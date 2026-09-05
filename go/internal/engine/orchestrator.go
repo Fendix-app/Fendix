@@ -319,10 +319,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	diffEmpty := o.cfg.CodePath != "" && allow != nil && allow.Empty()
 	if diffEmpty {
 		slog.Info("diff-aware scan: no changed files — skipping whitebox file scanners")
-		scanStatus.skip("secrets", "diff: no changed files")
-		scanStatus.skip("textscan", "diff: no changed files")
+		scanStatus.skip(AnalyzerSecrets, reporters.ReasonDiffUnchanged, "diff: no changed files")
+		scanStatus.skip(AnalyzerTextscan, reporters.ReasonDiffUnchanged, "diff: no changed files")
 		if !o.cfg.Fast {
-			scanStatus.skip("semgrep", "diff: no changed files")
+			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDiffUnchanged, "diff: no changed files")
 		}
 	}
 
@@ -347,11 +347,11 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		// SKIPPED and move on.
 		if o.cfg.Offline {
 			slog.Info("offline mode: skipping native go deps scan (govulncheck requires vuln.go.dev)")
-			scanStatus.skip("govulncheck", "offline mode: requires vuln.go.dev")
+			scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonDisabledOffline, "--offline: govulncheck requires vuln.go.dev")
 		} else if !allow.ContainsBase("go.mod", "go.sum") {
 			// Diff-aware: no Go manifest changed → nothing new to flag.
 			slog.Debug("diff-aware scan: go.mod/go.sum unchanged, skipping govulncheck")
-			scanStatus.skip("govulncheck", "diff: go.mod/go.sum unchanged")
+			scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonDiffUnchanged, "diff: go.mod/go.sum unchanged")
 		} else {
 			nativeFindings, err := govulncheck.Scan(ctx, o.cfg.CodePath)
 			switch {
@@ -361,10 +361,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 				scanStatus.ok("govulncheck")
 			case errors.Is(err, govulncheck.ErrNoGoMod):
 				slog.Debug("no go.mod at code path, skipping native go deps scan")
-				scanStatus.skip("govulncheck", "no go.mod at code path")
+				scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonNotApplicable, "no go.mod under --code")
 			default:
 				slog.Warn("native go deps scan failed", "error", err)
-				scanStatus.fail("govulncheck", err)
+				scanStatus.fail(AnalyzerGovulncheck, classifyErr(err), err)
 			}
 		}
 
@@ -389,10 +389,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		case !allow.ContainsBase("requirements.txt", "Pipfile.lock", "poetry.lock", "pyproject.toml"):
 			// Diff-aware: no Python manifest/lockfile changed → skip.
 			slog.Debug("diff-aware scan: no python manifest changed, skipping pip scan")
-			scanStatus.skip("pip", "diff: no python manifest changed")
+			scanStatus.skip(AnalyzerPip, reporters.ReasonDiffUnchanged, "diff: no python manifest changed")
 		case o.cfg.Offline && offlineSnap == nil:
 			slog.Warn("offline mode: skipping native pypi deps scan (no usable snapshot)")
-			scanStatus.skip("pip", "offline mode: no usable snapshot")
+			scanStatus.skip(AnalyzerPip, reporters.ReasonDependencyMissing, "--offline: no usable snapshot at "+dbPathForLog(o.cfg))
 		case o.cfg.Offline:
 			slog.Debug("native pypi dep-CVE scan starting", "mode", "offline snapshot")
 			pipFindings, pipErr = pip.ScanOffline(o.cfg.CodePath, pip.DefaultRecurseDepth, offlineSnap)
@@ -419,10 +419,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		case !allow.ContainsBase("package-lock.json", "package.json"):
 			// Diff-aware: no npm manifest/lockfile changed → skip.
 			slog.Debug("diff-aware scan: no npm manifest changed, skipping npm scan")
-			scanStatus.skip("npm", "diff: no npm manifest changed")
+			scanStatus.skip(AnalyzerNpm, reporters.ReasonDiffUnchanged, "diff: no npm manifest changed")
 		case o.cfg.Offline && offlineSnap == nil:
 			slog.Warn("offline mode: skipping native npm deps scan (no usable snapshot)")
-			scanStatus.skip("npm", "offline mode: no usable snapshot")
+			scanStatus.skip(AnalyzerNpm, reporters.ReasonDependencyMissing, "--offline: no usable snapshot at "+dbPathForLog(o.cfg))
 		case o.cfg.Offline:
 			npmFindings, npmErr = npm.ScanOffline(o.cfg.CodePath, offlineSnap)
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
@@ -450,10 +450,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			scanStatus.ok("secrets")
 		case errors.Is(err, secrets.ErrCodePathMissing):
 			slog.Debug("code path missing — skipping native secrets scan")
-			scanStatus.skip("secrets", "code path missing")
+			scanStatus.fail(AnalyzerSecrets, reporters.ReasonInputError, err)
 		default:
 			slog.Warn("native secrets scan failed", "error", err)
-			scanStatus.fail("secrets", err)
+			scanStatus.fail(AnalyzerSecrets, classifyErr(err), err)
 		}
 	}
 
@@ -472,13 +472,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			scanStatus.ok("semgrep")
 		case errors.Is(err, semgrep.ErrSemgrepUnavailable):
 			slog.Info("semgrep not installed — skipping (install with: pip install semgrep)")
-			scanStatus.skip("semgrep", "semgrep binary not installed")
+			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDependencyMissing, "semgrep binary not installed")
 		case errors.Is(err, semgrep.ErrCodePathMissing):
 			slog.Debug("code path missing — skipping native semgrep scan")
-			scanStatus.skip("semgrep", "code path missing")
+			scanStatus.fail(AnalyzerSemgrep, reporters.ReasonInputError, err)
 		default:
 			slog.Warn("native semgrep scan failed", "error", err)
-			scanStatus.fail("semgrep", err)
+			scanStatus.fail(AnalyzerSemgrep, classifyErr(err), err)
 		}
 	}
 
@@ -491,7 +491,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		switch {
 		case err != nil:
 			slog.Warn("native textscan failed", "error", err)
-			scanStatus.fail("textscan", err)
+			scanStatus.fail(AnalyzerTextscan, classifyErr(err), err)
 		default:
 			if len(textFindings) > 0 {
 				slog.Info("native textscan complete", "findings", len(textFindings))
@@ -1151,6 +1151,14 @@ func absPathOrEmpty(p string) string {
 		return abs
 	}
 	return p
+}
+
+// dbPathForLog names the offline snapshot path a skip detail refers to.
+func dbPathForLog(cfg *models.ScanConfig) string {
+	if cfg.OfflineDBPath != "" {
+		return cfg.OfflineDBPath
+	}
+	return offline.DefaultDBPath()
 }
 
 // runWhiteboxScan spawns the Python engine and collects whitebox findings.

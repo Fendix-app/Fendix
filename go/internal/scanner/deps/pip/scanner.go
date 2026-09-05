@@ -52,6 +52,13 @@ import (
 // requirements.txt at its root. Callers use this to skip silently.
 var ErrNoRequirements = errors.New("pip: no requirements.txt at path root")
 
+// ErrNoManifests is returned by the recursive scan when no Python
+// manifest (requirements.txt, Pipfile.lock, poetry.lock, pyproject.toml)
+// was found anywhere under codePath. Placeholder here — Task 3 wires it
+// into the recursive walk; for now recordDepScanResult's errors.Is check
+// against it simply never matches.
+var ErrNoManifests = errors.New("pip: no Python manifest under code path")
+
 // DefaultRecurseDepth bounds how many directory levels ScanRecursive
 // walks looking for nested requirements.txt manifests. 3 is enough to
 // catch multi-service repos (service/requirements.txt or

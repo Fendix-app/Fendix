@@ -61,6 +61,11 @@ var ErrSemgrepUnavailable = errors.New("semgrep: binary not found on PATH")
 // silent-skip parity with the Python `if not code_path.exists(): return`.
 var ErrCodePathMissing = errors.New("semgrep: code path does not exist")
 
+// ErrTimeout is wrapped into the error returned when the semgrep process
+// exceeds defaultTimeout, so the orchestrator can classify it as a timeout
+// rather than a generic execution error.
+var ErrTimeout = errors.New("semgrep: timed out")
+
 // defaultTimeout matches python semgrep_runner.py (120s). Bounded
 // per scan so a runaway rule can't hold the orchestrator hostage.
 const defaultTimeout = 120 * time.Second
@@ -178,7 +183,7 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		// Context errors (cancel/deadline) are always real failures —
 		// surface them so the orchestrator can stop the scan.
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("semgrep: timed out after %s", defaultTimeout)
+			return nil, fmt.Errorf("%w after %s", ErrTimeout, defaultTimeout)
 		}
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			return nil, runCtx.Err()

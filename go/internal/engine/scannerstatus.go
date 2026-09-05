@@ -1,14 +1,19 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"path/filepath"
+	"sort"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
 )
 
 // scannerStatusList accumulates the per-scanner outcome for the dep-CVE,
@@ -24,16 +29,82 @@ func (l *scannerStatusList) ok(name string) {
 	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerOK})
 }
 
-// skip records a scanner that did not run because its precondition was
-// absent or it cannot run in the current mode. A skip is not a failure.
-func (l *scannerStatusList) skip(name, detail string) {
-	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerSkipped, Detail: detail})
+// okDetail records a clean run that carries a note the reader should see
+// (for example partial probe responses). The state is still ok.
+func (l *scannerStatusList) okDetail(name, detail string) {
+	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerOK, Detail: truncateDetail(detail)})
 }
 
-// fail records a scanner that ran but errored. The error message is
-// truncated to keep the metadata payload bounded.
-func (l *scannerStatusList) fail(name string, err error) {
-	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerFailed, Detail: truncateErr(err)})
+// skip records an analyzer that did not run, with the closed reason that
+// says why. A skip is never a failure; whether it is a coverage gap is
+// decided by the reason's class (dependency_missing is, disabled is not).
+func (l *scannerStatusList) skip(name string, reason reporters.ScannerReason, detail string) {
+	if !reason.IsSkip() {
+		panic("scannerStatusList.skip called with a non-skip reason: " + string(reason))
+	}
+	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerSkipped, Reason: reason, Detail: truncateDetail(detail)})
+}
+
+// fail records an analyzer that started and did not deliver. The error text
+// is truncated to keep the metadata payload bounded.
+func (l *scannerStatusList) fail(name string, reason reporters.ScannerReason, err error) {
+	l.failDetail(name, reason, truncateErr(err))
+}
+
+// failDetail is fail with a hand-written detail (no error value).
+func (l *scannerStatusList) failDetail(name string, reason reporters.ScannerReason, detail string) {
+	if !reason.IsFail() {
+		panic("scannerStatusList.fail called with a non-fail reason: " + string(reason))
+	}
+	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerFailed, Reason: reason, Detail: truncateDetail(detail)})
+}
+
+// set appends a fully-formed entry (used for python-engine children, whose
+// state and reason arrive over the protocol and are validated there).
+func (l *scannerStatusList) set(entry reporters.ScannerStatus) {
+	entry.Detail = truncateDetail(entry.Detail)
+	*l = append(*l, entry)
+}
+
+// markAttempts stamps the in-process retry count on the named entry.
+func (l *scannerStatusList) markAttempts(name string, n int) {
+	for i := range *l {
+		if (*l)[i].Name == name {
+			(*l)[i].Attempts = n
+			return
+		}
+	}
+}
+
+// has reports whether an entry for name was recorded.
+func (l scannerStatusList) has(name string) bool {
+	for _, s := range l {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// sorted returns a copy in registry order. Names outside the registry keep
+// their relative order after every registered name. Stable, so a scan
+// renders identically on every run.
+func (l scannerStatusList) sorted() scannerStatusList {
+	out := make(scannerStatusList, len(l))
+	copy(out, l)
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, iok := registryRank[out[i].Name]
+		rj, jok := registryRank[out[j].Name]
+		switch {
+		case iok && jok:
+			return ri < rj
+		case iok:
+			return true
+		default:
+			return false
+		}
+	})
+	return out
 }
 
 // hasFailure reports whether any recorded scanner ran and errored.
@@ -64,12 +135,34 @@ func truncateErr(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
+	return truncateDetail(err.Error())
+}
+
+// truncateDetail bounds a detail string the same way truncateErr does.
+func truncateDetail(s string) string {
 	const max = 240
 	if len(s) > max {
-		s = s[:max] + "…"
+		return s[:max] + "…"
 	}
 	return s
+}
+
+// classifyErr maps an analyzer error to a fail reason. Task 7 extends it
+// with transport typing; here only the two deterministic cases exist:
+// a context deadline or the semgrep timeout sentinel is a timeout, and
+// everything else is an execution error.
+func classifyErr(err error) reporters.ScannerReason {
+	if err == nil {
+		return reporters.ReasonExecutionError
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, semgrep.ErrTimeout) {
+		return reporters.ReasonTimeout
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return reporters.ReasonTimeout
+	}
+	return reporters.ReasonExecutionError
 }
 
 // recordDepScanResult records the outcome of a pip-style dep scan (one
@@ -77,18 +170,19 @@ func truncateErr(err error) string {
 // found) and appends any findings. Used by both the online and offline
 // pip paths so they record status identically.
 func (o *Orchestrator) recordDepScanResult(status *scannerStatusList, name, label string, findings *[]evidence.Evidence, scanFindings []evidence.Evidence, err error) {
+	if len(scanFindings) > 0 {
+		*findings = append(*findings, scanFindings...)
+	}
 	switch {
 	case err == nil:
-		if len(scanFindings) > 0 {
-			slog.Info(label+" complete", "findings", len(scanFindings))
-			*findings = append(*findings, scanFindings...)
-		} else {
-			slog.Debug(label + " found no manifests under code path")
-		}
+		slog.Info(label+" complete", "findings", len(scanFindings))
 		status.ok(name)
+	case errors.Is(err, pip.ErrNoManifests):
+		slog.Debug(label + " found no manifests under code path")
+		status.skip(name, reporters.ReasonNotApplicable, "no Python manifest under --code")
 	default:
 		slog.Warn(label+" failed", "error", err)
-		status.fail(name, err)
+		status.fail(name, classifyErr(err), err)
 	}
 }
 
@@ -97,10 +191,12 @@ func (o *Orchestrator) recordDepScanResult(status *scannerStatusList, name, labe
 // no-lockfile silent skip). Shared by the online and offline npm paths.
 // Returns the updated findings slice.
 func (o *Orchestrator) recordNpmScanResult(status *scannerStatusList, findings *[]evidence.Evidence, npmFindings []evidence.Evidence, err error) []evidence.Evidence {
+	if len(npmFindings) > 0 {
+		*findings = append(*findings, npmFindings...)
+	}
 	switch {
 	case err == nil:
 		slog.Info("native npm deps scan complete", "findings", len(npmFindings))
-		*findings = append(*findings, npmFindings...)
 		status.ok("npm")
 	case errors.Is(err, npm.ErrLockfileMissingButPackageJsonPresent):
 		// Single INFO finding — flag the gap without producing noise.
@@ -119,13 +215,13 @@ func (o *Orchestrator) recordNpmScanResult(status *scannerStatusList, findings *
 			References: []string{"https://cwe.mitre.org/data/definitions/1395.html"},
 			Confidence: models.ConfidenceHigh,
 		})
-		status.skip("npm", "package-lock.json missing")
+		status.skip("npm", reporters.ReasonUnsupportedTarget, "package.json without package-lock.json")
 	case errors.Is(err, npm.ErrNoLockfile):
 		slog.Debug("no package-lock.json at code path, skipping native npm deps scan")
-		status.skip("npm", "no package-lock.json at code path")
+		status.skip("npm", reporters.ReasonNotApplicable, "no package.json under --code")
 	default:
 		slog.Warn("native npm deps scan failed", "error", err)
-		status.fail("npm", err)
+		status.fail("npm", classifyErr(err), err)
 	}
 	return *findings
 }
