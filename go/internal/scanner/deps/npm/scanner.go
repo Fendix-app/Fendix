@@ -48,6 +48,7 @@ import (
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/offline"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/applicability"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 // ErrLockfileMissingButPackageJsonPresent is returned when the
@@ -65,9 +66,8 @@ var ErrLockfileMissingButPackageJsonPresent = errors.New("npm: package.json pres
 // project at all.
 var ErrNoLockfile = errors.New("npm: no package-lock.json at path root")
 
-// osvAPIBase is the OSV.dev REST endpoint. Var-not-const so tests can
-// point it at an httptest server.
-var osvAPIBase = "https://api.osv.dev"
+// OSVBaseURL is the OSV API base; tests point it at an httptest server.
+var OSVBaseURL = "https://api.osv.dev"
 
 // cacheTTL matches the pip scanner — same 24h freshness window.
 //
@@ -166,6 +166,7 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 	// groups, run up to osvMaxConcurrentBatches concurrently. Failures
 	// of a chunk fall back to per-package /v1/query so CVE coverage
 	// survives a /v1/querybatch outage.
+	var lf neterr.Failures
 	if len(misses) > 0 {
 		sem := semaphore.NewWeighted(osvMaxConcurrentBatches)
 		var batchMu sync.Mutex
@@ -191,7 +192,7 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 			go func(chunk []pkgWithManifest) {
 				defer wg.Done()
 				defer sem.Release(1)
-				chunkFindings := runBatchOrFallback(ctx, client, cache, chunk)
+				chunkFindings := runBatchOrFallback(ctx, client, cache, chunk, &lf)
 				batchMu.Lock()
 				batchFindings = append(batchFindings, chunkFindings...)
 				batchMu.Unlock()
@@ -206,7 +207,7 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 	// walk.
 	findings = applicability.Resolve(abs, findings)
 	sortFindingsByID(findings)
-	return findings, nil
+	return findings, lf.Err("npm", len(misses))
 }
 
 // ScanOffline reads package-lock.json at codePath and matches every
@@ -303,7 +304,11 @@ type pkgWithManifest struct {
 // batch-level failure (non-2xx, length mismatch, transport error) it
 // falls back to the per-package /v1/query path so individual findings
 // still surface. Cache writes happen on both paths.
-func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest) []evidence.Evidence {
+//
+// A batch failure alone does not count against lf — the serial fallback
+// gets its own chance to resolve every package in the chunk, and only a
+// per-package failure there (or a failed hydration below) is Noted.
+func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest, lf *neterr.Failures) []evidence.Evidence {
 	pkgs := make([]resolvedPackage, len(chunk))
 	for i, p := range chunk {
 		pkgs[i] = p.pkg
@@ -311,7 +316,7 @@ func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, 
 	results, err := queryOSVBatch(ctx, client, pkgs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[fendix] npm: querybatch failed (%v); falling back to per-package /v1/query for %d packages\n", err, len(chunk))
-		return runSerialFallback(ctx, client, cache, chunk)
+		return runSerialFallback(ctx, client, cache, chunk, lf)
 	}
 	var findings []evidence.Evidence
 	for _, p := range chunk {
@@ -356,12 +361,17 @@ func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, 
 // runSerialFallback walks the chunk one package at a time using the
 // classic /v1/query endpoint. Used when /v1/querybatch fails so any
 // transient batch-only outage doesn't hide CVE coverage.
-func runSerialFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest) []evidence.Evidence {
+//
+// A per-package failure here IS the last fallback for that package, so
+// it's Noted against lf — this is what makes a total OSV.dev outage
+// surface as a typed LookupError instead of a silent "ok, zero findings".
+func runSerialFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest, lf *neterr.Failures) []evidence.Evidence {
 	var findings []evidence.Evidence
 	for _, p := range chunk {
 		vulns, err := queryOSV(ctx, client, cache, p.pkg.name, p.pkg.version)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[fendix] npm: query %s@%s failed: %v\n", p.pkg.name, p.pkg.version, err)
+			lf.Note(err)
 			continue
 		}
 		findings = append(findings, buildFindings(p.pkg, vulns, p.manifest)...)
@@ -415,19 +425,19 @@ func queryOSVBatch(ctx context.Context, client *http.Client, pkgs []resolvedPack
 	if err != nil {
 		return nil, fmt.Errorf("encode batch request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, osvAPIBase+"/v1/querybatch", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OSVBaseURL+"/v1/querybatch", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build batch request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("post batch to %s: %w", osvAPIBase, err)
+		return nil, fmt.Errorf("post batch to %s: %w", OSVBaseURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("osv batch returned %d: %s", resp.StatusCode, snippet)
+		return nil, fmt.Errorf("osv batch: %w: %s", &neterr.StatusError{Host: OSVBaseURL, Code: resp.StatusCode}, snippet)
 	}
 	var parsed batchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -619,7 +629,7 @@ func queryOSV(ctx context.Context, client *http.Client, cacheDir, pkg, version s
 		Package: osvPackage{Ecosystem: "npm", Name: pkg},
 		Version: version,
 	})
-	req, err := http.NewRequestWithContext(ctx, "POST", osvAPIBase+"/v1/query", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", OSVBaseURL+"/v1/query", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -631,7 +641,7 @@ func queryOSV(ctx context.Context, client *http.Client, cacheDir, pkg, version s
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("osv.dev returned %d", resp.StatusCode)
+		return nil, &neterr.StatusError{Host: OSVBaseURL, Code: resp.StatusCode}
 	}
 	var out osvQueryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {

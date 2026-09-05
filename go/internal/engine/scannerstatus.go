@@ -1,16 +1,15 @@
 package engine
 
 import (
-	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"path/filepath"
 	"sort"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
@@ -147,20 +146,26 @@ func truncateDetail(s string) string {
 	return s
 }
 
-// classifyErr maps an analyzer error to a fail reason. Task 7 extends it
-// with transport typing; here only the two deterministic cases exist:
-// a context deadline or the semgrep timeout sentinel is a timeout, and
-// everything else is an execution error.
+// classifyErr maps an analyzer error to a fail reason. semgrep.ErrTimeout
+// (or a bare context deadline) is a timeout; everything else is typed via
+// neterr.Classify against the typed transport errors pip/npm/govulncheck
+// now produce (Task 7): a *neterr.LookupError or *neterr.StatusError
+// wrapping a transient (429/5xx) status, or a subprocess sentinel, maps to
+// network_error; a deadline or subprocess-timeout sentinel maps to
+// timeout. Everything else stays execution_error — in particular a 4xx
+// StatusError other than 429, which is never transient.
 func classifyErr(err error) reporters.ScannerReason {
 	if err == nil {
 		return reporters.ReasonExecutionError
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, semgrep.ErrTimeout) {
+	if errors.Is(err, semgrep.ErrTimeout) {
 		return reporters.ReasonTimeout
 	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
+	switch neterr.Classify(err) {
+	case neterr.KindTimeout:
 		return reporters.ReasonTimeout
+	case neterr.KindNetwork:
+		return reporters.ReasonNetworkError
 	}
 	return reporters.ReasonExecutionError
 }

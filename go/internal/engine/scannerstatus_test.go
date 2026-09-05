@@ -10,6 +10,7 @@ import (
 	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
 )
@@ -159,5 +160,11 @@ func TestClassifyErr_MinimalMapping(t *testing.T) {
 	}
 	if got := classifyErr(fmt.Errorf("wrap: %w", semgrep.ErrTimeout)); got != reporters.ReasonTimeout {
 		t.Errorf("semgrep.ErrTimeout → %s, want timeout", got)
+	}
+	if got := classifyErr(&neterr.LookupError{Scanner: "pip", Failed: 1, Total: 1, Cause: &neterr.StatusError{Host: "h", Code: 503}}); got != reporters.ReasonNetworkError {
+		t.Errorf("lookup 503 → %s, want network_error", got)
+	}
+	if got := classifyErr(&neterr.StatusError{Host: "h", Code: 404}); got != reporters.ReasonExecutionError {
+		t.Errorf("404 → %s, want execution_error (never transient)", got)
 	}
 }

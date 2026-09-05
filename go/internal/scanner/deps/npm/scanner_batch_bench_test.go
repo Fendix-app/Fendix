@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 // Sprint 02.5's performance gate: post-sprint Scan against a 150+
@@ -109,9 +111,9 @@ func writeBenchLockfile(b *testing.B, dir string, n int) {
 func BenchmarkNpmDepCVE_Batch(b *testing.B) {
 	srv := newBenchOSVServer(b)
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -134,9 +136,9 @@ func BenchmarkNpmDepCVE_Batch(b *testing.B) {
 func BenchmarkNpmDepCVE_Serial(b *testing.B) {
 	srv := newBenchOSVServer(b)
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -157,6 +159,7 @@ func BenchmarkNpmDepCVE_Serial(b *testing.B) {
 		client := &http.Client{Timeout: httpTimeout}
 		b.StartTimer()
 
-		_ = runSerialFallback(context.Background(), client, cache, chunk)
+		var lf neterr.Failures
+		_ = runSerialFallback(context.Background(), client, cache, chunk, &lf)
 	}
 }

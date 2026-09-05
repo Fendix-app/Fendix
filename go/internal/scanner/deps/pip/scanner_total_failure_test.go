@@ -2,57 +2,71 @@ package pip
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
-// TestScanViaOSV_BothBatchAndSerialFail asserts that when OSV.dev
-// returns 503 on BOTH /v1/querybatch AND /v1/query, scanViaOSV
-// returns an error rather than hanging or panicking. This is the
-// upstream-outage path: a healthy fault model assumes the orchestrator's
-// continue-on-error wiring takes over (verified in the engine package),
-// but the contract at this layer is: surface a clear error and bail
-// the scanner, not the whole process.
-func TestScanViaOSV_BothBatchAndSerialFail(t *testing.T) {
+// TestScanViaOSV_TotalFailureIsLookupError asserts that when OSV.dev
+// returns 503 on BOTH /v1/querybatch AND the per-package /v1/query
+// fallback, scanViaOSV returns a *neterr.LookupError naming every failed
+// lookup rather than a bare "ok" with a quietly-empty finding set. This
+// replaces the old tolerant TestScanViaOSV_BothBatchAndSerialFail, which
+// accepted either a nil error or an untyped one — Task 7 makes total
+// lookup failure an explicit, typed contract instead of two-outcomes-
+// both-honest.
+func TestScanViaOSV_TotalFailureIsLookupError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
-	writeReqs(t, codeDir, "requirements.txt", "flask==2.0.1")
+	writeReqs(t, codeDir, "requirements.txt", "flask==2.0.1\nrequests==2.25.0\n")
 
 	findings, err := scanViaOSV(context.Background(), codeDir, DefaultRecurseDepth)
-	// The current contract: queryOSV returns the error, scanViaOSV
-	// logs and continues to the next manifest. Single-manifest case
-	// → zero findings returned, no fatal error (the per-manifest
-	// failure is internal).
-	if err != nil {
-		// Acceptable: an upstream wholly-503 surface could also
-		// be surfaced as an error if the implementation changes.
-		// Either contract is honest as long as it's deterministic.
-		if !strings.Contains(err.Error(), "OSV") && !strings.Contains(err.Error(), "503") && !strings.Contains(err.Error(), "service unavailable") {
-			t.Errorf("if surfacing error, it should reference OSV/503; got %v", err)
-		}
-		return
+	var le *neterr.LookupError
+	if !errors.As(err, &le) {
+		t.Fatalf("expected *neterr.LookupError, got %v", err)
 	}
-	// findings should be empty (no successful query produced any).
+	if le.Failed != 2 || le.Total != 2 || neterr.Classify(err) != neterr.KindNetwork {
+		t.Fatalf("lookup error = %+v (kind %v)", le, neterr.Classify(err))
+	}
 	if len(findings) != 0 {
-		t.Errorf("expected zero findings under total OSV outage, got %d", len(findings))
+		t.Fatalf("no lookup succeeded, expected no findings, got %d", len(findings))
 	}
 }
 
-// Note: a "timeout-mid-batch" test was attempted but removed —
-// httptest.Server.Close() blocks until in-flight handlers return,
-// which deadlocks any test that leaves a request hung. The
-// httpTimeout = 15*time.Second constant in scanner.go is enforced
-// at the http.Client level; testing it requires injecting a custom
-// http.Client which scanViaOSV doesn't currently expose. The
-// total-failure test above is the highest-value coverage we get
-// without a refactor.
+// TestScanViaOSV_BatchFailsSerialSucceedsIsNotAnError asserts that a
+// batch-endpoint outage which the serial fallback fully recovers from is
+// NOT reported as a failure: the lookup accumulator only counts a
+// package once every fallback for it has been exhausted, and here the
+// serial /v1/query path answers for the one package in the chunk.
+func TestScanViaOSV_BatchFailsSerialSucceedsIsNotAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/v1/querybatch") {
+			http.Error(w, "nope", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"vulns": []}`))
+	}))
+	defer srv.Close()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
+	t.Setenv("HOME", t.TempDir())
+	codeDir := t.TempDir()
+	writeReqs(t, codeDir, "requirements.txt", "flask==2.0.1\n")
+	if _, err := scanViaOSV(context.Background(), codeDir, DefaultRecurseDepth); err != nil {
+		t.Fatalf("serial fallback covered every package, expected nil error, got %v", err)
+	}
+}

@@ -46,6 +46,7 @@ import (
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/offline"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/applicability"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 // ErrNoRequirements is returned by Scan when codePath has no
@@ -88,9 +89,8 @@ var recurseSkipDirs = map[string]bool{
 	"dist":          true,
 }
 
-// osvAPIBase is the OSV.dev REST endpoint. Var-not-const so tests can
-// point it at an httptest server.
-var osvAPIBase = "https://api.osv.dev"
+// OSVBaseURL is the OSV API base; tests point it at an httptest server.
+var OSVBaseURL = "https://api.osv.dev"
 
 // SetOSVAPIBaseForTest replaces the OSV.dev endpoint with a test URL
 // and returns a restore function. Exported (with `ForTest` suffix
@@ -102,9 +102,9 @@ var osvAPIBase = "https://api.osv.dev"
 // Production code MUST NOT call this; calling it permanently rebases
 // every OSV.dev query at the new URL for the current process.
 func SetOSVAPIBaseForTest(url string) (restore func()) {
-	prev := osvAPIBase
-	osvAPIBase = url
-	return func() { osvAPIBase = prev }
+	prev := OSVBaseURL
+	OSVBaseURL = url
+	return func() { OSVBaseURL = prev }
 }
 
 // cacheTTL is how long an OSV response is considered fresh. 24h matches
@@ -167,20 +167,24 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 	client := &http.Client{Timeout: httpTimeout}
 	cache, _ := cacheDir() // empty string disables caching — Scan still works
 
+	var lf neterr.Failures
 	findings := make([]evidence.Evidence, 0)
 	for _, p := range pkgs {
 		vulns, err := queryOSV(ctx, client, cache, p.name, p.version)
 		if err != nil {
 			// Per-package failure shouldn't sink the whole scan. Log
 			// to stderr and move on — pip-audit has the same posture.
+			// The failure is still counted: a total wipeout must surface
+			// as a typed LookupError, not a quiet "ok" with zero findings.
 			fmt.Fprintf(os.Stderr, "[fendix] pip: query %s==%s failed: %v\n", p.name, p.version, err)
+			lf.Note(err)
 			continue
 		}
 		findings = append(findings, buildFindings(p, vulns, "requirements.txt")...)
 	}
 	findings = applicability.Resolve(abs, findings)
 	sortFindingsByID(findings)
-	return findings, nil
+	return findings, lf.Err("pip", len(pkgs))
 }
 
 // Options controls runtime behaviour of ScanRecursiveWithOptions. The
@@ -405,6 +409,7 @@ func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.
 	// groups, run up to osvMaxConcurrentBatches concurrently. The
 	// semaphore + waitgroup pattern keeps backpressure on OSV.dev's
 	// rate limiter while still parallelising across chunks.
+	var lf neterr.Failures
 	if len(misses) > 0 {
 		sem := semaphore.NewWeighted(osvMaxConcurrentBatches)
 		var batchMu sync.Mutex
@@ -430,7 +435,7 @@ func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.
 			go func(chunk []pkgWithManifest) {
 				defer wg.Done()
 				defer sem.Release(1)
-				chunkFindings := runBatchOrFallback(ctx, client, cache, chunk)
+				chunkFindings := runBatchOrFallback(ctx, client, cache, chunk, &lf)
 				batchMu.Lock()
 				batchFindings = append(batchFindings, chunkFindings...)
 				batchMu.Unlock()
@@ -445,14 +450,18 @@ func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.
 	// walk.
 	findings = applicability.Resolve(abs, findings)
 	sortFindingsByID(findings)
-	return findings, nil
+	return findings, lf.Err("pip", len(misses))
 }
 
 // runBatchOrFallback tries /v1/querybatch for a single chunk; on any
 // batch-level failure (non-2xx, length mismatch, transport error) it
 // falls back to the per-package /v1/query path so individual findings
 // still surface. Cache writes happen on both paths.
-func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest) []evidence.Evidence {
+//
+// A batch failure alone does not count against lf — the serial fallback
+// gets its own chance to resolve every package in the chunk, and only a
+// per-package failure there (or a failed hydration below) is Noted.
+func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest, lf *neterr.Failures) []evidence.Evidence {
 	pkgs := make([]pinnedPackage, len(chunk))
 	for i, p := range chunk {
 		pkgs[i] = p.pkg
@@ -460,7 +469,7 @@ func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, 
 	results, err := queryOSVBatch(ctx, client, pkgs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[fendix] pip: querybatch failed (%v); falling back to per-package /v1/query for %d packages\n", err, len(chunk))
-		return runSerialFallback(ctx, client, cache, chunk)
+		return runSerialFallback(ctx, client, cache, chunk, lf)
 	}
 	var findings []evidence.Evidence
 	for _, p := range chunk {
@@ -507,12 +516,17 @@ func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, 
 // runSerialFallback walks the chunk one package at a time using the
 // classic /v1/query endpoint. Used when /v1/querybatch fails so any
 // transient batch-only outage doesn't hide CVE coverage.
-func runSerialFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest) []evidence.Evidence {
+//
+// A per-package failure here IS the last fallback for that package, so
+// it's Noted against lf — this is what makes a total OSV.dev outage
+// surface as a typed LookupError instead of a silent "ok, zero findings".
+func runSerialFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest, lf *neterr.Failures) []evidence.Evidence {
 	var findings []evidence.Evidence
 	for _, p := range chunk {
 		vulns, err := queryOSV(ctx, client, cache, p.pkg.name, p.pkg.version)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[fendix] pip: query %s==%s failed: %v\n", p.pkg.name, p.pkg.version, err)
+			lf.Note(err)
 			continue
 		}
 		findings = append(findings, buildFindings(p.pkg, vulns, p.manifest)...)
@@ -568,19 +582,19 @@ func queryOSVBatch(ctx context.Context, client *http.Client, pkgs []pinnedPackag
 	if err != nil {
 		return nil, fmt.Errorf("encode batch request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, osvAPIBase+"/v1/querybatch", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OSVBaseURL+"/v1/querybatch", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build batch request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("post batch to %s: %w", osvAPIBase, err)
+		return nil, fmt.Errorf("post batch to %s: %w", OSVBaseURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("osv batch returned %d: %s", resp.StatusCode, snippet)
+		return nil, fmt.Errorf("osv batch: %w: %s", &neterr.StatusError{Host: OSVBaseURL, Code: resp.StatusCode}, snippet)
 	}
 	var parsed batchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -927,7 +941,7 @@ func queryOSV(ctx context.Context, client *http.Client, cacheDir, pkg, version s
 		Package: osvPackage{Ecosystem: "PyPI", Name: pkg},
 		Version: version,
 	})
-	req, err := http.NewRequestWithContext(ctx, "POST", osvAPIBase+"/v1/query", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", OSVBaseURL+"/v1/query", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -940,7 +954,7 @@ func queryOSV(ctx context.Context, client *http.Client, cacheDir, pkg, version s
 	if resp.StatusCode != http.StatusOK {
 		// Drain to allow connection reuse.
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("osv.dev returned %d", resp.StatusCode)
+		return nil, &neterr.StatusError{Host: OSVBaseURL, Code: resp.StatusCode}
 	}
 	var out osvQueryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {

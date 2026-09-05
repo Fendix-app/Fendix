@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 func TestScan_NoLockfile_ReturnsErrNoLockfile(t *testing.T) {
@@ -332,9 +334,9 @@ func TestScan_HappyPath_AgainstFakeOSV(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
@@ -366,6 +368,11 @@ func TestScan_HappyPath_AgainstFakeOSV(t *testing.T) {
 	}
 }
 
+// TestScan_PerPackageErrorDoesNotKillScan asserts that a per-package
+// lookup failure still emits findings for the packages that DID resolve
+// (Rule 3), while surfacing a typed *neterr.LookupError naming the one
+// package that didn't — Task 7 replaces the old "swallow and return nil"
+// posture with an honest partial-failure report.
 func TestScan_PerPackageErrorDoesNotKillScan(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req osvQueryRequest
@@ -381,9 +388,9 @@ func TestScan_PerPackageErrorDoesNotKillScan(t *testing.T) {
 		_, _ = w.Write([]byte(`{"vulns":[]}`))
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
@@ -399,8 +406,12 @@ func TestScan_PerPackageErrorDoesNotKillScan(t *testing.T) {
 	}
 
 	findings, err := Scan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("Scan should not error on per-package failure: %v", err)
+	var le *neterr.LookupError
+	if !errors.As(err, &le) {
+		t.Fatalf("expected *neterr.LookupError for the broken package, got %v", err)
+	}
+	if le.Failed != 1 || le.Total != 2 {
+		t.Fatalf("lookup error = %+v, want Failed=1 Total=2", le)
 	}
 	if len(findings) != 1 || findings[0].ID != "SEC-DEPS-X_Y_Z" {
 		t.Fatalf("want 1 finding for lodash, got %v", findings)

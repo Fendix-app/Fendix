@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 func TestScan_NoGoMod_ReturnsErrNoGoMod(t *testing.T) {
@@ -348,5 +350,18 @@ func main() {
 		if len(f.References) == 0 {
 			t.Errorf("finding[%d] missing OSV ID in references", i)
 		}
+	}
+}
+
+func TestClassifyRunErr(t *testing.T) {
+	base := errors.New("exit status 1")
+	if err := classifyRunErr(base, "Get \"https://vuln.go.dev/index/db.json\": dial tcp: lookup vuln.go.dev: no such host"); neterr.Classify(err) != neterr.KindNetwork {
+		t.Fatalf("dns failure must classify as network, got %v", err)
+	}
+	if err := classifyRunErr(base, "context deadline exceeded"); neterr.Classify(err) != neterr.KindTimeout {
+		t.Fatalf("deadline must classify as timeout, got %v", err)
+	}
+	if err := classifyRunErr(base, "package ./...: no Go files"); neterr.Classify(err) != neterr.KindOther {
+		t.Fatalf("tool error must stay other, got %v", err)
 	}
 }

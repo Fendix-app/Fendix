@@ -95,9 +95,9 @@ func writeBenchFixture(b *testing.B, dir string, n int) {
 func BenchmarkPipDepCVE_Batch(b *testing.B) {
 	srv := newBenchOSVServer(b)
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -122,9 +122,9 @@ func BenchmarkPipDepCVE_Batch(b *testing.B) {
 func BenchmarkPipDepCVE_Serial(b *testing.B) {
 	srv := newBenchOSVServer(b)
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()

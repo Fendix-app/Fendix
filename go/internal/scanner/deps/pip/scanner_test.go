@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 func TestScan_NoRequirements_ReturnsErrNoRequirements(t *testing.T) {
@@ -277,9 +279,9 @@ func TestScan_HappyPath_AgainstFakeOSV(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	// Isolate cache to a tempdir so the test doesn't touch the user's
 	// real ~/.fendix.
@@ -308,8 +310,12 @@ func TestScan_HappyPath_AgainstFakeOSV(t *testing.T) {
 }
 
 func TestScan_PerPackageErrorDoesNotKillScan(t *testing.T) {
-	// Half the packages return 500, half return clean. Scan should
-	// emit findings for the clean half + log the failures.
+	// Half the packages return 500, half return clean. Scan should still
+	// emit findings for the clean half (Rule 3: a failed lookup never
+	// drops a finding that DID resolve) while surfacing a typed
+	// *neterr.LookupError naming the one package that didn't — Task 7
+	// replaces the old "swallow and return nil" posture with an honest
+	// partial-failure report.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req osvQueryRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -328,9 +334,9 @@ func TestScan_PerPackageErrorDoesNotKillScan(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
@@ -340,8 +346,12 @@ func TestScan_PerPackageErrorDoesNotKillScan(t *testing.T) {
 	}
 
 	findings, err := Scan(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("Scan should not error on per-package failure: %v", err)
+	var le *neterr.LookupError
+	if !errors.As(err, &le) {
+		t.Fatalf("expected *neterr.LookupError for the broken package, got %v", err)
+	}
+	if le.Failed != 1 || le.Total != 2 {
+		t.Fatalf("lookup error = %+v, want Failed=1 Total=2", le)
 	}
 	if len(findings) != 1 || findings[0].ID != "SEC-DEPS-X_Y_Z" {
 		t.Fatalf("want 1 finding for flask, got %v", findings)
@@ -499,9 +509,9 @@ func TestScanRecursive_MultiServiceManifestsStampPath(t *testing.T) {
 		}},
 	})
 	defer ts.Close()
-	prev := osvAPIBase
-	osvAPIBase = ts.URL
-	defer func() { osvAPIBase = prev }()
+	prev := OSVBaseURL
+	OSVBaseURL = ts.URL
+	defer func() { OSVBaseURL = prev }()
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("django==4.0.0\n"), 0o644); err != nil {
