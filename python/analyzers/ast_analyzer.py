@@ -101,6 +101,12 @@ class ASTAnalyzer:
         """Initialize with root directory and optional language hint."""
         self.code_path = code_path
         self.language = language.lower() if language else "python"
+        # Per-language file counts observed during `run`. engine.py reads
+        # this after the walk to decide whether the injection check's
+        # outcome is "ok" (taint analysis actually ran) or
+        # "unsupported_target" (a JavaScript-only tree only got regex
+        # heuristics) — see engine.py's _injection_support.
+        self.file_stats: dict = {"python": 0, "javascript": 0}
 
     def run(self, emit_fn: Callable[[dict], None]) -> None:
         """Walk code_path and emit findings for security patterns detected."""
@@ -137,8 +143,10 @@ class ASTAnalyzer:
                 rel = str(fpath.relative_to(root))
 
                 if fpath.suffix == ".py":
+                    self.file_stats["python"] += 1
                     self._analyze_python(fpath, rel, emit_fn)
                 elif fpath.suffix in {".js", ".ts", ".jsx", ".tsx"}:
+                    self.file_stats["javascript"] += 1
                     self._analyze_js_heuristic(fpath, rel, emit_fn)
 
     def _build_route_index(self, root: Path):

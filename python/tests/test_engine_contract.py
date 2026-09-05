@@ -3,6 +3,7 @@
 Verifies that the Python engine reads a ScanRequest from stdin
 and emits valid JSON lines terminated by {"done": true, "total": N}.
 """
+import importlib.util
 import json
 import subprocess
 import sys
@@ -114,3 +115,75 @@ def test_engine_continues_after_analyzer_crash() -> None:
     assert result.returncode == 0
     objects = _parse_output(result)
     assert objects[-1]["done"] is True
+
+
+def _statuses(objects: list[dict]) -> dict[str, dict]:
+    return {o["status"]["check"]: o["status"] for o in objects if isinstance(o.get("status"), dict)}
+
+
+def _load_engine_module():
+    spec = importlib.util.spec_from_file_location("fendix_engine_under_test", ENGINE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_status_lines_for_every_check_even_when_none_run() -> None:
+    result = _run({"mode": "whitebox", "checks": [], "verbose": False})
+    objects = _parse_output(result)
+    statuses = _statuses(objects)
+    assert set(statuses) == {"auth", "injection", "deps"}
+    for s in statuses.values():
+        assert s["state"] == "skipped"
+        assert s["reason"] == "disabled_by_flag"
+    assert objects[-1]["protocol"] == 2
+
+
+def test_exactly_one_status_line_per_check() -> None:
+    result = _run({"mode": "whitebox", "checks": ["auth", "injection", "deps"], "code_path": "/nonexistent"})
+    lines = [o["status"]["check"] for o in _parse_output(result) if isinstance(o.get("status"), dict)]
+    assert sorted(lines) == ["auth", "deps", "injection"]
+
+
+def test_status_not_applicable_when_input_missing() -> None:
+    result = _run({"mode": "whitebox", "checks": ["auth", "injection", "deps"], "verbose": False})
+    statuses = _statuses(_parse_output(result))
+    assert statuses["auth"]["reason"] == "not_applicable"
+    assert statuses["injection"]["reason"] == "not_applicable"
+    assert statuses["deps"]["reason"] == "not_applicable"
+
+
+def test_done_total_ignores_status_lines() -> None:
+    result = _run({"mode": "whitebox", "checks": ["injection"], "code_path": "/nonexistent"})
+    objects = _parse_output(result)
+    findings = [o for o in objects if "title" in o]
+    assert objects[-1]["done"] is True
+    assert objects[-1]["total"] == len(findings)
+
+
+def test_injection_ok_on_python_and_unsupported_on_js_only() -> None:
+    with tempfile.TemporaryDirectory() as py_dir, tempfile.TemporaryDirectory() as js_dir:
+        Path(py_dir, "app.py").write_text("import os\nx = os.environ.get('X')\n")
+        Path(js_dir, "app.js").write_text("const x = 1;\n")
+        py = _statuses(_parse_output(_run({"mode": "whitebox", "checks": ["injection"], "code_path": py_dir})))
+        js = _statuses(_parse_output(_run({"mode": "whitebox", "checks": ["injection"], "code_path": js_dir})))
+    assert py["injection"]["state"] == "ok"
+    assert js["injection"]["state"] == "skipped"
+    assert js["injection"]["reason"] == "unsupported_target"
+    assert "JavaScript" in js["injection"]["detail"]
+
+
+def test_run_check_classifies_import_error_and_exception(capsys) -> None:
+    engine = _load_engine_module()
+
+    def missing() -> None:
+        raise ImportError("No module named 'packaging'")
+
+    def broken() -> None:
+        raise ValueError("bad spec")
+
+    assert engine._run_check("deps", "deps", missing, False) == ("skipped", "dependency_missing", "No module named 'packaging'")
+    state, reason, detail = engine._run_check("auth", "auth (spec)", broken, False)
+    assert (state, reason) == ("failed", "execution_error")
+    assert detail == "ValueError: bad spec"
+    assert engine._run_check("injection", "injection (ast)", lambda: None, False) == ("ok", None, None)
