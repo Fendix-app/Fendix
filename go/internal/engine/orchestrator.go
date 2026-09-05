@@ -712,6 +712,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// absent manifest, crash) must not be published as a check that ran.
 	checksRun = append(checksRun, codeScannerLabels(scanStatus)...)
 
+	scanStatus = scanStatus.sorted()
+	strict := o.cfg.FailOnCoverageGap || len(o.cfg.RequiredAnalyzers) > 0
+	cov := reporters.BuildCoverage([]reporters.ScannerStatus(scanStatus), o.cfg.RequiredAnalyzers, strict)
+
 	meta := reporters.ScanMetadata{
 		Target:    o.cfg.URL,
 		StartedAt: startTime,
@@ -728,7 +732,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		EndpointsTruncated:   crawler.Discovered > len(endpoints),
 		ActiveProbes:         o.cfg.EnableActive,
 		ChecksRun:            checksRun,
-		ScannerStatus:        []reporters.ScannerStatus(scanStatus.sorted()),
+		ScannerStatus:        []reporters.ScannerStatus(scanStatus),
+		Coverage:             &cov,
+		PolicyVersion:        decision.PolicyVersion,
 		Imports:              importedTools,
 	}
 
@@ -752,28 +758,8 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		slog.Info("warning summary", attrs...)
 	}
 
-	// F-L7/F-L13: surface a one-line scanner-status summary at scan end so
-	// a degraded run (a scanner that errored or was skipped) is visible
-	// without grepping the WARN stream. Only emitted when at least one
-	// code scanner ran.
-	if len(scanStatus) > 0 {
-		var ok, skipped, failed int
-		for _, s := range scanStatus {
-			switch s.State {
-			case reporters.ScannerOK:
-				ok++
-			case reporters.ScannerSkipped:
-				skipped++
-			case reporters.ScannerFailed:
-				failed++
-			}
-		}
-		args := []any{"ok", ok, "skipped", skipped, "failed", failed}
-		if failed > 0 {
-			args = append(args, "failed_scanners", strings.Join(scanStatus.failedNames(), ","))
-		}
-		slog.Info("scanner status summary", args...)
-	}
+	// Scan-end coverage table (spec §5.8): every registry entry, unconditionally.
+	printCoverageSummary(os.Stderr, scanStatus, cov, len(o.cfg.RequiredAnalyzers) > 0)
 
 	// Surface scan-budget telemetry whenever a cap was set, regardless of
 	// whether it fired. This makes "did we run out of budget?" trivially
@@ -817,6 +803,17 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		slog.Error("scanner failure recorded and --fail-on-scanner-error set — exiting non-zero",
 			"failed_scanners", strings.Join(scanStatus.failedNames(), ","))
 		fmt.Fprintf(os.Stderr, "fendix: scanner(s) failed and --fail-on-scanner-error is set: %s\n", strings.Join(scanStatus.failedNames(), ", "))
+		return 2
+	}
+
+	if o.cfg.FailOnCoverageGap && !cov.ConfiguredComplete {
+		slog.Error("coverage gap recorded and --fail-on-coverage-gap set — exiting non-zero", "gaps", strings.Join(cov.Gaps, ","))
+		fmt.Fprintf(os.Stderr, "fendix: coverage incomplete and --fail-on-coverage-gap is set: %s\n", describeGaps(scanStatus, cov.Gaps))
+		return 2
+	}
+	if len(cov.RequiredGaps) > 0 {
+		slog.Error("required analyzer(s) not delivered — exiting non-zero", "required_gaps", strings.Join(cov.RequiredGaps, ","))
+		fmt.Fprintf(os.Stderr, "fendix: required analyzer(s) not delivered: %s\n", describeGaps(scanStatus, cov.RequiredGaps))
 		return 2
 	}
 
@@ -1059,6 +1056,8 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 		Version:              reportVersion(o.version),
 		Mode:                 "import",
 		Imports:              importedTools,
+		Coverage:             func() *reporters.Coverage { c := reporters.BuildCoverage(nil, nil, false); return &c }(),
+		PolicyVersion:        decision.PolicyVersion,
 	}
 
 	_, decisions, ec := o.finalize(evid, meta)

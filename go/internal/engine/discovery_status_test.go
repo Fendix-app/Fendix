@@ -127,10 +127,9 @@ func TestOrchestrator_ZeroEndpointsWritesReportThenExits2(t *testing.T) {
 	if !ok || s.State != reporters.ScannerFailed || s.Reason != reporters.ReasonNoEndpoints {
 		t.Fatalf("dast = %+v, want failed/no_endpoints", s)
 	}
-	// report.Metadata.Coverage is populated in Task 9; restored in Task 9.
-	// if report.Metadata.Coverage == nil || report.Metadata.Coverage.ConfiguredComplete {
-	// 	t.Fatalf("coverage must be present and incomplete, got %+v", report.Metadata.Coverage)
-	// }
+	if report.Metadata.Coverage == nil || report.Metadata.Coverage.ConfiguredComplete {
+		t.Fatalf("coverage must be present and incomplete, got %+v", report.Metadata.Coverage)
+	}
 }
 
 func TestRunPlugins_OutcomeRecorded(t *testing.T) {

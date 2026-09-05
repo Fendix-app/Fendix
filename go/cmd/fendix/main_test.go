@@ -223,3 +223,13 @@ func TestRootHelpHasQuickstartAndGroups(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRequiredAnalyzers(t *testing.T) {
+	if err := validateRequiredAnalyzers([]string{"semgrep", "python-engine/injection"}); err != nil {
+		t.Fatalf("registered names must validate: %v", err)
+	}
+	err := validateRequiredAnalyzers([]string{"semgrep", "Semgrep"})
+	if err == nil || !strings.Contains(err.Error(), `"Semgrep"`) || !strings.Contains(err.Error(), "dast") {
+		t.Fatalf("unknown name must be rejected and the message must list the registry, got %v", err)
+	}
+}

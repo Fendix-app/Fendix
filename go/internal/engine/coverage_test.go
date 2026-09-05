@@ -1,16 +1,20 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/Abdel-RahmanSaied/Fendix/internal/decision"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
@@ -227,5 +231,91 @@ func TestRetryTransient_SecondAttemptFindingsReplaceFirst(t *testing.T) {
 	})
 	if err != nil || attempts != 2 || len(findings) != 2 || findings[0].ID != "SEC-A" {
 		t.Fatalf("second attempt must be authoritative: findings=%v attempts=%d err=%v", findings, attempts, err)
+	}
+}
+
+func TestOrchestrator_CoverageBlockPresentAndSorted(t *testing.T) {
+	dir := writeCodeDir(t)
+	out := filepath.Join(t.TempDir(), "report.json")
+	cfg := &models.ScanConfig{CodePath: dir, Workers: 1, Timeout: 5, Format: "json", OutputPath: out, Offline: true, OfflineDBPath: filepath.Join(t.TempDir(), "missing.json")}
+	NewOrchestrator(cfg, "dev").Run(context.Background())
+	report := readReport(t, out)
+	cov := report.Metadata.Coverage
+	if cov == nil || cov.ContractVersion != 1 || cov.Strict {
+		t.Fatalf("coverage = %+v", cov)
+	}
+	if report.Metadata.PolicyVersion != decision.PolicyVersion {
+		t.Fatalf("policy_version = %q, want %q", report.Metadata.PolicyVersion, decision.PolicyVersion)
+	}
+	// offline with no snapshot: pip and npm are dependency_missing → gaps.
+	// semgrep joins them wherever the binary isn't on PATH (this repo's own
+	// CI never installs it — see .github/workflows/ci.yml — so the check
+	// is done by real LookPath rather than assuming either state).
+	wantGaps := []string{"pip", "npm"}
+	if _, err := exec.LookPath("semgrep"); err != nil {
+		wantGaps = append([]string{"semgrep"}, wantGaps...)
+	}
+	if cov.ConfiguredComplete || !reflect.DeepEqual(cov.Gaps, wantGaps) {
+		t.Fatalf("gaps = %v, configured_complete = %v", cov.Gaps, cov.ConfiguredComplete)
+	}
+	var names []string
+	for _, s := range report.Metadata.ScannerStatus {
+		names = append(names, s.Name)
+	}
+	want := []string{"dast", "spec", "active-probes", "secrets", "textscan", "semgrep", "govulncheck", "pip", "npm", "python-engine", "plugins"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("entries are not in registry order: %v", names)
+	}
+}
+
+func TestOrchestrator_FailOnCoverageGapExits2(t *testing.T) {
+	dir := writeCodeDir(t)
+	mk := func(strict bool) *models.ScanConfig {
+		return &models.ScanConfig{CodePath: dir, Workers: 1, Timeout: 5, Format: "json", OutputPath: filepath.Join(t.TempDir(), "r.json"),
+			Offline: true, OfflineDBPath: filepath.Join(t.TempDir(), "missing.json"), FailOnCoverageGap: strict}
+	}
+	if code := NewOrchestrator(mk(false), "dev").Run(context.Background()); code != 0 {
+		t.Fatalf("without the flag: exit %d, want 0", code)
+	}
+	if code := NewOrchestrator(mk(true), "dev").Run(context.Background()); code != 2 {
+		t.Fatalf("with --fail-on-coverage-gap and a dependency_missing gap: exit %d, want 2", code)
+	}
+}
+
+func TestOrchestrator_RequireAnalyzersIsStricterThanConfiguredComplete(t *testing.T) {
+	dir := writeCodeDir(t)
+	out := filepath.Join(t.TempDir(), "r.json")
+	cfg := &models.ScanConfig{CodePath: dir, Workers: 1, Timeout: 5, Format: "json", OutputPath: out, Fast: true, RequiredAnalyzers: []string{"semgrep"}}
+	if code := NewOrchestrator(cfg, "dev").Run(context.Background()); code != 2 {
+		t.Fatalf("--fast --require-analyzers semgrep: exit %d, want 2", code)
+	}
+	cov := readReport(t, out).Metadata.Coverage
+	if !cov.Strict || !cov.ConfiguredComplete || !reflect.DeepEqual(cov.RequiredGaps, []string{"semgrep"}) {
+		t.Fatalf("coverage = %+v: --fast is not an engine gap, but semgrep was required and not delivered", cov)
+	}
+
+	cfg2 := &models.ScanConfig{CodePath: dir, Workers: 1, Timeout: 5, Format: "json", OutputPath: filepath.Join(t.TempDir(), "r2.json"), Fast: true, RequiredAnalyzers: []string{"secrets"}}
+	if code := NewOrchestrator(cfg2, "dev").Run(context.Background()); code != 0 {
+		t.Fatalf("required secrets ran: exit %d, want 0", code)
+	}
+}
+
+func TestPrintCoverageSummary_ListsEveryEntryAndTheVerdictLines(t *testing.T) {
+	var buf bytes.Buffer
+	status := scannerStatusList{
+		{Name: "secrets", State: reporters.ScannerOK},
+		{Name: "semgrep", State: reporters.ScannerSkipped, Reason: reporters.ReasonDisabledByFlag, Detail: "--fast"},
+		{Name: "pip", State: reporters.ScannerOK, Attempts: 2},
+	}
+	cov := reporters.BuildCoverage([]reporters.ScannerStatus(status), []string{"semgrep"}, true)
+	printCoverageSummary(&buf, status, cov, true)
+	out := buf.String()
+	for _, want := range []string{"secrets", "semgrep", "disabled", "disabled_by_flag", "coverage: complete", "required: not delivered (semgrep)", "2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q:\n%s", want, out)
+		}
+	}
+	if got := describeGaps(status, []string{"semgrep"}); !strings.Contains(got, "disabled by --fast") {
+		t.Errorf("describeGaps must name the contradiction, got %q", got)
 	}
 }

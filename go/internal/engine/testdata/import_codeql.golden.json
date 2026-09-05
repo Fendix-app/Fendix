@@ -105,6 +105,16 @@
   ],
   "metadata": {
     "active_probes": false,
+    "coverage": {
+      "configured_complete": true,
+      "contract_version": 1,
+      "gaps": [],
+      "limitations": [],
+      "required_analyzers": [],
+      "required_gaps": [],
+      "retried": [],
+      "strict": false
+    },
     "duration": "\u003cnormalized\u003e",
     "endpoints_scanned": 0,
     "fingerprint_algorithm": "fendix/v2",
@@ -116,6 +126,7 @@
       }
     ],
     "mode": "import",
+    "policy_version": "1.0.0",
     "schema_version": 2,
     "started_at": "\u003cnormalized\u003e",
     "target": "",
