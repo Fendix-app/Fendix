@@ -82,11 +82,9 @@ func TestResilience_MalformedFindingStream(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			findings, total, err := readFindings(strings.NewReader(tt.input))
+			sr := readFindings(strings.NewReader(tt.input))
 			// Must not panic — all other behavior is acceptable
-			_ = findings
-			_ = total
-			_ = err
+			_ = sr
 		})
 	}
 }

@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
 )
 
 // writePythonScript creates a temporary Python script that simulates the engine.
@@ -28,36 +31,33 @@ func TestReadFindings_ValidStream(t *testing.T) {
 {"id":"","title":"SQL injection","severity":"CRITICAL","source":"whitebox","category":"injection","endpoint":"db.py:42","evidence":"cursor.execute(f\"...\")","fix":"Use parameterized queries","references":["CWE-89"],"confidence":"HIGH","line":"db.py:42"}
 {"done":true,"total":2}
 `
-	findings, total, err := readFindings(strings.NewReader(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	sr := readFindings(strings.NewReader(input))
+	if sr.readErr != nil {
+		t.Fatalf("unexpected error: %v", sr.readErr)
 	}
-	if total != 2 {
-		t.Errorf("expected total 2, got %d", total)
+	if sr.doneTotal != 2 {
+		t.Errorf("expected total 2, got %d", sr.doneTotal)
 	}
-	if len(findings) != 2 {
-		t.Fatalf("expected 2 findings, got %d", len(findings))
+	if len(sr.findings) != 2 {
+		t.Fatalf("expected 2 findings, got %d", len(sr.findings))
 	}
-	if findings[0].Title != "Hardcoded secret" {
-		t.Errorf("unexpected title: %s", findings[0].Title)
+	if sr.findings[0].Title != "Hardcoded secret" {
+		t.Errorf("unexpected title: %s", sr.findings[0].Title)
 	}
-	if findings[1].Severity != models.SeverityCritical {
-		t.Errorf("unexpected severity: %s", findings[1].Severity)
+	if sr.findings[1].Severity != models.SeverityCritical {
+		t.Errorf("unexpected severity: %s", sr.findings[1].Severity)
 	}
 }
 
 func TestReadFindings_EmptyStream(t *testing.T) {
 	input := `{"done":true,"total":0}
 `
-	findings, total, err := readFindings(strings.NewReader(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	sr := readFindings(strings.NewReader(input))
+	if sr.doneTotal != 0 {
+		t.Errorf("expected total 0, got %d", sr.doneTotal)
 	}
-	if total != 0 {
-		t.Errorf("expected total 0, got %d", total)
-	}
-	if len(findings) != 0 {
-		t.Errorf("expected 0 findings, got %d", len(findings))
+	if len(sr.findings) != 0 {
+		t.Errorf("expected 0 findings, got %d", len(sr.findings))
 	}
 }
 
@@ -66,15 +66,15 @@ func TestReadFindings_MalformedLine(t *testing.T) {
 {"id":"","title":"Valid finding","severity":"HIGH","source":"whitebox","category":"test","endpoint":"a.py:1","evidence":"x","fix":"y","references":[],"confidence":"HIGH","line":null}
 {"done":true,"total":1}
 `
-	findings, total, err := readFindings(strings.NewReader(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	sr := readFindings(strings.NewReader(input))
+	if sr.doneTotal != 1 {
+		t.Errorf("expected total 1, got %d", sr.doneTotal)
 	}
-	if total != 1 {
-		t.Errorf("expected total 1, got %d", total)
+	if len(sr.findings) != 1 {
+		t.Errorf("expected 1 finding (malformed skipped), got %d", len(sr.findings))
 	}
-	if len(findings) != 1 {
-		t.Errorf("expected 1 finding (malformed skipped), got %d", len(findings))
+	if sr.malformed != 1 {
+		t.Errorf("expected 1 malformed line counted, got %d", sr.malformed)
 	}
 }
 
@@ -82,39 +82,36 @@ func TestReadFindings_MissingRequiredFields(t *testing.T) {
 	input := `{"id":"","title":"","severity":"","source":"","category":"","endpoint":"","evidence":"","fix":"","references":[],"confidence":"","line":null}
 {"done":true,"total":0}
 `
-	findings, _, err := readFindings(strings.NewReader(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	sr := readFindings(strings.NewReader(input))
+	if len(sr.findings) != 0 {
+		t.Errorf("expected 0 findings (empty title/severity skipped), got %d", len(sr.findings))
 	}
-	if len(findings) != 0 {
-		t.Errorf("expected 0 findings (empty title/severity skipped), got %d", len(findings))
+	if sr.malformed != 1 {
+		t.Errorf("expected the empty-fields line to be counted malformed, got %d", sr.malformed)
 	}
 }
 
 func TestReadFindings_DoneWithError(t *testing.T) {
 	input := `{"done":true,"total":0,"error":"invalid ScanRequest JSON: Expecting value"}
 `
-	_, _, err := readFindings(strings.NewReader(input))
-	if err == nil {
-		t.Fatal("expected error from done message with error field")
+	sr := readFindings(strings.NewReader(input))
+	if sr.doneErr == "" {
+		t.Fatal("expected doneErr from done message with error field")
 	}
-	if !strings.Contains(err.Error(), "invalid ScanRequest JSON") {
-		t.Errorf("unexpected error message: %v", err)
+	if !strings.Contains(sr.doneErr, "invalid ScanRequest JSON") {
+		t.Errorf("unexpected doneErr message: %v", sr.doneErr)
 	}
 }
 
 func TestReadFindings_NoTerminator(t *testing.T) {
 	input := `{"id":"","title":"Orphan finding","severity":"MEDIUM","source":"whitebox","category":"test","endpoint":"a.py:1","evidence":"x","fix":"y","references":[],"confidence":"MEDIUM","line":null}
 `
-	findings, total, err := readFindings(strings.NewReader(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	sr := readFindings(strings.NewReader(input))
+	if len(sr.findings) != 1 {
+		t.Errorf("expected 1 finding, got %d", len(sr.findings))
 	}
-	if len(findings) != 1 {
-		t.Errorf("expected 1 finding, got %d", len(findings))
-	}
-	if total != 1 {
-		t.Errorf("expected total 1 (fallback), got %d", total)
+	if sr.sawDone {
+		t.Error("expected sawDone false: stream ended without a done line")
 	}
 }
 
@@ -124,15 +121,12 @@ func TestReadFindings_BlankLines(t *testing.T) {
 
 {"done":true,"total":1}
 `
-	findings, total, err := readFindings(strings.NewReader(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	sr := readFindings(strings.NewReader(input))
+	if sr.doneTotal != 1 {
+		t.Errorf("expected total 1, got %d", sr.doneTotal)
 	}
-	if total != 1 {
-		t.Errorf("expected total 1, got %d", total)
-	}
-	if len(findings) != 1 {
-		t.Errorf("expected 1 finding, got %d", len(findings))
+	if len(sr.findings) != 1 {
+		t.Errorf("expected 1 finding, got %d", len(sr.findings))
 	}
 }
 
@@ -140,15 +134,12 @@ func TestReadFindings_WhiteboxSourceDefault(t *testing.T) {
 	input := `{"id":"","title":"No source","severity":"HIGH","source":"","category":"test","endpoint":"a.py","evidence":"x","fix":"y","references":[],"confidence":"HIGH","line":null}
 {"done":true,"total":1}
 `
-	findings, _, err := readFindings(strings.NewReader(input))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	sr := readFindings(strings.NewReader(input))
+	if len(sr.findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(sr.findings))
 	}
-	if len(findings) != 1 {
-		t.Fatalf("expected 1 finding, got %d", len(findings))
-	}
-	if findings[0].Source != models.SourceWhitebox {
-		t.Errorf("expected source whitebox, got %s", findings[0].Source)
+	if sr.findings[0].Source != models.SourceWhitebox {
+		t.Errorf("expected source whitebox, got %s", sr.findings[0].Source)
 	}
 }
 
@@ -435,5 +426,140 @@ func TestScanRequest_HasNoLanguageField(t *testing.T) {
 				"hint is genuinely needed, WIRE it from a flag — do not add another field\n"+
 				"nothing populates.", f.Name)
 		}
+	}
+}
+
+// writeFakeEngine writes a minimal engine.py (with the json/sys imports
+// prepended) into a fresh temp dir and returns the dir, for spawner-level
+// (Run) tests that only need to supply the print(...) body.
+func writeFakeEngine(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "engine.py"), []byte("import json, sys\n"+body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestReadFindings_StatusLinesAreNotFindings(t *testing.T) {
+	in := strings.NewReader(strings.Join([]string{
+		`{"status": {"check": "auth", "state": "skipped", "reason": "not_applicable", "detail": "no spec supplied"}}`,
+		`{"title": "SQLi", "severity": "HIGH", "category": "injection", "endpoint": "app.py:3"}`,
+		`{"status": {"check": "injection", "state": "ok"}}`,
+		`{"status": {"check": "deps", "state": "skipped", "reason": "dependency_missing", "detail": "No module named 'packaging'"}}`,
+		`{"done": true, "total": 1, "protocol": 2}`,
+	}, "\n"))
+	sr := readFindings(in)
+	if len(sr.findings) != 1 || sr.doneTotal != 1 || !sr.sawDone || sr.malformed != 0 || sr.protocol != 2 {
+		t.Fatalf("unexpected stream result: %+v", sr)
+	}
+	if len(sr.checks) != 3 || sr.checks[0].Check != "auth" || sr.checks[0].Reason != "not_applicable" || sr.checks[1].State != "ok" || sr.checks[2].Detail == "" {
+		t.Fatalf("status lines not parsed: %+v", sr.checks)
+	}
+}
+
+func TestReadFindings_MissingDoneAndMalformedCounted(t *testing.T) {
+	sr := readFindings(strings.NewReader(`{"title": "x", "severity": "LOW"}` + "\n" + `this is not json` + "\n"))
+	if sr.sawDone || sr.malformed != 1 || len(sr.findings) != 1 {
+		t.Fatalf("unexpected: %+v", sr)
+	}
+}
+
+func TestSpawner_OutcomeClassification(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	finding := `{"title": "SQLi", "severity": "HIGH", "category": "injection", "endpoint": "app.py:3"}`
+	for _, tc := range []struct {
+		name string
+		body string
+		want SpawnOutcome
+	}{
+		{"ok", "print('" + finding + "', flush=True)\nprint(json.dumps({'done': True, 'total': 1}), flush=True)\n", SpawnOK},
+		{"truncated: no done", "print('" + finding + "', flush=True)\n", SpawnTruncated},
+		{"truncated: total mismatch", "print('" + finding + "', flush=True)\nprint(json.dumps({'done': True, 'total': 5}), flush=True)\n", SpawnTruncated},
+		{"malformed line", "print('not json at all', flush=True)\nprint(json.dumps({'done': True, 'total': 0}), flush=True)\n", SpawnMalformed},
+		{"exit error wins over done", "print(json.dumps({'done': True, 'total': 0}), flush=True)\nsys.exit(3)\n", SpawnExitError},
+		{"done.error", "print(json.dumps({'done': True, 'total': 0, 'error': 'boom'}), flush=True)\n", SpawnExitError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeFakeEngine(t, tc.body)
+			res := NewPythonSpawner("python3", dir).Run(context.Background(), ScanRequest{Mode: "whitebox", Checks: []string{"injection"}})
+			if res.Outcome != tc.want {
+				t.Fatalf("outcome = %v (err=%v), want %v", res.Outcome, res.Err, tc.want)
+			}
+			if tc.want != SpawnOK && res.Err == nil {
+				t.Fatal("a non-ok outcome must carry an error")
+			}
+		})
+	}
+}
+
+func TestSpawner_ProtocolV2ChildCompleteness(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	st := func(check, state string) string {
+		return "print(json.dumps({'status': {'check': '" + check + "', 'state': '" + state + "'}}), flush=True)\n"
+	}
+	done := "print(json.dumps({'done': True, 'total': 0, 'protocol': 2}), flush=True)\n"
+	legacyDone := "print(json.dumps({'done': True, 'total': 0}), flush=True)\n"
+	for _, tc := range []struct {
+		name       string
+		body       string
+		want       SpawnOutcome
+		wantChecks int
+	}{
+		{"all three exactly once", st("auth", "ok") + st("injection", "ok") + st("deps", "ok") + done, SpawnOK, 3},
+		{"missing one is truncated", st("auth", "ok") + st("deps", "ok") + done, SpawnTruncated, 2},
+		{"duplicate is malformed", st("auth", "ok") + st("injection", "ok") + st("injection", "ok") + st("deps", "ok") + done, SpawnMalformed, 4},
+		{"unknown child is malformed", st("auth", "ok") + st("injection", "ok") + st("deps", "ok") + st("secrets", "ok") + done, SpawnMalformed, 4},
+		{"legacy stream: children ignored, parent ok", st("auth", "ok") + legacyDone, SpawnOK, 0},
+		{"legacy stream without any status lines", legacyDone, SpawnOK, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeFakeEngine(t, tc.body)
+			res := NewPythonSpawner("python3", dir).Run(context.Background(), ScanRequest{Mode: "whitebox", Checks: []string{"auth", "injection", "deps"}})
+			if res.Outcome != tc.want {
+				t.Fatalf("outcome = %v (err=%v), want %v", res.Outcome, res.Err, tc.want)
+			}
+			if len(res.Checks) != tc.wantChecks {
+				t.Fatalf("checks kept = %d, want %d: %+v", len(res.Checks), tc.wantChecks, res.Checks)
+			}
+		})
+	}
+}
+
+func TestRecordPythonEngine_ChildrenParticipateParentStaysOK(t *testing.T) {
+	var l scannerStatusList
+	recordPythonEngine(&l, SpawnResult{Outcome: SpawnOK, Protocol: 2, Checks: []CheckStatus{
+		{Check: "auth", State: "skipped", Reason: "not_applicable", Detail: "no spec supplied"},
+		{Check: "injection", State: "ok"},
+		{Check: "deps", State: "skipped", Reason: "dependency_missing", Detail: "No module named 'packaging'"},
+	}})
+	if got := find(l, AnalyzerPythonEngine); got.State != reporters.ScannerOK {
+		t.Fatalf("parent = %+v, want ok", got)
+	}
+	if got := find(l, AnalyzerPythonDeps); got.Reason != reporters.ReasonDependencyMissing {
+		t.Fatalf("deps child = %+v, want dependency_missing", got)
+	}
+	if n := len(l); n != 4 {
+		t.Fatalf("expected parent + 3 children, got %d entries: %+v", n, l)
+	}
+
+	l = nil
+	recordPythonEngine(&l, SpawnResult{Outcome: SpawnOK, Protocol: 2, Checks: []CheckStatus{{Check: "injection", State: "failed", Reason: "not_applicable"}}})
+	if got := find(l, AnalyzerPythonInjection); got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonMalformedOutput {
+		t.Fatalf("mismatched pairing must be recorded as failed/malformed_output, got %+v", got)
+	}
+
+	l = nil
+	recordPythonEngine(&l, SpawnResult{Outcome: SpawnTruncated, Protocol: 2, Err: errors.New("python engine (protocol 2) omitted status for: deps"),
+		Checks: []CheckStatus{{Check: "auth", State: "ok"}, {Check: "injection", State: "ok"}}})
+	if got := find(l, AnalyzerPythonEngine); got.Reason != reporters.ReasonTruncatedOutput {
+		t.Fatalf("missing child → parent %+v, want truncated_output", got)
+	}
+	if !l.has(AnalyzerPythonAuth) || l.has(AnalyzerPythonDeps) {
+		t.Fatal("reported children are kept; the missing one has no entry — the parent failure carries the gap")
 	}
 }

@@ -47,6 +47,11 @@ type Orchestrator struct {
 	// scan to native-Go-only output (the silent no-op bug). nil when SAST was
 	// not requested or the engine resolved cleanly.
 	engineErr error
+	// engineMissing records why EnsureEngine could not resolve the Python
+	// tree, on the explicit AND the implicit path. Read when recording the
+	// python-engine entry so an implicit --code scan without a tree is a
+	// visible dependency_missing rather than a stderr line.
+	engineMissing error
 	// metrics is the opt-in product-metrics collector (v0.20). It is a
 	// NoopCollector unless FENDIX_METRICS is set, so the scan path pays
 	// nothing when metrics are disabled. nil only when an Orchestrator is
@@ -66,6 +71,7 @@ type Orchestrator struct {
 func NewOrchestrator(cfg *models.ScanConfig, version string) *Orchestrator {
 	engineDir := ""
 	var engineErr error
+	var engineMissing error
 	if cfg.PythonEngine {
 		dir, err := EnsureEngine("", version)
 		if err != nil {
@@ -84,17 +90,22 @@ func NewOrchestrator(cfg *models.ScanConfig, version string) *Orchestrator {
 			if cfg.PythonEngineExplicit {
 				engineErr = err
 			}
+			// engineMissing is set on BOTH paths: it feeds the python-engine
+			// scanner_status entry (dependency_missing), which must be visible
+			// whether or not the missing tree was also fatal to the whole scan.
+			engineMissing = err
 		} else {
 			engineDir = dir
 		}
 	}
 
 	return &Orchestrator{
-		cfg:       cfg,
-		spawner:   NewPythonSpawner("", engineDir),
-		version:   version,
-		engineErr: engineErr,
-		metrics:   metrics.FromEnv(""),
+		cfg:           cfg,
+		spawner:       NewPythonSpawner("", engineDir),
+		version:       version,
+		engineErr:     engineErr,
+		engineMissing: engineMissing,
+		metrics:       metrics.FromEnv(""),
 	}
 }
 
@@ -585,22 +596,36 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		}
 	}
 
-	// 4. Spawn Python engine for white-box analysis. Default off as of
+	// 4. Python whitebox engine — registry entry python-engine plus the
+	// children the protocol reports (spec §4.4, §5.4). Default off as of
 	// TASK-118 — secrets (TASK-115) + semgrep (TASK-116) now run in
 	// native Go and the embedded Python distribution is no longer
 	// bundled. Set --python-engine to re-enable the Python auth /
 	// injection / deps checks; requires a usable Python source tree
 	// resolvable via EnsureEngine (local python/ or explicit FENDIX_ENGINE).
-	if o.cfg.PythonEngine && (o.cfg.CodePath != "" || o.cfg.SpecPath != "") {
+	switch {
+	case !o.cfg.PythonEngine && !codeConfigured && o.cfg.SpecPath == "":
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "no --code or --spec")
+	case !o.cfg.PythonEngine:
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonDisabledByFlag, "--python-engine=false")
+	case !codeConfigured && o.cfg.SpecPath == "":
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "no --code or --spec")
+	case codeConfigured && !codeUsable && o.cfg.SpecPath == "":
+		scanStatus.fail(AnalyzerPythonEngine, reporters.ReasonInputError, codeErr)
+	case o.engineMissing != nil:
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonDependencyMissing, "engine tree not found: "+o.engineMissing.Error())
+	default:
 		pyStatus := CheckPython(o.spawner.pythonBin)
 		if !pyStatus.Available {
 			slog.Warn("python not available — skipping whitebox analysis")
 			fmt.Fprintln(os.Stderr, "fendix: "+PythonRequiredMessage())
+			scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonDependencyMissing, "python3 interpreter not found ("+pyStatus.Binary+")")
 		} else {
 			slog.Info("python available", "version", pyStatus.Version, "binary", pyStatus.Binary)
 			bundle.SetPythonVersion(pyStatus.Version)
-			wbFindings := o.runWhiteboxScan(ctx)
+			wbFindings, result := o.runWhiteboxScan(ctx)
 			evid = append(evid, wbFindings...)
+			recordPythonEngine(&scanStatus, result)
 		}
 	}
 
@@ -649,17 +674,6 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	}
 
 	duration := time.Since(startTime)
-
-	// Temporary placeholder (spec §10): python-engine is a base analyzer
-	// that must appear exactly once on every scan, but its real recording
-	// logic isn't wired yet — Task 5 records its actual outcome (protocol
-	// result / not-requested / engine-unavailable). plugins now records
-	// itself above via recordPlugins. Guarded with has() so this is a
-	// no-op once Task 5 lands its own scanStatus.set/skip/ok calls earlier
-	// in Run.
-	if !scanStatus.has(AnalyzerPythonEngine) {
-		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "recorded in Task 5")
-	}
 
 	// Determine scan mode for metadata
 	scanMode := "blackbox"
@@ -1357,6 +1371,39 @@ func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints
 	}
 }
 
+// recordPythonEngine maps a spawn outcome onto the python-engine entry and
+// records each protocol-v2 status line as a child entry. The spawner has
+// already enforced completeness (one line per expected check, no unknown
+// checks); this function validates the state/reason pairing and keeps the
+// parent's process semantics separate from any child's final state.
+func recordPythonEngine(status *scannerStatusList, res SpawnResult) {
+	switch res.Outcome {
+	case SpawnOK:
+		status.ok(AnalyzerPythonEngine)
+	case SpawnMalformed:
+		status.fail(AnalyzerPythonEngine, reporters.ReasonMalformedOutput, res.Err)
+	case SpawnTruncated:
+		status.fail(AnalyzerPythonEngine, reporters.ReasonTruncatedOutput, res.Err)
+	default: // SpawnStartError, SpawnExitError, SpawnCancelled
+		status.fail(AnalyzerPythonEngine, reporters.ReasonExecutionError, res.Err)
+	}
+	for _, c := range res.Checks {
+		name := AnalyzerPythonEngine + "/" + c.Check
+		if !IsRegisteredAnalyzer(name) || status.has(name) {
+			continue // unreachable after spawner validation; defensive only
+		}
+		entry := reporters.ScannerStatus{Name: name, State: reporters.ScannerStatusState(c.State), Reason: reporters.ScannerReason(c.Reason), Detail: c.Detail}
+		valid := (entry.State == reporters.ScannerOK && entry.Reason == "") ||
+			(entry.State == reporters.ScannerSkipped && entry.Reason.IsSkip()) ||
+			(entry.State == reporters.ScannerFailed && entry.Reason.IsFail())
+		if !valid {
+			entry = reporters.ScannerStatus{Name: name, State: reporters.ScannerFailed, Reason: reporters.ReasonMalformedOutput,
+				Detail: fmt.Sprintf("invalid status line: state=%q reason=%q", c.State, c.Reason)}
+		}
+		status.set(entry)
+	}
+}
+
 // absPathOrEmpty resolves p to an absolute path. Returns "" for an
 // empty input (so unset flags don't become spurious paths). Failures
 // fall back to the original value rather than dropping the field —
@@ -1394,7 +1441,7 @@ func dbPathForLog(cfg *models.ScanConfig) string {
 // (matching SEC-* IDs mean dedup collapses any overlap), but they aren't
 // on by default. The Python files stay in-tree for one release window in
 // case of rollback; TASK-118 deletes them.
-func (o *Orchestrator) runWhiteboxScan(ctx context.Context) []evidence.Evidence {
+func (o *Orchestrator) runWhiteboxScan(ctx context.Context) ([]evidence.Evidence, SpawnResult) {
 	checks := []string{"auth", "injection", "deps"}
 	if len(o.cfg.Checks) > 0 {
 		checks = o.cfg.Checks
@@ -1417,13 +1464,11 @@ func (o *Orchestrator) runWhiteboxScan(ctx context.Context) []evidence.Evidence 
 
 	result := o.spawner.Run(ctx, req)
 	if result.Err != nil {
-		slog.Error("python engine failed — ensure Python 3 is installed and python/requirements.txt dependencies are available", "error", result.Err)
-		// Return whatever findings we collected before the error
-		return evidence.FromFindings(result.Findings)
+		slog.Error("python engine did not complete cleanly — findings received so far are kept", "outcome", result.Outcome, "error", result.Err)
+	} else {
+		slog.Info("whitebox scan complete", "findings", len(result.Findings))
 	}
-
-	slog.Info("whitebox scan complete", "findings", len(result.Findings))
-	return evidence.FromFindings(result.Findings)
+	return evidence.FromFindings(result.Findings), result
 }
 
 // stampDecisions scores every FINAL finding and stamps the verdict (status,
