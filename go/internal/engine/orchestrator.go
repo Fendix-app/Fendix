@@ -265,6 +265,27 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// invocations[].executionSuccessful flag, and (opt-in) the exit code.
 	var scanStatus scannerStatusList
 
+	// Validate --code once. An unreadable path is an input error for every
+	// code analyzer (spec §4.4), recorded identically so a consumer sees one
+	// cause, not six different scanner-specific messages. Doing this ONE
+	// validation up front — instead of letting each of secrets/semgrep/
+	// textscan/govulncheck/pip/npm independently stat the path and produce
+	// its own execution_error wording — is what makes "input_error on every
+	// code analyzer" an invariant rather than a coincidence of six error
+	// messages happening to agree.
+	codeConfigured := o.cfg.CodePath != ""
+	var codeErr error
+	if codeConfigured {
+		codeErr = o.validateCodePath()
+		if codeErr != nil {
+			slog.Error("--code is not a readable directory", "path", o.cfg.CodePath, "error", codeErr)
+			for _, name := range []string{AnalyzerSecrets, AnalyzerTextscan, AnalyzerSemgrep, AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+				scanStatus.fail(name, reporters.ReasonInputError, codeErr)
+			}
+		}
+	}
+	codeUsable := codeConfigured && codeErr == nil
+
 	// --offline (F-M4/F-H4): load the air-gapped snapshot once. In offline
 	// mode the orchestrator MUST NOT make any outbound call — pip/npm
 	// consult this snapshot and govulncheck (which needs vuln.go.dev) is
@@ -340,7 +361,28 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// Each ecosystem has an ErrNo... sentinel for silent-skip; other
 	// errors are RECORDED (per-scanner status) and the scan continues so
 	// a network blip doesn't stop a scan from reporting other findings.
-	if o.cfg.CodePath != "" && !o.cfg.NoNativeDeps && !o.cfg.Fast {
+	//
+	// Explicit else branches (spec §10): --no-code, an unreadable --code,
+	// --fast and --no-native-deps must each record all three dep
+	// scanners with a reason rather than leaving no entry at all — that
+	// used to be four different ways for govulncheck/pip/npm to go
+	// missing from scanner_status with no trace of why.
+	switch {
+	case !codeConfigured:
+		for _, name := range []string{AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+			scanStatus.skip(name, reporters.ReasonNotApplicable, "no --code")
+		}
+	case !codeUsable:
+		// already recorded input_error above
+	case o.cfg.Fast:
+		for _, name := range []string{AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+			scanStatus.skip(name, reporters.ReasonDisabledByFlag, "--fast")
+		}
+	case o.cfg.NoNativeDeps:
+		for _, name := range []string{AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+			scanStatus.skip(name, reporters.ReasonDisabledByFlag, "--no-native-deps")
+		}
+	default:
 		// govulncheck needs the live vuln.go.dev DB and a build of the
 		// target module; it has no snapshot-only mode. In --offline we do
 		// NOT call it (that would be a silent outbound call) — record it
@@ -438,7 +480,18 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// Python implementation so any overlap (e.g. user explicitly passes
 	// --checks secrets) dedupes cleanly. No network access — runs in
 	// offline mode unchanged.
-	if o.cfg.CodePath != "" && !diffEmpty {
+	//
+	// Explicit else branches (spec §10): no --code, an unreadable --code,
+	// and an empty diff each record ONE reasoned entry instead of leaving
+	// secrets absent from scanner_status.
+	switch {
+	case !codeConfigured:
+		scanStatus.skip(AnalyzerSecrets, reporters.ReasonNotApplicable, "no --code")
+	case !codeUsable:
+		// already recorded input_error above
+	case diffEmpty:
+		// recorded diff_unchanged above
+	default:
 		secretEvidence, err := secrets.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
 		switch {
 		case err == nil:
@@ -463,7 +516,22 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// graceful absence matches the existing posture for missing
 	// Python. Same SEC-* IDs as the Python wrapper so dedup absorbs
 	// any overlap when a user opts the Python path back in.
-	if o.cfg.CodePath != "" && !o.cfg.Fast && !diffEmpty {
+	//
+	// Explicit else branches (spec §10). The diff short-circuit above
+	// (allow != nil && allow.Empty()) already guards itself with
+	// `if !o.cfg.Fast` before recording semgrep diff_unchanged, so the
+	// o.cfg.Fast case here MUST come before diffEmpty: a fast run against
+	// an empty diff records semgrep once, as disabled_by_flag, never twice.
+	switch {
+	case !codeConfigured:
+		scanStatus.skip(AnalyzerSemgrep, reporters.ReasonNotApplicable, "no --code")
+	case !codeUsable:
+		// already recorded input_error above
+	case o.cfg.Fast:
+		scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDisabledByFlag, "--fast")
+	case diffEmpty:
+		// recorded diff_unchanged above
+	default:
 		semgrepFindings, err := semgrep.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
 		switch {
 		case err == nil:
@@ -486,7 +554,18 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// for Go, JS/TS, Dockerfile, and Kubernetes YAML. Pure stdlib,
 	// no external tooling required. Fast (<1s on typical repos)
 	// because it's filename-extension-routed line scanning.
-	if o.cfg.CodePath != "" && !diffEmpty {
+	//
+	// Explicit else branches (spec §10): no --code, an unreadable --code,
+	// and an empty diff each record ONE reasoned entry instead of leaving
+	// textscan absent from scanner_status.
+	switch {
+	case !codeConfigured:
+		scanStatus.skip(AnalyzerTextscan, reporters.ReasonNotApplicable, "no --code")
+	case !codeUsable:
+		// already recorded input_error above
+	case diffEmpty:
+		// recorded diff_unchanged above
+	default:
 		textFindings, err := textscan.ScanWithAllowlist(o.cfg.CodePath, textscan.AllRules(), allow)
 		switch {
 		case err != nil:
@@ -562,6 +641,20 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 
 	duration := time.Since(startTime)
 
+	// Temporary placeholders (spec §10): python-engine and plugins are base
+	// analyzers that must appear exactly once on every scan, but their real
+	// recording logic isn't wired yet — Task 5 records python-engine's
+	// actual outcome (protocol result / not-requested / engine-unavailable)
+	// and Task 4 does the same for plugins (discovered-and-ran / none-found
+	// / --no-plugins). Guarded with has() so this is a no-op once those
+	// tasks land their own scanStatus.set/skip/ok calls earlier in Run.
+	if !scanStatus.has(AnalyzerPythonEngine) {
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "recorded in Task 5")
+	}
+	if !scanStatus.has(AnalyzerPlugins) {
+		scanStatus.skip(AnalyzerPlugins, reporters.ReasonNotApplicable, "recorded in Task 4")
+	}
+
 	// Determine scan mode for metadata
 	scanMode := "blackbox"
 	if (o.cfg.CodePath != "" || o.cfg.SpecPath != "") && o.cfg.URL != "" {
@@ -599,7 +692,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		EndpointsTruncated:   crawler.Discovered > len(endpoints),
 		ActiveProbes:         o.cfg.EnableActive,
 		ChecksRun:            checksRun,
-		ScannerStatus:        []reporters.ScannerStatus(scanStatus),
+		ScannerStatus:        []reporters.ScannerStatus(scanStatus.sorted()),
 		Imports:              importedTools,
 	}
 
@@ -1131,6 +1224,22 @@ func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
 	// at this ingestion boundary (v0.22). No native provenance to add — the
 	// wire format carries only Finding fields.
 	return evidence.FromFindings(out)
+}
+
+// validateCodePath reports why --code cannot be scanned: missing, not a
+// directory, or unreadable. nil means every code analyzer may walk it.
+func (o *Orchestrator) validateCodePath() error {
+	info, err := os.Stat(o.cfg.CodePath)
+	if err != nil {
+		return fmt.Errorf("code path: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("code path %q is not a directory", o.cfg.CodePath)
+	}
+	if _, err := os.ReadDir(o.cfg.CodePath); err != nil {
+		return fmt.Errorf("code path: %w", err)
+	}
+	return nil
 }
 
 // absPathOrEmpty resolves p to an absolute path. Returns "" for an

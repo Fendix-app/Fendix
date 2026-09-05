@@ -1,6 +1,7 @@
 package pip
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -105,13 +106,14 @@ func TestScanOffline_NilSnapshotErrors(t *testing.T) {
 	}
 }
 
-// TestScanOffline_NoManifestsEmpty mirrors the online "checked
-// everywhere, nothing to scan" contract (empty slice, no error).
-func TestScanOffline_NoManifestsEmpty(t *testing.T) {
+// TestScanOffline_NoManifestsIsErrNoManifests mirrors the online "checked
+// everywhere, nothing to scan" contract: ErrNoManifests, not a silent
+// empty-slice ok, so the orchestrator can record pip skipped/not_applicable.
+func TestScanOffline_NoManifestsIsErrNoManifests(t *testing.T) {
 	snap := offline.FromOSVExport(nil, nil)
 	findings, err := ScanOffline(t.TempDir(), DefaultRecurseDepth, snap)
-	if err != nil {
-		t.Fatalf("ScanOffline: %v", err)
+	if !errors.Is(err, ErrNoManifests) {
+		t.Fatalf("ScanOffline: got err %v, want ErrNoManifests", err)
 	}
 	if len(findings) != 0 {
 		t.Errorf("got %d findings; want 0", len(findings))

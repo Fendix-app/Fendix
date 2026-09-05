@@ -465,11 +465,11 @@ func TestFindRequirementsManifests_DepthCap(t *testing.T) {
 	}
 }
 
-func TestScanRecursive_EmptyDirReturnsEmptySlice(t *testing.T) {
+func TestScanRecursive_EmptyDirReturnsErrNoManifests(t *testing.T) {
 	dir := t.TempDir()
 	findings, err := ScanRecursive(context.Background(), dir, DefaultRecurseDepth)
-	if err != nil {
-		t.Fatalf("ScanRecursive: %v", err)
+	if !errors.Is(err, ErrNoManifests) {
+		t.Fatalf("ScanRecursive: got err %v, want ErrNoManifests", err)
 	}
 	if len(findings) != 0 {
 		t.Errorf("want empty findings; got %d", len(findings))

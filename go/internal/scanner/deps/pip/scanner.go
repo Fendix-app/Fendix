@@ -52,11 +52,13 @@ import (
 // requirements.txt at its root. Callers use this to skip silently.
 var ErrNoRequirements = errors.New("pip: no requirements.txt at path root")
 
-// ErrNoManifests is returned by the recursive scan when no Python
+// ErrNoManifests is returned by the recursive scan (scanViaOSV,
+// ScanOffline, and the pip-audit subprocess path) when no Python
 // manifest (requirements.txt, Pipfile.lock, poetry.lock, pyproject.toml)
-// was found anywhere under codePath. Placeholder here — Task 3 wires it
-// into the recursive walk; for now recordDepScanResult's errors.Is check
-// against it simply never matches.
+// was found anywhere under codePath. The orchestrator's
+// recordDepScanResult maps this to skipped/not_applicable — a project
+// with no Python dependencies is not a clean "ok" run of a scanner that
+// never got to scan anything.
 var ErrNoManifests = errors.New("pip: no Python manifest under code path")
 
 // DefaultRecurseDepth bounds how many directory levels ScanRecursive
@@ -206,10 +208,12 @@ type Options struct {
 // `maxDepth=0` means "current directory only" (equivalent to Scan).
 // `maxDepth=1` means "current directory + immediate children", etc.
 //
-// Returns the empty slice (not ErrNoRequirements) when the walk finds
-// no manifests at any depth — that's a "checked everywhere, nothing to
-// scan" state distinct from a single-level miss. Caller can decide
-// whether to log or skip.
+// Returns ErrNoManifests (not ErrNoRequirements) when the walk finds no
+// manifests at any depth — that's a "checked everywhere, nothing to
+// scan" state distinct from a single-level miss. The coverage contract
+// (spec §10) needs this as a distinct sentinel, not an empty slice,
+// so the orchestrator can record pip skipped/not_applicable instead of
+// a silent ok on a project with no Python dependencies.
 //
 // Dedups by absolute path so a symlink loop can't double-count, and
 // scans manifests in alphabetical path order for stable output.
@@ -244,8 +248,8 @@ func ScanRecursiveWithOptions(ctx context.Context, codePath string, maxDepth int
 // (same SEC-DEPS-<id> IDs, Title/Fix/References) so dedup, correlation,
 // and the reporters cannot tell the two apart.
 //
-// Returns the empty slice (not ErrNoRequirements) when the walk finds
-// no manifests, matching scanViaOSV's "checked everywhere, nothing to
+// Returns ErrNoManifests (not ErrNoRequirements) when the walk finds no
+// manifests, matching scanViaOSV's "checked everywhere, nothing to
 // scan" contract.
 func ScanOffline(codePath string, maxDepth int, snap *offline.Snapshot) ([]evidence.Evidence, error) {
 	if snap == nil {
@@ -263,7 +267,7 @@ func ScanOffline(codePath string, maxDepth int, snap *offline.Snapshot) ([]evide
 		return nil, fmt.Errorf("pip: walk for requirements.txt: %w", err)
 	}
 	if len(manifests) == 0 {
-		return []evidence.Evidence{}, nil
+		return nil, ErrNoManifests
 	}
 
 	var findings []evidence.Evidence
@@ -350,7 +354,7 @@ func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.
 		return nil, fmt.Errorf("pip: walk for requirements.txt: %w", err)
 	}
 	if len(manifests) == 0 {
-		return []evidence.Evidence{}, nil
+		return nil, ErrNoManifests
 	}
 
 	// Phase 1: collect all (package, manifest-rel-path) pairs across
@@ -640,7 +644,7 @@ func scanViaSubprocess(ctx context.Context, codePath string, maxDepth int, pipAu
 		return nil, fmt.Errorf("pip: walk for requirements.txt: %w", err)
 	}
 	if len(manifests) == 0 {
-		return []evidence.Evidence{}, nil
+		return nil, ErrNoManifests
 	}
 	var all []evidence.Evidence
 	for _, m := range manifests {
