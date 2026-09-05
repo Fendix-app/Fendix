@@ -3,6 +3,7 @@ package reporters
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -810,7 +811,9 @@ func TestRenderSARIF_Invocation(t *testing.T) {
 
 // TestRenderSARIF_ExecutionSuccessfulFalseOnScannerFailure verifies F-L13:
 // a recorded scanner failure flips executionSuccessful to false and emits a
-// toolExecutionNotification, so SARIF consumers see a degraded run.
+// toolExecutionNotification, so SARIF consumers see a degraded run. Every
+// non-ok entry is now itemised, so the skip alongside the failure also
+// produces a notification; this test pins down only the failure's.
 func TestRenderSARIF_ExecutionSuccessfulFalseOnScannerFailure(t *testing.T) {
 	var buf bytes.Buffer
 	meta := ScanMetadata{
@@ -833,41 +836,138 @@ func TestRenderSARIF_ExecutionSuccessfulFalseOnScannerFailure(t *testing.T) {
 	if inv.ExecutionSuccessful {
 		t.Error("expected executionSuccessful=false when a scanner failed")
 	}
-	if len(inv.ToolExecutionNotifications) != 1 {
-		t.Fatalf("expected 1 notification (only the failed scanner), got %d", len(inv.ToolExecutionNotifications))
+	if len(inv.ToolExecutionNotifications) != 2 {
+		t.Fatalf("expected 2 notifications (one per non-ok entry), got %d", len(inv.ToolExecutionNotifications))
 	}
-	n := inv.ToolExecutionNotifications[0]
-	if n.Level != "error" {
-		t.Errorf("notification level = %q; want error", n.Level)
+	var errorNotifications []SARIFNotification
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "error" {
+			errorNotifications = append(errorNotifications, n)
+		}
 	}
+	if len(errorNotifications) != 1 {
+		t.Fatalf("expected exactly 1 notification at level error, got %d: %+v", len(errorNotifications), inv.ToolExecutionNotifications)
+	}
+	n := errorNotifications[0]
 	if !strings.Contains(n.Message.Text, "pip") || !strings.Contains(n.Message.Text, "503") {
 		t.Errorf("notification message %q should name the failed scanner and detail", n.Message.Text)
 	}
 }
 
-// TestRenderSARIF_ExecutionSuccessfulTrueOnSkipOnly verifies that skips
-// alone (no failures) keep executionSuccessful=true and emit no
-// notifications — a skip is not a degraded run.
-func TestRenderSARIF_ExecutionSuccessfulTrueOnSkipOnly(t *testing.T) {
+func renderSARIFLog(t *testing.T, meta ScanMetadata) SARIFLog {
+	t.Helper()
 	var buf bytes.Buffer
-	meta := ScanMetadata{
-		Version: "dev",
-		ScannerStatus: []ScannerStatus{
-			{Name: "govulncheck", State: ScannerSkipped, Detail: "offline mode"},
-			{Name: "semgrep", State: ScannerSkipped, Detail: "not installed"},
-		},
-	}
 	if err := RenderSARIF(&buf, sampleFindings(), meta); err != nil {
 		t.Fatalf("RenderSARIF failed: %v", err)
 	}
 	var log SARIFLog
-	json.Unmarshal(buf.Bytes(), &log)
+	if err := json.Unmarshal(buf.Bytes(), &log); err != nil {
+		t.Fatal(err)
+	}
+	return log
+}
+
+// Skips alone keep executionSuccessful=true (default CLI mode is
+// unchanged) but every non-ok analyzer is now itemised as a note.
+func TestRenderSARIF_SkipOnlyIsSuccessfulWithNotes(t *testing.T) {
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: []ScannerStatus{
+		{Name: "govulncheck", State: ScannerSkipped, Reason: ReasonDisabledOffline, Detail: "--offline"},
+		{Name: "semgrep", State: ScannerSkipped, Reason: ReasonNotApplicable, Detail: "no --code"},
+	}})
 	inv := log.Runs[0].Invocations[0]
 	if !inv.ExecutionSuccessful {
-		t.Error("expected executionSuccessful=true when only skips are recorded")
+		t.Error("skips alone must not flip executionSuccessful in default mode")
 	}
-	if len(inv.ToolExecutionNotifications) != 0 {
-		t.Errorf("expected no notifications for skip-only run, got %d", len(inv.ToolExecutionNotifications))
+	if len(inv.ToolExecutionNotifications) != 2 {
+		t.Fatalf("expected one notification per non-ok entry, got %d", len(inv.ToolExecutionNotifications))
+	}
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level != "note" {
+			t.Errorf("disabled/not_applicable must be level note, got %q", n.Level)
+		}
+	}
+}
+
+func TestRenderSARIF_NotificationLevelsFollowClass(t *testing.T) {
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: []ScannerStatus{
+		{Name: "secrets", State: ScannerOK},
+		{Name: "semgrep", State: ScannerSkipped, Reason: ReasonDependencyMissing, Detail: "semgrep binary not installed"},
+		{Name: "npm", State: ScannerSkipped, Reason: ReasonUnsupportedTarget, Detail: "yarn.lock"},
+		{Name: "pip", State: ScannerFailed, Reason: ReasonNetworkError, Detail: "osv.dev returned HTTP 503"},
+		{Name: "textscan", State: ScannerSkipped}, // legacy: no reason → unknown
+	}})
+	inv := log.Runs[0].Invocations[0]
+	if inv.ExecutionSuccessful {
+		t.Error("a failed entry must flip executionSuccessful in default mode")
+	}
+	got := map[string]string{}
+	for _, n := range inv.ToolExecutionNotifications {
+		name := strings.SplitN(n.Message.Text, ":", 2)[0]
+		got[name] = n.Level
+	}
+	want := map[string]string{"semgrep": "warning", "npm": "note", "pip": "error", "textscan": "warning"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("levels = %v, want %v", got, want)
+	}
+	if _, ok := got["secrets"]; ok {
+		t.Error("ok entries must not produce notifications")
+	}
+}
+
+func TestRenderSARIF_StrictModeFailsOnRequiredGap(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}, {Name: "semgrep", State: ScannerSkipped, Reason: ReasonDisabledByFlag, Detail: "--fast"}}
+	cov := BuildCoverage(status, []string{"semgrep"}, true)
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: status, Coverage: &cov})
+	inv := log.Runs[0].Invocations[0]
+	if inv.ExecutionSuccessful {
+		t.Fatal("strict run with required_gaps must be unsuccessful even though configured_complete is true")
+	}
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "error" && strings.Contains(n.Message.Text, "required analyzer semgrep not delivered") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an error notification for the required gap, got %+v", inv.ToolExecutionNotifications)
+	}
+	// The same status without strict is successful: disabled is not an engine gap.
+	covLoose := BuildCoverage(status, nil, false)
+	if !renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: status, Coverage: &covLoose}).Runs[0].Invocations[0].ExecutionSuccessful {
+		t.Fatal("non-strict run with only a disabled analyzer must be successful")
+	}
+}
+
+func TestRenderSARIF_HostedIncompleteIsUnsuccessfulAndKeepsBlockResults(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}}
+	cov := BuildCoverage(status, nil, false)
+	meta := ScanMetadata{Version: "3.4.0", ScannerStatus: status, Coverage: &cov,
+		ReleaseDecision: "block", CoverageState: "incomplete", DecisionPolicyVersion: "2.0.0",
+		DecisionRationale: json.RawMessage(`{"missing_coverage":[{"scanner":"python-engine","state":"unavailable"}]}`)}
+	log := renderSARIFLog(t, meta)
+	inv := log.Runs[0].Invocations[0]
+	if inv.ExecutionSuccessful {
+		t.Fatal("hosted export with coverage_state=incomplete must be unsuccessful regardless of the verdict")
+	}
+	warned := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "warning" && strings.HasPrefix(n.Message.Text, "Required coverage incomplete") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected the coverage warning, got %+v", inv.ToolExecutionNotifications)
+	}
+	if len(log.Runs[0].Results) != len(sampleFindings()) {
+		t.Fatal("results must be untouched by the coverage state")
+	}
+	props := log.Runs[0].Properties
+	if props["fendix/release"] == nil || props["fendix/coverage"] == nil {
+		t.Fatalf("property bag must carry release and coverage, got %v", props)
+	}
+	rel := props["fendix/release"].(map[string]any)
+	if rel["release_decision"] != "block" || rel["coverage_state"] != "incomplete" {
+		t.Fatalf("release properties = %v", rel)
 	}
 }
 

@@ -64,6 +64,10 @@ type SARIFRun struct {
 	AutomationDetails *SARIFRunAutomationDetails `json:"automationDetails,omitempty"`
 	Results           []SARIFResult              `json:"results"`
 	Invocations       []SARIFInvocation          `json:"invocations,omitempty"`
+	// Properties is the run-level property bag (SARIF §3.14.29). Carries the
+	// coverage contract ("fendix/coverage") and, on hosted re-renders, the
+	// backend's verdict ("fendix/release"). Additive; omitted when empty.
+	Properties map[string]any `json:"properties,omitempty"`
 }
 
 // SARIFRunAutomationDetails identifies a run (SARIF §3.17). Only `id` is
@@ -1174,23 +1178,61 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 		results = append(results, result)
 	}
 
-	// F-L13: executionSuccessful is false when any required scanner
-	// errored, and each failure becomes a toolExecutionNotification.
-	// Derived from ScanMetadata.ScannerStatus — a degraded scan must not
-	// present as a clean pass to SARIF consumers.
-	invocation := SARIFInvocation{ExecutionSuccessful: true}
+	// F-L13 / spec §5.6: executionSuccessful() picks one of three modes
+	// (default CLI, strict CLI, hosted export) from meta alone, and every
+	// non-ok ScannerStatus entry becomes its own toolExecutionNotification —
+	// a degraded or incomplete scan must not present as a clean pass to
+	// SARIF consumers.
+	invocation := SARIFInvocation{ExecutionSuccessful: executionSuccessful(meta)}
 	for _, s := range meta.ScannerStatus {
-		if s.Failed() {
-			invocation.ExecutionSuccessful = false
-			msg := s.Name + " scanner failed"
-			if s.Detail != "" {
-				msg += ": " + s.Detail
-			}
-			invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{
-				Level:   "error",
-				Message: SARIFMessage{Text: msg},
-			})
+		if s.State == ScannerOK {
+			continue
 		}
+		invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{
+			Level:   notificationLevel(s),
+			Message: SARIFMessage{Text: notificationText(s)},
+		})
+	}
+	if meta.Coverage != nil && meta.Coverage.Strict {
+		byName := map[string]ScannerStatus{}
+		for _, s := range meta.ScannerStatus {
+			byName[s.Name] = s
+		}
+		for _, name := range meta.Coverage.RequiredGaps {
+			s := byName[name]
+			text := fmt.Sprintf("required analyzer %s not delivered: %s (%s)", name, s.Class(), s.Reason)
+			invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{Level: "error", Message: SARIFMessage{Text: NeutralizeText(text)}})
+		}
+	}
+	if meta.CoverageState == "incomplete" {
+		var gaps []string
+		for _, s := range meta.ScannerStatus {
+			if s.IsGap() || s.Class() == ClassUnknown {
+				gaps = append(gaps, s.Name)
+			}
+		}
+		if meta.Coverage != nil && len(meta.Coverage.Gaps) > 0 {
+			gaps = meta.Coverage.Gaps
+		}
+		invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{
+			Level:   "warning",
+			Message: SARIFMessage{Text: "Required coverage incomplete: " + strings.Join(gaps, ", ")},
+		})
+	}
+
+	var runProps map[string]any
+	if meta.Coverage != nil || len(meta.ScannerStatus) > 0 {
+		runProps = map[string]any{"fendix/coverage": map[string]any{"coverage": meta.Coverage, "scanner_status": meta.ScannerStatus}}
+	}
+	if meta.ReleaseDecision != "" || meta.CoverageState != "" {
+		if runProps == nil {
+			runProps = map[string]any{}
+		}
+		rel := map[string]any{"release_decision": meta.ReleaseDecision, "coverage_state": meta.CoverageState, "decision_policy_version": meta.DecisionPolicyVersion}
+		if len(meta.DecisionRationale) > 0 {
+			rel["decision_rationale"] = meta.DecisionRationale
+		}
+		runProps["fendix/release"] = rel
 	}
 
 	log := SARIFLog{
@@ -1212,6 +1254,7 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 				AutomationDetails: &SARIFRunAutomationDetails{ID: automationIDFor(meta.Mode)},
 				Results:           results,
 				Invocations:       []SARIFInvocation{invocation},
+				Properties:        runProps,
 			},
 		},
 	}
@@ -1250,4 +1293,54 @@ func neutralizeAll(in []string) []string {
 		out[i] = NeutralizeText(s)
 	}
 	return out
+}
+
+// executionSuccessful implements the three modes of spec §5.6, decided from
+// the input alone so a re-render is faithful:
+//  1. hosted export (coverage_state present): false iff incomplete;
+//  2. strict CLI run: false iff a configured analyzer was not delivered or
+//     an explicit requirement was not satisfied;
+//  3. default CLI run: false iff an analyzer failed — unchanged behaviour.
+func executionSuccessful(meta ScanMetadata) bool {
+	anyFailed := false
+	for _, s := range meta.ScannerStatus {
+		if s.Failed() {
+			anyFailed = true
+			break
+		}
+	}
+	if meta.CoverageState != "" {
+		return meta.CoverageState != "incomplete" && !anyFailed
+	}
+	if meta.Coverage != nil && meta.Coverage.Strict {
+		return meta.Coverage.StrictOK() && !anyFailed
+	}
+	return !anyFailed
+}
+
+// notificationLevel maps a lifecycle class to a SARIF notification level:
+// a failure is an error, an unavailable dependency or an unclassifiable
+// entry is a warning, an intentional or structural skip is a note.
+func notificationLevel(s ScannerStatus) string {
+	switch s.Class() {
+	case ClassFailed:
+		return "error"
+	case ClassUnavailable, ClassUnknown:
+		return "warning"
+	}
+	return "note"
+}
+
+// notificationText renders "<name>: <class> (<reason>): <detail>". Detail
+// is neutralized because under `fendix report --input` it is operator
+// supplied.
+func notificationText(s ScannerStatus) string {
+	text := s.Name + ": " + s.Class()
+	if s.Reason != "" {
+		text += " (" + string(s.Reason) + ")"
+	}
+	if s.Detail != "" {
+		text += ": " + s.Detail
+	}
+	return NeutralizeText(text)
 }
