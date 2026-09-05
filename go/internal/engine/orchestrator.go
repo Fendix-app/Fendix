@@ -197,32 +197,30 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	defer cancelBudget()
 	defer budget.SetCancelFunc(nil) // unregister on Run return
 
-	// 1. Discover endpoints
+	// 1. Discover endpoints. A hard discovery failure and a zero-endpoint
+	// result both used to exit 2 before any report existed; the coverage
+	// contract needs the evidence, so both now record `dast` and render the
+	// report first. The exit code is unchanged (hardExit below).
 	crawler := scanner.NewCrawler(o.cfg)
-	endpoints, err := crawler.CrawlEndpoints(ctx)
-	if err != nil {
-		slog.Error("endpoint discovery failed — check --url is reachable and --spec is valid YAML/JSON", "error", err)
-		return 2
+	endpoints, discoveryErr := crawler.CrawlEndpoints(ctx)
+	if discoveryErr != nil {
+		slog.Error("endpoint discovery failed — check --url is reachable and --spec is valid YAML/JSON", "error", discoveryErr)
+		endpoints = nil
 	}
 
-	// Arm the request cap now that discovery is complete. Reset() the
-	// counters so the budget summary at scan end reflects scan-phase
-	// requests only — clearer semantics for the user, and independent of
-	// however many requests discovery happened to make.
 	budget.Reset()
 	budget.SetMaxRequests(o.cfg.MaxRequests)
 	budget.SetCancelFunc(cancelBudget)
 
-	// Only fail when there's nothing to scan in EITHER engine. Code-only scans
-	// (--code without --url/--spec) legitimately have zero endpoints and should
-	// still run the white-box analyzer (TASK-080). Black-box checks below
-	// receive an empty endpoint list and return zero findings, which is fine.
+	hardExit := 0
+	if discoveryErr != nil {
+		hardExit = 2
+	}
 	if len(endpoints) == 0 && o.cfg.CodePath == "" {
 		slog.Warn("no endpoints discovered — nothing to scan")
 		fmt.Fprintln(os.Stderr, "fendix: no endpoints discovered. Provide --url, --spec, or --code.")
-		return 2
+		hardExit = 2
 	}
-
 	if len(endpoints) > 0 {
 		slog.Info("scanning endpoints", "count", len(endpoints))
 	}
@@ -264,6 +262,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// ScanMetadata.ScannerStatus, a scan-end summary line, the SARIF
 	// invocations[].executionSuccessful flag, and (opt-in) the exit code.
 	var scanStatus scannerStatusList
+
+	// The black-box entries describe what the check pass did, not what was
+	// configured: budget.Stats() covers the check phase because Reset() ran
+	// after discovery, and the probe audit log holds every active probe sent.
+	sent, rejected := budget.Stats()
+	recordBlackbox(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr,
+		summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), sent, rejected))
 
 	// Validate --code once. An unreadable path is an input error for every
 	// code analyzer (spec §4.4), recorded identically so a consumer sees one
@@ -604,9 +609,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// engine findings, so a custom-secret-pattern plugin can correlate
 	// against a blackbox auth check exactly like the built-in secrets
 	// analyzer does.
+	var pluginsOut pluginOutcome
 	if !o.cfg.NoPlugins {
-		evid = append(evid, o.runPlugins(ctx)...)
+		var pluginEvid []evidence.Evidence
+		pluginEvid, pluginsOut = o.runPlugins(ctx)
+		evid = append(evid, pluginEvid...)
 	}
+	recordPlugins(&scanStatus, o.cfg, pluginsOut)
 
 	// 4.8. SARIF imports (`scan --import`): parse + normalize findings from
 	// other scanners and append them to the evidence stream BEFORE any
@@ -641,18 +650,15 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 
 	duration := time.Since(startTime)
 
-	// Temporary placeholders (spec §10): python-engine and plugins are base
-	// analyzers that must appear exactly once on every scan, but their real
-	// recording logic isn't wired yet — Task 5 records python-engine's
-	// actual outcome (protocol result / not-requested / engine-unavailable)
-	// and Task 4 does the same for plugins (discovered-and-ran / none-found
-	// / --no-plugins). Guarded with has() so this is a no-op once those
-	// tasks land their own scanStatus.set/skip/ok calls earlier in Run.
+	// Temporary placeholder (spec §10): python-engine is a base analyzer
+	// that must appear exactly once on every scan, but its real recording
+	// logic isn't wired yet — Task 5 records its actual outcome (protocol
+	// result / not-requested / engine-unavailable). plugins now records
+	// itself above via recordPlugins. Guarded with has() so this is a
+	// no-op once Task 5 lands its own scanStatus.set/skip/ok calls earlier
+	// in Run.
 	if !scanStatus.has(AnalyzerPythonEngine) {
 		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "recorded in Task 5")
-	}
-	if !scanStatus.has(AnalyzerPlugins) {
-		scanStatus.skip(AnalyzerPlugins, reporters.ReasonNotApplicable, "recorded in Task 4")
 	}
 
 	// Determine scan mode for metadata
@@ -782,6 +788,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			"failed_scanners", strings.Join(scanStatus.failedNames(), ","))
 		fmt.Fprintf(os.Stderr, "fendix: scanner(s) failed and --fail-on-scanner-error is set: %s\n", strings.Join(scanStatus.failedNames(), ", "))
 		return 2
+	}
+
+	// A hard discovery failure or a zero-endpoint result already rendered
+	// the report above (finalize ran unconditionally); this returns the
+	// unchanged exit-2 contract now that the evidence exists to explain it.
+	if hardExit != 0 {
+		return hardExit
 	}
 
 	// 8. Check fail-on threshold
@@ -1147,14 +1160,23 @@ func (o *Orchestrator) renderReport(findings []models.Finding, meta reporters.Sc
 	}
 }
 
+// pluginOutcome is what runPlugins observed, for the `plugins` entry.
+type pluginOutcome struct {
+	Discovered  int
+	Failed      []string
+	DiscoverErr error
+}
+
 // runPlugins discovers plugins under the configured roots and runs
 // every plugin whose Mode is compatible with the current scan
 // (blackbox plugins only run when a target URL is set; whitebox
 // plugins only run when --code or --spec is set; hybrid plugins
 // run whenever either condition holds). Plugin failures are logged
 // at WARN and the scan continues — a broken plugin must not
-// interrupt the embedded engines.
-func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
+// interrupt the embedded engines. The returned pluginOutcome feeds
+// recordPlugins, which records the single aggregate `plugins` entry.
+func (o *Orchestrator) runPlugins(ctx context.Context) ([]evidence.Evidence, pluginOutcome) {
+	var outcome pluginOutcome
 	cwd, _ := os.Getwd()
 	// Repo-local plugins (<cwd>/.fendix/plugins) are opt-in (F-H2): the
 	// scanned repo is attacker-controlled in CI, so a `.fendix/plugins/`
@@ -1164,10 +1186,12 @@ func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
 	plugins, err := plugin.Discover(roots)
 	if err != nil {
 		slog.Warn("plugin discovery failed", "error", err)
-		return nil
+		outcome.DiscoverErr = err
+		return nil, outcome
 	}
+	outcome.Discovered = len(plugins)
 	if len(plugins) == 0 {
-		return nil
+		return nil, outcome
 	}
 
 	hasBlackboxTarget := o.cfg.URL != ""
@@ -1216,6 +1240,7 @@ func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
 			slog.Warn("plugin failed (continuing)", "plugin", p.Name, "error", err)
 			// A plugin that exited non-zero may still have emitted findings
 			// before the failure; preserve them.
+			outcome.Failed = append(outcome.Failed, p.Name)
 		}
 		slog.Info("plugin complete", "plugin", p.Name, "findings", len(findings))
 		out = append(out, findings...)
@@ -1223,7 +1248,26 @@ func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
 	// External plugins emit Finding-shaped protocol JSON; adapt to Evidence
 	// at this ingestion boundary (v0.22). No native provenance to add — the
 	// wire format carries only Finding fields.
-	return evidence.FromFindings(out)
+	return evidence.FromFindings(out), outcome
+}
+
+// recordPlugins records the aggregate plugins entry (spec §4.4): plugins
+// are one entry regardless of how many individual plugins ran, so a
+// consumer sees "plugins failed" rather than N scanner-shaped rows for one
+// out-of-tree extension point.
+func recordPlugins(status *scannerStatusList, cfg *models.ScanConfig, outcome pluginOutcome) {
+	switch {
+	case cfg.NoPlugins:
+		status.skip(AnalyzerPlugins, reporters.ReasonDisabledByFlag, "--no-plugins")
+	case outcome.DiscoverErr != nil:
+		status.fail(AnalyzerPlugins, reporters.ReasonExecutionError, outcome.DiscoverErr)
+	case outcome.Discovered == 0:
+		status.skip(AnalyzerPlugins, reporters.ReasonNotApplicable, "no plugins configured")
+	case len(outcome.Failed) > 0:
+		status.failDetail(AnalyzerPlugins, reporters.ReasonExecutionError, "plugin(s) failed: "+strings.Join(outcome.Failed, ", "))
+	default:
+		status.ok(AnalyzerPlugins)
+	}
 }
 
 // validateCodePath reports why --code cannot be scanned: missing, not a
@@ -1240,6 +1284,77 @@ func (o *Orchestrator) validateCodePath() error {
 		return fmt.Errorf("code path: %w", err)
 	}
 	return nil
+}
+
+// checkPhaseOutcome is what the black-box check pass observably did: how
+// many active probes were sent, how many got no HTTP response at all, how
+// many requests the --max-requests budget refused, and whether the
+// --max-duration deadline cut the pass short.
+type checkPhaseOutcome struct {
+	Attempted  int
+	NoResponse int
+	Rejected   int64
+	Deadline   bool
+}
+
+// summarizeCheckPhase derives the outcome from the probe audit log (every
+// active check records each probe it sends; Status 0 means no HTTP response
+// came back), the budget counters, and the context.
+func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, sent, rejected int64) checkPhaseOutcome {
+	out := checkPhaseOutcome{Attempted: len(records), Rejected: rejected, Deadline: errors.Is(ctx.Err(), context.DeadlineExceeded)}
+	for _, r := range records {
+		if r.Status == 0 {
+			out.NoResponse++
+		}
+	}
+	_ = sent // reported in the budget summary line; not a coverage signal on its own
+	return out
+}
+
+// recordBlackbox records dast, spec and active-probes (spec §4.4) once the
+// check pass has finished. `ok` means the pass ran to completion: nothing
+// cut it short and, for probes, at least one probe got an HTTP response.
+func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error, phase checkPhaseOutcome) {
+	switch {
+	case cfg.URL == "":
+		status.skip(AnalyzerDAST, reporters.ReasonNotApplicable, "no --url")
+	case discoveryErr != nil:
+		status.fail(AnalyzerDAST, classifyErr(discoveryErr), discoveryErr)
+	case endpoints == 0:
+		status.failDetail(AnalyzerDAST, reporters.ReasonNoEndpoints, "URL configured, discovery found zero endpoints")
+	case phase.Deadline:
+		status.failDetail(AnalyzerDAST, reporters.ReasonTimeout, "--max-duration elapsed before the check pass completed")
+	case phase.Rejected > 0:
+		status.failDetail(AnalyzerDAST, reporters.ReasonExecutionError, fmt.Sprintf("--max-requests exhausted: %d requests refused before the check pass completed", phase.Rejected))
+	default:
+		status.ok(AnalyzerDAST)
+	}
+	switch {
+	case cfg.SpecPath == "":
+		status.skip(AnalyzerSpec, reporters.ReasonNotApplicable, "no --spec")
+	case specErr != nil:
+		status.fail(AnalyzerSpec, reporters.ReasonInputError, specErr)
+	default:
+		status.ok(AnalyzerSpec)
+	}
+	switch {
+	case !cfg.EnableActive:
+		status.skip(AnalyzerActiveProbes, reporters.ReasonDisabledByFlag, "--enable-active not set")
+	case endpoints == 0:
+		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no endpoints to probe")
+	case phase.Deadline:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonTimeout, "--max-duration elapsed before the probe pass completed")
+	case phase.Rejected > 0:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, fmt.Sprintf("--max-requests exhausted: %d requests refused before the probe pass completed", phase.Rejected))
+	case phase.Attempted == 0:
+		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no probe-eligible parameters on the discovered endpoints")
+	case phase.NoResponse == phase.Attempted:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNetworkError, fmt.Sprintf("%d probe requests sent, none received an HTTP response", phase.Attempted))
+	case phase.NoResponse > 0:
+		status.okDetail(AnalyzerActiveProbes, fmt.Sprintf("%d of %d probe requests received no HTTP response", phase.NoResponse, phase.Attempted))
+	default:
+		status.ok(AnalyzerActiveProbes)
+	}
 }
 
 // absPathOrEmpty resolves p to an absolute path. Returns "" for an

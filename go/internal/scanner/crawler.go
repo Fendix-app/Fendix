@@ -97,6 +97,11 @@ type Crawler struct {
 	// surface coverage (endpoints_discovered / endpoints_truncated in the
 	// report) instead of leaving the truncation a silent slog.Warn.
 	Discovered int
+	// SpecErr is the error fromSpec returned, when --spec was given and the
+	// document could not be parsed. Discovery continues with the other
+	// strategies (unchanged), but the orchestrator reads this to record the
+	// `spec` analyzer as failed/input_error instead of leaving a silent WARN.
+	SpecErr error
 }
 
 // NewCrawler creates a Crawler with an HTTP client configured from scan config.
@@ -150,6 +155,7 @@ func (c *Crawler) CrawlEndpoints(ctx context.Context) ([]Endpoint, error) {
 	if c.cfg.SpecPath != "" {
 		specEndpoints, err := c.fromSpec(ctx)
 		if err != nil {
+			c.SpecErr = err
 			slog.Warn("spec parsing failed, continuing with other strategies", "error", err)
 		} else {
 			endpoints = append(endpoints, specEndpoints...)
