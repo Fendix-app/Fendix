@@ -36,7 +36,13 @@
         "endpoints_truncated":  { "type": "boolean" },
         "active_probes":     { "type": "boolean" },
         "checks_run":        { "type": "array", "items": { "type": "string" } },
-        "scanner_status":    { "type": "array", "items": { "$ref": "#/definitions/ScannerStatus" } }
+        "scanner_status":    { "type": "array", "items": { "$ref": "#/definitions/ScannerStatus" } },
+        "coverage":          { "$ref": "#/definitions/Coverage" },
+        "policy_version":    { "type": "string" },
+        "release_decision":  { "type": "string", "enum": ["pass", "warn", "block", "incomplete"] },
+        "coverage_state":    { "type": "string", "enum": ["complete", "incomplete", "unknown"] },
+        "decision_policy_version": { "type": "string" },
+        "decision_rationale": { "type": "object" }
       }
     },
     "ScannerStatus": {
@@ -44,9 +50,26 @@
       "required": ["name", "state"],
       "additionalProperties": false,
       "properties": {
-        "name":   { "type": "string" },
-        "state":  { "type": "string", "enum": ["ok", "skipped", "failed"] },
-        "detail": { "type": "string" }
+        "name":     { "type": "string" },
+        "state":    { "type": "string", "enum": ["ok", "skipped", "failed"] },
+        "reason":   { "type": "string", "enum": ["not_applicable", "diff_unchanged", "disabled_by_flag", "disabled_offline", "dependency_missing", "unsupported_target", "network_error", "timeout", "execution_error", "malformed_output", "truncated_output", "input_error", "no_endpoints"] },
+        "detail":   { "type": "string" },
+        "attempts": { "type": "integer", "minimum": 2 }
+      }
+    },
+    "Coverage": {
+      "type": "object",
+      "required": ["contract_version", "strict", "configured_complete", "gaps", "limitations", "required_analyzers", "required_gaps", "retried"],
+      "additionalProperties": false,
+      "properties": {
+        "contract_version":    { "type": "integer", "minimum": 1 },
+        "strict":              { "type": "boolean" },
+        "configured_complete": { "type": "boolean" },
+        "gaps":                { "type": "array", "items": { "type": "string" } },
+        "limitations":         { "type": "array", "items": { "type": "string" } },
+        "required_analyzers":  { "type": "array", "items": { "type": "string" } },
+        "required_gaps":       { "type": "array", "items": { "type": "string" } },
+        "retried":             { "type": "array", "items": { "type": "string" } }
       }
     },
     "SeverityCounts": {

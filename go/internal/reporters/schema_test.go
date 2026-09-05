@@ -44,6 +44,48 @@ func validateAgainstSchema(t *testing.T, report map[string]any) {
 			_ = i
 		}
 	}
+	if raw, ok := meta["scanner_status"]; ok {
+		for i, item := range requireArray(t, "metadata.scanner_status", raw) {
+			entry := requireObject(t, "metadata.scanner_status[]", item)
+			path := "metadata.scanner_status[" + itoa(i) + "]"
+			requireKeys(t, path, entry, []string{"name", "state"})
+			state, _ := entry["state"].(string)
+			requireEnum(t, path+".state", entry["state"], []string{"ok", "skipped", "failed"})
+			reason, hasReason := entry["reason"].(string)
+			switch state {
+			case "ok":
+				if hasReason {
+					t.Errorf("%s: ok entry must not carry a reason, got %q", path, reason)
+				}
+			case "skipped":
+				if !hasReason || !ScannerReason(reason).IsSkip() {
+					t.Errorf("%s: skipped entry needs a skip reason, got %q", path, reason)
+				}
+			case "failed":
+				if !hasReason || !ScannerReason(reason).IsFail() {
+					t.Errorf("%s: failed entry needs a fail reason, got %q", path, reason)
+				}
+			}
+			if a, ok := entry["attempts"]; ok {
+				requireInt(t, path+".attempts", a)
+			}
+		}
+	}
+	if raw, ok := meta["coverage"]; ok {
+		cov := requireObject(t, "metadata.coverage", raw)
+		requireKeys(t, "metadata.coverage", cov, []string{"contract_version", "strict", "configured_complete", "gaps", "limitations", "required_analyzers", "required_gaps", "retried"})
+		requireInt(t, "metadata.coverage.contract_version", cov["contract_version"])
+		requireBool(t, "metadata.coverage.strict", cov["strict"])
+		requireBool(t, "metadata.coverage.configured_complete", cov["configured_complete"])
+		for _, k := range []string{"gaps", "limitations", "required_analyzers", "required_gaps", "retried"} {
+			for _, v := range requireArray(t, "metadata.coverage."+k, cov[k]) {
+				requireString(t, "metadata.coverage."+k+"[]", v)
+			}
+		}
+	}
+	if pv, ok := meta["policy_version"]; ok {
+		requireString(t, "metadata.policy_version", pv)
+	}
 
 	sum := requireObject(t, "summary", report["summary"])
 	for _, k := range []string{"critical", "high", "medium", "low", "info"} {
