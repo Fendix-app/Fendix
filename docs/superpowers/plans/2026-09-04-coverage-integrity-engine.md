@@ -14,7 +14,7 @@
 
 - **Contract version.** `metadata.coverage.contract_version` is `1`. `metadata.schema_version` stays `2`: every change here is additive.
 - **Wire `state` keeps three values** — `ok`, `skipped`, `failed`. Classification lives in `reason`. A `skipped` entry carries a skip reason; a `failed` entry carries a fail reason; an `ok` entry carries none. The schema test enforces the pairing.
-- **Registry order is fixed** (spec §4.1): `dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `python-engine`, `python-engine/auth`, `python-engine/injection`, `python-engine/deps`, `plugins`. Every non-import scan emits exactly one entry per base analyzer; the three children appear only when the Python protocol reports them.
+- **Registry order is fixed** (spec §4.1): `dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `python-engine`, `python-engine/auth`, `python-engine/injection`, `python-engine/deps`, `plugins`. Every non-import scan that reaches the analyzer stage emits exactly one entry per base analyzer; the three children appear exactly once each when the Python engine declares protocol version 2, and not at all otherwise. **One accepted exception:** an explicit `--python-engine` whose tree cannot be resolved exits 2 in preflight, before any analyzer runs, and renders no report (Task 5; spec §4.4). That is the only path on which a non-import scan produces no `scanner_status`.
 - **Default CLI exit behaviour does not change.** `0`/`1` from `decision.ExitCode`; `--fail-on-scanner-error` exits `2` only on `failed`. New strictness is behind `--fail-on-coverage-gap` and `--require-analyzers`, both off by default. Exit `2` always outranks `1`.
 - **Constitution Rule 3 — evidence is never dropped.** Findings gathered by an analyzer are appended whether or not that analyzer is later recorded `failed`. A retry replaces only the retried analyzer's evidence with its second attempt's evidence.
 - **No whole-engine re-run.** Retry is one in-process re-invocation of a single dependency scanner, only for `network_error` or `timeout`.
@@ -62,7 +62,7 @@
 | `python/analyzers/ast_analyzer.py` | per-language file counts | modify |
 | `python/tests/test_engine_contract.py` | status-line contract | modify |
 | `docs/schema.json`, `docs/schema.md`, `docs/INTEGRATION_GUIDE.md`, `README.md`, `CHANGELOG.md`, `docs/adr/ADR-002-ndjson-ipc.md`, `docs/DECISION_POLICY.md` | contract documentation | modify |
-| `.github/workflows/release.yml`, `tests/fixtures/coverage-smoke/` | image smoke test | modify / **create** |
+| `.github/workflows/release.yml`, `tests/fixtures/coverage-smoke/` (incl. `osv-export.json`), `scripts/coverage-smoke-check.sh` | candidate build, deterministic and network smokes, promotion gate | modify / **create** |
 
 Tasks 1–2 are the vocabulary. Tasks 3–6 make every subsystem record itself. Tasks 7–8 are transport typing and retry. Task 9 is the CLI surface. Tasks 10–11 are SARIF and human renderers. Tasks 12–13 are docs and the release gate.
 
@@ -577,7 +577,7 @@ re-render carries. All additive; schema_version stays 2."
 
 **Interfaces:**
 - Consumes: `reporters.ScannerReason`, `reporters.ScannerStatus` from Task 1.
-- Produces: `engine.Registry []string`; the `Analyzer*` name constants; `IsRegisteredAnalyzer(name string) bool`; `(*scannerStatusList).skip(name string, reason reporters.ScannerReason, detail string)`; `(*scannerStatusList).fail(name string, reason reporters.ScannerReason, err error)`; `(*scannerStatusList).failDetail(name string, reason reporters.ScannerReason, detail string)`; `(*scannerStatusList).set(entry reporters.ScannerStatus)`; `(*scannerStatusList).markAttempts(name string, n int)`; `(scannerStatusList).has(name string) bool`; `(scannerStatusList).sorted() scannerStatusList`; `classifyErr(err error) reporters.ScannerReason` (minimal here, extended in Task 7); `semgrep.ErrTimeout`.
+- Produces: `engine.Registry []string`; the `Analyzer*` name constants; `IsRegisteredAnalyzer(name string) bool`; `(*scannerStatusList).okDetail(name, detail string)`; `(*scannerStatusList).skip(name string, reason reporters.ScannerReason, detail string)`; `(*scannerStatusList).fail(name string, reason reporters.ScannerReason, err error)`; `(*scannerStatusList).failDetail(name string, reason reporters.ScannerReason, detail string)`; `(*scannerStatusList).set(entry reporters.ScannerStatus)`; `(*scannerStatusList).markAttempts(name string, n int)`; `(scannerStatusList).has(name string) bool`; `(scannerStatusList).sorted() scannerStatusList`; `classifyErr(err error) reporters.ScannerReason` (minimal here, extended in Task 7); `semgrep.ErrTimeout`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -748,6 +748,12 @@ Replace lines 22-37 (`ok`, `skip`, `fail`) with:
 // ok records a clean run.
 func (l *scannerStatusList) ok(name string) {
 	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerOK})
+}
+
+// okDetail records a clean run that carries a note the reader should see
+// (for example partial probe responses). The state is still ok.
+func (l *scannerStatusList) okDetail(name, detail string) {
+	*l = append(*l, reporters.ScannerStatus{Name: name, State: reporters.ScannerOK, Detail: truncateDetail(detail)})
 }
 
 // skip records an analyzer that did not run, with the closed reason that
@@ -1283,7 +1289,9 @@ unreadable --code is input_error on every code analyzer, validated once."
 
 **Interfaces:**
 - Consumes: Task 2 API.
-- Produces: `scanner.Crawler.SpecErr error`; `recordDiscovery(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error)`; `pluginOutcome{Discovered int; Failed []string; DiscoverErr error}` returned by `runPlugins`; `Run` renders a report before returning `2` for zero endpoints or a discovery error.
+- Produces: `scanner.Crawler.SpecErr error`; `type checkPhaseOutcome struct{Attempted, NoResponse int; Rejected int64; Deadline bool}`; `summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, sent, rejected int64) checkPhaseOutcome`; `recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error, phase checkPhaseOutcome)`; `pluginOutcome{Discovered int; Failed []string; DiscoverErr error}` returned by `runPlugins`; `Run` renders a report before returning `2` for zero endpoints or a discovery error.
+
+**Why the check pass is observable.** Every active check records each probe it sends in the scan-wide probe audit log (`scanner.GlobalAuditRecords()`; `injection.go` through `auditLog.Record`, the other six through `cc.Audit.Record`, which alias the same log). A `ProbeRecord` with `Status == 0` is a probe that got no HTTP response. The `--max-requests` budget counts refused requests (`budget.Stats()`), and a `--max-duration` cut leaves `ctx.Err() == context.DeadlineExceeded`. Those three signals are the aggregate execution outcome; `ok` is recorded only after the pool has returned and none of them says the pass was cut short or got nothing back.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1296,10 +1304,13 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner"
 )
 
 func find(l scannerStatusList, name string) reporters.ScannerStatus {
@@ -1311,37 +1322,50 @@ func find(l scannerStatusList, name string) reporters.ScannerStatus {
 	return reporters.ScannerStatus{}
 }
 
-func TestRecordDiscovery_Table(t *testing.T) {
+func TestRecordBlackbox_Table(t *testing.T) {
+	url := models.ScanConfig{URL: "http://t"}
+	active := models.ScanConfig{URL: "http://t", EnableActive: true}
 	for _, tc := range []struct {
 		name         string
 		cfg          models.ScanConfig
 		endpoints    int
 		discoveryErr error
 		specErr      error
+		phase        checkPhaseOutcome
 		wantDAST     [2]string // state, reason
 		wantSpec     [2]string
 		wantProbes   [2]string
 	}{
-		{"code only", models.ScanConfig{CodePath: "x"}, 0, nil, nil,
+		{"code only", models.ScanConfig{CodePath: "x"}, 0, nil, nil, checkPhaseOutcome{},
 			[2]string{"skipped", "not_applicable"}, [2]string{"skipped", "not_applicable"}, [2]string{"skipped", "disabled_by_flag"}},
-		{"url with endpoints", models.ScanConfig{URL: "http://t"}, 3, nil, nil,
+		{"url with endpoints, passive only", url, 3, nil, nil, checkPhaseOutcome{},
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"skipped", "disabled_by_flag"}},
-		{"url zero endpoints", models.ScanConfig{URL: "http://t"}, 0, nil, nil,
+		{"url zero endpoints", url, 0, nil, nil, checkPhaseOutcome{},
 			[2]string{"failed", "no_endpoints"}, [2]string{"skipped", "not_applicable"}, [2]string{"skipped", "disabled_by_flag"}},
-		{"discovery error", models.ScanConfig{URL: "http://t"}, 0, errors.New("dns"), nil,
+		{"discovery error", url, 0, errors.New("dns"), nil, checkPhaseOutcome{},
 			[2]string{"failed", "execution_error"}, [2]string{"skipped", "not_applicable"}, [2]string{"skipped", "disabled_by_flag"}},
-		{"spec parsed", models.ScanConfig{URL: "http://t", SpecPath: "s.yaml"}, 2, nil, nil,
+		{"spec parsed", models.ScanConfig{URL: "http://t", SpecPath: "s.yaml"}, 2, nil, nil, checkPhaseOutcome{},
 			[2]string{"ok", ""}, [2]string{"ok", ""}, [2]string{"skipped", "disabled_by_flag"}},
-		{"spec parse failure", models.ScanConfig{URL: "http://t", SpecPath: "s.yaml"}, 2, nil, errors.New("yaml: bad"),
+		{"spec parse failure", models.ScanConfig{URL: "http://t", SpecPath: "s.yaml"}, 2, nil, errors.New("yaml: bad"), checkPhaseOutcome{},
 			[2]string{"ok", ""}, [2]string{"failed", "input_error"}, [2]string{"skipped", "disabled_by_flag"}},
-		{"active with endpoints", models.ScanConfig{URL: "http://t", EnableActive: true}, 2, nil, nil,
+		{"active, probes completed with responses", active, 2, nil, nil, checkPhaseOutcome{Attempted: 40},
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
-		{"active without endpoints", models.ScanConfig{URL: "http://t", EnableActive: true}, 0, nil, nil,
+		{"active, some probes got no response", active, 2, nil, nil, checkPhaseOutcome{Attempted: 40, NoResponse: 3},
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
+		{"active, no probe got any response", active, 2, nil, nil, checkPhaseOutcome{Attempted: 40, NoResponse: 40},
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "network_error"}},
+		{"active, nothing probe-eligible", active, 2, nil, nil, checkPhaseOutcome{},
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"skipped", "not_applicable"}},
+		{"active without endpoints", active, 0, nil, nil, checkPhaseOutcome{},
 			[2]string{"failed", "no_endpoints"}, [2]string{"skipped", "not_applicable"}, [2]string{"skipped", "not_applicable"}},
+		{"request budget exhausted mid-pass", active, 2, nil, nil, checkPhaseOutcome{Attempted: 10, Rejected: 25},
+			[2]string{"failed", "execution_error"}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "execution_error"}},
+		{"duration cap hit mid-pass", active, 2, nil, nil, checkPhaseOutcome{Attempted: 10, Deadline: true},
+			[2]string{"failed", "timeout"}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "timeout"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var l scannerStatusList
-			recordDiscovery(&l, &tc.cfg, tc.endpoints, tc.discoveryErr, tc.specErr)
+			recordBlackbox(&l, &tc.cfg, tc.endpoints, tc.discoveryErr, tc.specErr, tc.phase)
 			check := func(name string, want [2]string) {
 				got := find(l, name)
 				if string(got.State) != want[0] || string(got.Reason) != want[1] {
@@ -1352,6 +1376,25 @@ func TestRecordDiscovery_Table(t *testing.T) {
 			check(AnalyzerSpec, tc.wantSpec)
 			check(AnalyzerActiveProbes, tc.wantProbes)
 		})
+	}
+	// Partial probe failures stay visible in the detail of an ok entry.
+	var l scannerStatusList
+	recordBlackbox(&l, &active, 2, nil, nil, checkPhaseOutcome{Attempted: 40, NoResponse: 3})
+	if got := find(l, AnalyzerActiveProbes); !strings.Contains(got.Detail, "3 of 40") {
+		t.Fatalf("partial failures must be named in detail, got %+v", got)
+	}
+}
+
+func TestSummarizeCheckPhase(t *testing.T) {
+	records := []scanner.ProbeRecord{{Status: 200}, {Status: 0}, {Status: 500}, {Status: 0}}
+	got := summarizeCheckPhase(context.Background(), records, 120, 0)
+	if got.Attempted != 4 || got.NoResponse != 2 || got.Rejected != 0 || got.Deadline {
+		t.Fatalf("phase = %+v", got)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if got := summarizeCheckPhase(ctx, nil, 10, 5); !got.Deadline || got.Rejected != 5 {
+		t.Fatalf("deadline/rejected not captured: %+v", got)
 	}
 }
 
@@ -1416,7 +1459,7 @@ Note: `report.Metadata.Coverage` is populated in Task 9; until then the zero-end
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/engine/ -run 'TestRecordDiscovery|TestOrchestrator_ZeroEndpoints|TestRunPlugins_Outcome' -v`
-Expected: FAIL to compile (`undefined: recordDiscovery`, `runPlugins` returns one value).
+Expected: FAIL to compile (`undefined: recordBlackbox`, `undefined: checkPhaseOutcome`, `runPlugins` returns one value).
 
 - [ ] **Step 3: Expose the spec parse failure on the crawler**
 
@@ -1444,7 +1487,7 @@ and in `CrawlEndpoints` change the spec branch to:
 	}
 ```
 
-- [ ] **Step 4: Record discovery, spec and probes; render before exit 2**
+- [ ] **Step 4: Record dast, spec and active-probes from what the check pass did; render before exit 2**
 
 In `orchestrator.go` replace lines 197-224 (discovery through the zero-endpoint exit) with:
 
@@ -1478,17 +1521,49 @@ In `orchestrator.go` replace lines 197-224 (discovery through the zero-endpoint 
 	}
 ```
 
-Immediately after `var scanStatus scannerStatusList` (and before the code-path validation from Task 3) add:
+Immediately after `var scanStatus scannerStatusList` (which sits after `evid := pool.RunEvidence(...)`, so the check pass has finished; and before the code-path validation from Task 3) add:
 
 ```go
-	recordDiscovery(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr)
+	// The black-box entries describe what the check pass did, not what was
+	// configured: budget.Stats() covers the check phase because Reset() ran
+	// after discovery, and the probe audit log holds every active probe sent.
+	sent, rejected := budget.Stats()
+	recordBlackbox(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr,
+		summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), sent, rejected))
 ```
 
-Add the pure function next to `absPathOrEmpty`:
+Add the pure functions next to `absPathOrEmpty`:
 
 ```go
-// recordDiscovery records the three black-box analyzers (spec §4.4).
-func recordDiscovery(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error) {
+// checkPhaseOutcome is what the black-box check pass observably did: how
+// many active probes were sent, how many got no HTTP response at all, how
+// many requests the --max-requests budget refused, and whether the
+// --max-duration deadline cut the pass short.
+type checkPhaseOutcome struct {
+	Attempted  int
+	NoResponse int
+	Rejected   int64
+	Deadline   bool
+}
+
+// summarizeCheckPhase derives the outcome from the probe audit log (every
+// active check records each probe it sends; Status 0 means no HTTP response
+// came back), the budget counters, and the context.
+func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, sent, rejected int64) checkPhaseOutcome {
+	out := checkPhaseOutcome{Attempted: len(records), Rejected: rejected, Deadline: errors.Is(ctx.Err(), context.DeadlineExceeded)}
+	for _, r := range records {
+		if r.Status == 0 {
+			out.NoResponse++
+		}
+	}
+	_ = sent // reported in the budget summary line; not a coverage signal on its own
+	return out
+}
+
+// recordBlackbox records dast, spec and active-probes (spec §4.4) once the
+// check pass has finished. `ok` means the pass ran to completion: nothing
+// cut it short and, for probes, at least one probe got an HTTP response.
+func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error, phase checkPhaseOutcome) {
 	switch {
 	case cfg.URL == "":
 		status.skip(AnalyzerDAST, reporters.ReasonNotApplicable, "no --url")
@@ -1496,6 +1571,10 @@ func recordDiscovery(status *scannerStatusList, cfg *models.ScanConfig, endpoint
 		status.fail(AnalyzerDAST, classifyErr(discoveryErr), discoveryErr)
 	case endpoints == 0:
 		status.failDetail(AnalyzerDAST, reporters.ReasonNoEndpoints, "URL configured, discovery found zero endpoints")
+	case phase.Deadline:
+		status.failDetail(AnalyzerDAST, reporters.ReasonTimeout, "--max-duration elapsed before the check pass completed")
+	case phase.Rejected > 0:
+		status.failDetail(AnalyzerDAST, reporters.ReasonExecutionError, fmt.Sprintf("--max-requests exhausted: %d requests refused before the check pass completed", phase.Rejected))
 	default:
 		status.ok(AnalyzerDAST)
 	}
@@ -1512,13 +1591,23 @@ func recordDiscovery(status *scannerStatusList, cfg *models.ScanConfig, endpoint
 		status.skip(AnalyzerActiveProbes, reporters.ReasonDisabledByFlag, "--enable-active not set")
 	case endpoints == 0:
 		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no endpoints to probe")
+	case phase.Deadline:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonTimeout, "--max-duration elapsed before the probe pass completed")
+	case phase.Rejected > 0:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, fmt.Sprintf("--max-requests exhausted: %d requests refused before the probe pass completed", phase.Rejected))
+	case phase.Attempted == 0:
+		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no probe-eligible parameters on the discovered endpoints")
+	case phase.NoResponse == phase.Attempted:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNetworkError, fmt.Sprintf("%d probe requests sent, none received an HTTP response", phase.Attempted))
+	case phase.NoResponse > 0:
+		status.okDetail(AnalyzerActiveProbes, fmt.Sprintf("%d of %d probe requests received no HTTP response", phase.NoResponse, phase.Attempted))
 	default:
 		status.ok(AnalyzerActiveProbes)
 	}
 }
 ```
 
-`classifyErr(discoveryErr)` yields `execution_error` for ordinary errors and `timeout` for a deadline, which is what the matrix asks for. The worker pool does not surface per-probe errors, so `active-probes` cannot be `failed` in contract version 1; the plan records `ok` when probes ran, as the spec's matrix permits only when an error is observable.
+`classifyErr(discoveryErr)` yields `execution_error` for ordinary errors and `timeout` for a deadline. The `dast` entry shares the budget and deadline rules: a check pass cut short by `--max-requests` or `--max-duration` did not deliver the coverage that was configured, whatever the operator's reason for the cap, and the entry says so. Before wiring, confirm every active check writes to the audit log — `grep -c 'Audit.Record\|auditLog.Record' internal/scanner/{injection,ssrf,xss,openredirect,hostheader,graphql,methodtamper}.go` must be non-zero for all seven — and add `"github.com/Abdel-RahmanSaied/Fendix/internal/scanner"` to the orchestrator's imports if it is not already there.
 
 Then, at the exit path, insert before `return decision.ExitCode(decisions)` (after the `--fail-on-scanner-error` block):
 
@@ -1620,7 +1709,7 @@ one aggregate entry."
 
 **Interfaces:**
 - Consumes: Task 2 recording API; `CheckPython`, `EnsureEngine` (unchanged).
-- Produces: `type SpawnOutcome int` with `SpawnOK, SpawnExitError, SpawnMalformed, SpawnTruncated, SpawnCancelled, SpawnStartError`; `type CheckStatus struct{Check, State, Reason, Detail string}`; `SpawnResult{Findings []models.Finding; Total int; Err error; Outcome SpawnOutcome; Checks []CheckStatus; Malformed int; SawDone bool}`; `type streamResult struct{...}` returned by `readFindings(io.Reader) streamResult`; `(*Orchestrator).runWhiteboxScan(ctx) ([]evidence.Evidence, SpawnResult)`; `recordPythonEngine(status *scannerStatusList, res SpawnResult)`; `Orchestrator.engineMissing error`.
+- Produces: `type SpawnOutcome int` with `SpawnOK, SpawnExitError, SpawnMalformed, SpawnTruncated, SpawnCancelled, SpawnStartError`; `type CheckStatus struct{Check, State, Reason, Detail string}`; `DoneMessage.Protocol int`; `SpawnResult{Findings []models.Finding; Total int; Protocol int; Err error; Outcome SpawnOutcome; Checks []CheckStatus; Malformed int; SawDone bool}`; `type streamResult struct{...}` returned by `readFindings(io.Reader) streamResult`; `var expectedPythonChecks = []string{"auth", "injection", "deps"}`; `childProtocolError(checks []CheckStatus) error`; `missingPythonChecks(checks []CheckStatus) []string`; `(*Orchestrator).runWhiteboxScan(ctx) ([]evidence.Evidence, SpawnResult)`; `recordPythonEngine(status *scannerStatusList, res SpawnResult)`; `Orchestrator.engineMissing error`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1642,10 +1731,10 @@ func TestReadFindings_StatusLinesAreNotFindings(t *testing.T) {
 		`{"title": "SQLi", "severity": "HIGH", "category": "injection", "endpoint": "app.py:3"}`,
 		`{"status": {"check": "injection", "state": "ok"}}`,
 		`{"status": {"check": "deps", "state": "skipped", "reason": "dependency_missing", "detail": "No module named 'packaging'"}}`,
-		`{"done": true, "total": 1}`,
+		`{"done": true, "total": 1, "protocol": 2}`,
 	}, "\n"))
 	sr := readFindings(in)
-	if len(sr.findings) != 1 || sr.doneTotal != 1 || !sr.sawDone || sr.malformed != 0 {
+	if len(sr.findings) != 1 || sr.doneTotal != 1 || !sr.sawDone || sr.malformed != 0 || sr.protocol != 2 {
 		t.Fatalf("unexpected stream result: %+v", sr)
 	}
 	if len(sr.checks) != 3 || sr.checks[0].Check != "auth" || sr.checks[0].Reason != "not_applicable" || sr.checks[1].State != "ok" || sr.checks[2].Detail == "" {
@@ -1690,15 +1779,47 @@ func TestSpawner_OutcomeClassification(t *testing.T) {
 	}
 }
 
+func TestSpawner_ProtocolV2ChildCompleteness(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	st := func(check, state string) string {
+		return "print(json.dumps({'status': {'check': '" + check + "', 'state': '" + state + "'}}), flush=True)\n"
+	}
+	done := "print(json.dumps({'done': True, 'total': 0, 'protocol': 2}), flush=True)\n"
+	legacyDone := "print(json.dumps({'done': True, 'total': 0}), flush=True)\n"
+	for _, tc := range []struct {
+		name       string
+		body       string
+		want       SpawnOutcome
+		wantChecks int
+	}{
+		{"all three exactly once", st("auth", "ok") + st("injection", "ok") + st("deps", "ok") + done, SpawnOK, 3},
+		{"missing one is truncated", st("auth", "ok") + st("deps", "ok") + done, SpawnTruncated, 2},
+		{"duplicate is malformed", st("auth", "ok") + st("injection", "ok") + st("injection", "ok") + st("deps", "ok") + done, SpawnMalformed, 4},
+		{"unknown child is malformed", st("auth", "ok") + st("injection", "ok") + st("deps", "ok") + st("secrets", "ok") + done, SpawnMalformed, 4},
+		{"legacy stream: children ignored, parent ok", st("auth", "ok") + legacyDone, SpawnOK, 0},
+		{"legacy stream without any status lines", legacyDone, SpawnOK, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeFakeEngine(t, tc.body)
+			res := NewPythonSpawner("python3", dir).Run(context.Background(), ScanRequest{Mode: "whitebox", Checks: []string{"auth", "injection", "deps"}})
+			if res.Outcome != tc.want {
+				t.Fatalf("outcome = %v (err=%v), want %v", res.Outcome, res.Err, tc.want)
+			}
+			if len(res.Checks) != tc.wantChecks {
+				t.Fatalf("checks kept = %d, want %d: %+v", len(res.Checks), tc.wantChecks, res.Checks)
+			}
+		})
+	}
+}
+
 func TestRecordPythonEngine_ChildrenParticipateParentStaysOK(t *testing.T) {
 	var l scannerStatusList
-	recordPythonEngine(&l, SpawnResult{Outcome: SpawnOK, Checks: []CheckStatus{
+	recordPythonEngine(&l, SpawnResult{Outcome: SpawnOK, Protocol: 2, Checks: []CheckStatus{
 		{Check: "auth", State: "skipped", Reason: "not_applicable", Detail: "no spec supplied"},
 		{Check: "injection", State: "ok"},
 		{Check: "deps", State: "skipped", Reason: "dependency_missing", Detail: "No module named 'packaging'"},
-		{Check: "deps", State: "ok"},                       // duplicate: first wins
-		{Check: "auth", State: "skipped", Reason: "bogus"}, // duplicate AND invalid: ignored (first wins)
-		{Check: "secrets", State: "ok"},                    // not a registered child: dropped
 	}})
 	if got := find(l, AnalyzerPythonEngine); got.State != reporters.ScannerOK {
 		t.Fatalf("parent = %+v, want ok", got)
@@ -1706,32 +1827,32 @@ func TestRecordPythonEngine_ChildrenParticipateParentStaysOK(t *testing.T) {
 	if got := find(l, AnalyzerPythonDeps); got.Reason != reporters.ReasonDependencyMissing {
 		t.Fatalf("deps child = %+v, want dependency_missing", got)
 	}
-	if l.has("python-engine/secrets") {
-		t.Fatal("unregistered child must not be recorded")
-	}
 	if n := len(l); n != 4 {
 		t.Fatalf("expected parent + 3 children, got %d entries: %+v", n, l)
 	}
 
 	l = nil
-	recordPythonEngine(&l, SpawnResult{Outcome: SpawnOK, Checks: []CheckStatus{{Check: "injection", State: "failed", Reason: "not_applicable"}}})
+	recordPythonEngine(&l, SpawnResult{Outcome: SpawnOK, Protocol: 2, Checks: []CheckStatus{{Check: "injection", State: "failed", Reason: "not_applicable"}}})
 	if got := find(l, AnalyzerPythonInjection); got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonMalformedOutput {
 		t.Fatalf("mismatched pairing must be recorded as failed/malformed_output, got %+v", got)
 	}
 
 	l = nil
-	recordPythonEngine(&l, SpawnResult{Outcome: SpawnTruncated, Err: errors.New("reported 5, received 1")})
+	recordPythonEngine(&l, SpawnResult{Outcome: SpawnTruncated, Protocol: 2, Err: errors.New("python engine (protocol 2) omitted status for: deps"),
+		Checks: []CheckStatus{{Check: "auth", State: "ok"}, {Check: "injection", State: "ok"}}})
 	if got := find(l, AnalyzerPythonEngine); got.Reason != reporters.ReasonTruncatedOutput {
-		t.Fatalf("truncated → %+v", got)
+		t.Fatalf("missing child → parent %+v, want truncated_output", got)
+	}
+	if !l.has(AnalyzerPythonAuth) || l.has(AnalyzerPythonDeps) {
+		t.Fatal("reported children are kept; the missing one has no entry — the parent failure carries the gap")
 	}
 }
-```
 
 Add `"errors"`, `"os"`, `"os/exec"`, `"path/filepath"`, `"strings"` and the `reporters` import to the test file as needed.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `go test ./internal/engine/ -run 'TestReadFindings|TestSpawner_Outcome|TestRecordPythonEngine' -v`
+Run: `go test ./internal/engine/ -run 'TestReadFindings|TestSpawner_Outcome|TestSpawner_ProtocolV2|TestRecordPythonEngine' -v`
 Expected: FAIL to compile (`readFindings` returns three values; `SpawnOutcome` undefined).
 
 - [ ] **Step 3: Rewrite the spawner types and reader**
@@ -1739,12 +1860,21 @@ Expected: FAIL to compile (`readFindings` returns three values; `SpawnOutcome` u
 In `internal/engine/spawner.go` replace `DoneMessage` through `SpawnResult` with:
 
 ```go
-// DoneMessage is the terminal JSON line from the Python engine.
+// DoneMessage is the terminal JSON line from the Python engine. Protocol
+// is the version the Python side declares; absent (0) or 1 means a legacy
+// tree whose status lines, if any, are ignored. 2 means one status line per
+// expected check is mandatory and verified.
 type DoneMessage struct {
-	Done  bool   `json:"done"`
-	Total int    `json:"total"`
-	Error string `json:"error,omitempty"`
+	Done     bool   `json:"done"`
+	Total    int    `json:"total"`
+	Error    string `json:"error,omitempty"`
+	Protocol int    `json:"protocol,omitempty"`
 }
+
+// expectedPythonChecks is the set a protocol-v2 Python engine must report
+// exactly once each. Adding a check to engine.py means adding it here and
+// to the registry in the same change.
+var expectedPythonChecks = []string{"auth", "injection", "deps"}
 
 // CheckStatus is one `{"status": {...}}` protocol line (protocol v2): the
 // Python engine's own report of one check's outcome. State and Reason use
@@ -1775,6 +1905,7 @@ const (
 type SpawnResult struct {
 	Findings  []models.Finding
 	Total     int
+	Protocol  int
 	Err       error
 	Outcome   SpawnOutcome
 	Checks    []CheckStatus
@@ -1786,6 +1917,7 @@ type SpawnResult struct {
 type streamResult struct {
 	findings  []models.Finding
 	doneTotal int
+	protocol  int
 	sawDone   bool
 	doneErr   string
 	malformed int
@@ -1813,7 +1945,16 @@ In `Run`, replace from `// Read streaming findings from stdout` to the end of th
 		}
 	}
 
-	res := SpawnResult{Findings: sr.findings, Total: sr.doneTotal, Checks: sr.checks, Malformed: sr.malformed, SawDone: sr.sawDone}
+	res := SpawnResult{Findings: sr.findings, Total: sr.doneTotal, Protocol: sr.protocol, Checks: sr.checks, Malformed: sr.malformed, SawDone: sr.sawDone}
+	if sr.protocol < 2 {
+		// A legacy tree made no completeness promise; only the parent entry
+		// is meaningful, so any stray status lines are dropped.
+		res.Checks = nil
+	}
+	childErr := error(nil)
+	if sr.protocol >= 2 {
+		childErr = childProtocolError(sr.checks)
+	}
 	switch {
 	case ctx.Err() != nil:
 		res.Outcome, res.Err = SpawnCancelled, ctx.Err()
@@ -1827,6 +1968,10 @@ In `Run`, replace from `// Read streaming findings from stdout` to the end of th
 		res.Outcome, res.Err = SpawnMalformed, fmt.Errorf("%d unparseable line(s) from python engine", sr.malformed)
 	case !sr.sawDone:
 		res.Outcome, res.Err = SpawnTruncated, fmt.Errorf("python engine stream ended without a done line (%d findings received)", len(sr.findings))
+	case childErr != nil:
+		res.Outcome, res.Err = SpawnMalformed, childErr
+	case sr.protocol >= 2 && len(missingPythonChecks(sr.checks)) > 0:
+		res.Outcome, res.Err = SpawnTruncated, fmt.Errorf("python engine (protocol %d) omitted status for: %s", sr.protocol, strings.Join(missingPythonChecks(sr.checks), ", "))
 	case sr.doneTotal != len(sr.findings):
 		res.Outcome, res.Err = SpawnTruncated, fmt.Errorf("python engine reported %d findings, received %d", sr.doneTotal, len(sr.findings))
 	default:
@@ -1861,7 +2006,7 @@ func readFindings(r io.Reader) streamResult {
 		if probe.Done {
 			var done DoneMessage
 			_ = json.Unmarshal([]byte(line), &done)
-			sr.sawDone, sr.doneTotal, sr.doneErr = true, done.Total, done.Error
+			sr.sawDone, sr.doneTotal, sr.doneErr, sr.protocol = true, done.Total, done.Error, done.Protocol
 			continue
 		}
 		// A status line's `status` is an object; a finding's `status` (its
@@ -1897,6 +2042,37 @@ func readFindings(r io.Reader) streamResult {
 		sr.readErr = fmt.Errorf("scanning stdout: %w", err)
 	}
 	return sr
+}
+
+// childProtocolError returns the first protocol violation among status
+// lines under protocol v2: an unknown check identity or a duplicate check.
+func childProtocolError(checks []CheckStatus) error {
+	seen := map[string]bool{}
+	for _, c := range checks {
+		if !IsRegisteredAnalyzer(AnalyzerPythonEngine + "/" + c.Check) {
+			return fmt.Errorf("python engine reported unknown check %q", c.Check)
+		}
+		if seen[c.Check] {
+			return fmt.Errorf("python engine reported check %q twice", c.Check)
+		}
+		seen[c.Check] = true
+	}
+	return nil
+}
+
+// missingPythonChecks lists expected checks with no status line.
+func missingPythonChecks(checks []CheckStatus) []string {
+	seen := map[string]bool{}
+	for _, c := range checks {
+		seen[c.Check] = true
+	}
+	var missing []string
+	for _, want := range expectedPythonChecks {
+		if !seen[want] {
+			missing = append(missing, want)
+		}
+	}
+	return missing
 }
 ```
 
@@ -1963,12 +2139,14 @@ func (o *Orchestrator) runWhiteboxScan(ctx context.Context) ([]evidence.Evidence
 }
 ```
 
-Add next to `recordDiscovery`:
+Add next to `recordBlackbox`:
 
 ```go
 // recordPythonEngine maps a spawn outcome onto the python-engine entry and
-// validates each protocol status line into a child entry. The parent
-// describes the process; a child's failure never marks the parent failed.
+// records each protocol-v2 status line as a child entry. The spawner has
+// already enforced completeness (one line per expected check, no unknown
+// checks); this function validates the state/reason pairing and keeps the
+// parent's process semantics separate from any child's final state.
 func recordPythonEngine(status *scannerStatusList, res SpawnResult) {
 	switch res.Outcome {
 	case SpawnOK:
@@ -1982,12 +2160,8 @@ func recordPythonEngine(status *scannerStatusList, res SpawnResult) {
 	}
 	for _, c := range res.Checks {
 		name := AnalyzerPythonEngine + "/" + c.Check
-		if !IsRegisteredAnalyzer(name) {
-			slog.Warn("python engine reported an unregistered check — ignored", "check", c.Check)
-			continue
-		}
-		if status.has(name) {
-			continue // the protocol emits one line per check; the first wins
+		if !IsRegisteredAnalyzer(name) || status.has(name) {
+			continue // unreachable after spawner validation; defensive only
 		}
 		entry := reporters.ScannerStatus{Name: name, State: reporters.ScannerStatusState(c.State), Reason: reporters.ScannerReason(c.Reason), Detail: c.Detail}
 		valid := (entry.State == reporters.ScannerOK && entry.Reason == "") ||
@@ -2015,8 +2189,10 @@ git commit -m "feat(engine): python-engine joins scanner_status with protocol v2
 
 The spawn outcome is classified (exit error > malformed > truncated,
 done.total reconciled against findings received) and recorded as the
-python-engine entry; per-check status lines become python-engine/*
-children validated against the contract. A missing interpreter or engine
+python-engine entry. Under protocol v2 (declared on the done line) exactly
+one status line per expected check is required: a duplicate or unknown
+check is malformed_output, a missing one is truncated_output; legacy trees
+stay parent-only. A missing interpreter or engine
 tree is dependency_missing instead of a stderr line."
 ```
 
@@ -2031,7 +2207,7 @@ tree is dependency_missing instead of a stderr line."
 - Modify: `docs/adr/ADR-002-ndjson-ipc.md` (protocol v2 addendum)
 
 **Interfaces:**
-- Produces: one `{"status": {"check": <auth|injection|deps>, "state": ..., "reason"?: ..., "detail"?: ...}}` line per check, before the done line; `ASTAnalyzer.file_stats = {"python": int, "javascript": int}` after `run`.
+- Produces: `PROTOCOL_VERSION = 2` in `engine.py`; exactly one `{"status": {"check": <auth|injection|deps>, "state": ..., "reason"?: ..., "detail"?: ...}}` line per check, before the done line; the done line declares `"protocol": 2`; `ASTAnalyzer.file_stats = {"python": int, "javascript": int}` after `run`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2054,11 +2230,19 @@ def _load_engine_module():
 
 def test_status_lines_for_every_check_even_when_none_run() -> None:
     result = _run({"mode": "whitebox", "checks": [], "verbose": False})
-    statuses = _statuses(_parse_output(result))
+    objects = _parse_output(result)
+    statuses = _statuses(objects)
     assert set(statuses) == {"auth", "injection", "deps"}
     for s in statuses.values():
         assert s["state"] == "skipped"
         assert s["reason"] == "disabled_by_flag"
+    assert objects[-1]["protocol"] == 2
+
+
+def test_exactly_one_status_line_per_check() -> None:
+    result = _run({"mode": "whitebox", "checks": ["auth", "injection", "deps"], "code_path": "/nonexistent"})
+    lines = [o["status"]["check"] for o in _parse_output(result) if isinstance(o.get("status"), dict)]
+    assert sorted(lines) == ["auth", "deps", "injection"]
 
 
 def test_status_not_applicable_when_input_missing() -> None:
@@ -2118,6 +2302,9 @@ Replace `_run_check` and the dispatch section (lines 27-52 and 112-142) with:
 from typing import Callable, Optional, Tuple
 
 StatusTuple = Tuple[str, Optional[str], Optional[str]]
+
+
+PROTOCOL_VERSION = 2  # declared on the done line; the Go side verifies one status per check
 
 
 def _status(check: str, state: str, reason: Optional[str] = None, detail: Optional[str] = None) -> None:
@@ -2206,10 +2393,10 @@ and in `main()`:
     if verbose:
         _log(f"engine completed {counter} findings")
 
-    print(json.dumps({"done": True, "total": counter}), flush=True)
+    print(json.dumps({"done": True, "total": counter, "protocol": PROTOCOL_VERSION}), flush=True)
 ```
 
-Keep the existing `secrets`/`semgrep` notice block above the loop unchanged.
+Keep the existing `secrets`/`semgrep` notice block above the loop unchanged. The loop is the completeness guarantee: every expected check produces exactly one status line on every path, including "not in checks" and "input missing".
 
 - [ ] **Step 4: Count files per language in `ast_analyzer.py`**
 
@@ -2244,11 +2431,17 @@ done line:
 
 `state` ∈ `ok|skipped|failed`; `reason` is the coverage contract's closed
 enumeration (see `docs/schema.md`); a status line is never a finding and is
-never counted in `done.total`. The Go side records each as the
-`python-engine/<check>` scanner_status entry, validates the pairing, and
-treats an invalid line as `failed/malformed_output` for that child. An older
-Python tree emits no status lines and only the parent entry is recorded;
-an older Go binary logs and ignores them. `done.total` is now reconciled
+never counted in `done.total`. The done line declares the protocol:
+`{"done": true, "total": N, "protocol": 2}`. Under protocol 2 the Go side
+requires exactly one status line for each of `auth`, `injection`, `deps`: a
+duplicate or an unknown check is a protocol violation recorded on the parent
+as `failed/malformed_output`; a missing check is recorded on the parent as
+`failed/truncated_output`. Reported children are recorded as
+`python-engine/<check>` entries with their state/reason pairing validated
+(an invalid pairing is `failed/malformed_output` for that child). A done
+line without `protocol`, or with a value below 2, is a legacy tree: its
+status lines are ignored and only the parent entry is recorded. An older Go
+binary logs status lines and ignores them. `done.total` is reconciled
 against the findings received: a mismatch records the parent as
 `failed/truncated_output`.
 ```
@@ -2819,7 +3012,7 @@ Expected: FAIL to compile (`retryTransient`, `retryDelay` undefined).
 
 - [ ] **Step 3: Add the helper**
 
-Next to `recordDiscovery` in `orchestrator.go`:
+Next to `recordBlackbox` in `orchestrator.go`:
 
 ```go
 // retryDelay is the pause before the single in-process retry of a
@@ -4039,16 +4232,25 @@ git commit -m "docs: coverage contract v1 — schema, integration guide, flags, 
 
 ---
 
-### Task 13: Release gate — the published image must record every analyzer
+### Task 13: Release gate — candidate image, deterministic smoke, promotion, then mirror
 
 **Files:**
-- Create: `tests/fixtures/coverage-smoke/{app.py,requirements.txt,go.mod,main.go,package.json,package-lock.json}`
+- Create: `tests/fixtures/coverage-smoke/{app.py,requirements.txt,go.mod,main.go,package.json,package-lock.json,osv-export.json}`
 - Create: `scripts/coverage-smoke-check.sh`
-- Modify: `.github/workflows/release.yml` (new step in the `docker` job, after "Build & push image" and before "Install cosign")
+- Modify: `.github/workflows/release.yml` (`docker` job: build a candidate, smoke it, promote the smoked digest, then sign; `mirror` unchanged and still gated on `docker`)
 - Modify: `Makefile` (`coverage-smoke` target)
 
 **Interfaces:**
-- Produces: `scripts/coverage-smoke-check.sh <report.json>` exits 0 iff the contract holds for the fixture; `make coverage-smoke` runs it against a local build; the release workflow runs it against the pushed image and blocks the mirror job on failure.
+- Produces: `scripts/coverage-smoke-check.sh --deterministic <report.json>` (blocks promotion) and `--network <report.json>` (warns); the candidate package `ghcr.io/<owner>/fendix-candidate:<tag>-<sha12>`; promotion of the smoked digest to `ghcr.io/<owner>/fendix:<tag>` and `:latest` by manifest copy, never by rebuild; `steps.promote.outputs.digest`, consumed by the existing signing, SBOM and provenance steps.
+
+**What the two smokes assert.**
+
+| Smoke | Runs with | Proves | Blocks promotion |
+|---|---|---|---|
+| deterministic | `--offline` against the fixture's own snapshot, `docker run --network none` | the image contains and can invoke every runtime capability it promises: the Go scanners, semgrep, the Python engine and its three checks, the offline dependency path for PyPI and npm; the coverage block is present and complete; no entry is `dependency_missing` | yes |
+| network | online, default flags | the live OSV and vuln.go.dev integration: the three dependency scanners are `ok`, or `failed` with a transport reason (`network_error`, `timeout`) | no — a transport failure is a warning annotation; any other non-ok state is an error annotation but still does not block, because it is not a property of the image |
+
+A healthy image is therefore never unreleasable because a vulnerability database is temporarily unavailable, and a defective image never reaches a release reference.
 
 - [ ] **Step 1: Write the fixture**
 
@@ -4113,98 +4315,217 @@ tests/fixtures/coverage-smoke/package-lock.json
 }
 ```
 
+```
+tests/fixtures/coverage-smoke/osv-export.json
+```
+```json
+[
+  {"id": "FENDIX-SMOKE-PYPI-0001", "aliases": ["CVE-2026-0001"], "package": {"ecosystem": "PyPI", "name": "flask"}, "ranges": [{"introduced": "0", "fixed": "2.3.0"}], "summary": "Smoke fixture: flask below 2.3.0", "references": ["https://example.invalid/flask"]},
+  {"id": "FENDIX-SMOKE-NPM-0001", "aliases": ["CVE-2026-0002"], "package": {"ecosystem": "npm", "name": "lodash"}, "ranges": [{"introduced": "0", "fixed": "4.17.21"}], "summary": "Smoke fixture: lodash below 4.17.21", "references": ["https://example.invalid/lodash"]}
+]
+```
+
+The export is the shape `fendix db update --source` ingests (`offline.Advisory`). It exists so the deterministic smoke can prove the pip and npm paths work end to end without any network.
+
 - [ ] **Step 2: Write the check script**
 
 ```sh
 #!/usr/bin/env sh
-# scripts/coverage-smoke-check.sh <report.json>
-# Asserts the coverage contract on a scan of tests/fixtures/coverage-smoke:
-# every analyzer that has an input in the fixture must be ok; the ones that
-# structurally cannot apply must say so; the coverage block must be present
-# and complete. This is the test that would have caught a scan image that
-# shipped without semgrep.
+# scripts/coverage-smoke-check.sh --deterministic|--network <report.json>
+#
+# --deterministic  the packaging/capability gate. The report must come from a
+#                  scan of tests/fixtures/coverage-smoke run with --offline
+#                  against the fixture's own snapshot and with no network at
+#                  all. It proves the image contains and can invoke every
+#                  runtime capability it promises. Any failure blocks
+#                  promotion of the candidate image.
+# --network        the live-integration check. The same fixture scanned online:
+#                  govulncheck, pip and npm must be ok, or failed with a
+#                  transport reason. A transport failure is a warning, not a
+#                  release blocker — it is not a property of the image.
 set -eu
-report="$1"
-fail=0
+mode="$1"; report="$2"; fail=0; warn=0
 
-expect_state() { # name state
-  got=$(jq -r --arg n "$1" '[.metadata.scanner_status[] | select(.name==$n) | .state] | first // "MISSING"' "$report")
-  if [ "$got" != "$2" ]; then echo "::error::$1 state is '$got', expected '$2'"; fail=1; fi
-}
-expect_reason() { # name reason
-  got=$(jq -r --arg n "$1" '[.metadata.scanner_status[] | select(.name==$n) | .reason] | first // "MISSING"' "$report")
-  if [ "$got" != "$2" ]; then echo "::error::$1 reason is '$got', expected '$2'"; fail=1; fi
-}
+state_of()  { jq -r --arg n "$1" '[.metadata.scanner_status[] | select(.name==$n) | .state]  | first // "MISSING"' "$report"; }
+reason_of() { jq -r --arg n "$1" '[.metadata.scanner_status[] | select(.name==$n) | .reason] | first // "none"' "$report"; }
+expect_state()  { got=$(state_of "$1");  [ "$got" = "$2" ] || { echo "::error::$1 state is '$got', expected '$2'";  fail=1; }; }
+expect_reason() { got=$(reason_of "$1"); [ "$got" = "$2" ] || { echo "::error::$1 reason is '$got', expected '$2'"; fail=1; }; }
 
-for name in secrets textscan semgrep govulncheck pip npm python-engine python-engine/injection python-engine/deps plugins; do
-  case "$name" in
-    plugins) expect_reason plugins not_applicable ;;
-    *) expect_state "$name" ok ;;
-  esac
-done
-expect_reason dast not_applicable
-expect_reason spec not_applicable
-expect_reason active-probes disabled_by_flag
-expect_reason python-engine/auth not_applicable
+case "$mode" in
+  --deterministic)
+    for name in secrets textscan semgrep pip npm python-engine python-engine/injection python-engine/deps; do
+      expect_state "$name" ok
+    done
+    expect_reason govulncheck disabled_offline
+    expect_reason python-engine/auth not_applicable
+    expect_reason dast not_applicable
+    expect_reason spec not_applicable
+    expect_reason active-probes disabled_by_flag
+    expect_reason plugins not_applicable
+    dm=$(jq -r '[.metadata.scanner_status[] | select(.reason=="dependency_missing") | .name] | join(",")' "$report")
+    [ -z "$dm" ] || { echo "::error::dependency_missing inside the image: $dm"; fail=1; }
+    [ "$(jq -r '.metadata.coverage.contract_version // "MISSING"' "$report")" = "1" ] || { echo "::error::coverage.contract_version missing"; fail=1; }
+    [ "$(jq -r '.metadata.coverage.configured_complete // "MISSING"' "$report")" = "true" ] || { echo "::error::configured_complete is not true; gaps: $(jq -c '.metadata.coverage.gaps' "$report")"; fail=1; }
+    [ "$(jq -r '.metadata.policy_version // "MISSING"' "$report")" != "MISSING" ] || { echo "::error::policy_version missing"; fail=1; }
+    deps=$(jq '[.findings[] | select(.category=="deps")] | length' "$report")
+    [ "$deps" -ge 2 ] || { echo "::error::offline snapshot findings missing: expected >= 2 dependency findings, got $deps"; fail=1; }
+    ;;
+  --network)
+    for name in govulncheck pip npm; do
+      st=$(state_of "$name"); rs=$(reason_of "$name")
+      case "$st" in
+        ok) ;;
+        failed)
+          case "$rs" in
+            network_error|timeout) echo "::warning::$name: live vulnerability database unavailable ($rs); not a packaging defect"; warn=1 ;;
+            *) echo "::error::$name failed online with '$rs' (not a transport reason)"; fail=1 ;;
+          esac ;;
+        *) echo "::error::$name is '$st/$rs' online"; fail=1 ;;
+      esac
+    done
+    ;;
+  *) echo "usage: $0 --deterministic|--network <report.json>" >&2; exit 2 ;;
+esac
 
-cv=$(jq -r '.metadata.coverage.contract_version // "MISSING"' "$report")
-[ "$cv" = "1" ] || { echo "::error::coverage.contract_version is '$cv'"; fail=1; }
-cc=$(jq -r '.metadata.coverage.configured_complete // "MISSING"' "$report")
-[ "$cc" = "true" ] || { echo "::error::configured_complete is '$cc'; gaps: $(jq -c '.metadata.coverage.gaps' "$report")"; fail=1; }
-count=$(jq '.metadata.scanner_status | length' "$report")
-[ "$count" -ge 11 ] || { echo "::error::expected at least 11 entries, got $count"; fail=1; }
-
-if [ "$fail" = 0 ]; then echo "coverage smoke: every analyzer delivered on the fixture"; fi
+[ "$fail" = 0 ] && echo "coverage smoke ($mode): ok (warnings=$warn)"
 exit $fail
 ```
 
 `chmod +x scripts/coverage-smoke-check.sh`.
 
-- [ ] **Step 3: Makefile target**
+- [ ] **Step 3: Makefile target (deterministic mode, local binary)**
 
 ```make
-# Coverage contract smoke: scan the fixture with the local binary and assert
-# every analyzer recorded ok (needs semgrep on PATH, python3, and network
-# for the OSV/vuln.go.dev lookups). The release workflow runs the same
-# script against the published image.
+# Coverage contract smoke, deterministic mode: build the fixture's offline
+# snapshot, scan the fixture with --offline and the local binary, assert
+# every capability recorded ok. Needs semgrep and python3 on PATH; needs NO
+# network. The release workflow runs the same script against the candidate
+# image with --network none, then a separate online check that only warns.
 coverage-smoke: build
-	./bin/fendix scan --code tests/fixtures/coverage-smoke --python-engine --format json --output /tmp/fendix-coverage-smoke.json || true
-	scripts/coverage-smoke-check.sh /tmp/fendix-coverage-smoke.json
+	./bin/fendix db update --source tests/fixtures/coverage-smoke/osv-export.json --output /tmp/fendix-smoke-db.json
+	./bin/fendix scan --code tests/fixtures/coverage-smoke --python-engine --offline --offline-db /tmp/fendix-smoke-db.json \
+	  --format json --output /tmp/fendix-coverage-smoke.json || true
+	scripts/coverage-smoke-check.sh --deterministic /tmp/fendix-coverage-smoke.json
 ```
 
-(The `|| true` is deliberate: the fixture contains a shell-injection sink, so the scan may exit 1 on findings; the assertion is the script.)
+(The `|| true` is deliberate: the fixture contains a shell-injection sink and two vulnerable pins, so the scan may exit 1 on findings; the assertion is the script.)
 
-- [ ] **Step 4: Release workflow step**
+- [ ] **Step 4: Restructure the `docker` job in `release.yml`**
 
-In `.github/workflows/release.yml`, in the `docker` job, after the "Build & push image" step and before "Install cosign", add (reuse the image reference variables that step already exports for the signing step — the same `${IMAGE}@${DIGEST}` the `Sign Docker image` step signs):
+Replace the "Compute image tags" and "Build & push image" steps (lines 413-446) with a candidate build, two smokes and a promotion; the existing cosign, syft and SLSA steps then read `steps.promote.outputs.digest` instead of `steps.build.outputs.digest`.
 
 ```yaml
-      - name: Smoke — coverage contract on the pushed image
+      - name: Compute image references
+        id: tags
+        run: |
+          REPO_LC="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          OWNER_LC="${REPO_LC%%/*}"
+          TAG="${GITHUB_REF_NAME}"
+          {
+            echo "image=ghcr.io/${REPO_LC}"
+            echo "candidate=ghcr.io/${OWNER_LC}/fendix-candidate"
+            echo "candidate_tag=${TAG}-${GITHUB_SHA::12}"
+            echo "tag=${TAG}"
+            echo "version=${TAG#v}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The candidate lives in a separate package. Nothing under the release
+      # package name exists until the deterministic smoke has passed, so a
+      # consumer pinning ghcr.io/<owner>/fendix:<tag> or :latest can never
+      # observe an unverified image.
+      - name: Build & push candidate image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.tags.outputs.tag }}
+          tags: ${{ steps.tags.outputs.candidate }}:${{ steps.tags.outputs.candidate_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Smoke (deterministic, no network) — packaging and capability gate
+        env:
+          CANDIDATE: ${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}
         run: |
           set -eu
-          docker run --rm --entrypoint /usr/local/bin/fendix \
-            -v "$PWD/tests/fixtures/coverage-smoke:/src:ro" \
-            "${IMAGE}@${DIGEST}" scan --code /src --python-engine --format json --output /dev/stdout \
-            > smoke.json || true
-          scripts/coverage-smoke-check.sh smoke.json
+          docker run --rm --network none --entrypoint sh \
+            -v "$PWD/tests/fixtures/coverage-smoke:/src:ro" "$CANDIDATE" -c '
+              /usr/local/bin/fendix db update --source /src/osv-export.json --output /tmp/offline-db.json >/dev/null
+              /usr/local/bin/fendix scan --code /src --python-engine --offline --offline-db /tmp/offline-db.json \
+                --format json --output /tmp/report.json >/dev/null 2>&1 || true
+              cat /tmp/report.json' > smoke-deterministic.json
+          scripts/coverage-smoke-check.sh --deterministic smoke-deterministic.json
+
+      - name: Smoke (network) — live vulnerability databases
+        continue-on-error: true
+        env:
+          CANDIDATE: ${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          docker run --rm --entrypoint sh \
+            -v "$PWD/tests/fixtures/coverage-smoke:/src:ro" "$CANDIDATE" -c '
+              /usr/local/bin/fendix scan --code /src --python-engine --format json --output /tmp/report.json >/dev/null 2>&1 || true
+              cat /tmp/report.json' > smoke-network.json
+          scripts/coverage-smoke-check.sh --network smoke-network.json
+
+      # Promotion is a manifest copy of the exact digest that passed the gate.
+      # No rebuild, so the promoted image is byte-identical to the smoked one;
+      # the digest equality check makes that a hard assertion.
+      - name: Promote smoked candidate to release references
+        id: promote
+        run: |
+          set -eu
+          SRC="${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}"
+          docker buildx imagetools create \
+            -t "${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.tag }}" \
+            -t "${{ steps.tags.outputs.image }}:latest" \
+            "$SRC"
+          DIGEST="$(docker buildx imagetools inspect "${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.tag }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          [ "$DIGEST" = "${{ steps.build.outputs.digest }}" ] || { echo "::error::promoted digest $DIGEST differs from smoked candidate ${{ steps.build.outputs.digest }}"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 ```
 
-The step fails the job when any analyzer the image should carry did not run, and the `mirror` job depends on `docker`, so a broken image is never mirrored to the public install repo.
+Then, in every later step of the job that references the image digest (`Sign Docker image`, `Generate + attest image SBOM`, `Attest SLSA provenance (image)`), replace `${{ steps.build.outputs.digest }}` with `${{ steps.promote.outputs.digest }}` and keep `${{ steps.tags.outputs.image }}` as the reference. The `mirror` job already depends on `docker`; a failed deterministic smoke fails the job before promotion, so neither a release tag nor a mirror entry is created.
+
+Add, as the last step of the job, a best-effort cleanup so rejected candidates do not accumulate (the promoted digest is retained because it is now referenced by the release package):
+
+```yaml
+      - name: Prune old candidate images
+        if: always()
+        continue-on-error: true
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          package-name: fendix-candidate
+          package-type: container
+          min-versions-to-keep: 5
+```
+
+Two things to know when this runs for the first time: pushing to a new package needs the job's existing `packages: write` permission and the package should be made **private** in the GHCR package settings (a candidate is not a release reference; keeping it private removes any chance of it being pulled as one); and if semgrep fails under `--network none`, fix the invocation (`--metrics=off`, `--disable-version-check`) rather than relaxing the test — an air-gapped run that needs the network is exactly what the gate exists to catch.
 
 - [ ] **Step 5: Run locally**
 
 Run: `make coverage-smoke`
-Expected: `coverage smoke: every analyzer delivered on the fixture` when semgrep and python3 are on PATH. If semgrep is not installed locally the script names it as `semgrep state is 'skipped', expected 'ok'` — that is the script working; install semgrep (`pip install semgrep`) or run the check through the built image with `docker run` as in the workflow step.
+Expected: `coverage smoke (--deterministic): ok (warnings=0)` when semgrep and python3 are on PATH. A missing local semgrep is reported by the script as `semgrep state is 'skipped', expected 'ok'`, which is the gate doing its job; install semgrep or run the same commands through a locally built image with `docker run --network none`.
+
+Also validate the workflow file: `actionlint .github/workflows/release.yml` (the CI job already runs actionlint; run it locally to catch a mis-nested step before pushing a tag).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add tests/fixtures/coverage-smoke scripts/coverage-smoke-check.sh Makefile .github/workflows/release.yml
-git commit -m "ci(release): smoke-test the pushed image against the coverage contract
+git commit -m "ci(release): gate promotion on a deterministic coverage smoke of the candidate image
 
-Scans a fixture carrying Python, Go and npm inputs with the published image
-and fails the release when any analyzer the image must carry did not record
-ok, or when the coverage block is missing or incomplete."
+The image is built and pushed as a candidate under a separate package,
+scanned offline with no network against the fixture's own snapshot to
+prove every promised capability is present and invocable, then promoted
+to the release references by manifest copy of the identical digest. A
+separate online check covers the live vulnerability databases and only
+warns, so a database outage cannot block a healthy release."
 ```
 
 ---
@@ -4228,14 +4549,15 @@ ok, or when the coverage block is missing or incomplete."
 | §5.7 documentation | 12 |
 | §5.8 CLI flags, exit precedence, scan-end table, re-render passthrough | 9 |
 | §6.4 in-process analyzer retry, `attempts`, no whole-engine re-run | 8 |
-| §10 engine invariants: exactly-once, determinism, pairing, coverage, spawner outcomes, strict exits, SARIF, re-render, image smoke | 1, 3, 4, 5, 7, 8, 9, 10, 13 |
+| §10 engine invariants: exactly-once, determinism, pairing, coverage, spawner outcomes incl. protocol completeness, observable check pass, strict exits, SARIF, re-render, deterministic image smoke | 1, 3, 4, 5, 7, 8, 9, 10, 13 |
 
 **Deltas against the spec that the owner should record as clarifications** (none contradicts a decision; each is stated where it applies):
 
 1. **Explicit `--python-engine` with an unresolvable tree keeps today's immediate exit 2 with no report** (Task 5). Spec §4.4 says the entry is "additionally recorded"; recording requires running the scan, which would change the explicit path's contract. The implicit path, which is what Fendix Cloud uses, records `dependency_missing` as specified.
 2. **Findings gathered before a dependency-scanner failure are kept** (Tasks 2, 7, 8), and the second attempt's partial findings are kept when the retry also fails. Spec §6.4 point 3 assumed a failed lookup produced nothing to keep; a partial `LookupError` can carry findings, and Rule 3 says they are never dropped. The retried analyzer's first-attempt findings are still discarded in favour of the second attempt's.
-3. **`active-probes` cannot be `failed` in contract version 1** (Task 4): the worker pool does not surface per-probe errors. It records `ok`, `disabled_by_flag` or `not_applicable`.
+3. **`active-probes` and `dast` derive `ok` from the observed check pass** (Task 4), not from configuration: the probe audit log (every active probe with its HTTP status, `0` meaning no response), the request budget's refused count, and a `--max-duration` deadline. All probes unanswered is `failed/network_error`; a pass cut short by the budget or the deadline is `failed/execution_error` or `failed/timeout`; partial unanswered probes stay visible in the detail of an `ok` entry. The spec's matrix rows for `dast` and `active-probes` are amended to this rule.
 4. **Re-rendering a pre-contract report emits SARIF `warning` notifications for reason-less skips** (Task 10), because their class is `unknown`. Listed under "Changed" in the changelog.
+5. **Python protocol v2 completeness is verified** (Tasks 5–6): the done line declares `protocol: 2`, and the Go side requires exactly one status line per expected check — duplicate or unknown is `malformed_output`, missing is `truncated_output`, both on the parent. A tree that declares no protocol is parent-only. The spec's §5.4 is amended to this rule.
 
 **Placeholder scan.** No `TBD`/`TODO`; every code step carries the code; the only forward references are to symbols defined in earlier tasks (`pip.ErrNoManifests` is declared in Task 2 and wired in Task 3; `Coverage` assertions in Task 4's zero-endpoint test are commented until Task 9 restores them, as the step says).
 
