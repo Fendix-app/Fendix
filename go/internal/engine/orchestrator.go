@@ -27,6 +27,7 @@ import (
 	"github.com/Abdel-RahmanSaied/Fendix/internal/sarifimport"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/govulncheck"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/secrets"
@@ -411,18 +412,24 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			slog.Debug("diff-aware scan: go.mod/go.sum unchanged, skipping govulncheck")
 			scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonDiffUnchanged, "diff: go.mod/go.sum unchanged")
 		} else {
-			nativeFindings, err := govulncheck.Scan(ctx, o.cfg.CodePath)
+			nativeFindings, attempts, err := retryTransient(ctx, AnalyzerGovulncheck, func() ([]evidence.Evidence, error) {
+				return govulncheck.Scan(ctx, o.cfg.CodePath)
+			})
 			switch {
 			case err == nil:
 				slog.Info("native go deps scan complete", "findings", len(nativeFindings))
 				evid = append(evid, nativeFindings...)
-				scanStatus.ok("govulncheck")
+				scanStatus.ok(AnalyzerGovulncheck)
 			case errors.Is(err, govulncheck.ErrNoGoMod):
 				slog.Debug("no go.mod at code path, skipping native go deps scan")
 				scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonNotApplicable, "no go.mod under --code")
 			default:
 				slog.Warn("native go deps scan failed", "error", err)
+				evid = append(evid, nativeFindings...)
 				scanStatus.fail(AnalyzerGovulncheck, classifyErr(err), err)
+			}
+			if attempts > 1 {
+				scanStatus.markAttempts(AnalyzerGovulncheck, attempts)
 			}
 		}
 
@@ -461,11 +468,14 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 				pipMode = "pip-audit subprocess"
 			}
 			slog.Debug("native pypi dep-CVE scan starting", "mode", pipMode)
-			pipFindings, pipErr = pip.ScanRecursiveWithOptions(
-				ctx, o.cfg.CodePath, pip.DefaultRecurseDepth,
-				pip.Options{UsePipAudit: o.cfg.UsePipAudit},
-			)
-			o.recordDepScanResult(&scanStatus, "pip", "native pypi deps scan", &evid, pipFindings, pipErr)
+			var attempts int
+			pipFindings, attempts, pipErr = retryTransient(ctx, AnalyzerPip, func() ([]evidence.Evidence, error) {
+				return pip.ScanRecursiveWithOptions(ctx, o.cfg.CodePath, pip.DefaultRecurseDepth, pip.Options{UsePipAudit: o.cfg.UsePipAudit})
+			})
+			o.recordDepScanResult(&scanStatus, AnalyzerPip, "native pypi deps scan", &evid, pipFindings, pipErr)
+			if attempts > 1 {
+				scanStatus.markAttempts(AnalyzerPip, attempts)
+			}
 		}
 
 		// npm: same offline routing as pip.
@@ -485,8 +495,14 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			npmFindings, npmErr = npm.ScanOffline(o.cfg.CodePath, offlineSnap)
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
 		default:
-			npmFindings, npmErr = npm.Scan(ctx, o.cfg.CodePath)
+			var attempts int
+			npmFindings, attempts, npmErr = retryTransient(ctx, AnalyzerNpm, func() ([]evidence.Evidence, error) {
+				return npm.Scan(ctx, o.cfg.CodePath)
+			})
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
+			if attempts > 1 {
+				scanStatus.markAttempts(AnalyzerNpm, attempts)
+			}
 		}
 	}
 
@@ -1369,6 +1385,37 @@ func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints
 	default:
 		status.ok(AnalyzerActiveProbes)
 	}
+}
+
+// retryDelay is the pause before the single in-process retry of a
+// transient dependency-scanner failure. Tests set it to zero.
+var retryDelay = 2 * time.Second
+
+// isTransient reports whether err is worth one retry: a network failure
+// or a timeout. Everything else is deterministic and is never retried.
+func isTransient(err error) bool {
+	k := neterr.Classify(err)
+	return k == neterr.KindNetwork || k == neterr.KindTimeout
+}
+
+// retryTransient runs fn and, when it fails transiently, runs it once more
+// after retryDelay. The second attempt is authoritative for this analyzer:
+// its findings and its error replace the first attempt's entirely, and no
+// other analyzer's evidence is touched (spec §6.4). Returns the attempt
+// count so the caller can stamp `attempts`.
+func retryTransient(ctx context.Context, name string, fn func() ([]evidence.Evidence, error)) ([]evidence.Evidence, int, error) {
+	findings, err := fn()
+	if err == nil || !isTransient(err) || ctx.Err() != nil {
+		return findings, 1, err
+	}
+	slog.Warn("transient dependency-scanner failure — retrying once", "scanner", name, "error", err)
+	select {
+	case <-ctx.Done():
+		return findings, 1, err
+	case <-time.After(retryDelay):
+	}
+	findings, err = fn()
+	return findings, 2, err
 }
 
 // recordPythonEngine maps a spawn outcome onto the python-engine entry and
