@@ -73,6 +73,25 @@ RUN apt-get update && \
 # Copy the Go binary
 COPY --from=go-builder /fendix /usr/local/bin/fendix
 
+# ---- Go toolchain, so govulncheck can run inside the image ----
+# govulncheck (golang.org/x/vuln) loads the target module through the `go`
+# command. Without a toolchain it recorded `failed/execution_error` on every
+# Go repository the image scanned — a permanent, Fendix-owned coverage gap
+# that release policy 2.0.0 turns into INCOMPLETE (coverage spec §11, risk
+# 13). The builder's toolchain is statically linked, so it runs on this
+# glibc runtime unchanged; ~300 MB of image.
+#
+# GOTOOLCHAIN=local: a module whose go.mod asks for a newer Go than this
+# image carries records execution_error instead of downloading a toolchain
+# mid-scan (a hidden network dependency and a 100 MB write per scan); the
+# fix for that is a builder bump, which dependabot proposes.
+# CGO_ENABLED=0: the runtime ships no C compiler (purged above), so cgo
+# packages cannot build; saying so explicitly keeps the failure deterministic.
+COPY --from=go-builder /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}" \
+    GOTOOLCHAIN=local \
+    CGO_ENABLED=0
+
 # Copy the Python engine (for direct use, not just embedded)
 COPY python/ /opt/fendix/python/
 # EnsureEngine (go/internal/engine/extract.go) resolves the taint engine via

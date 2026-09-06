@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The image ships a Go toolchain**, so `govulncheck` runs inside it.
+  Every earlier image recorded `govulncheck` as `failed/execution_error` on
+  any Go repository it scanned, because `golang.org/x/vuln` loads the module
+  through the `go` command and none was present — a gap the coverage contract
+  now makes visible instead of fail-open. `GOTOOLCHAIN=local`: a module that
+  requires a newer Go than the image carries records `execution_error` rather
+  than downloading a toolchain during the scan; `CGO_ENABLED=0`, since the
+  runtime has no C compiler. Image size grows by roughly 300 MB (637 MB → 946 MB on linux/arm64).
 - **Coverage contract v1.** Every analyzer that can silently degrade is now
   recorded once per scan in `metadata.scanner_status`, in a fixed registry
   order, with a closed machine-readable `reason` on every non-ok entry:
