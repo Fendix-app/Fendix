@@ -69,7 +69,18 @@ etc.) record when a field first appeared, not a support commitment.
     {"name": "secrets",  "state": "ok"},
     {"name": "semgrep",  "state": "skipped", "reason": "dependency_missing", "detail": "semgrep binary not installed"},
     {"name": "npm",      "state": "failed",  "reason": "execution_error",    "detail": "npm audit: exit status 1"}
-  ]
+  ],
+  "policy_version": "1.0.0",
+  "coverage": {
+    "contract_version": 1,
+    "strict": false,
+    "configured_complete": false,
+    "gaps": ["semgrep", "npm"],
+    "limitations": [],
+    "required_analyzers": [],
+    "required_gaps": [],
+    "retried": []
+  }
 }
 ```
 
@@ -120,7 +131,7 @@ Lifecycle classes, derived from `(state, reason)`: `ok`; `not_applicable` (`not_
 | `strict` | boolean | The run used `--fail-on-coverage-gap` or `--require-analyzers`. |
 | `configured_complete` | boolean | `true` iff no entry is `unavailable` or `failed`. Not changed by `--require-analyzers`. |
 | `gaps` | array of string | Names of `unavailable` or `failed` entries. |
-| `limitations` | array of string | `"<name>: <detail>"` for every `unsupported` entry. |
+| `limitations` | array of string | `"<name>: <detail>"` for every `unsupported` entry, or just `"<name>"` when that entry's `detail` is empty. |
 | `required_analyzers` | array of string | The `--require-analyzers` list; empty when none. |
 | `required_gaps` | array of string | Required names not `ok` or `not_applicable`. An explicit requirement is stricter than `configured_complete`: `disabled` and `unsupported` do not satisfy it. |
 | `retried` | array of string | Entries with `attempts > 1`. |

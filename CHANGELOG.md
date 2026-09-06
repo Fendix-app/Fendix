@@ -56,6 +56,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SARIF `fendix report --input` of a pre-contract report** now emits a
   `warning` notification for a skipped entry that has no reason (class
   `unknown`), where it emitted nothing.
+- **`--fail-on-scanner-error` now trips on any recorded analyzer, not just
+  six.** It reads the whole `metadata.scanner_status` registry — `dast`,
+  `spec`, `active-probes` and `plugins` and the python-engine (and its
+  checks) can now cause the exit-2 failure alongside the original
+  `govulncheck`/`pip`/`npm`/`secrets`/`semgrep`/`textscan`. Skipped entries
+  still never count.
+- **`checks_run` can now omit `"deps"` on a `--code` scan with no Python
+  manifest, no `go.mod` and no `package.json`.** `pip` with no manifest
+  moved to `skipped/not_applicable` (above), and the coarse `"deps"` label
+  is derived from `ok` entries, so a repo with none of the three
+  manifests now reports `checks_run` without `"deps"` where it previously
+  included it. The derivation rule is unchanged; the derived value is not.
+- **`fendix verify` can now answer `unknown` (exit 2) on a dependency
+  finding where it previously answered `resolved`.** `pip.Scan`/`npm.Scan`
+  return a typed lookup error on a partial OSV lookup failure instead of a
+  silent `ok`, and `verifyDep` treats any re-scan error as `unknown` —
+  fail-closed rather than presuming the finding is gone.
 
 ## [3.3.0] - 2026-09-02
 
