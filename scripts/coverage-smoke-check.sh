@@ -9,8 +9,11 @@
 #                  promotion of the candidate image.
 # --network        the live-integration check. The same fixture scanned online:
 #                  govulncheck, pip and npm must be ok, or failed with a
-#                  transport reason. A transport failure is a warning, not a
-#                  release blocker — it is not a property of the image.
+#                  transport reason, and an ok govulncheck must have found the
+#                  fixture's pinned golang.org/x/text vulnerability (module
+#                  resolution and detection end to end). A transport failure
+#                  is a warning, not a release blocker — it is not a property
+#                  of the image.
 set -eu
 mode="$1"; report="$2"; fail=0; warn=0
 
@@ -51,6 +54,15 @@ case "$mode" in
         *) echo "::error::$name is '$st/$rs' online"; fail=1 ;;
       esac
     done
+    # The fixture pins golang.org/x/text v0.3.0 and calls ParseAcceptLanguage
+    # (GO-2021-0113), so a govulncheck that resolved the module and ran must
+    # report it. An ok state with no finding means the toolchain loaded the
+    # module but the vulnerability database or the call-graph pass did not
+    # do its job — the exact silent-ok this smoke exists to catch.
+    if [ "$(state_of govulncheck)" = ok ]; then
+      xtext=$(jq '[.findings[] | select(.title|test("golang.org/x/text"))] | length' "$report")
+      [ "$xtext" -ge 1 ] || { echo "::error::govulncheck is ok but reported no finding for the fixture's known-vulnerable golang.org/x/text pin"; fail=1; }
+    fi
     ;;
   *) echo "usage: $0 --deterministic|--network <report.json>" >&2; exit 2 ;;
 esac
