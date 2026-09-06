@@ -73,6 +73,41 @@ RUN apt-get update && \
 # Copy the Go binary
 COPY --from=go-builder /fendix /usr/local/bin/fendix
 
+# ---- Go toolchain, so govulncheck can run inside the image ----
+# govulncheck (golang.org/x/vuln) loads the target module through the `go`
+# command. Without a toolchain it recorded `failed/execution_error` on every
+# Go repository the image scanned — a permanent, Fendix-owned coverage gap
+# that release policy 2.0.0 turns into INCOMPLETE (coverage spec §11, risk
+# 13). The builder's toolchain is statically linked, so it runs on this
+# glibc runtime as is (~300 MB of image). Dockerfile and Dockerfile.app carry
+# the same block; keep the two in step.
+#
+# What a scan does with it, and the knobs that bound it:
+#   - Module resolution reaches Go's default proxy and checksum database
+#     (proxy.golang.org, sum.golang.org) for any dependency the target does
+#     not vendor, so the dependency graph of a scanned repository leaves the
+#     scan host. Operators with private modules set GOPRIVATE (and GOPROXY /
+#     GONOSUMDB as their proxy requires) on the container; an unresolvable
+#     dependency records govulncheck failed/execution_error, never a silent ok.
+#   - GOTOOLCHAIN=local: a module whose go.mod asks for a newer Go than this
+#     image carries records execution_error instead of downloading a
+#     toolchain mid-scan; the fix is a builder bump, which dependabot proposes.
+#   - GOFLAGS=-mod=readonly and GOENV=off: a scan never rewrites the target's
+#     go.mod/go.sum (checkouts are mounted read-only) and never reads a
+#     per-user go env file, whatever a future Go version's defaults become.
+#   - CGO_ENABLED=0: the runtime ships no C compiler, so cgo packages cannot
+#     be loaded; saying so keeps that failure deterministic.
+#   - Caches live under /tmp so any UID the container runs as can write them.
+COPY --from=go-builder /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}" \
+    GOTOOLCHAIN=local \
+    CGO_ENABLED=0 \
+    GOFLAGS=-mod=readonly \
+    GOENV=off \
+    GOPATH=/tmp/go \
+    GOCACHE=/tmp/go-build \
+    GOMODCACHE=/tmp/go/pkg/mod
+
 # Copy the Python engine (for direct use, not just embedded)
 COPY python/ /opt/fendix/python/
 # EnsureEngine (go/internal/engine/extract.go) resolves the taint engine via

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Both images ship a Go toolchain**, so `govulncheck` runs inside them
+  (`Dockerfile` and `Dockerfile.app`, the GitHub App). Every earlier image
+  recorded `govulncheck` as `failed/execution_error` on any Go repository it
+  scanned, because `golang.org/x/vuln` loads the module through the `go`
+  command and none was present — a gap the coverage contract now makes
+  visible instead of fail-open. Module resolution uses Go's default proxy
+  and checksum database, so the dependency graph of a scanned repository
+  leaves the scan host; set `GOPRIVATE` (and `GOPROXY`/`GONOSUMDB`) on the
+  container for private modules, and an unresolvable dependency records
+  `execution_error`. `GOTOOLCHAIN=local`: a module that requires a newer Go
+  than the image carries records `execution_error` rather than downloading
+  a toolchain during the scan; `GOFLAGS=-mod=readonly` and `GOENV=off` keep
+  a scan from writing to the target or reading a user env file;
+  `CGO_ENABLED=0`, since the runtime has no C compiler; caches live under
+  `/tmp`. The release smoke fixture now carries a real, pinned, vulnerable
+  dependency (`golang.org/x/text v0.3.0`) so the network smoke exercises
+  module resolution end to end. Image size grows by roughly 300 MB (637 MB →
+  946 MB on linux/arm64).
 - **Coverage contract v1.** Every analyzer that can silently degrade is now
   recorded once per scan in `metadata.scanner_status`, in a fixed registry
   order, with a closed machine-readable `reason` on every non-ok entry:
@@ -36,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Dockerfile.app` (the GitHub App image) builds on CPython 3.14 again.**
+  It compiles semgrep's `ruamel.yaml.clib` with a transient build toolchain
+  and purges it in the same layer, exactly as `Dockerfile` has since the
+  cp314 base; without that the image had failed at `pip install` since the
+  semgrep pin. The release network smoke now also requires an `ok`
+  `govulncheck` to have reported the fixture's pinned vulnerability.
 - **A URL scan that discovers zero endpoints now writes the report before
   exiting 2**, with `dast` recorded `failed/no_endpoints`. Previously it
   exited with no report and Fendix Cloud stored it as a clean scan.
