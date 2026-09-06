@@ -4559,6 +4559,14 @@ warns, so a database outage cannot block a healthy release."
 4. **Re-rendering a pre-contract report emits SARIF `warning` notifications for reason-less skips** (Task 10), because their class is `unknown`. Listed under "Changed" in the changelog.
 5. **Python protocol v2 completeness is verified** (Tasks 5–6): the done line declares `protocol: 2`, and the Go side requires exactly one status line per expected check — duplicate or unknown is `malformed_output`, missing is `truncated_output`, both on the parent. A tree that declares no protocol is parent-only. The spec's §5.4 is amended to this rule.
 
+Recorded after implementation (final review 2026-09-06; mirrored in spec §11):
+
+6. **`checks_run` keeps its derivation rule but not always its value** (Tasks 2, 12). `pip` with no manifest is now `not_applicable`, so a `--code` scan with no dependency manifest at all loses the coarse `deps` label; `checksrun_test.go` pins both directions and the changelog lists it under "Changed". Spec §8.1's "byte-identical" claim is amended to "derived by the same rule".
+7. **Hosted SARIF mode is exactly `coverage_state != "incomplete"`** (Task 10). The `&& !anyFailed` in this plan's Task 10 snippet was dropped: in a hosted re-render the backend's classification is authoritative. The "Required coverage incomplete" warning names gaps from `decision_rationale.missing_coverage[].scanner` first, then `coverage.gaps`, then gap/unknown entries, and omits the list when nothing can be named.
+8. **An unrecognised `release_decision` renders verbatim** (Task 11), not as a blank banner: `VerdictLabel`'s `default: return ""` in this plan was overruled.
+9. **`fendix verify` fails closed on a partial lookup** (Task 7): a `*neterr.LookupError` from `pip.Scan`/`npm.Scan` makes `verifyDep` answer `unknown` (exit 2) where it could previously answer "resolved". Documented in the changelog and the integration guide.
+10. **The official image ships no Go toolchain** (Task 13, parked for the owner): `govulncheck` records `failed/execution_error` on any image scan of a Go module, which the warn-only network smoke surfaces as a non-blocking annotation. Spec §11 risk 13 carries it into the backend plan.
+
 **Placeholder scan.** No `TBD`/`TODO`; every code step carries the code; the only forward references are to symbols defined in earlier tasks (`pip.ErrNoManifests` is declared in Task 2 and wired in Task 3; `Coverage` assertions in Task 4's zero-endpoint test are commented until Task 9 restores them, as the step says).
 
 **Type consistency.** `retryTransient` returns `([]evidence.Evidence, int, error)` everywhere (Tasks 8 and 9). `skip(name, reason, detail)` / `fail(name, reason, err)` / `failDetail(name, reason, detail)` are the only recording signatures used after Task 2. `SpawnResult.Outcome` values are used identically in Tasks 5 and 9. `Coverage.StrictOK()` is used by Task 9's exits and Task 10's SARIF mode.
