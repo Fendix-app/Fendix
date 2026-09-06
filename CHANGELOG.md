@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-09-06
+
+A coverage-integrity release. A scan can no longer look complete when it was
+not: every analyzer records whether it ran and, if not, a closed reason; the
+report states its own coverage; a URL scan with zero endpoints writes its
+report before exiting 2; two opt-in flags turn a gap into a failing build;
+and the images ship a Go toolchain so govulncheck runs inside them. **No
+fingerprint changes** and no change to default exit codes. Three behaviour
+changes are listed under "Changed" because they alter existing reports:
+`pip` with no manifest, npm without a lockfile, and the wider reach of
+`--fail-on-scanner-error`.
+
 ### Added
 
 - **Both images ship a Go toolchain**, so `govulncheck` runs inside them
