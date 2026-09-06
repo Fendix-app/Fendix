@@ -264,6 +264,10 @@ func RenderHTMLOpts(w io.Writer, findings []models.Finding, meta ScanMetadata, o
 	// handles metachars, but not Trojan-Source bidi reordering or
 	// invisible control chars — NeutralizeFindings closes that gap.
 	findings = NeutralizeFindings(findings)
+	// Same treatment for the coverage table / verdict banner: ScannerStatus
+	// and Coverage fields are exactly as operator-controlled under
+	// `fendix report --input` as finding fields are.
+	meta = NeutralizeCoverageMetadata(meta)
 	data := htmlTemplateData{
 		JSONReport: JSONReport{
 			Metadata:  meta,

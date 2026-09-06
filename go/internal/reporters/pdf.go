@@ -48,6 +48,12 @@ func RenderPDF(w io.Writer, findings []models.Finding, meta ScanMetadata, opts P
 	// reordering or invisible control chars — neutralize them here so
 	// the PDF can't be spoofed the way a Trojan-Source title would.
 	findings = NeutralizeFindings(findings)
+	// Same treatment for the coverage appendix rows / release-decision
+	// row: ScannerStatus, Coverage, and the backend-passthrough
+	// ReleaseDecision/CoverageState strings are exactly as
+	// operator-controlled under `fendix report --input` as finding
+	// fields are.
+	meta = NeutralizeCoverageMetadata(meta)
 
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(15, 20, 15)

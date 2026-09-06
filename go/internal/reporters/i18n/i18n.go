@@ -168,6 +168,12 @@ func ClassLabel(s Strings, class string) string {
 // VerdictLabel implements the verdict presentation rule: the release
 // decision is primary; incomplete coverage qualifies a BLOCK and is the
 // headline only when the decision itself is INCOMPLETE.
+//
+// decision outside the closed set (pass/warn/block/incomplete) is not
+// silently hidden: it is returned verbatim, with no localisation and no
+// coverage-state suffix, so an out-of-contract backend value is visible
+// in the rendered report instead of producing a blank verdict banner or
+// an empty "Release decision:" row.
 func VerdictLabel(s Strings, decision, coverageState string) string {
 	var label string
 	switch decision {
@@ -183,7 +189,7 @@ func VerdictLabel(s Strings, decision, coverageState string) string {
 	case "pass":
 		label = s.VerdictPass
 	default:
-		return ""
+		return decision
 	}
 	if coverageState == "unknown" {
 		label += " — " + s.CoverageNotMeasured

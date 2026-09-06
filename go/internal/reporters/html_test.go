@@ -489,3 +489,30 @@ func TestRenderHTML_ArabicCoverageTitle(t *testing.T) {
 		t.Fatal("Arabic report must use the Arabic coverage title")
 	}
 }
+
+// TestRenderHTML_CoverageNeutralizesBidiAndControl covers the same
+// Trojan-Source threat as TestRenderHTML_NeutralizesBidiAndControl, but
+// for the coverage table: ScannerStatus.Name/Detail (and, derived from
+// Name, Coverage.Gaps) are exactly as operator-controlled under
+// `fendix report --input` as finding fields are, and must not survive
+// into the rendered HTML.
+func TestRenderHTML_CoverageNeutralizesBidiAndControl(t *testing.T) {
+	status := []ScannerStatus{
+		{Name: "py" + rlo + "engine", State: ScannerFailed, Reason: ReasonNetworkError, Detail: "HTTP" + zwsp + "503"},
+	}
+	cov := BuildCoverage(status, nil, false)
+	var buf bytes.Buffer
+	meta := ScanMetadata{Version: "3.4.0", Mode: "whitebox", ScannerStatus: status, Coverage: &cov}
+	if err := RenderHTML(&buf, nil, meta); err != nil {
+		t.Fatalf("RenderHTML: %v", err)
+	}
+	out := buf.String()
+	for _, bad := range []string{rlo, zwsp} {
+		if strings.Contains(out, bad) {
+			t.Errorf("HTML coverage section still contains a bidi/zero-width char %U", []rune(bad)[0])
+		}
+	}
+	if !strings.Contains(out, "pyengine") {
+		t.Error("expected the sanitized analyzer name to still be present")
+	}
+}

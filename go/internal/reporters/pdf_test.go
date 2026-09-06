@@ -142,6 +142,33 @@ func TestRenderPDF_WithCoverageAndVerdictSucceeds(t *testing.T) {
 	}
 }
 
+// TestRenderPDF_CoverageNeutralizesBidiAndControl covers the same
+// Trojan-Source threat as TestRenderPDF_NeutralizesAndDoesNotPanic, but
+// for the coverage appendix rows: ScannerStatus.Name/Detail (and, derived
+// from Name, Coverage.Gaps) are exactly as operator-controlled under
+// `fendix report --input` as finding fields are, and must not survive
+// into the rendered PDF.
+func TestRenderPDF_CoverageNeutralizesBidiAndControl(t *testing.T) {
+	status := []ScannerStatus{
+		{Name: "py" + rlo + "engine", State: ScannerFailed, Reason: ReasonNetworkError, Detail: "HTTP" + zwsp + "503"},
+	}
+	cov := BuildCoverage(status, nil, false)
+	meta := ScanMetadata{Target: "https://example.com", Version: "dev", ScannerStatus: status, Coverage: &cov}
+	var buf bytes.Buffer
+	if err := RenderPDF(&buf, nil, meta, PDFOptions{}); err != nil {
+		t.Fatalf("RenderPDF: %v", err)
+	}
+	out := buf.Bytes()
+	if !bytes.HasPrefix(out, []byte("%PDF-")) {
+		t.Error("PDF missing magic header")
+	}
+	for _, bad := range []string{rlo, zwsp} {
+		if bytes.Contains(out, []byte(bad)) {
+			t.Errorf("PDF output embeds raw bytes for %U", []rune(bad)[0])
+		}
+	}
+}
+
 func TestTopNBySeverity_OrdersCorrectly(t *testing.T) {
 	findings := []models.Finding{
 		{ID: "low", Severity: models.SeverityLow},

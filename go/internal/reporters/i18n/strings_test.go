@@ -29,6 +29,9 @@ func TestVerdictLabel_PresentationRule(t *testing.T) {
 		{"warn", "complete", s.VerdictWarn},
 		{"pass", "complete", s.VerdictPass},
 		{"pass", "unknown", s.VerdictPass + " — " + s.CoverageNotMeasured},
+		// An out-of-contract decision is shown verbatim, not hidden as a
+		// blank verdict banner or an empty "Release decision:" row.
+		{"escalated", "complete", "escalated"},
 	} {
 		if got := VerdictLabel(s, tc.d, tc.c); got != tc.want {
 			t.Errorf("VerdictLabel(%s,%s) = %q, want %q", tc.d, tc.c, got, tc.want)
