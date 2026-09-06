@@ -460,7 +460,10 @@ func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.
 //
 // A batch failure alone does not count against lf — the serial fallback
 // gets its own chance to resolve every package in the chunk, and only a
-// per-package failure there (or a failed hydration below) is Noted.
+// per-package failure there is Noted. A successful batch proves OSV is
+// reachable, so a hydration miss below keeps the degraded record (Rule 3:
+// findings are never dropped) rather than being counted as a lookup
+// failure.
 func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, chunk []pkgWithManifest, lf *neterr.Failures) []evidence.Evidence {
 	pkgs := make([]pinnedPackage, len(chunk))
 	for i, p := range chunk {

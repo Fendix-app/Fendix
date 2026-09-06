@@ -228,6 +228,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	if discoveryErr != nil {
 		hardExit = 2
 	}
+	// TASK-080: a code-only scan legitimately has zero endpoints (there was
+	// never a --url to discover any from) and must not exit 2 for it — the
+	// CodePath=="" guard confines this hard failure to a blackbox/hybrid
+	// scan that actually needed discovery to find something.
 	if len(endpoints) == 0 && o.cfg.CodePath == "" {
 		slog.Warn("no endpoints discovered — nothing to scan")
 		fmt.Fprintln(os.Stderr, "fendix: no endpoints discovered. Provide --url, --spec, or --code.")
@@ -1435,7 +1439,13 @@ func recordPythonEngine(status *scannerStatusList, res SpawnResult) {
 	for _, c := range res.Checks {
 		name := AnalyzerPythonEngine + "/" + c.Check
 		if !IsRegisteredAnalyzer(name) || status.has(name) {
-			continue // unreachable after spawner validation; defensive only
+			// A duplicate or unknown check DOES reach this loop: the
+			// spawner's childProtocolError already marks the PARENT entry
+			// malformed_output for it, but res.Checks still carries every
+			// line it saw, unknown/duplicate included. Skip re-recording
+			// (or double-recording) the child here — the parent's failure
+			// already reports the violation.
+			continue
 		}
 		entry := reporters.ScannerStatus{Name: name, State: reporters.ScannerStatusState(c.State), Reason: reporters.ScannerReason(c.Reason), Detail: c.Detail}
 		valid := (entry.State == reporters.ScannerOK && entry.Reason == "") ||
