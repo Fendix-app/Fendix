@@ -285,8 +285,19 @@ Three surfaces, each driven by a flag:
     "checks_run": ["headers", "cors", "secrets", "semgrep", "deps"],
     "scanner_status": [
       { "name": "govulncheck", "state": "ok" },
-      { "name": "semgrep", "state": "skipped", "detail": "binary not found" }
-    ]
+      { "name": "semgrep", "state": "skipped", "reason": "dependency_missing", "detail": "binary not found" }
+    ],
+    "policy_version": "1.0.0",
+    "coverage": {
+      "contract_version": 1,
+      "strict": false,
+      "configured_complete": false,
+      "gaps": ["semgrep"],
+      "limitations": [],
+      "required_analyzers": [],
+      "required_gaps": [],
+      "retried": []
+    }
   },
   "summary": { "critical": 1, "high": 3, "medium": 5, "low": 2, "info": 4 },
   "sources": { "blackbox": 10, "whitebox": 5, "correlated": 0 },
