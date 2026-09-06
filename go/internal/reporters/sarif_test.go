@@ -951,12 +951,12 @@ func TestRenderSARIF_HostedIncompleteIsUnsuccessfulAndKeepsBlockResults(t *testi
 	}
 	warned := false
 	for _, n := range inv.ToolExecutionNotifications {
-		if n.Level == "warning" && strings.HasPrefix(n.Message.Text, "Required coverage incomplete") {
+		if n.Level == "warning" && n.Message.Text == "Required coverage incomplete: python-engine" {
 			warned = true
 		}
 	}
 	if !warned {
-		t.Fatalf("expected the coverage warning, got %+v", inv.ToolExecutionNotifications)
+		t.Fatalf("expected the coverage warning to name python-engine from the rationale, got %+v", inv.ToolExecutionNotifications)
 	}
 	if len(log.Runs[0].Results) != len(sampleFindings()) {
 		t.Fatal("results must be untouched by the coverage state")
@@ -968,6 +968,98 @@ func TestRenderSARIF_HostedIncompleteIsUnsuccessfulAndKeepsBlockResults(t *testi
 	rel := props["fendix/release"].(map[string]any)
 	if rel["release_decision"] != "block" || rel["coverage_state"] != "incomplete" {
 		t.Fatalf("release properties = %v", rel)
+	}
+}
+
+// TestRenderSARIF_HostedIncompleteWithNoNamableGapOmitsColon covers the
+// fixture above's own shape with the rationale removed: coverage_state is
+// incomplete but nothing — not the rationale, not Coverage.Gaps, not a local
+// ScannerStatus entry — names a gap. The message must render exactly
+// "Required coverage incomplete" with no trailing colon, never
+// "Required coverage incomplete: " followed by nothing.
+func TestRenderSARIF_HostedIncompleteWithNoNamableGapOmitsColon(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}}
+	cov := BuildCoverage(status, nil, false)
+	log := renderSARIFLog(t, ScanMetadata{Version: "3.4.0", ScannerStatus: status, Coverage: &cov, CoverageState: "incomplete"})
+	inv := log.Runs[0].Invocations[0]
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level != "warning" {
+			continue
+		}
+		found = true
+		if n.Message.Text != "Required coverage incomplete" {
+			t.Fatalf("message = %q, want exactly %q (no trailing colon)", n.Message.Text, "Required coverage incomplete")
+		}
+	}
+	if !found {
+		t.Fatal("expected a warning notification")
+	}
+}
+
+// TestRenderSARIF_HostedIncompleteNeutralizesGapName covers an untrusted
+// analyzer name reaching the coverage-incomplete warning: under
+// `fendix report --input` ScannerStatus.Name is operator-supplied, exactly
+// like every other field this function neutralizes.
+func TestRenderSARIF_HostedIncompleteNeutralizesGapName(t *testing.T) {
+	status := []ScannerStatus{{Name: "py" + rlo + "engine", State: ScannerFailed, Reason: ReasonNetworkError}}
+	cov := BuildCoverage(status, nil, false)
+	log := renderSARIFLog(t, ScanMetadata{Version: "3.4.0", ScannerStatus: status, Coverage: &cov, CoverageState: "incomplete"})
+	inv := log.Runs[0].Invocations[0]
+	for _, n := range inv.ToolExecutionNotifications {
+		if strings.Contains(n.Message.Text, rlo) {
+			t.Fatalf("notification text %q still carries the bidi override char", n.Message.Text)
+		}
+	}
+}
+
+// TestRenderSARIF_ExecutionSuccessfulHostedCompleteIgnoresUnrelatedFailure
+// pins the controller ruling: hosted mode looks at coverage_state alone, so
+// a "complete" hosted export stays successful even with an unrelated
+// scanner failure recorded — while that failure still surfaces as its own
+// error notification.
+func TestRenderSARIF_ExecutionSuccessfulHostedCompleteIgnoresUnrelatedFailure(t *testing.T) {
+	status := []ScannerStatus{{Name: "pip", State: ScannerFailed, Reason: ReasonNetworkError, Detail: "osv.dev returned HTTP 503"}}
+	log := renderSARIFLog(t, ScanMetadata{Version: "3.4.0", ScannerStatus: status, CoverageState: "complete"})
+	inv := log.Runs[0].Invocations[0]
+	if !inv.ExecutionSuccessful {
+		t.Fatal("hosted export with coverage_state=complete must be successful regardless of an unrelated scanner failure")
+	}
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "error" && strings.Contains(n.Message.Text, "pip") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the failed scanner must still surface as an error notification, got %+v", inv.ToolExecutionNotifications)
+	}
+}
+
+// TestRenderSARIF_StrictModeRequiredGapWithNoStatusEntry covers a required
+// analyzer BuildCoverage never saw a scanner_status entry for at all (the
+// operator required a name the report never mentions). The zero-value
+// ScannerStatus this produces has an empty Reason, so the notification must
+// not render a dangling empty parenthetical.
+func TestRenderSARIF_StrictModeRequiredGapWithNoStatusEntry(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}}
+	cov := BuildCoverage(status, []string{"sonarqube"}, true)
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: status, Coverage: &cov})
+	inv := log.Runs[0].Invocations[0]
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level != "error" {
+			continue
+		}
+		if n.Message.Text == "required analyzer sonarqube not delivered: unknown" {
+			found = true
+		}
+		if strings.Contains(n.Message.Text, "()") {
+			t.Fatalf("notification text %q has a dangling empty parenthetical", n.Message.Text)
+		}
+	}
+	if !found {
+		t.Fatalf("expected the exact unresolved-name message, got %+v", inv.ToolExecutionNotifications)
 	}
 }
 
