@@ -67,8 +67,8 @@ etc.) record when a field first appeared, not a support commitment.
   "checks_run":           ["headers", "cors", "exposure", "ratelimit", "secrets", "semgrep", "deps"],
   "scanner_status": [
     {"name": "secrets",  "state": "ok"},
-    {"name": "semgrep",  "state": "skipped", "detail": "semgrep binary not installed"},
-    {"name": "npm",      "state": "failed",  "detail": "npm audit: exit status 1"}
+    {"name": "semgrep",  "state": "skipped", "reason": "dependency_missing", "detail": "semgrep binary not installed"},
+    {"name": "npm",      "state": "failed",  "reason": "execution_error",    "detail": "npm audit: exit status 1"}
   ]
 }
 ```
@@ -86,28 +86,46 @@ etc.) record when a field first appeared, not a support commitment.
 | `endpoints_truncated` | boolean | no | `true` when the `--max-endpoints` cap actually dropped endpoints. Omitted when false. Pair with `endpoints_discovered` to detect a silent coverage gap from a CI gate. |
 | `active_probes` | boolean | yes | Whether `--enable-active` was set. |
 | `checks_run` | array of string | no | Names of checks executed. Omitted when empty. |
-| `scanner_status` | array of `ScannerStatus` | no | Per-scanner outcome for the dependency-CVE, secrets, semgrep and textscan passes. Omitted (empty) for pure black-box scans that run no code scanners. See below. |
+| `scanner_status` | array of `ScannerStatus` | no | Per-analyzer outcome, one entry per registry analyzer, in registry order: `dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `python-engine`, `python-engine/auth`, `python-engine/injection`, `python-engine/deps`, `plugins`. The three `python-engine/*` children appear only when the Python engine reports them. Empty for `import` mode. See below. |
+| `coverage` | `Coverage` | no (present on every report from v3.4.0) | The engine's configured-completeness statement. See below. |
+| `policy_version` | string | no (present from v3.4.0) | Version of the finding-decision policy (`docs/DECISION_POLICY.md`) this build applied. `"1.0.0"` for the RC-3 semantics shipped in v3.2.0. |
+| `release_decision`, `coverage_state`, `decision_policy_version`, `decision_rationale` | string / string / string / object | no | Present only on reports re-rendered by Fendix Cloud, which embeds its release verdict in the input it hands to `fendix report`. A live `fendix scan` never writes them. |
 
 ### ScannerStatus
 
 ```json
-{"name": "govulncheck", "state": "skipped", "detail": "offline mode"}
+{"name": "semgrep", "state": "skipped", "reason": "dependency_missing", "detail": "semgrep binary not installed"}
+{"name": "pip", "state": "ok", "attempts": 2}
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | yes | Scanner identity: `govulncheck`, `pip`, `npm`, `secrets`, `semgrep`, `textscan`. |
-| `state` | string enum | yes | One of `ok`, `skipped`, `failed`. |
-| `detail` | string | no | Short human-readable reason — the skip cause or an error excerpt. Omitted when empty. |
+| `name` | string | yes | Registry identity (list above). |
+| `state` | string enum | yes | `ok`, `skipped`, `failed`. |
+| `reason` | string enum | when `state` ≠ `ok` | Skip reasons: `not_applicable`, `diff_unchanged`, `disabled_by_flag`, `disabled_offline`, `dependency_missing`, `unsupported_target`. Fail reasons: `network_error`, `timeout`, `execution_error`, `malformed_output`, `truncated_output`, `input_error`, `no_endpoints`. Closed set. |
+| `detail` | string | no | Short human-readable excerpt. Never used for classification. |
+| `attempts` | integer ≥ 2 | no | Present when the analyzer was retried in process (one retry, `network_error`/`timeout` on the dependency scanners only). `state`/`reason` describe the final attempt. |
 
-`scanner_status` ends the historical fail-open behaviour where a scanner crash
-was logged at WARN and silently dropped. A `skipped` state is **not** a failure
-— it means the precondition was absent (no manifest, tool not installed) or the
-scanner cannot run in the current mode (e.g. `govulncheck` under `--offline`,
-which needs `vuln.go.dev`). Only `failed` counts as a failure: it feeds
-`--fail-on-scanner-error` and SARIF's `invocations[].executionSuccessful`. A
-consumer that wants "was this scan complete?" should check for any `failed`
-entry rather than inferring coverage from `total`.
+Lifecycle classes, derived from `(state, reason)`: `ok`; `not_applicable` (`not_applicable`, `diff_unchanged`); `disabled` (`disabled_by_flag`, `disabled_offline`); `unavailable` (`dependency_missing`); `unsupported` (`unsupported_target`); `failed` (any fail reason). Only `unavailable` and `failed` are engine gaps: the analyzer was configured to run and did not deliver. `disabled` and `unsupported` are visible, intentional or structural, and never a gap on their own.
+
+### Coverage
+
+```json
+{"contract_version": 1, "strict": false, "configured_complete": false, "gaps": ["semgrep"], "limitations": ["npm: package.json without package-lock.json"], "required_analyzers": [], "required_gaps": [], "retried": ["pip"]}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `contract_version` | integer | Version of the registry-and-reason contract (`1`). Independent of `schema_version`. |
+| `strict` | boolean | The run used `--fail-on-coverage-gap` or `--require-analyzers`. |
+| `configured_complete` | boolean | `true` iff no entry is `unavailable` or `failed`. Not changed by `--require-analyzers`. |
+| `gaps` | array of string | Names of `unavailable` or `failed` entries. |
+| `limitations` | array of string | `"<name>: <detail>"` for every `unsupported` entry. |
+| `required_analyzers` | array of string | The `--require-analyzers` list; empty when none. |
+| `required_gaps` | array of string | Required names not `ok` or `not_applicable`. An explicit requirement is stricter than `configured_complete`: `disabled` and `unsupported` do not satisfy it. |
+| `retried` | array of string | Entries with `attempts > 1`. |
+
+A consumer that wants "was this scan complete?" should read `coverage.configured_complete` and, on a strict run, `coverage.required_gaps`; `gaps` and `limitations` carry the detail. Checking only for a `failed` entry is no longer sufficient: a missing dependency is `skipped/dependency_missing`, and it is a gap.
 
 ---
 

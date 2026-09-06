@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Coverage contract v1.** Every analyzer that can silently degrade is now
+  recorded once per scan in `metadata.scanner_status`, in a fixed registry
+  order, with a closed machine-readable `reason` on every non-ok entry:
+  `dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`,
+  `govulncheck`, `pip`, `npm`, `python-engine` (plus `python-engine/auth`,
+  `/injection`, `/deps` when the Python engine reports them) and `plugins`.
+  `metadata.coverage` states whether everything the run was configured to
+  execute actually ran (`configured_complete`), names the `gaps`, lists
+  `limitations` (unsupported targets), and echoes `required_analyzers` /
+  `required_gaps`. `metadata.policy_version` names the decision policy.
+- **`--fail-on-coverage-gap`** exits 2 when `configured_complete` is false.
+  **`--require-analyzers a,b`** exits 2 when a named analyzer was not
+  delivered — `disabled` and `unsupported` do not satisfy an explicit
+  requirement. Both off by default; default exit behaviour is unchanged.
+- **One in-process retry** for a `network_error` or `timeout` on
+  `govulncheck`, `pip` or `npm`; the entry carries `attempts: 2`. Nothing
+  else is retried. There is no whole-engine re-run.
+- **Python engine protocol v2** — one `{"status": {...}}` line per check.
+- **SARIF** itemises every non-ok analyzer as a `toolExecutionNotification`
+  (error / warning / note by class) and carries the coverage block and, on
+  Fendix Cloud re-renders, the release verdict in `runs[].properties`.
+  `executionSuccessful` is unchanged in default mode, strict under the new
+  flags, and false on any hosted export whose coverage is incomplete.
+- **HTML and PDF** gain a coverage table under the verdict.
+
+### Changed
+
+- **A URL scan that discovers zero endpoints now writes the report before
+  exiting 2**, with `dast` recorded `failed/no_endpoints`. Previously it
+  exited with no report and Fendix Cloud stored it as a clean scan.
+- **`pip` with no manifest is `skipped/not_applicable`**, not `ok`. **An npm
+  `package.json` without a lockfile is `skipped/unsupported_target`.**
+- **A failed OSV lookup is no longer a silent `ok`.** `pip` and `npm` record
+  `failed/network_error` when package lookups fail after every fallback,
+  keeping the findings that did resolve.
+- **A missing Python interpreter or engine tree is `python-engine`
+  `skipped/dependency_missing`** instead of a stderr line; a Python engine
+  crash, unparseable stream, missing done line or `done.total` mismatch is
+  recorded as `failed` with the matching reason, and the findings received
+  are kept.
+- **`--fast`, `--no-native-deps`, `--offline`, `--no-plugins` and
+  `--python-engine=false` record `disabled` entries** instead of leaving
+  the analyzer absent from the list. Blackbox scans gain `not_applicable`
+  entries where the list used to be empty.
+- **SARIF `fendix report --input` of a pre-contract report** now emits a
+  `warning` notification for a skipped entry that has no reason (class
+  `unknown`), where it emitted nothing.
+
 ## [3.3.0] - 2026-09-02
 
 An identity-and-honesty release. One new key is published, one report field

@@ -1,6 +1,7 @@
 # Fendix Decision Policy
 
 **Status:** shipped in the decision-integrity change (RC-1 / RC-2 / RC-3)
+**Policy version:** `1.0.0` — stamped into every report as `metadata.policy_version` (`decision.PolicyVersion`). Bumped when a rule in `applyConfidenceGate` or the corroboration taxonomy changes meaning; the report schema version does not move for that.
 **Authoritative implementation:** `go/internal/decision/decision.go`
 **Escape hatch:** `--enforce-confidence=false` restores the pre-policy
 severity-only mapping byte-for-byte.
