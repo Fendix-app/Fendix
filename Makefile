@@ -1,4 +1,4 @@
-.PHONY: build test lint clean embed-engine e2e fuzz bench
+.PHONY: build test lint clean embed-engine e2e fuzz bench coverage-smoke
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
 GO_DIR := go
@@ -31,6 +31,17 @@ build: embed-engine
 	cd $(GO_DIR) && go build -ldflags="-s -w -X main.Version=$(VERSION)" \
 		-o ../$(BIN_DIR)/fendix ./cmd/fendix/
 	@echo "✓ Built: $(BIN_DIR)/fendix"
+
+# Coverage contract smoke, deterministic mode: build the fixture's offline
+# snapshot, scan the fixture with --offline and the local binary, assert
+# every capability recorded ok. Needs semgrep and python3 on PATH; needs NO
+# network. The release workflow runs the same script against the candidate
+# image with --network none, then a separate online check that only warns.
+coverage-smoke: build
+	./bin/fendix db update --source tests/fixtures/coverage-smoke/osv-export.json --output /tmp/fendix-smoke-db.json
+	./bin/fendix scan --code tests/fixtures/coverage-smoke --python-engine --offline --offline-db /tmp/fendix-smoke-db.json \
+	  --format json --output /tmp/fendix-coverage-smoke.json || true
+	scripts/coverage-smoke-check.sh --deterministic /tmp/fendix-coverage-smoke.json
 
 test: test-go test-python
 

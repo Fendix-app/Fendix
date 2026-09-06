@@ -410,44 +410,79 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tags
+      - name: Compute image references
         id: tags
         run: |
           REPO_LC="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
-          # Docker tag keeps the leading `v` so it matches the Git tag and
-          # the binary filename convention (fendix-vX.Y.Z-...). The OCI
-          # version label uses the bare semver without `v` per the OCI
-          # image-spec convention for org.opencontainers.image.version.
+          OWNER_LC="${REPO_LC%%/*}"
           TAG="${GITHUB_REF_NAME}"
-          VERSION="${GITHUB_REF_NAME#v}"
           {
             echo "image=ghcr.io/${REPO_LC}"
+            echo "candidate=ghcr.io/${OWNER_LC}/fendix-candidate"
+            echo "candidate_tag=${TAG}-${GITHUB_SHA::12}"
             echo "tag=${TAG}"
-            echo "version=${VERSION}"
+            echo "version=${TAG#v}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build & push image
+      # The candidate lives in a separate package. Nothing under the release
+      # package name exists until the deterministic smoke has passed, so a
+      # consumer pinning ghcr.io/<owner>/fendix:<tag> or :latest can never
+      # observe an unverified image.
+      - name: Build & push candidate image
         id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          # Stamp the git tag into the binary as main.Version. Without this
-          # the Dockerfile's ARG default wins and every published image
-          # reports `fendix version docker` — which the backend then persists
-          # as the scan's engine_version and emits as SARIF driver.version.
-          # Uses `tag` (with the leading `v`), not `version`, to match the
-          # platform binaries built above from ${GITHUB_REF_NAME}.
           build-args: |
             VERSION=${{ steps.tags.outputs.tag }}
-          tags: |
-            ${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.tag }}
-            ${{ steps.tags.outputs.image }}:latest
+          tags: ${{ steps.tags.outputs.candidate }}:${{ steps.tags.outputs.candidate_tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.tags.outputs.version }}
             org.opencontainers.image.licenses=MIT
+
+      - name: Smoke (deterministic, no network) — packaging and capability gate
+        env:
+          CANDIDATE: ${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          docker run --rm --network none --entrypoint sh \
+            -v "$PWD/tests/fixtures/coverage-smoke:/src:ro" "$CANDIDATE" -c '
+              /usr/local/bin/fendix db update --source /src/osv-export.json --output /tmp/offline-db.json >/dev/null
+              /usr/local/bin/fendix scan --code /src --python-engine --offline --offline-db /tmp/offline-db.json \
+                --format json --output /tmp/report.json >/dev/null 2>&1 || true
+              cat /tmp/report.json' > smoke-deterministic.json
+          scripts/coverage-smoke-check.sh --deterministic smoke-deterministic.json
+
+      - name: Smoke (network) — live vulnerability databases
+        continue-on-error: true
+        env:
+          CANDIDATE: ${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          docker run --rm --entrypoint sh \
+            -v "$PWD/tests/fixtures/coverage-smoke:/src:ro" "$CANDIDATE" -c '
+              /usr/local/bin/fendix scan --code /src --python-engine --format json --output /tmp/report.json >/dev/null 2>&1 || true
+              cat /tmp/report.json' > smoke-network.json
+          scripts/coverage-smoke-check.sh --network smoke-network.json
+
+      # Promotion is a manifest copy of the exact digest that passed the gate.
+      # No rebuild, so the promoted image is byte-identical to the smoked one;
+      # the digest equality check makes that a hard assertion.
+      - name: Promote smoked candidate to release references
+        id: promote
+        run: |
+          set -eu
+          SRC="${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}"
+          docker buildx imagetools create \
+            -t "${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.tag }}" \
+            -t "${{ steps.tags.outputs.image }}:latest" \
+            "$SRC"
+          DIGEST="$(docker buildx imagetools inspect "${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.tag }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          [ "$DIGEST" = "${{ steps.build.outputs.digest }}" ] || { echo "::error::promoted digest $DIGEST differs from smoked candidate ${{ steps.build.outputs.digest }}"; exit 1; }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
       # Cosign keyless signing for the Docker image. Signs the multi-arch
       # manifest list digest (the recursive --recursive flag fans out to each
@@ -472,7 +507,7 @@ jobs:
         if: vars.COSIGN_ENABLED == 'true'
         env:
           COSIGN_YES: "true"
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
           IMAGE: ${{ steps.tags.outputs.image }}
         run: |
           set -eu
@@ -500,7 +535,7 @@ jobs:
         if: vars.COSIGN_ENABLED == 'true'
         env:
           COSIGN_YES: "true"
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
           IMAGE: ${{ steps.tags.outputs.image }}
         run: |
           set -eu
@@ -524,7 +559,7 @@ jobs:
         if: vars.COSIGN_ENABLED == 'true'
         env:
           COSIGN_YES: "true"
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
           IMAGE: ${{ steps.tags.outputs.image }}
         run: |
           set -eu
@@ -563,9 +598,18 @@ jobs:
             --type slsaprovenance1 \
             "${IMAGE}@${DIGEST}"
 
+      - name: Prune old candidate images
+        if: always()
+        continue-on-error: true
+        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+        with:
+          package-name: fendix-candidate
+          package-type: container
+          min-versions-to-keep: 5
+
   mirror:
     name: Mirror release to public install repo
-    needs: publish
+    needs: [publish, docker]
     runs-on: ubuntu-latest
     env:
       MIRROR_REPO: Abdel-RahmanSaied/homebrew-fendix
