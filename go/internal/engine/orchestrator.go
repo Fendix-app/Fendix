@@ -27,6 +27,7 @@ import (
 	"github.com/Abdel-RahmanSaied/Fendix/internal/sarifimport"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/govulncheck"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/secrets"
@@ -47,6 +48,11 @@ type Orchestrator struct {
 	// scan to native-Go-only output (the silent no-op bug). nil when SAST was
 	// not requested or the engine resolved cleanly.
 	engineErr error
+	// engineMissing records why EnsureEngine could not resolve the Python
+	// tree, on the explicit AND the implicit path. Read when recording the
+	// python-engine entry so an implicit --code scan without a tree is a
+	// visible dependency_missing rather than a stderr line.
+	engineMissing error
 	// metrics is the opt-in product-metrics collector (v0.20). It is a
 	// NoopCollector unless FENDIX_METRICS is set, so the scan path pays
 	// nothing when metrics are disabled. nil only when an Orchestrator is
@@ -66,6 +72,7 @@ type Orchestrator struct {
 func NewOrchestrator(cfg *models.ScanConfig, version string) *Orchestrator {
 	engineDir := ""
 	var engineErr error
+	var engineMissing error
 	if cfg.PythonEngine {
 		dir, err := EnsureEngine("", version)
 		if err != nil {
@@ -84,17 +91,22 @@ func NewOrchestrator(cfg *models.ScanConfig, version string) *Orchestrator {
 			if cfg.PythonEngineExplicit {
 				engineErr = err
 			}
+			// engineMissing is set on BOTH paths: it feeds the python-engine
+			// scanner_status entry (dependency_missing), which must be visible
+			// whether or not the missing tree was also fatal to the whole scan.
+			engineMissing = err
 		} else {
 			engineDir = dir
 		}
 	}
 
 	return &Orchestrator{
-		cfg:       cfg,
-		spawner:   NewPythonSpawner("", engineDir),
-		version:   version,
-		engineErr: engineErr,
-		metrics:   metrics.FromEnv(""),
+		cfg:           cfg,
+		spawner:       NewPythonSpawner("", engineDir),
+		version:       version,
+		engineErr:     engineErr,
+		engineMissing: engineMissing,
+		metrics:       metrics.FromEnv(""),
 	}
 }
 
@@ -197,32 +209,34 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	defer cancelBudget()
 	defer budget.SetCancelFunc(nil) // unregister on Run return
 
-	// 1. Discover endpoints
+	// 1. Discover endpoints. A hard discovery failure and a zero-endpoint
+	// result both used to exit 2 before any report existed; the coverage
+	// contract needs the evidence, so both now record `dast` and render the
+	// report first. The exit code is unchanged (hardExit below).
 	crawler := scanner.NewCrawler(o.cfg)
-	endpoints, err := crawler.CrawlEndpoints(ctx)
-	if err != nil {
-		slog.Error("endpoint discovery failed — check --url is reachable and --spec is valid YAML/JSON", "error", err)
-		return 2
+	endpoints, discoveryErr := crawler.CrawlEndpoints(ctx)
+	if discoveryErr != nil {
+		slog.Error("endpoint discovery failed — check --url is reachable and --spec is valid YAML/JSON", "error", discoveryErr)
+		endpoints = nil
 	}
 
-	// Arm the request cap now that discovery is complete. Reset() the
-	// counters so the budget summary at scan end reflects scan-phase
-	// requests only — clearer semantics for the user, and independent of
-	// however many requests discovery happened to make.
 	budget.Reset()
 	budget.SetMaxRequests(o.cfg.MaxRequests)
 	budget.SetCancelFunc(cancelBudget)
 
-	// Only fail when there's nothing to scan in EITHER engine. Code-only scans
-	// (--code without --url/--spec) legitimately have zero endpoints and should
-	// still run the white-box analyzer (TASK-080). Black-box checks below
-	// receive an empty endpoint list and return zero findings, which is fine.
+	hardExit := 0
+	if discoveryErr != nil {
+		hardExit = 2
+	}
+	// TASK-080: a code-only scan legitimately has zero endpoints (there was
+	// never a --url to discover any from) and must not exit 2 for it — the
+	// CodePath=="" guard confines this hard failure to a blackbox/hybrid
+	// scan that actually needed discovery to find something.
 	if len(endpoints) == 0 && o.cfg.CodePath == "" {
 		slog.Warn("no endpoints discovered — nothing to scan")
 		fmt.Fprintln(os.Stderr, "fendix: no endpoints discovered. Provide --url, --spec, or --code.")
-		return 2
+		hardExit = 2
 	}
-
 	if len(endpoints) > 0 {
 		slog.Info("scanning endpoints", "count", len(endpoints))
 	}
@@ -264,6 +278,34 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// ScanMetadata.ScannerStatus, a scan-end summary line, the SARIF
 	// invocations[].executionSuccessful flag, and (opt-in) the exit code.
 	var scanStatus scannerStatusList
+
+	// The black-box entries describe what the check pass did, not what was
+	// configured: budget.Stats() covers the check phase because Reset() ran
+	// after discovery, and the probe audit log holds every active probe sent.
+	_, rejected := budget.Stats()
+	recordBlackbox(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr,
+		summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), rejected))
+
+	// Validate --code once. An unreadable path is an input error for every
+	// code analyzer (spec §4.4), recorded identically so a consumer sees one
+	// cause, not six different scanner-specific messages. Doing this ONE
+	// validation up front — instead of letting each of secrets/semgrep/
+	// textscan/govulncheck/pip/npm independently stat the path and produce
+	// its own execution_error wording — is what makes "input_error on every
+	// code analyzer" an invariant rather than a coincidence of six error
+	// messages happening to agree.
+	codeConfigured := o.cfg.CodePath != ""
+	var codeErr error
+	if codeConfigured {
+		codeErr = o.validateCodePath()
+		if codeErr != nil {
+			slog.Error("--code is not a readable directory", "path", o.cfg.CodePath, "error", codeErr)
+			for _, name := range []string{AnalyzerSecrets, AnalyzerTextscan, AnalyzerSemgrep, AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+				scanStatus.fail(name, reporters.ReasonInputError, codeErr)
+			}
+		}
+	}
+	codeUsable := codeConfigured && codeErr == nil
 
 	// --offline (F-M4/F-H4): load the air-gapped snapshot once. In offline
 	// mode the orchestrator MUST NOT make any outbound call — pip/npm
@@ -319,10 +361,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	diffEmpty := o.cfg.CodePath != "" && allow != nil && allow.Empty()
 	if diffEmpty {
 		slog.Info("diff-aware scan: no changed files — skipping whitebox file scanners")
-		scanStatus.skip("secrets", "diff: no changed files")
-		scanStatus.skip("textscan", "diff: no changed files")
+		scanStatus.skip(AnalyzerSecrets, reporters.ReasonDiffUnchanged, "diff: no changed files")
+		scanStatus.skip(AnalyzerTextscan, reporters.ReasonDiffUnchanged, "diff: no changed files")
 		if !o.cfg.Fast {
-			scanStatus.skip("semgrep", "diff: no changed files")
+			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDiffUnchanged, "diff: no changed files")
 		}
 	}
 
@@ -340,31 +382,58 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// Each ecosystem has an ErrNo... sentinel for silent-skip; other
 	// errors are RECORDED (per-scanner status) and the scan continues so
 	// a network blip doesn't stop a scan from reporting other findings.
-	if o.cfg.CodePath != "" && !o.cfg.NoNativeDeps && !o.cfg.Fast {
+	//
+	// Explicit else branches (spec §10): --no-code, an unreadable --code,
+	// --fast and --no-native-deps must each record all three dep
+	// scanners with a reason rather than leaving no entry at all — that
+	// used to be four different ways for govulncheck/pip/npm to go
+	// missing from scanner_status with no trace of why.
+	switch {
+	case !codeConfigured:
+		for _, name := range []string{AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+			scanStatus.skip(name, reporters.ReasonNotApplicable, "no --code")
+		}
+	case !codeUsable:
+		// already recorded input_error above
+	case o.cfg.Fast:
+		for _, name := range []string{AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+			scanStatus.skip(name, reporters.ReasonDisabledByFlag, "--fast")
+		}
+	case o.cfg.NoNativeDeps:
+		for _, name := range []string{AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm} {
+			scanStatus.skip(name, reporters.ReasonDisabledByFlag, "--no-native-deps")
+		}
+	default:
 		// govulncheck needs the live vuln.go.dev DB and a build of the
 		// target module; it has no snapshot-only mode. In --offline we do
 		// NOT call it (that would be a silent outbound call) — record it
 		// SKIPPED and move on.
 		if o.cfg.Offline {
 			slog.Info("offline mode: skipping native go deps scan (govulncheck requires vuln.go.dev)")
-			scanStatus.skip("govulncheck", "offline mode: requires vuln.go.dev")
+			scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonDisabledOffline, "--offline: govulncheck requires vuln.go.dev")
 		} else if !allow.ContainsBase("go.mod", "go.sum") {
 			// Diff-aware: no Go manifest changed → nothing new to flag.
 			slog.Debug("diff-aware scan: go.mod/go.sum unchanged, skipping govulncheck")
-			scanStatus.skip("govulncheck", "diff: go.mod/go.sum unchanged")
+			scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonDiffUnchanged, "diff: go.mod/go.sum unchanged")
 		} else {
-			nativeFindings, err := govulncheck.Scan(ctx, o.cfg.CodePath)
+			nativeFindings, attempts, err := retryTransient(ctx, AnalyzerGovulncheck, func() ([]evidence.Evidence, error) {
+				return govulncheck.Scan(ctx, o.cfg.CodePath)
+			})
 			switch {
 			case err == nil:
 				slog.Info("native go deps scan complete", "findings", len(nativeFindings))
 				evid = append(evid, nativeFindings...)
-				scanStatus.ok("govulncheck")
+				scanStatus.ok(AnalyzerGovulncheck)
 			case errors.Is(err, govulncheck.ErrNoGoMod):
 				slog.Debug("no go.mod at code path, skipping native go deps scan")
-				scanStatus.skip("govulncheck", "no go.mod at code path")
+				scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonNotApplicable, "no go.mod under --code")
 			default:
 				slog.Warn("native go deps scan failed", "error", err)
-				scanStatus.fail("govulncheck", err)
+				evid = append(evid, nativeFindings...)
+				scanStatus.fail(AnalyzerGovulncheck, classifyErr(err), err)
+			}
+			if attempts > 1 {
+				scanStatus.markAttempts(AnalyzerGovulncheck, attempts)
 			}
 		}
 
@@ -389,10 +458,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		case !allow.ContainsBase("requirements.txt", "Pipfile.lock", "poetry.lock", "pyproject.toml"):
 			// Diff-aware: no Python manifest/lockfile changed → skip.
 			slog.Debug("diff-aware scan: no python manifest changed, skipping pip scan")
-			scanStatus.skip("pip", "diff: no python manifest changed")
+			scanStatus.skip(AnalyzerPip, reporters.ReasonDiffUnchanged, "diff: no python manifest changed")
 		case o.cfg.Offline && offlineSnap == nil:
 			slog.Warn("offline mode: skipping native pypi deps scan (no usable snapshot)")
-			scanStatus.skip("pip", "offline mode: no usable snapshot")
+			scanStatus.skip(AnalyzerPip, reporters.ReasonDependencyMissing, "--offline: no usable snapshot at "+dbPathForLog(o.cfg))
 		case o.cfg.Offline:
 			slog.Debug("native pypi dep-CVE scan starting", "mode", "offline snapshot")
 			pipFindings, pipErr = pip.ScanOffline(o.cfg.CodePath, pip.DefaultRecurseDepth, offlineSnap)
@@ -403,11 +472,14 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 				pipMode = "pip-audit subprocess"
 			}
 			slog.Debug("native pypi dep-CVE scan starting", "mode", pipMode)
-			pipFindings, pipErr = pip.ScanRecursiveWithOptions(
-				ctx, o.cfg.CodePath, pip.DefaultRecurseDepth,
-				pip.Options{UsePipAudit: o.cfg.UsePipAudit},
-			)
-			o.recordDepScanResult(&scanStatus, "pip", "native pypi deps scan", &evid, pipFindings, pipErr)
+			var attempts int
+			pipFindings, attempts, pipErr = retryTransient(ctx, AnalyzerPip, func() ([]evidence.Evidence, error) {
+				return pip.ScanRecursiveWithOptions(ctx, o.cfg.CodePath, pip.DefaultRecurseDepth, pip.Options{UsePipAudit: o.cfg.UsePipAudit})
+			})
+			o.recordDepScanResult(&scanStatus, AnalyzerPip, "native pypi deps scan", &evid, pipFindings, pipErr)
+			if attempts > 1 {
+				scanStatus.markAttempts(AnalyzerPip, attempts)
+			}
 		}
 
 		// npm: same offline routing as pip.
@@ -419,16 +491,22 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		case !allow.ContainsBase("package-lock.json", "package.json"):
 			// Diff-aware: no npm manifest/lockfile changed → skip.
 			slog.Debug("diff-aware scan: no npm manifest changed, skipping npm scan")
-			scanStatus.skip("npm", "diff: no npm manifest changed")
+			scanStatus.skip(AnalyzerNpm, reporters.ReasonDiffUnchanged, "diff: no npm manifest changed")
 		case o.cfg.Offline && offlineSnap == nil:
 			slog.Warn("offline mode: skipping native npm deps scan (no usable snapshot)")
-			scanStatus.skip("npm", "offline mode: no usable snapshot")
+			scanStatus.skip(AnalyzerNpm, reporters.ReasonDependencyMissing, "--offline: no usable snapshot at "+dbPathForLog(o.cfg))
 		case o.cfg.Offline:
 			npmFindings, npmErr = npm.ScanOffline(o.cfg.CodePath, offlineSnap)
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
 		default:
-			npmFindings, npmErr = npm.Scan(ctx, o.cfg.CodePath)
+			var attempts int
+			npmFindings, attempts, npmErr = retryTransient(ctx, AnalyzerNpm, func() ([]evidence.Evidence, error) {
+				return npm.Scan(ctx, o.cfg.CodePath)
+			})
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
+			if attempts > 1 {
+				scanStatus.markAttempts(AnalyzerNpm, attempts)
+			}
 		}
 	}
 
@@ -438,7 +516,18 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// Python implementation so any overlap (e.g. user explicitly passes
 	// --checks secrets) dedupes cleanly. No network access — runs in
 	// offline mode unchanged.
-	if o.cfg.CodePath != "" && !diffEmpty {
+	//
+	// Explicit else branches (spec §10): no --code, an unreadable --code,
+	// and an empty diff each record ONE reasoned entry instead of leaving
+	// secrets absent from scanner_status.
+	switch {
+	case !codeConfigured:
+		scanStatus.skip(AnalyzerSecrets, reporters.ReasonNotApplicable, "no --code")
+	case !codeUsable:
+		// already recorded input_error above
+	case diffEmpty:
+		// recorded diff_unchanged above
+	default:
 		secretEvidence, err := secrets.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
 		switch {
 		case err == nil:
@@ -450,10 +539,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			scanStatus.ok("secrets")
 		case errors.Is(err, secrets.ErrCodePathMissing):
 			slog.Debug("code path missing — skipping native secrets scan")
-			scanStatus.skip("secrets", "code path missing")
+			scanStatus.fail(AnalyzerSecrets, reporters.ReasonInputError, err)
 		default:
 			slog.Warn("native secrets scan failed", "error", err)
-			scanStatus.fail("secrets", err)
+			scanStatus.fail(AnalyzerSecrets, classifyErr(err), err)
 		}
 	}
 
@@ -463,7 +552,22 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// graceful absence matches the existing posture for missing
 	// Python. Same SEC-* IDs as the Python wrapper so dedup absorbs
 	// any overlap when a user opts the Python path back in.
-	if o.cfg.CodePath != "" && !o.cfg.Fast && !diffEmpty {
+	//
+	// Explicit else branches (spec §10). The diff short-circuit above
+	// (allow != nil && allow.Empty()) already guards itself with
+	// `if !o.cfg.Fast` before recording semgrep diff_unchanged, so the
+	// o.cfg.Fast case here MUST come before diffEmpty: a fast run against
+	// an empty diff records semgrep once, as disabled_by_flag, never twice.
+	switch {
+	case !codeConfigured:
+		scanStatus.skip(AnalyzerSemgrep, reporters.ReasonNotApplicable, "no --code")
+	case !codeUsable:
+		// already recorded input_error above
+	case o.cfg.Fast:
+		scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDisabledByFlag, "--fast")
+	case diffEmpty:
+		// recorded diff_unchanged above
+	default:
 		semgrepFindings, err := semgrep.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
 		switch {
 		case err == nil:
@@ -472,13 +576,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			scanStatus.ok("semgrep")
 		case errors.Is(err, semgrep.ErrSemgrepUnavailable):
 			slog.Info("semgrep not installed — skipping (install with: pip install semgrep)")
-			scanStatus.skip("semgrep", "semgrep binary not installed")
+			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDependencyMissing, "semgrep binary not installed")
 		case errors.Is(err, semgrep.ErrCodePathMissing):
 			slog.Debug("code path missing — skipping native semgrep scan")
-			scanStatus.skip("semgrep", "code path missing")
+			scanStatus.fail(AnalyzerSemgrep, reporters.ReasonInputError, err)
 		default:
 			slog.Warn("native semgrep scan failed", "error", err)
-			scanStatus.fail("semgrep", err)
+			scanStatus.fail(AnalyzerSemgrep, classifyErr(err), err)
 		}
 	}
 
@@ -486,12 +590,23 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// for Go, JS/TS, Dockerfile, and Kubernetes YAML. Pure stdlib,
 	// no external tooling required. Fast (<1s on typical repos)
 	// because it's filename-extension-routed line scanning.
-	if o.cfg.CodePath != "" && !diffEmpty {
+	//
+	// Explicit else branches (spec §10): no --code, an unreadable --code,
+	// and an empty diff each record ONE reasoned entry instead of leaving
+	// textscan absent from scanner_status.
+	switch {
+	case !codeConfigured:
+		scanStatus.skip(AnalyzerTextscan, reporters.ReasonNotApplicable, "no --code")
+	case !codeUsable:
+		// already recorded input_error above
+	case diffEmpty:
+		// recorded diff_unchanged above
+	default:
 		textFindings, err := textscan.ScanWithAllowlist(o.cfg.CodePath, textscan.AllRules(), allow)
 		switch {
 		case err != nil:
 			slog.Warn("native textscan failed", "error", err)
-			scanStatus.fail("textscan", err)
+			scanStatus.fail(AnalyzerTextscan, classifyErr(err), err)
 		default:
 			if len(textFindings) > 0 {
 				slog.Info("native textscan complete", "findings", len(textFindings))
@@ -501,22 +616,36 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		}
 	}
 
-	// 4. Spawn Python engine for white-box analysis. Default off as of
+	// 4. Python whitebox engine — registry entry python-engine plus the
+	// children the protocol reports (spec §4.4, §5.4). Default off as of
 	// TASK-118 — secrets (TASK-115) + semgrep (TASK-116) now run in
 	// native Go and the embedded Python distribution is no longer
 	// bundled. Set --python-engine to re-enable the Python auth /
 	// injection / deps checks; requires a usable Python source tree
 	// resolvable via EnsureEngine (local python/ or explicit FENDIX_ENGINE).
-	if o.cfg.PythonEngine && (o.cfg.CodePath != "" || o.cfg.SpecPath != "") {
+	switch {
+	case !o.cfg.PythonEngine && !codeConfigured && o.cfg.SpecPath == "":
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "no --code or --spec")
+	case !o.cfg.PythonEngine:
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonDisabledByFlag, "--python-engine=false")
+	case !codeConfigured && o.cfg.SpecPath == "":
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "no --code or --spec")
+	case codeConfigured && !codeUsable && o.cfg.SpecPath == "":
+		scanStatus.fail(AnalyzerPythonEngine, reporters.ReasonInputError, codeErr)
+	case o.engineMissing != nil:
+		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonDependencyMissing, "engine tree not found: "+o.engineMissing.Error())
+	default:
 		pyStatus := CheckPython(o.spawner.pythonBin)
 		if !pyStatus.Available {
 			slog.Warn("python not available — skipping whitebox analysis")
 			fmt.Fprintln(os.Stderr, "fendix: "+PythonRequiredMessage())
+			scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonDependencyMissing, "python3 interpreter not found ("+pyStatus.Binary+")")
 		} else {
 			slog.Info("python available", "version", pyStatus.Version, "binary", pyStatus.Binary)
 			bundle.SetPythonVersion(pyStatus.Version)
-			wbFindings := o.runWhiteboxScan(ctx)
+			wbFindings, result := o.runWhiteboxScan(ctx)
 			evid = append(evid, wbFindings...)
+			recordPythonEngine(&scanStatus, result)
 		}
 	}
 
@@ -525,9 +654,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// engine findings, so a custom-secret-pattern plugin can correlate
 	// against a blackbox auth check exactly like the built-in secrets
 	// analyzer does.
+	var pluginsOut pluginOutcome
 	if !o.cfg.NoPlugins {
-		evid = append(evid, o.runPlugins(ctx)...)
+		var pluginEvid []evidence.Evidence
+		pluginEvid, pluginsOut = o.runPlugins(ctx)
+		evid = append(evid, pluginEvid...)
 	}
+	recordPlugins(&scanStatus, o.cfg, pluginsOut)
 
 	// 4.8. SARIF imports (`scan --import`): parse + normalize findings from
 	// other scanners and append them to the evidence stream BEFORE any
@@ -583,6 +716,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// absent manifest, crash) must not be published as a check that ran.
 	checksRun = append(checksRun, codeScannerLabels(scanStatus)...)
 
+	scanStatus = scanStatus.sorted()
+	strict := o.cfg.FailOnCoverageGap || len(o.cfg.RequiredAnalyzers) > 0
+	cov := reporters.BuildCoverage([]reporters.ScannerStatus(scanStatus), o.cfg.RequiredAnalyzers, strict)
+
 	meta := reporters.ScanMetadata{
 		Target:    o.cfg.URL,
 		StartedAt: startTime,
@@ -600,6 +737,8 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		ActiveProbes:         o.cfg.EnableActive,
 		ChecksRun:            checksRun,
 		ScannerStatus:        []reporters.ScannerStatus(scanStatus),
+		Coverage:             &cov,
+		PolicyVersion:        decision.PolicyVersion,
 		Imports:              importedTools,
 	}
 
@@ -623,28 +762,8 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		slog.Info("warning summary", attrs...)
 	}
 
-	// F-L7/F-L13: surface a one-line scanner-status summary at scan end so
-	// a degraded run (a scanner that errored or was skipped) is visible
-	// without grepping the WARN stream. Only emitted when at least one
-	// code scanner ran.
-	if len(scanStatus) > 0 {
-		var ok, skipped, failed int
-		for _, s := range scanStatus {
-			switch s.State {
-			case reporters.ScannerOK:
-				ok++
-			case reporters.ScannerSkipped:
-				skipped++
-			case reporters.ScannerFailed:
-				failed++
-			}
-		}
-		args := []any{"ok", ok, "skipped", skipped, "failed", failed}
-		if failed > 0 {
-			args = append(args, "failed_scanners", strings.Join(scanStatus.failedNames(), ","))
-		}
-		slog.Info("scanner status summary", args...)
-	}
+	// Scan-end coverage table (spec §5.8): every registry entry, unconditionally.
+	printCoverageSummary(os.Stderr, scanStatus, cov, len(o.cfg.RequiredAnalyzers) > 0)
 
 	// Surface scan-budget telemetry whenever a cap was set, regardless of
 	// whether it fired. This makes "did we run out of budget?" trivially
@@ -689,6 +808,24 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			"failed_scanners", strings.Join(scanStatus.failedNames(), ","))
 		fmt.Fprintf(os.Stderr, "fendix: scanner(s) failed and --fail-on-scanner-error is set: %s\n", strings.Join(scanStatus.failedNames(), ", "))
 		return 2
+	}
+
+	if o.cfg.FailOnCoverageGap && !cov.ConfiguredComplete {
+		slog.Error("coverage gap recorded and --fail-on-coverage-gap set — exiting non-zero", "gaps", strings.Join(cov.Gaps, ","))
+		fmt.Fprintf(os.Stderr, "fendix: coverage incomplete and --fail-on-coverage-gap is set: %s\n", describeGaps(scanStatus, cov.Gaps))
+		return 2
+	}
+	if len(cov.RequiredGaps) > 0 {
+		slog.Error("required analyzer(s) not delivered — exiting non-zero", "required_gaps", strings.Join(cov.RequiredGaps, ","))
+		fmt.Fprintf(os.Stderr, "fendix: required analyzer(s) not delivered: %s\n", describeGaps(scanStatus, cov.RequiredGaps))
+		return 2
+	}
+
+	// A hard discovery failure or a zero-endpoint result already rendered
+	// the report above (finalize ran unconditionally); this returns the
+	// unchanged exit-2 contract now that the evidence exists to explain it.
+	if hardExit != 0 {
+		return hardExit
 	}
 
 	// 8. Check fail-on threshold
@@ -923,6 +1060,8 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 		Version:              reportVersion(o.version),
 		Mode:                 "import",
 		Imports:              importedTools,
+		Coverage:             func() *reporters.Coverage { c := reporters.BuildCoverage(nil, nil, false); return &c }(),
+		PolicyVersion:        decision.PolicyVersion,
 	}
 
 	_, decisions, ec := o.finalize(evid, meta)
@@ -1054,14 +1193,23 @@ func (o *Orchestrator) renderReport(findings []models.Finding, meta reporters.Sc
 	}
 }
 
+// pluginOutcome is what runPlugins observed, for the `plugins` entry.
+type pluginOutcome struct {
+	Discovered  int
+	Failed      []string
+	DiscoverErr error
+}
+
 // runPlugins discovers plugins under the configured roots and runs
 // every plugin whose Mode is compatible with the current scan
 // (blackbox plugins only run when a target URL is set; whitebox
 // plugins only run when --code or --spec is set; hybrid plugins
 // run whenever either condition holds). Plugin failures are logged
 // at WARN and the scan continues — a broken plugin must not
-// interrupt the embedded engines.
-func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
+// interrupt the embedded engines. The returned pluginOutcome feeds
+// recordPlugins, which records the single aggregate `plugins` entry.
+func (o *Orchestrator) runPlugins(ctx context.Context) ([]evidence.Evidence, pluginOutcome) {
+	var outcome pluginOutcome
 	cwd, _ := os.Getwd()
 	// Repo-local plugins (<cwd>/.fendix/plugins) are opt-in (F-H2): the
 	// scanned repo is attacker-controlled in CI, so a `.fendix/plugins/`
@@ -1071,10 +1219,12 @@ func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
 	plugins, err := plugin.Discover(roots)
 	if err != nil {
 		slog.Warn("plugin discovery failed", "error", err)
-		return nil
+		outcome.DiscoverErr = err
+		return nil, outcome
 	}
+	outcome.Discovered = len(plugins)
 	if len(plugins) == 0 {
-		return nil
+		return nil, outcome
 	}
 
 	hasBlackboxTarget := o.cfg.URL != ""
@@ -1123,6 +1273,7 @@ func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
 			slog.Warn("plugin failed (continuing)", "plugin", p.Name, "error", err)
 			// A plugin that exited non-zero may still have emitted findings
 			// before the failure; preserve them.
+			outcome.Failed = append(outcome.Failed, p.Name)
 		}
 		slog.Info("plugin complete", "plugin", p.Name, "findings", len(findings))
 		out = append(out, findings...)
@@ -1130,7 +1281,182 @@ func (o *Orchestrator) runPlugins(ctx context.Context) []evidence.Evidence {
 	// External plugins emit Finding-shaped protocol JSON; adapt to Evidence
 	// at this ingestion boundary (v0.22). No native provenance to add — the
 	// wire format carries only Finding fields.
-	return evidence.FromFindings(out)
+	return evidence.FromFindings(out), outcome
+}
+
+// recordPlugins records the aggregate plugins entry (spec §4.4): plugins
+// are one entry regardless of how many individual plugins ran, so a
+// consumer sees "plugins failed" rather than N scanner-shaped rows for one
+// out-of-tree extension point.
+func recordPlugins(status *scannerStatusList, cfg *models.ScanConfig, outcome pluginOutcome) {
+	switch {
+	case cfg.NoPlugins:
+		status.skip(AnalyzerPlugins, reporters.ReasonDisabledByFlag, "--no-plugins")
+	case outcome.DiscoverErr != nil:
+		status.fail(AnalyzerPlugins, reporters.ReasonExecutionError, outcome.DiscoverErr)
+	case outcome.Discovered == 0:
+		status.skip(AnalyzerPlugins, reporters.ReasonNotApplicable, "no plugins configured")
+	case len(outcome.Failed) > 0:
+		status.failDetail(AnalyzerPlugins, reporters.ReasonExecutionError, "plugin(s) failed: "+strings.Join(outcome.Failed, ", "))
+	default:
+		status.ok(AnalyzerPlugins)
+	}
+}
+
+// validateCodePath reports why --code cannot be scanned: missing, not a
+// directory, or unreadable. nil means every code analyzer may walk it.
+func (o *Orchestrator) validateCodePath() error {
+	info, err := os.Stat(o.cfg.CodePath)
+	if err != nil {
+		return fmt.Errorf("code path: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("code path %q is not a directory", o.cfg.CodePath)
+	}
+	if _, err := os.ReadDir(o.cfg.CodePath); err != nil {
+		return fmt.Errorf("code path: %w", err)
+	}
+	return nil
+}
+
+// checkPhaseOutcome is what the black-box check pass observably did: how
+// many active probes were sent, how many got no HTTP response at all, how
+// many requests the --max-requests budget refused, and whether the
+// --max-duration deadline cut the pass short.
+type checkPhaseOutcome struct {
+	Attempted  int
+	NoResponse int
+	Rejected   int64
+	Deadline   bool
+}
+
+// summarizeCheckPhase derives the outcome from the probe audit log (every
+// active check records each probe it sends; Status 0 means no HTTP response
+// came back), the budget counters, and the context.
+func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, rejected int64) checkPhaseOutcome {
+	out := checkPhaseOutcome{Attempted: len(records), Rejected: rejected, Deadline: errors.Is(ctx.Err(), context.DeadlineExceeded)}
+	for _, r := range records {
+		if r.Status == 0 {
+			out.NoResponse++
+		}
+	}
+	return out
+}
+
+// recordBlackbox records dast, spec and active-probes (spec §4.4) once the
+// check pass has finished. `ok` means the pass ran to completion: nothing
+// cut it short and, for probes, at least one probe got an HTTP response.
+func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error, phase checkPhaseOutcome) {
+	switch {
+	case cfg.URL == "":
+		status.skip(AnalyzerDAST, reporters.ReasonNotApplicable, "no --url")
+	case discoveryErr != nil:
+		status.fail(AnalyzerDAST, classifyErr(discoveryErr), discoveryErr)
+	case endpoints == 0:
+		status.failDetail(AnalyzerDAST, reporters.ReasonNoEndpoints, "URL configured, discovery found zero endpoints")
+	case phase.Deadline:
+		status.failDetail(AnalyzerDAST, reporters.ReasonTimeout, "--max-duration elapsed before the check pass completed")
+	case phase.Rejected > 0:
+		status.failDetail(AnalyzerDAST, reporters.ReasonExecutionError, fmt.Sprintf("--max-requests exhausted: %d requests refused before the check pass completed", phase.Rejected))
+	default:
+		status.ok(AnalyzerDAST)
+	}
+	switch {
+	case cfg.SpecPath == "":
+		status.skip(AnalyzerSpec, reporters.ReasonNotApplicable, "no --spec")
+	case specErr != nil:
+		status.fail(AnalyzerSpec, reporters.ReasonInputError, specErr)
+	default:
+		status.ok(AnalyzerSpec)
+	}
+	switch {
+	case !cfg.EnableActive:
+		status.skip(AnalyzerActiveProbes, reporters.ReasonDisabledByFlag, "--enable-active not set")
+	case endpoints == 0:
+		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no endpoints to probe")
+	case phase.Deadline:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonTimeout, "--max-duration elapsed before the probe pass completed")
+	case phase.Rejected > 0:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, fmt.Sprintf("--max-requests exhausted: %d requests refused before the probe pass completed", phase.Rejected))
+	case phase.Attempted == 0:
+		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no probe-eligible parameters on the discovered endpoints")
+	case phase.NoResponse == phase.Attempted:
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNetworkError, fmt.Sprintf("%d probe requests sent, none received an HTTP response", phase.Attempted))
+	case phase.NoResponse > 0:
+		status.okDetail(AnalyzerActiveProbes, fmt.Sprintf("%d of %d probe requests received no HTTP response", phase.NoResponse, phase.Attempted))
+	default:
+		status.ok(AnalyzerActiveProbes)
+	}
+}
+
+// retryDelay is the pause before the single in-process retry of a
+// transient dependency-scanner failure. Tests set it to zero.
+var retryDelay = 2 * time.Second
+
+// isTransient reports whether err is worth one retry: a network failure
+// or a timeout. Everything else is deterministic and is never retried.
+func isTransient(err error) bool {
+	k := neterr.Classify(err)
+	return k == neterr.KindNetwork || k == neterr.KindTimeout
+}
+
+// retryTransient runs fn and, when it fails transiently, runs it once more
+// after retryDelay. The second attempt is authoritative for this analyzer:
+// its findings and its error replace the first attempt's entirely, and no
+// other analyzer's evidence is touched (spec §6.4). Returns the attempt
+// count so the caller can stamp `attempts`.
+func retryTransient(ctx context.Context, name string, fn func() ([]evidence.Evidence, error)) ([]evidence.Evidence, int, error) {
+	findings, err := fn()
+	if err == nil || !isTransient(err) || ctx.Err() != nil {
+		return findings, 1, err
+	}
+	slog.Warn("transient dependency-scanner failure — retrying once", "scanner", name, "error", err)
+	select {
+	case <-ctx.Done():
+		return findings, 1, err
+	case <-time.After(retryDelay):
+	}
+	findings, err = fn()
+	return findings, 2, err
+}
+
+// recordPythonEngine maps a spawn outcome onto the python-engine entry and
+// records each protocol-v2 status line as a child entry. The spawner has
+// already enforced completeness (one line per expected check, no unknown
+// checks); this function validates the state/reason pairing and keeps the
+// parent's process semantics separate from any child's final state.
+func recordPythonEngine(status *scannerStatusList, res SpawnResult) {
+	switch res.Outcome {
+	case SpawnOK:
+		status.ok(AnalyzerPythonEngine)
+	case SpawnMalformed:
+		status.fail(AnalyzerPythonEngine, reporters.ReasonMalformedOutput, res.Err)
+	case SpawnTruncated:
+		status.fail(AnalyzerPythonEngine, reporters.ReasonTruncatedOutput, res.Err)
+	default: // SpawnStartError, SpawnExitError, SpawnCancelled
+		status.fail(AnalyzerPythonEngine, reporters.ReasonExecutionError, res.Err)
+	}
+	for _, c := range res.Checks {
+		name := AnalyzerPythonEngine + "/" + c.Check
+		if !IsRegisteredAnalyzer(name) || status.has(name) {
+			// A duplicate or unknown check DOES reach this loop: the
+			// spawner's childProtocolError already marks the PARENT entry
+			// malformed_output for it, but res.Checks still carries every
+			// line it saw, unknown/duplicate included. Skip re-recording
+			// (or double-recording) the child here — the parent's failure
+			// already reports the violation.
+			continue
+		}
+		entry := reporters.ScannerStatus{Name: name, State: reporters.ScannerStatusState(c.State), Reason: reporters.ScannerReason(c.Reason), Detail: c.Detail}
+		valid := (entry.State == reporters.ScannerOK && entry.Reason == "") ||
+			(entry.State == reporters.ScannerSkipped && entry.Reason.IsSkip()) ||
+			(entry.State == reporters.ScannerFailed && entry.Reason.IsFail())
+		if !valid {
+			entry = reporters.ScannerStatus{Name: name, State: reporters.ScannerFailed, Reason: reporters.ReasonMalformedOutput,
+				Detail: fmt.Sprintf("invalid status line: state=%q reason=%q", c.State, c.Reason)}
+		}
+		status.set(entry)
+	}
 }
 
 // absPathOrEmpty resolves p to an absolute path. Returns "" for an
@@ -1153,6 +1479,14 @@ func absPathOrEmpty(p string) string {
 	return p
 }
 
+// dbPathForLog names the offline snapshot path a skip detail refers to.
+func dbPathForLog(cfg *models.ScanConfig) string {
+	if cfg.OfflineDBPath != "" {
+		return cfg.OfflineDBPath
+	}
+	return offline.DefaultDBPath()
+}
+
 // runWhiteboxScan spawns the Python engine and collects whitebox findings.
 //
 // "secrets" and "semgrep" are no longer in the default check set as of
@@ -1162,7 +1496,7 @@ func absPathOrEmpty(p string) string {
 // (matching SEC-* IDs mean dedup collapses any overlap), but they aren't
 // on by default. The Python files stay in-tree for one release window in
 // case of rollback; TASK-118 deletes them.
-func (o *Orchestrator) runWhiteboxScan(ctx context.Context) []evidence.Evidence {
+func (o *Orchestrator) runWhiteboxScan(ctx context.Context) ([]evidence.Evidence, SpawnResult) {
 	checks := []string{"auth", "injection", "deps"}
 	if len(o.cfg.Checks) > 0 {
 		checks = o.cfg.Checks
@@ -1185,13 +1519,11 @@ func (o *Orchestrator) runWhiteboxScan(ctx context.Context) []evidence.Evidence 
 
 	result := o.spawner.Run(ctx, req)
 	if result.Err != nil {
-		slog.Error("python engine failed — ensure Python 3 is installed and python/requirements.txt dependencies are available", "error", result.Err)
-		// Return whatever findings we collected before the error
-		return evidence.FromFindings(result.Findings)
+		slog.Error("python engine did not complete cleanly — findings received so far are kept", "outcome", result.Outcome, "error", result.Err)
+	} else {
+		slog.Info("whitebox scan complete", "findings", len(result.Findings))
 	}
-
-	slog.Info("whitebox scan complete", "findings", len(result.Findings))
-	return evidence.FromFindings(result.Findings)
+	return evidence.FromFindings(result.Findings), result
 }
 
 // stampDecisions scores every FINAL finding and stamps the verdict (status,

@@ -3,6 +3,7 @@ package npm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 // batchQuery / batchResponse mirror the OSV.dev /v1/querybatch shape so
@@ -160,9 +163,9 @@ func TestScan_BatchUsedWhenManyPackages(t *testing.T) {
 		false, &batchHits, &queryHits)
 	defer srv.Close()
 
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -211,9 +214,9 @@ func TestScan_CacheHitsSkipBatch(t *testing.T) {
 		http.Error(w, "no HTTP should hit on a fully-cached scan", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	t.Setenv("HOME", t.TempDir())
 	cache, err := cacheDir()
@@ -251,9 +254,9 @@ func TestScan_BatchFailureFallsBackToSerial(t *testing.T) {
 		},
 		true, &batchHits, &queryHits) // failBatch=true → batch returns 500
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -304,9 +307,9 @@ func TestScan_BatchSizeRespected(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(out)
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -359,9 +362,9 @@ func TestScan_ConcurrencyCapRespected(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(out)
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	// Force enough chunks to exceed the concurrency cap.
@@ -390,9 +393,9 @@ func TestQueryOSVBatch_LengthMismatchErrors(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(batchResponseEnv{Results: nil})
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	client := &http.Client{Timeout: httpTimeout}
 	_, err := queryOSVBatch(context.Background(), client, []resolvedPackage{
@@ -421,5 +424,62 @@ func TestQueryOSVBatch_ExceedingMaxSizeErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds OSV.dev limit") {
 		t.Errorf("error should mention the OSV.dev limit: %v", err)
+	}
+}
+
+// TestScan_TotalFailureIsLookupError mirrors the pip scanner's contract:
+// when OSV.dev returns 503 on both /v1/querybatch and the per-package
+// /v1/query fallback, Scan returns a *neterr.LookupError naming every
+// failed lookup instead of a silent "ok" with an empty finding set.
+func TestScan_TotalFailureIsLookupError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
+	t.Setenv("HOME", t.TempDir())
+
+	codeDir := t.TempDir()
+	writeLockfile(t, codeDir, []resolvedPackage{{name: "lodash", version: "4.17.15"}})
+
+	findings, err := Scan(context.Background(), codeDir)
+	var le *neterr.LookupError
+	if !errors.As(err, &le) {
+		t.Fatalf("expected *neterr.LookupError, got %v", err)
+	}
+	if le.Failed != 1 || le.Total != 1 || neterr.Classify(err) != neterr.KindNetwork {
+		t.Fatalf("lookup error = %+v (kind %v)", le, neterr.Classify(err))
+	}
+	if len(findings) != 0 {
+		t.Fatalf("no lookup succeeded, expected no findings, got %d", len(findings))
+	}
+}
+
+// TestScan_BatchFailsSerialSucceedsIsNotAnError mirrors the pip
+// scanner's contract: a batch-endpoint outage that the serial fallback
+// fully recovers from is not reported as a failure — the accumulator
+// only counts a package once every fallback for it is exhausted.
+func TestScan_BatchFailsSerialSucceedsIsNotAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/v1/querybatch") {
+			http.Error(w, "nope", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"vulns": []}`))
+	}))
+	defer srv.Close()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
+	t.Setenv("HOME", t.TempDir())
+
+	codeDir := t.TempDir()
+	writeLockfile(t, codeDir, []resolvedPackage{{name: "lodash", version: "4.17.15"}})
+
+	if _, err := Scan(context.Background(), codeDir); err != nil {
+		t.Fatalf("serial fallback covered every package, expected nil error, got %v", err)
 	}
 }

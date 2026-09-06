@@ -165,9 +165,9 @@ func TestBatchPathHydratesAliasesAndFix(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()

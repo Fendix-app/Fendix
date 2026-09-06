@@ -23,6 +23,7 @@ import (
 	"github.com/go-pdf/fpdf"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters/i18n"
 )
 
 // PDFOptions configures RenderPDF. Today the only knob is the
@@ -47,6 +48,12 @@ func RenderPDF(w io.Writer, findings []models.Finding, meta ScanMetadata, opts P
 	// reordering or invisible control chars — neutralize them here so
 	// the PDF can't be spoofed the way a Trojan-Source title would.
 	findings = NeutralizeFindings(findings)
+	// Same treatment for the coverage appendix rows / release-decision
+	// row: ScannerStatus, Coverage, and the backend-passthrough
+	// ReleaseDecision/CoverageState strings are exactly as
+	// operator-controlled under `fendix report --input` as finding
+	// fields are.
+	meta = NeutralizeCoverageMetadata(meta)
 
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(15, 20, 15)
@@ -258,6 +265,34 @@ func renderPDFAppendix(pdf *fpdf.Fpdf, meta ScanMetadata) {
 		{"Duration", strOrNA(meta.Duration)},
 		{"Endpoints scanned", intToString(meta.EndpointsCount)},
 		{"Fendix version", strOrNA(meta.Version)},
+	}
+	if meta.ReleaseDecision != "" {
+		rows = append(rows, [2]string{"Release decision", i18n.VerdictLabel(i18n.Get("en"), meta.ReleaseDecision, meta.CoverageState)})
+	}
+	if meta.Coverage != nil {
+		cov := "complete"
+		if !meta.Coverage.ConfiguredComplete {
+			cov = "incomplete: " + strings.Join(meta.Coverage.Gaps, ", ")
+		}
+		rows = append(rows, [2]string{"Coverage", cov})
+		if len(meta.Coverage.RequiredGaps) > 0 {
+			rows = append(rows, [2]string{"Required, not delivered", strings.Join(meta.Coverage.RequiredGaps, ", ")})
+		}
+		for _, s := range meta.ScannerStatus {
+			val := s.Class()
+			if s.Reason != "" {
+				val += " (" + string(s.Reason) + ")"
+			}
+			if s.Attempts > 1 {
+				val += fmt.Sprintf(", %d attempts", s.Attempts)
+			}
+			if s.Detail != "" {
+				val += " — " + s.Detail
+			}
+			rows = append(rows, [2]string{"  " + s.Name, val})
+		}
+	} else {
+		rows = append(rows, [2]string{"Coverage", "not recorded by this engine version"})
 	}
 	for _, r := range rows {
 		pdf.SetFont("Helvetica", "B", 10)

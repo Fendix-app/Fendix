@@ -157,9 +157,9 @@ func TestScanViaSubprocess_PipAuditNotInstalled(t *testing.T) {
 		"flask": {{ID: "PYSEC-2022-43012", Summary: "fb"}},
 	})
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -329,9 +329,9 @@ func TestScanRecursive_BackwardCompatNoOptions(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(osvQueryResponse{})
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()

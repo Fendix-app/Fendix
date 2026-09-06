@@ -49,11 +49,9 @@ more garbage
 
 	f.Fuzz(func(t *testing.T, data string) {
 		// readFindings must never panic
-		findings, total, err := readFindings(strings.NewReader(data))
+		sr := readFindings(strings.NewReader(data))
 		// We don't assert specific results — only that it doesn't crash
-		_ = findings
-		_ = total
-		_ = err
+		_ = sr
 	})
 }
 

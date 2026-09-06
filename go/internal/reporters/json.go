@@ -78,6 +78,20 @@ type ScanMetadata struct {
 	// no usable location — the counts always reconcile. ADDITIVE: absent
 	// (omitempty) for scans with no imports, so schema_version stays 1.
 	Imports []ImportedTool `json:"imports,omitempty"`
+	// Coverage is the engine's configured-completeness statement (coverage
+	// contract v1). Nil on reports that predate the contract; a re-render
+	// passes it through verbatim.
+	Coverage *Coverage `json:"coverage,omitempty"`
+	// PolicyVersion is the finding-decision policy version
+	// (docs/DECISION_POLICY.md) this build applies.
+	PolicyVersion string `json:"policy_version,omitempty"`
+	// Backend passthrough. A live scan never sets these; the hosted backend
+	// embeds them in the input it hands to `fendix report --input` so the
+	// verdict it derived travels into SARIF/HTML/PDF. They are opaque here.
+	ReleaseDecision       string          `json:"release_decision,omitempty"`
+	CoverageState         string          `json:"coverage_state,omitempty"`
+	DecisionPolicyVersion string          `json:"decision_policy_version,omitempty"`
+	DecisionRationale     json.RawMessage `json:"decision_rationale,omitempty"`
 }
 
 // ImportedTool is one source tool's accounting block within
@@ -113,14 +127,17 @@ const (
 	ScannerFailed ScannerStatusState = "failed"
 )
 
-// ScannerStatus is the recorded outcome of a single scanner pass. Name
-// is the scanner identity ("govulncheck", "pip", "npm", "secrets",
-// "semgrep", "textscan"); Detail is a short human-readable reason
-// (skip cause or error excerpt).
+// ScannerStatus is the recorded outcome of a single analyzer pass. Name is
+// the registry identity (see engine.Registry); Reason is the closed
+// explanation for a non-ok state (coverage contract v1); Detail is a short
+// human-readable excerpt; Attempts is present only when an in-process
+// retry ran (>1) and State/Reason describe the final attempt.
 type ScannerStatus struct {
-	Name   string             `json:"name"`
-	State  ScannerStatusState `json:"state"`
-	Detail string             `json:"detail,omitempty"`
+	Name     string             `json:"name"`
+	State    ScannerStatusState `json:"state"`
+	Reason   ScannerReason      `json:"reason,omitempty"`
+	Detail   string             `json:"detail,omitempty"`
+	Attempts int                `json:"attempts,omitempty"`
 }
 
 // Failed reports whether this scanner ran and errored. Skips and OK

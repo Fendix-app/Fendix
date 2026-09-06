@@ -34,6 +34,7 @@ import (
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 )
 
 // ErrNoGoMod is returned by Scan when the given path doesn't contain a
@@ -76,11 +77,27 @@ func Scan(ctx context.Context, modulePath string) ([]evidence.Evidence, error) {
 	// code); both are clean parses for us. Other exit codes mean the tool
 	// itself failed — surface stderr so users know what to fix.
 	if runErr != nil && !isFoundVulnsExit(runErr) {
-		excerpt := firstLines(stderr.String(), 3)
-		return nil, fmt.Errorf("govulncheck: %w (stderr: %s)", runErr, excerpt)
+		return nil, classifyRunErr(runErr, stderr.String())
 	}
 
 	return parseFindings(stdout.Bytes(), filepath.Base(abs))
+}
+
+// classifyRunErr wraps a govulncheck failure with a transport sentinel when
+// its stderr shows the vulnerability database was unreachable, so the
+// orchestrator can type it without reading prose. x/vuln/scan's library
+// errors are untyped, so stderr text is the only signal available here —
+// classified against a fixed list of Go's own net error wordings
+// (neterr.ClassifyText), never surfaced past this package.
+func classifyRunErr(runErr error, stderr string) error {
+	excerpt := firstLines(stderr, 3)
+	switch neterr.ClassifyText(stderr) {
+	case neterr.KindNetwork:
+		return fmt.Errorf("govulncheck: %w: %v (stderr: %s)", neterr.ErrSubprocessNetwork, runErr, excerpt)
+	case neterr.KindTimeout:
+		return fmt.Errorf("govulncheck: %w: %v (stderr: %s)", neterr.ErrSubprocessTimeout, runErr, excerpt)
+	}
+	return fmt.Errorf("govulncheck: %w (stderr: %s)", runErr, excerpt)
 }
 
 // isFoundVulnsExit returns true when govulncheck exited with the

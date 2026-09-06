@@ -67,7 +67,7 @@ import (
 //
 // Var-not-const so the package's own tests can drive the overrun path
 // without materialising 20k files, matching the pip/npm scanners'
-// osvAPIBase seam. Production code must not write it.
+// OSVBaseURL seam. Production code must not write it.
 var importGrepMaxFiles = 20000
 
 // importGrepMaxFileBytes matches textscan's per-file cap: this scanner is

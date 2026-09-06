@@ -389,6 +389,11 @@ func newScanCmd() *cobra.Command {
 			offlineFlag, _ := flags.GetBool("offline")
 			offlineDBFlag, _ := flags.GetString("offline-db")
 			failOnScannerErrorFlag, _ := flags.GetBool("fail-on-scanner-error")
+			failOnCoverageGapFlag, _ := flags.GetBool("fail-on-coverage-gap")
+			requireAnalyzersFlag, _ := flags.GetStringSlice("require-analyzers")
+			if err := validateRequiredAnalyzers(requireAnalyzersFlag); err != nil {
+				return cli.ExitWithCode(2, "fendix: "+err.Error())
+			}
 			// --diff enables diff-aware scanning. It's a string flag with a
 			// NoOptDefVal of "HEAD", so bare `--diff` diffs against HEAD and
 			// `--diff=origin/main` diffs against that ref. `flags.Changed`
@@ -477,6 +482,8 @@ func newScanCmd() *cobra.Command {
 				Offline:               offlineFlag,
 				OfflineDBPath:         offlineDBFlag,
 				FailOnScannerError:    failOnScannerErrorFlag,
+				FailOnCoverageGap:     failOnCoverageGapFlag,
+				RequiredAnalyzers:     requireAnalyzersFlag,
 				Diff:                  diffEnabled,
 				DiffRef:               diffRefFlag,
 				DiffStaged:            diffStagedFlag,
@@ -593,7 +600,9 @@ func newScanCmd() *cobra.Command {
 	flags.String("lang", "en", "HTML report language: en (default), ar (Arabic, RTL). Other formats stay English.")
 	flags.Bool("offline", false, "Air-gapped mode: consult the local offline-db snapshot for dep CVEs instead of osv.dev/vuln.go.dev. The pip and npm scanners run against the snapshot (create it with `fendix db update`); govulncheck needs vuln.go.dev and is recorded SKIPPED. No outbound network call is made.")
 	flags.String("offline-db", "", "Path to the offline-db snapshot (default: ~/.fendix/offline-db.json). Only effective with --offline.")
-	flags.Bool("fail-on-scanner-error", false, "Exit non-zero (2) if any scanner (govulncheck/pip/npm/secrets/semgrep/textscan) ran and errored. CI-friendly: turns a silent coverage gap into a build failure. Skipped scanners do not count.")
+	flags.Bool("fail-on-scanner-error", false, "Exit non-zero (2) if any recorded analyzer — any entry in metadata.scanner_status, which is the full registry (dast, spec, active-probes, secrets, textscan, semgrep, govulncheck, pip, npm, plugins, the python-engine and its checks) — ran and errored. CI-friendly: turns a silent coverage gap into a build failure. Skipped entries never count.")
+	flags.Bool("fail-on-coverage-gap", false, "Exit 2 when an analyzer this run was configured to execute was unavailable or failed (metadata.coverage.configured_complete=false). Disabled, not-applicable and unsupported analyzers never trip it.")
+	flags.StringSlice("require-analyzers", nil, "Comma-separated analyzer names that must be delivered (recorded ok or not_applicable) for exit 0; anything else exits 2. Stricter than --fail-on-coverage-gap: a required analyzer disabled by another flag is a contradiction and exits 2. Names: "+strings.Join(engine.Registry, ", "))
 	flags.Bool("block-on-inapplicable", false, "Gate the build on a vulnerable dependency even when Fendix found no import of the advisory's affected component. Default false: such a finding is reported in full and held at WARN, because the vulnerable code path is not applicable to this project on the available evidence. Set this when policy is \"no vulnerable version ships, applicable or not\" — e.g. where the SBOM is what gets audited rather than the call graph.")
 	flags.Bool("deescalate-tests", true, "Report findings in test/fixture code as INFO instead of WARN (evidence is preserved, never suppressed). A finding at or above --fail-on still blocks when a corroborating signal backs it (e.g. a provider-validated live credential); an uncorroborated test-code match is held at WARN. Pass --deescalate-tests=false to treat test-code findings like production ones.")
 	flags.Bool("enforce-confidence", true, "Only BLOCK a finding at or above --fail-on when the confidence band supports it AND something corroborates the claim: LOW band warns; a finding with no corroborating signal at all warns; MEDIUM band blocks only with an INDEPENDENT signal (cross-engine agreement, confirmed route, reachable taint path, proven path, payload-validated probe, cross-tool corroboration, contradicted authentication requirement); self-evident signals (direct response read, deterministic detection in production source, imported high-precision rule) gate at HIGH. Evidence is never suppressed. Pass --enforce-confidence=false to restore the legacy severity-only gate — findings that block only because of that relaxation are marked policy_override in the report.")
@@ -610,6 +619,18 @@ func newScanCmd() *cobra.Command {
 	flags.StringSlice("import", nil, "Merge findings from another scanner's SARIF 2.1.0 file into this scan (repeatable). Imported findings go through the standard pipeline; a native fendix finding at the same weakness+location becomes strong cross-tool corroboration. See also the standalone 'fendix import' command.")
 
 	return cmd
+}
+
+// validateRequiredAnalyzers rejects any --require-analyzers name that is
+// not in the registry before a scan starts, so a typo cannot silently
+// require nothing.
+func validateRequiredAnalyzers(names []string) error {
+	for _, n := range names {
+		if !engine.IsRegisteredAnalyzer(n) {
+			return fmt.Errorf("unknown analyzer %q in --require-analyzers; known analyzers: %s", n, strings.Join(engine.Registry, ", "))
+		}
+	}
+	return nil
 }
 
 // resolveLang validates --lang against the i18n-supported set. Unknown

@@ -167,6 +167,17 @@ type ScanConfig struct {
 	// scanners (e.g. govulncheck in offline mode) do not count as
 	// failures — only scanners that ran and errored.
 	FailOnScannerError bool
+	// FailOnCoverageGap exits 2 when metadata.coverage.configured_complete
+	// is false: an analyzer this run was configured to execute was
+	// unavailable or failed. Disabled, not-applicable and unsupported never
+	// trip it. Off by default (coverage contract v1).
+	FailOnCoverageGap bool
+	// RequiredAnalyzers names analyzers that must be delivered — recorded ok
+	// or not_applicable — for the run to exit 0. Stricter than
+	// FailOnCoverageGap: a disabled or unsupported required analyzer exits 2,
+	// because the operator asked for it by name. Names are validated
+	// against engine.Registry before the scan starts.
+	RequiredAnalyzers []string
 
 	// Diff enables diff-aware scanning: the whitebox scanners
 	// (secrets/textscan/semgrep) are scoped to only the files git reports

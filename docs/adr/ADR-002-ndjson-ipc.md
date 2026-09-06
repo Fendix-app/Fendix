@@ -78,3 +78,27 @@ Use newline-delimited JSON (NDJSON) over stdin/stdout:
 - Both sides validate JSON structure in tests
 - Evidence fields truncated to 200 characters maximum
 - End-to-end contract tests run in CI
+
+## Addendum (coverage contract v1, engine v3.4.0): status lines
+
+The stream gains one optional line type, emitted once per check before the
+done line:
+
+    {"status": {"check": "injection", "state": "ok"}}
+    {"status": {"check": "deps", "state": "skipped", "reason": "dependency_missing", "detail": "No module named 'packaging'"}}
+
+`state` ∈ `ok|skipped|failed`; `reason` is the coverage contract's closed
+enumeration (see `docs/schema.md`); a status line is never a finding and is
+never counted in `done.total`. The done line declares the protocol:
+`{"done": true, "total": N, "protocol": 2}`. Under protocol 2 the Go side
+requires exactly one status line for each of `auth`, `injection`, `deps`: a
+duplicate or an unknown check is a protocol violation recorded on the parent
+as `failed/malformed_output`; a missing check is recorded on the parent as
+`failed/truncated_output`. Reported children are recorded as
+`python-engine/<check>` entries with their state/reason pairing validated
+(an invalid pairing is `failed/malformed_output` for that child). A done
+line without `protocol`, or with a value below 2, is a legacy tree: its
+status lines are ignored and only the parent entry is recorded. An older Go
+binary logs status lines and ignores them. `done.total` is reconciled
+against the findings received: a mismatch records the parent as
+`failed/truncated_output`.

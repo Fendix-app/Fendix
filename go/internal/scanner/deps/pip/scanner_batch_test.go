@@ -141,9 +141,9 @@ func TestScanViaOSV_BatchUsedWhenManyPackages(t *testing.T) {
 		false, &batchHits, &queryHits)
 	defer srv.Close()
 
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -193,9 +193,9 @@ func TestScanViaOSV_CacheHitsSkipBatch(t *testing.T) {
 		http.Error(w, "no HTTP should hit on a fully-cached scan", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	// Use a real-on-disk cache dir under HOME to exercise the actual
 	// readCache path.
@@ -232,9 +232,9 @@ func TestScanViaOSV_BatchFailureFallsBackToSerial(t *testing.T) {
 		},
 		true, &batchHits, &queryHits) // failBatch=true → batch returns 500
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -283,9 +283,9 @@ func TestScanViaOSV_BatchSizeRespected(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(out)
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -338,9 +338,9 @@ func TestScanViaOSV_ConcurrencyCapRespected(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(out)
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	// Force enough chunks to exceed the concurrency cap (cap=4 → use ≥6
@@ -370,9 +370,9 @@ func TestQueryOSVBatch_LengthMismatchErrors(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(batchResponseEnv{Results: nil})
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 
 	client := &http.Client{Timeout: httpTimeout}
 	_, err := queryOSVBatch(context.Background(), client, []pinnedPackage{

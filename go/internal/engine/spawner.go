@@ -33,12 +33,45 @@ type ScanRequest struct {
 	Verbose  bool     `json:"verbose"`
 }
 
-// DoneMessage is the terminal JSON line from the Python engine.
+// DoneMessage is the terminal JSON line from the Python engine. Protocol
+// is the version the Python side declares; absent (0) or 1 means a legacy
+// tree whose status lines, if any, are ignored. 2 means one status line per
+// expected check is mandatory and verified.
 type DoneMessage struct {
-	Done  bool   `json:"done"`
-	Total int    `json:"total"`
-	Error string `json:"error,omitempty"`
+	Done     bool   `json:"done"`
+	Total    int    `json:"total"`
+	Error    string `json:"error,omitempty"`
+	Protocol int    `json:"protocol,omitempty"`
 }
+
+// expectedPythonChecks is the set a protocol-v2 Python engine must report
+// exactly once each. Adding a check to engine.py means adding it here and
+// to the registry in the same change.
+var expectedPythonChecks = []string{"auth", "injection", "deps"}
+
+// CheckStatus is one `{"status": {...}}` protocol line (protocol v2): the
+// Python engine's own report of one check's outcome. State and Reason use
+// the coverage contract's vocabulary and are validated by the caller.
+type CheckStatus struct {
+	Check  string `json:"check"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// SpawnOutcome classifies how the Python engine run ended, in the order the
+// coverage contract ranks them: an exit error outranks malformed output,
+// which outranks a truncated stream.
+type SpawnOutcome int
+
+const (
+	SpawnOK         SpawnOutcome = iota
+	SpawnStartError              // process could not be started
+	SpawnExitError               // non-zero exit, or a done line carrying error
+	SpawnMalformed               // at least one unparseable or shape-invalid line
+	SpawnTruncated               // no done line, or done.total != findings received
+	SpawnCancelled               // context cancelled
+)
 
 // PythonSpawner manages the lifecycle of the Python engine subprocess.
 type PythonSpawner struct {
@@ -62,11 +95,29 @@ func NewPythonSpawner(pythonBin, engineDir string) *PythonSpawner {
 	}
 }
 
-// SpawnResult holds the findings and any error from the Python engine.
+// SpawnResult is what the caller learns about one engine run. Findings are
+// always returned, whatever the outcome (Rule 3).
 type SpawnResult struct {
-	Findings []models.Finding
-	Total    int
-	Err      error
+	Findings  []models.Finding
+	Total     int
+	Protocol  int
+	Err       error
+	Outcome   SpawnOutcome
+	Checks    []CheckStatus
+	Malformed int
+	SawDone   bool
+}
+
+// streamResult is readFindings' raw observation of the stdout stream.
+type streamResult struct {
+	findings  []models.Finding
+	doneTotal int
+	protocol  int
+	sawDone   bool
+	doneErr   string
+	malformed int
+	checks    []CheckStatus
+	readErr   error
 }
 
 // Run spawns the Python engine, sends the ScanRequest, and collects findings.
@@ -80,7 +131,7 @@ func (ps *PythonSpawner) Run(ctx context.Context, req ScanRequest) SpawnResult {
 	// default-non-embedded path.
 	absEngineDir, err := filepath.Abs(ps.engineDir)
 	if err != nil {
-		return SpawnResult{Err: fmt.Errorf("resolving engine dir: %w", err)}
+		return SpawnResult{Outcome: SpawnStartError, Err: fmt.Errorf("resolving engine dir: %w", err)}
 	}
 	enginePath := filepath.Join(absEngineDir, "engine.py")
 
@@ -89,12 +140,12 @@ func (ps *PythonSpawner) Run(ctx context.Context, req ScanRequest) SpawnResult {
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return SpawnResult{Err: fmt.Errorf("creating stdin pipe: %w", err)}
+		return SpawnResult{Outcome: SpawnStartError, Err: fmt.Errorf("creating stdin pipe: %w", err)}
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return SpawnResult{Err: fmt.Errorf("creating stdout pipe: %w", err)}
+		return SpawnResult{Outcome: SpawnStartError, Err: fmt.Errorf("creating stdout pipe: %w", err)}
 	}
 
 	// Capture stderr for diagnostics
@@ -104,62 +155,78 @@ func (ps *PythonSpawner) Run(ctx context.Context, req ScanRequest) SpawnResult {
 	// Send ScanRequest and close stdin
 	reqJSON, err := json.Marshal(req)
 	if err != nil {
-		return SpawnResult{Err: fmt.Errorf("marshaling scan request: %w", err)}
+		return SpawnResult{Outcome: SpawnStartError, Err: fmt.Errorf("marshaling scan request: %w", err)}
 	}
 	startTime := time.Now()
 
 	if err := cmd.Start(); err != nil {
-		return SpawnResult{Err: fmt.Errorf("starting python engine: %w", err)}
+		return SpawnResult{Outcome: SpawnStartError, Err: fmt.Errorf("starting python engine: %w", err)}
 	}
 
 	if _, err := stdin.Write(reqJSON); err != nil {
 		cmd.Process.Kill()
-		return SpawnResult{Err: fmt.Errorf("writing scan request to stdin: %w", err)}
+		return SpawnResult{Outcome: SpawnStartError, Err: fmt.Errorf("writing scan request to stdin: %w", err)}
 	}
 	stdin.Close()
 
-	// Read streaming findings from stdout
-	findings, total, readErr := readFindings(stdout)
-
-	// Wait for process to exit
+	sr := readFindings(stdout)
 	waitErr := cmd.Wait()
 
 	duration := time.Since(startTime)
 	slog.Info("python engine finished",
 		"duration", duration.Round(time.Millisecond),
-		"findings", len(findings),
+		"findings", len(sr.findings),
 		"exit_code", cmd.ProcessState.ExitCode(),
+		"status_lines", len(sr.checks),
 	)
-
-	// Log stderr if non-empty
 	if stderrStr := stderrBuf.String(); stderrStr != "" {
 		for _, line := range strings.Split(strings.TrimSpace(stderrStr), "\n") {
 			slog.Debug("python engine stderr", "line", line)
 		}
 	}
 
-	if readErr != nil {
-		return SpawnResult{Findings: findings, Total: total, Err: fmt.Errorf("reading python output: %w", readErr)}
+	res := SpawnResult{Findings: sr.findings, Total: sr.doneTotal, Protocol: sr.protocol, Checks: sr.checks, Malformed: sr.malformed, SawDone: sr.sawDone}
+	if sr.protocol < 2 {
+		// A legacy tree made no completeness promise; only the parent entry
+		// is meaningful, so any stray status lines are dropped.
+		res.Checks = nil
 	}
-
-	if waitErr != nil {
-		// Context cancellation is not an error — it means the user cancelled
-		if ctx.Err() != nil {
-			return SpawnResult{Findings: findings, Total: total, Err: ctx.Err()}
-		}
-		return SpawnResult{Findings: findings, Total: total, Err: fmt.Errorf("python engine exited with error: %w", waitErr)}
+	childErr := error(nil)
+	if sr.protocol >= 2 {
+		childErr = childProtocolError(sr.checks)
 	}
-
-	return SpawnResult{Findings: findings, Total: total}
+	switch {
+	case ctx.Err() != nil:
+		res.Outcome, res.Err = SpawnCancelled, ctx.Err()
+	case waitErr != nil:
+		res.Outcome, res.Err = SpawnExitError, fmt.Errorf("python engine exited with error: %w", waitErr)
+	case sr.doneErr != "":
+		res.Outcome, res.Err = SpawnExitError, fmt.Errorf("python engine error: %s", sr.doneErr)
+	case sr.readErr != nil:
+		res.Outcome, res.Err = SpawnMalformed, fmt.Errorf("reading python output: %w", sr.readErr)
+	case sr.malformed > 0:
+		res.Outcome, res.Err = SpawnMalformed, fmt.Errorf("%d unparseable line(s) from python engine", sr.malformed)
+	case !sr.sawDone:
+		res.Outcome, res.Err = SpawnTruncated, fmt.Errorf("python engine stream ended without a done line (%d findings received)", len(sr.findings))
+	case childErr != nil:
+		res.Outcome, res.Err = SpawnMalformed, childErr
+	case sr.protocol >= 2 && len(missingPythonChecks(sr.checks)) > 0:
+		res.Outcome, res.Err = SpawnTruncated, fmt.Errorf("python engine (protocol %d) omitted status for: %s", sr.protocol, strings.Join(missingPythonChecks(sr.checks), ", "))
+	case sr.doneTotal != len(sr.findings):
+		res.Outcome, res.Err = SpawnTruncated, fmt.Errorf("python engine reported %d findings, received %d", sr.doneTotal, len(sr.findings))
+	default:
+		res.Outcome = SpawnOK
+	}
+	return res
 }
 
-// readFindings reads newline-delimited JSON from the Python engine stdout.
-// It returns collected findings and the total from the done message.
-func readFindings(r io.Reader) ([]models.Finding, int, error) {
-	var findings []models.Finding
+// readFindings reads the NDJSON stream: finding lines, optional
+// `{"status": {...}}` lines (protocol v2), and the terminal done line. It
+// never returns early on a bad line — every line is observed so the
+// caller can classify the whole stream.
+func readFindings(r io.Reader) streamResult {
+	var sr streamResult
 	scanner := bufio.NewScanner(r)
-
-	// Increase buffer size for potentially large finding JSON
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
@@ -167,45 +234,83 @@ func readFindings(r io.Reader) ([]models.Finding, int, error) {
 		if line == "" {
 			continue
 		}
-
-		// Check if this is the done message
-		var done DoneMessage
-		if err := json.Unmarshal([]byte(line), &done); err == nil && done.Done {
-			if done.Error != "" {
-				return findings, done.Total, fmt.Errorf("python engine error: %s", done.Error)
-			}
-			return findings, done.Total, nil
+		var probe struct {
+			Status json.RawMessage `json:"status"`
+			Done   bool            `json:"done"`
 		}
-
-		// Parse as a Finding
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			sr.malformed++
+			logagg.Warn("python_engine", "skipping malformed line from python", "error", err, "line", line)
+			continue
+		}
+		if probe.Done {
+			var done DoneMessage
+			_ = json.Unmarshal([]byte(line), &done)
+			sr.sawDone, sr.doneTotal, sr.doneErr, sr.protocol = true, done.Total, done.Error, done.Protocol
+			continue
+		}
+		// A status line's `status` is an object; a finding's `status` (its
+		// decision) is a string, so the first byte tells them apart.
+		if len(probe.Status) > 0 && probe.Status[0] == '{' {
+			var sl struct {
+				Status CheckStatus `json:"status"`
+			}
+			if err := json.Unmarshal([]byte(line), &sl); err != nil || sl.Status.Check == "" {
+				sr.malformed++
+				continue
+			}
+			sr.checks = append(sr.checks, sl.Status)
+			continue
+		}
 		var finding models.Finding
 		if err := json.Unmarshal([]byte(line), &finding); err != nil {
+			sr.malformed++
 			logagg.Warn("python_engine", "skipping malformed finding JSON from python", "error", err, "line", line)
 			continue
 		}
-
-		// Only accept findings with required fields
 		if finding.Title == "" || finding.Severity == "" {
+			sr.malformed++
 			logagg.Warn("python_engine", "skipping finding with missing required fields", "line", line)
 			continue
 		}
-
-		// Mark source as whitebox
 		if finding.Source == "" {
 			finding.Source = models.SourceWhitebox
 		}
-
-		findings = append(findings, finding)
+		sr.findings = append(sr.findings, finding)
 	}
-
 	if err := scanner.Err(); err != nil {
-		return findings, 0, fmt.Errorf("scanning stdout: %w", err)
+		sr.readErr = fmt.Errorf("scanning stdout: %w", err)
 	}
+	return sr
+}
 
-	// If we got here without a done message, it means the stream ended unexpectedly
-	if len(findings) > 0 {
-		slog.Warn("python engine stream ended without done message", "findings_collected", len(findings))
+// childProtocolError returns the first protocol violation among status
+// lines under protocol v2: an unknown check identity or a duplicate check.
+func childProtocolError(checks []CheckStatus) error {
+	seen := map[string]bool{}
+	for _, c := range checks {
+		if !IsRegisteredAnalyzer(AnalyzerPythonEngine + "/" + c.Check) {
+			return fmt.Errorf("python engine reported unknown check %q", c.Check)
+		}
+		if seen[c.Check] {
+			return fmt.Errorf("python engine reported check %q twice", c.Check)
+		}
+		seen[c.Check] = true
 	}
+	return nil
+}
 
-	return findings, len(findings), nil
+// missingPythonChecks lists expected checks with no status line.
+func missingPythonChecks(checks []CheckStatus) []string {
+	seen := map[string]bool{}
+	for _, c := range checks {
+		seen[c.Check] = true
+	}
+	var missing []string
+	for _, want := range expectedPythonChecks {
+		if !seen[want] {
+			missing = append(missing, want)
+		}
+	}
+	return missing
 }

@@ -171,3 +171,48 @@ func NeutralizeFindings(findings []models.Finding) []models.Finding {
 	}
 	return out
 }
+
+// NeutralizeCoverageMetadata returns a copy of meta with every
+// operator-controlled coverage/verdict field neutralized:
+// ScannerStatus.Name/Reason/Detail, Coverage.Gaps/RequiredGaps/
+// Limitations/RequiredAnalyzers/Retried, and the backend-passthrough
+// ReleaseDecision/CoverageState strings. Under `fendix report --input`,
+// all of these arrive verbatim from an arbitrary parsed JSON report —
+// exactly as untrusted as the finding fields NeutralizeFindings strips.
+// All three renderers (html.go, pdf.go, sarif.go) call this before
+// rendering or emitting their coverage table / appendix rows / run
+// property bag, mirroring the NeutralizeFindings call each already
+// makes for findings. DecisionRationale (json.RawMessage) is
+// deliberately left untouched: it is opaque, structured data that must
+// stay byte-identical.
+//
+// meta is passed and returned by value: the caller's ScannerStatus slice
+// and Coverage value are never mutated, only the local copy's fields are
+// reassigned to newly allocated, neutralized copies.
+func NeutralizeCoverageMetadata(meta ScanMetadata) ScanMetadata {
+	if len(meta.ScannerStatus) > 0 {
+		status := make([]ScannerStatus, len(meta.ScannerStatus))
+		for i, s := range meta.ScannerStatus {
+			status[i] = ScannerStatus{
+				Name:     NeutralizeText(s.Name),
+				State:    s.State,
+				Reason:   ScannerReason(NeutralizeText(string(s.Reason))),
+				Detail:   NeutralizeText(s.Detail),
+				Attempts: s.Attempts,
+			}
+		}
+		meta.ScannerStatus = status
+	}
+	if meta.Coverage != nil {
+		cov := *meta.Coverage
+		cov.Gaps = neutralizeAll(cov.Gaps)
+		cov.RequiredGaps = neutralizeAll(cov.RequiredGaps)
+		cov.Limitations = neutralizeAll(cov.Limitations)
+		cov.RequiredAnalyzers = neutralizeAll(cov.RequiredAnalyzers)
+		cov.Retried = neutralizeAll(cov.Retried)
+		meta.Coverage = &cov
+	}
+	meta.ReleaseDecision = NeutralizeText(meta.ReleaseDecision)
+	meta.CoverageState = NeutralizeText(meta.CoverageState)
+	return meta
+}

@@ -1,0 +1,4 @@
+[
+  {"id": "FENDIX-SMOKE-PYPI-0001", "aliases": ["CVE-2026-0001"], "package": {"ecosystem": "PyPI", "name": "flask"}, "ranges": [{"introduced": "0", "fixed": "2.3.0"}], "summary": "Smoke fixture: flask below 2.3.0", "references": ["https://example.invalid/flask"]},
+  {"id": "FENDIX-SMOKE-NPM-0001", "aliases": ["CVE-2026-0002"], "package": {"ecosystem": "npm", "name": "lodash"}, "ranges": [{"introduced": "0", "fixed": "4.17.21"}], "summary": "Smoke fixture: lodash below 4.17.21", "references": ["https://example.invalid/lodash"]}
+]

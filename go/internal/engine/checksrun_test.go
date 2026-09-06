@@ -54,6 +54,28 @@ func TestCodeScannerLabelsOnlyReportsPassesThatRan(t *testing.T) {
 			want: nil,
 		},
 		{
+			// A --code scan of a repo with no Python manifest, no go.mod
+			// and no package.json now records all three dependency
+			// scanners not_applicable (pip's ErrNoManifests case included,
+			// per I4(a)), so "deps" is absent — where an older build's
+			// pip recorded a bare `ok` for the same no-manifest case and
+			// checks_run included "deps".
+			name: "all three dependency scanners not_applicable means no deps label",
+			status: scannerStatusList{
+				{Name: "govulncheck", State: reporters.ScannerSkipped, Reason: reporters.ReasonNotApplicable, Detail: "no go.mod at code path"},
+				{Name: "pip", State: reporters.ScannerSkipped, Reason: reporters.ReasonNotApplicable, Detail: "no Python manifest under --code"},
+				{Name: "npm", State: reporters.ScannerSkipped, Reason: reporters.ReasonNotApplicable, Detail: "no package.json under --code"},
+			},
+			want: nil,
+		},
+		{
+			name: "pip ok alone earns the deps label",
+			status: scannerStatusList{
+				{Name: "pip", State: reporters.ScannerOK},
+			},
+			want: []string{"deps"},
+		},
+		{
 			name: "all three ran",
 			status: scannerStatusList{
 				{Name: "secrets", State: reporters.ScannerOK},

@@ -281,6 +281,115 @@ func TestNeutralizeFindings_DoesNotMutateOriginal(t *testing.T) {
 	}
 }
 
+// TestNeutralizeCoverageMetadata_StripsAllFields is a direct unit test of
+// NeutralizeCoverageMetadata (I2). The PDF integration test
+// (TestRenderPDF_CoverageNeutralizesBidiAndControl) only asserts raw bytes
+// are absent from a compressed PDF stream, which still passes even if the
+// NeutralizeCoverageMetadata call were deleted outright — a compressed
+// stream never contains the plaintext bytes either way. This test calls
+// the function directly and checks every field its doc comment claims to
+// scrub: ScannerStatus.Name/Reason/Detail, Coverage.Gaps/RequiredGaps/
+// Limitations/RequiredAnalyzers/Retried, and ReleaseDecision/CoverageState.
+func TestNeutralizeCoverageMetadata_StripsAllFields(t *testing.T) {
+	status := []ScannerStatus{
+		{
+			Name:     "py" + rlo + "engine",
+			State:    ScannerFailed,
+			Reason:   ScannerReason("net" + zwsp + "work_error"),
+			Detail:   "lookup\x07failed",
+			Attempts: 2,
+		},
+	}
+	cov := Coverage{
+		ContractVersion:   1,
+		Gaps:              []string{"py" + rlo + "engine"},
+		RequiredGaps:      []string{"pip" + zwsp},
+		Limitations:       []string{"secrets: partial\x07scan"},
+		RequiredAnalyzers: []string{"go" + rlo + "vulncheck"},
+		Retried:           []string{"npm" + zwsp},
+	}
+	meta := ScanMetadata{
+		Version:         "3.4.0",
+		ScannerStatus:   status,
+		Coverage:        &cov,
+		ReleaseDecision: "block" + rlo,
+		CoverageState:   "incomplete" + zwsp,
+	}
+
+	out := NeutralizeCoverageMetadata(meta)
+
+	// --- every documented output field is scrubbed ---
+	if containsAnyNeutralized(out.ScannerStatus[0].Name) {
+		t.Errorf("ScannerStatus.Name not neutralized: %q", out.ScannerStatus[0].Name)
+	}
+	if containsAnyNeutralized(string(out.ScannerStatus[0].Reason)) {
+		t.Errorf("ScannerStatus.Reason not neutralized: %q", out.ScannerStatus[0].Reason)
+	}
+	if strings.ContainsRune(out.ScannerStatus[0].Detail, '\x07') {
+		t.Errorf("ScannerStatus.Detail not neutralized: %q", out.ScannerStatus[0].Detail)
+	}
+	if out.ScannerStatus[0].Attempts != 2 {
+		t.Errorf("Attempts is numeric and must be untouched, got %d", out.ScannerStatus[0].Attempts)
+	}
+	if containsAnyNeutralized(out.Coverage.Gaps[0]) {
+		t.Errorf("Coverage.Gaps not neutralized: %q", out.Coverage.Gaps[0])
+	}
+	if containsAnyNeutralized(out.Coverage.RequiredGaps[0]) {
+		t.Errorf("Coverage.RequiredGaps not neutralized: %q", out.Coverage.RequiredGaps[0])
+	}
+	if strings.ContainsRune(out.Coverage.Limitations[0], '\x07') {
+		t.Errorf("Coverage.Limitations not neutralized: %q", out.Coverage.Limitations[0])
+	}
+	if containsAnyNeutralized(out.Coverage.RequiredAnalyzers[0]) {
+		t.Errorf("Coverage.RequiredAnalyzers not neutralized: %q", out.Coverage.RequiredAnalyzers[0])
+	}
+	if containsAnyNeutralized(out.Coverage.Retried[0]) {
+		t.Errorf("Coverage.Retried not neutralized: %q", out.Coverage.Retried[0])
+	}
+	if containsAnyNeutralized(out.ReleaseDecision) {
+		t.Errorf("ReleaseDecision not neutralized: %q", out.ReleaseDecision)
+	}
+	if containsAnyNeutralized(out.CoverageState) {
+		t.Errorf("CoverageState not neutralized: %q", out.CoverageState)
+	}
+
+	// --- the input is never mutated: the original slice/struct still
+	// carries every raw character, and the Coverage pointer differs. ---
+	if !containsAnyNeutralized(meta.ScannerStatus[0].Name) {
+		t.Error("original ScannerStatus.Name should not be mutated")
+	}
+	if !strings.Contains(string(meta.ScannerStatus[0].Reason), zwsp) {
+		t.Error("original ScannerStatus.Reason should not be mutated")
+	}
+	if !strings.ContainsRune(meta.ScannerStatus[0].Detail, '\x07') {
+		t.Error("original ScannerStatus.Detail should not be mutated")
+	}
+	if !containsAnyNeutralized(meta.Coverage.Gaps[0]) {
+		t.Error("original Coverage.Gaps should not be mutated")
+	}
+	if !containsAnyNeutralized(meta.Coverage.RequiredGaps[0]) {
+		t.Error("original Coverage.RequiredGaps should not be mutated")
+	}
+	if !strings.ContainsRune(meta.Coverage.Limitations[0], '\x07') {
+		t.Error("original Coverage.Limitations should not be mutated")
+	}
+	if !containsAnyNeutralized(meta.Coverage.RequiredAnalyzers[0]) {
+		t.Error("original Coverage.RequiredAnalyzers should not be mutated")
+	}
+	if !containsAnyNeutralized(meta.Coverage.Retried[0]) {
+		t.Error("original Coverage.Retried should not be mutated")
+	}
+	if !containsAnyNeutralized(meta.ReleaseDecision) {
+		t.Error("original ReleaseDecision should not be mutated")
+	}
+	if !containsAnyNeutralized(meta.CoverageState) {
+		t.Error("original CoverageState should not be mutated")
+	}
+	if meta.Coverage == out.Coverage {
+		t.Error("Coverage pointer must not be shared between input and output")
+	}
+}
+
 // containsAnyNeutralized reports whether s still contains any of the
 // bidi/zero-width characters used in these tests — a quick assertion
 // that NeutralizeText scrubbed the field.

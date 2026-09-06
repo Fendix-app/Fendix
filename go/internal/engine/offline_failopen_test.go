@@ -164,12 +164,14 @@ func TestOrchestrator_OfflineNoSnapshotSkipsDepScanners(t *testing.T) {
 // TestOrchestrator_FailOnScannerError verifies F-L7/F-L13: a scanner that
 // runs and errors forces exit 2 when --fail-on-scanner-error is set, and a
 // clean exit (0) when it is not. Pointing --code at a regular file (not a
-// directory) makes the secrets scanner error deterministically with no
-// network access.
+// directory) makes validateCodePath reject it up front and record every
+// code analyzer (secrets included) failed/input_error before any of them
+// runs — deterministic and network-free.
 func TestOrchestrator_FailOnScannerError(t *testing.T) {
 	dir := t.TempDir()
-	// A regular file as the code path: secrets.Scan returns
-	// "not a directory" (a non-sentinel error → recorded failed).
+	// A regular file as the code path: validateCodePath rejects it before
+	// secrets (or any other code analyzer) ever runs, recording each one
+	// failed/input_error (see TestOrchestrator_UnreadableCodePathIsInputErrorEverywhere).
 	codeFile := filepath.Join(dir, "code.txt")
 	if err := os.WriteFile(codeFile, []byte("hello"), 0644); err != nil {
 		t.Fatal(err)

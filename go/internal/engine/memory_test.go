@@ -22,9 +22,9 @@ func TestMemory_LargeFindingStream(t *testing.T) {
 	var memBefore runtime.MemStats
 	runtime.ReadMemStats(&memBefore)
 
-	findings, total, err := readFindings(strings.NewReader(stream))
-	if err != nil {
-		t.Fatalf("readFindings failed: %v", err)
+	sr := readFindings(strings.NewReader(stream))
+	if sr.readErr != nil {
+		t.Fatalf("readFindings failed: %v", sr.readErr)
 	}
 
 	// Force GC after
@@ -32,11 +32,11 @@ func TestMemory_LargeFindingStream(t *testing.T) {
 	var memAfter runtime.MemStats
 	runtime.ReadMemStats(&memAfter)
 
-	if len(findings) != numFindings {
-		t.Errorf("expected %d findings, got %d", numFindings, len(findings))
+	if len(sr.findings) != numFindings {
+		t.Errorf("expected %d findings, got %d", numFindings, len(sr.findings))
 	}
-	if total != numFindings {
-		t.Errorf("expected total %d, got %d", numFindings, total)
+	if sr.doneTotal != numFindings {
+		t.Errorf("expected total %d, got %d", numFindings, sr.doneTotal)
 	}
 
 	// Calculate memory used by findings

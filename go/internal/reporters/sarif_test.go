@@ -3,6 +3,7 @@ package reporters
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -810,7 +811,9 @@ func TestRenderSARIF_Invocation(t *testing.T) {
 
 // TestRenderSARIF_ExecutionSuccessfulFalseOnScannerFailure verifies F-L13:
 // a recorded scanner failure flips executionSuccessful to false and emits a
-// toolExecutionNotification, so SARIF consumers see a degraded run.
+// toolExecutionNotification, so SARIF consumers see a degraded run. Every
+// non-ok entry is now itemised, so the skip alongside the failure also
+// produces a notification; this test pins down only the failure's.
 func TestRenderSARIF_ExecutionSuccessfulFalseOnScannerFailure(t *testing.T) {
 	var buf bytes.Buffer
 	meta := ScanMetadata{
@@ -833,41 +836,294 @@ func TestRenderSARIF_ExecutionSuccessfulFalseOnScannerFailure(t *testing.T) {
 	if inv.ExecutionSuccessful {
 		t.Error("expected executionSuccessful=false when a scanner failed")
 	}
-	if len(inv.ToolExecutionNotifications) != 1 {
-		t.Fatalf("expected 1 notification (only the failed scanner), got %d", len(inv.ToolExecutionNotifications))
+	if len(inv.ToolExecutionNotifications) != 2 {
+		t.Fatalf("expected 2 notifications (one per non-ok entry), got %d", len(inv.ToolExecutionNotifications))
 	}
-	n := inv.ToolExecutionNotifications[0]
-	if n.Level != "error" {
-		t.Errorf("notification level = %q; want error", n.Level)
+	var errorNotifications []SARIFNotification
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "error" {
+			errorNotifications = append(errorNotifications, n)
+		}
 	}
+	if len(errorNotifications) != 1 {
+		t.Fatalf("expected exactly 1 notification at level error, got %d: %+v", len(errorNotifications), inv.ToolExecutionNotifications)
+	}
+	n := errorNotifications[0]
 	if !strings.Contains(n.Message.Text, "pip") || !strings.Contains(n.Message.Text, "503") {
 		t.Errorf("notification message %q should name the failed scanner and detail", n.Message.Text)
 	}
 }
 
-// TestRenderSARIF_ExecutionSuccessfulTrueOnSkipOnly verifies that skips
-// alone (no failures) keep executionSuccessful=true and emit no
-// notifications — a skip is not a degraded run.
-func TestRenderSARIF_ExecutionSuccessfulTrueOnSkipOnly(t *testing.T) {
+func renderSARIFLog(t *testing.T, meta ScanMetadata) SARIFLog {
+	t.Helper()
 	var buf bytes.Buffer
-	meta := ScanMetadata{
-		Version: "dev",
-		ScannerStatus: []ScannerStatus{
-			{Name: "govulncheck", State: ScannerSkipped, Detail: "offline mode"},
-			{Name: "semgrep", State: ScannerSkipped, Detail: "not installed"},
-		},
-	}
 	if err := RenderSARIF(&buf, sampleFindings(), meta); err != nil {
 		t.Fatalf("RenderSARIF failed: %v", err)
 	}
 	var log SARIFLog
-	json.Unmarshal(buf.Bytes(), &log)
+	if err := json.Unmarshal(buf.Bytes(), &log); err != nil {
+		t.Fatal(err)
+	}
+	return log
+}
+
+// Skips alone keep executionSuccessful=true (default CLI mode is
+// unchanged) but every non-ok analyzer is now itemised as a note.
+func TestRenderSARIF_SkipOnlyIsSuccessfulWithNotes(t *testing.T) {
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: []ScannerStatus{
+		{Name: "govulncheck", State: ScannerSkipped, Reason: ReasonDisabledOffline, Detail: "--offline"},
+		{Name: "semgrep", State: ScannerSkipped, Reason: ReasonNotApplicable, Detail: "no --code"},
+	}})
 	inv := log.Runs[0].Invocations[0]
 	if !inv.ExecutionSuccessful {
-		t.Error("expected executionSuccessful=true when only skips are recorded")
+		t.Error("skips alone must not flip executionSuccessful in default mode")
 	}
-	if len(inv.ToolExecutionNotifications) != 0 {
-		t.Errorf("expected no notifications for skip-only run, got %d", len(inv.ToolExecutionNotifications))
+	if len(inv.ToolExecutionNotifications) != 2 {
+		t.Fatalf("expected one notification per non-ok entry, got %d", len(inv.ToolExecutionNotifications))
+	}
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level != "note" {
+			t.Errorf("disabled/not_applicable must be level note, got %q", n.Level)
+		}
+	}
+}
+
+func TestRenderSARIF_NotificationLevelsFollowClass(t *testing.T) {
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: []ScannerStatus{
+		{Name: "secrets", State: ScannerOK},
+		{Name: "semgrep", State: ScannerSkipped, Reason: ReasonDependencyMissing, Detail: "semgrep binary not installed"},
+		{Name: "npm", State: ScannerSkipped, Reason: ReasonUnsupportedTarget, Detail: "yarn.lock"},
+		{Name: "pip", State: ScannerFailed, Reason: ReasonNetworkError, Detail: "osv.dev returned HTTP 503"},
+		{Name: "textscan", State: ScannerSkipped}, // legacy: no reason → unknown
+	}})
+	inv := log.Runs[0].Invocations[0]
+	if inv.ExecutionSuccessful {
+		t.Error("a failed entry must flip executionSuccessful in default mode")
+	}
+	got := map[string]string{}
+	for _, n := range inv.ToolExecutionNotifications {
+		name := strings.SplitN(n.Message.Text, ":", 2)[0]
+		got[name] = n.Level
+	}
+	want := map[string]string{"semgrep": "warning", "npm": "note", "pip": "error", "textscan": "warning"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("levels = %v, want %v", got, want)
+	}
+	if _, ok := got["secrets"]; ok {
+		t.Error("ok entries must not produce notifications")
+	}
+}
+
+func TestRenderSARIF_StrictModeFailsOnRequiredGap(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}, {Name: "semgrep", State: ScannerSkipped, Reason: ReasonDisabledByFlag, Detail: "--fast"}}
+	cov := BuildCoverage(status, []string{"semgrep"}, true)
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: status, Coverage: &cov})
+	inv := log.Runs[0].Invocations[0]
+	if inv.ExecutionSuccessful {
+		t.Fatal("strict run with required_gaps must be unsuccessful even though configured_complete is true")
+	}
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "error" && strings.Contains(n.Message.Text, "required analyzer semgrep not delivered") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an error notification for the required gap, got %+v", inv.ToolExecutionNotifications)
+	}
+	// The same status without strict is successful: disabled is not an engine gap.
+	covLoose := BuildCoverage(status, nil, false)
+	if !renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: status, Coverage: &covLoose}).Runs[0].Invocations[0].ExecutionSuccessful {
+		t.Fatal("non-strict run with only a disabled analyzer must be successful")
+	}
+}
+
+func TestRenderSARIF_HostedIncompleteIsUnsuccessfulAndKeepsBlockResults(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}}
+	cov := BuildCoverage(status, nil, false)
+	meta := ScanMetadata{Version: "3.4.0", ScannerStatus: status, Coverage: &cov,
+		ReleaseDecision: "block", CoverageState: "incomplete", DecisionPolicyVersion: "2.0.0",
+		DecisionRationale: json.RawMessage(`{"missing_coverage":[{"scanner":"python-engine","state":"unavailable"}]}`)}
+	log := renderSARIFLog(t, meta)
+	inv := log.Runs[0].Invocations[0]
+	if inv.ExecutionSuccessful {
+		t.Fatal("hosted export with coverage_state=incomplete must be unsuccessful regardless of the verdict")
+	}
+	warned := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "warning" && n.Message.Text == "Required coverage incomplete: python-engine" {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected the coverage warning to name python-engine from the rationale, got %+v", inv.ToolExecutionNotifications)
+	}
+	if len(log.Runs[0].Results) != len(sampleFindings()) {
+		t.Fatal("results must be untouched by the coverage state")
+	}
+	props := log.Runs[0].Properties
+	if props["fendix/release"] == nil || props["fendix/coverage"] == nil {
+		t.Fatalf("property bag must carry release and coverage, got %v", props)
+	}
+	rel := props["fendix/release"].(map[string]any)
+	if rel["release_decision"] != "block" || rel["coverage_state"] != "incomplete" {
+		t.Fatalf("release properties = %v", rel)
+	}
+}
+
+// TestRenderSARIF_HostedIncompleteWithNoNamableGapOmitsColon covers the
+// fixture above's own shape with the rationale removed: coverage_state is
+// incomplete but nothing — not the rationale, not Coverage.Gaps, not a local
+// ScannerStatus entry — names a gap. The message must render exactly
+// "Required coverage incomplete" with no trailing colon, never
+// "Required coverage incomplete: " followed by nothing.
+func TestRenderSARIF_HostedIncompleteWithNoNamableGapOmitsColon(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}}
+	cov := BuildCoverage(status, nil, false)
+	log := renderSARIFLog(t, ScanMetadata{Version: "3.4.0", ScannerStatus: status, Coverage: &cov, CoverageState: "incomplete"})
+	inv := log.Runs[0].Invocations[0]
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level != "warning" {
+			continue
+		}
+		found = true
+		if n.Message.Text != "Required coverage incomplete" {
+			t.Fatalf("message = %q, want exactly %q (no trailing colon)", n.Message.Text, "Required coverage incomplete")
+		}
+	}
+	if !found {
+		t.Fatal("expected a warning notification")
+	}
+}
+
+// TestRenderSARIF_HostedIncompleteNeutralizesGapName covers an untrusted
+// analyzer name reaching the coverage-incomplete warning: under
+// `fendix report --input` ScannerStatus.Name is operator-supplied, exactly
+// like every other field this function neutralizes.
+func TestRenderSARIF_HostedIncompleteNeutralizesGapName(t *testing.T) {
+	status := []ScannerStatus{{Name: "py" + rlo + "engine", State: ScannerFailed, Reason: ReasonNetworkError}}
+	cov := BuildCoverage(status, nil, false)
+	log := renderSARIFLog(t, ScanMetadata{Version: "3.4.0", ScannerStatus: status, Coverage: &cov, CoverageState: "incomplete"})
+	inv := log.Runs[0].Invocations[0]
+	for _, n := range inv.ToolExecutionNotifications {
+		if strings.Contains(n.Message.Text, rlo) {
+			t.Fatalf("notification text %q still carries the bidi override char", n.Message.Text)
+		}
+	}
+}
+
+// TestRenderSARIF_RunPropertyBagNeutralized covers I1: the run-level
+// property bag ("fendix/coverage" / "fendix/release") is built straight
+// from meta.ScannerStatus / meta.Coverage / meta.ReleaseDecision /
+// meta.CoverageState, which RenderSARIF used to emit verbatim — unlike
+// html.go and pdf.go, which both call NeutralizeCoverageMetadata before
+// rendering their own coverage table. A bidi override in an
+// operator-supplied `fendix report --input` report must not reach the
+// property bag any more than it reaches a notification message.
+func TestRenderSARIF_RunPropertyBagNeutralized(t *testing.T) {
+	status := []ScannerStatus{{
+		Name:   "py" + rlo + "engine",
+		State:  ScannerFailed,
+		Reason: ReasonNetworkError,
+		Detail: "lookup" + rlo + "failed",
+	}}
+	cov := BuildCoverage(status, nil, false)
+	meta := ScanMetadata{
+		Version:               "3.4.0",
+		ScannerStatus:         status,
+		Coverage:              &cov,
+		ReleaseDecision:       "block" + rlo,
+		CoverageState:         "incomplete",
+		DecisionPolicyVersion: "1",
+	}
+
+	var buf bytes.Buffer
+	if err := RenderSARIF(&buf, sampleFindings(), meta); err != nil {
+		t.Fatalf("RenderSARIF: %v", err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte(rlo)) {
+		t.Fatalf("SARIF output still carries the bidi override char: %s", buf.Bytes())
+	}
+
+	var log SARIFLog
+	if err := json.Unmarshal(buf.Bytes(), &log); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	covProps, ok := log.Runs[0].Properties["fendix/coverage"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected fendix/coverage property bag, got %#v", log.Runs[0].Properties)
+	}
+	statusList, ok := covProps["scanner_status"].([]any)
+	if !ok || len(statusList) != 1 {
+		t.Fatalf("expected one scanner_status entry, got %#v", covProps["scanner_status"])
+	}
+	entry, ok := statusList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected scanner_status[0] to be an object, got %#v", statusList[0])
+	}
+	if got := entry["name"]; got != "pyengine" {
+		t.Errorf("scanner_status[0].name not sanitized in the property bag: got %q, want %q", got, "pyengine")
+	}
+	if got := entry["detail"]; got != "lookupfailed" {
+		t.Errorf("scanner_status[0].detail not sanitized in the property bag: got %q, want %q", got, "lookupfailed")
+	}
+	relProps, ok := log.Runs[0].Properties["fendix/release"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected fendix/release property bag, got %#v", log.Runs[0].Properties)
+	}
+	if got := relProps["release_decision"]; got != "block" {
+		t.Errorf("release_decision not sanitized in the property bag: got %q, want %q", got, "block")
+	}
+}
+
+// TestRenderSARIF_ExecutionSuccessfulHostedCompleteIgnoresUnrelatedFailure
+// pins the controller ruling: hosted mode looks at coverage_state alone, so
+// a "complete" hosted export stays successful even with an unrelated
+// scanner failure recorded — while that failure still surfaces as its own
+// error notification.
+func TestRenderSARIF_ExecutionSuccessfulHostedCompleteIgnoresUnrelatedFailure(t *testing.T) {
+	status := []ScannerStatus{{Name: "pip", State: ScannerFailed, Reason: ReasonNetworkError, Detail: "osv.dev returned HTTP 503"}}
+	log := renderSARIFLog(t, ScanMetadata{Version: "3.4.0", ScannerStatus: status, CoverageState: "complete"})
+	inv := log.Runs[0].Invocations[0]
+	if !inv.ExecutionSuccessful {
+		t.Fatal("hosted export with coverage_state=complete must be successful regardless of an unrelated scanner failure")
+	}
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level == "error" && strings.Contains(n.Message.Text, "pip") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the failed scanner must still surface as an error notification, got %+v", inv.ToolExecutionNotifications)
+	}
+}
+
+// TestRenderSARIF_StrictModeRequiredGapWithNoStatusEntry covers a required
+// analyzer BuildCoverage never saw a scanner_status entry for at all (the
+// operator required a name the report never mentions). The zero-value
+// ScannerStatus this produces has an empty Reason, so the notification must
+// not render a dangling empty parenthetical.
+func TestRenderSARIF_StrictModeRequiredGapWithNoStatusEntry(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}}
+	cov := BuildCoverage(status, []string{"sonarqube"}, true)
+	log := renderSARIFLog(t, ScanMetadata{Version: "dev", ScannerStatus: status, Coverage: &cov})
+	inv := log.Runs[0].Invocations[0]
+	found := false
+	for _, n := range inv.ToolExecutionNotifications {
+		if n.Level != "error" {
+			continue
+		}
+		if n.Message.Text == "required analyzer sonarqube not delivered: unknown" {
+			found = true
+		}
+		if strings.Contains(n.Message.Text, "()") {
+			t.Fatalf("notification text %q has a dangling empty parenthetical", n.Message.Text)
+		}
+	}
+	if !found {
+		t.Fatalf("expected the exact unresolved-name message, got %+v", inv.ToolExecutionNotifications)
 	}
 }
 

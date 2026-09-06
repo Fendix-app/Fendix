@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
@@ -90,12 +91,20 @@ body{background:#fff;color:#1e293b;padding:1rem}
 .toolbar{display:none}
 .meta{border-color:#ccc;color:#64748b}
 }
+.verdict{padding:12px 16px;border-radius:8px;font-weight:600;margin:0 0 16px}
+.verdict-block{background:#3b0d0d;color:#ffb4b4}.verdict-incomplete{background:#3a2e08;color:#ffd97a}
+.verdict-warn{background:#3a2e08;color:#ffd97a}.verdict-pass{background:#0f2e1a;color:#9ae6b4}
+.verdict-partial{border-left:4px solid #ffd97a}
+.coverage-table{width:100%;border-collapse:collapse;font-size:13px}.coverage-table th,.coverage-table td{text-align:start;padding:4px 8px;border-bottom:1px solid #2a2a2a}
+.coverage-verdict.gap{color:#ffd97a}.coverage-verdict.ok{color:#9ae6b4}
+tr.cov-failed td,tr.cov-unavailable td,tr.cov-unknown td{color:#ffb4b4}tr.cov-unsupported td,tr.cov-disabled td{color:#bdbdbd}
 </style>
 </head>
 <body>
 <div class="container">
 <h1>&#x1f6e1; {{.I18n.ReportTitle}}</h1>
 <p class="subtitle">{{.Metadata.Target}} &mdash; {{.Metadata.Mode}} scan &mdash; {{.Metadata.Duration}}</p>
+{{if .Metadata.ReleaseDecision}}<div class="verdict verdict-{{.Metadata.ReleaseDecision}}{{if eq .Metadata.CoverageState "incomplete"}} verdict-partial{{end}}">{{verdictLabel .Metadata.ReleaseDecision .Metadata.CoverageState}}</div>{{end}}
 <div class="summary">
 <div class="stat critical"><div class="count">{{.Summary.Critical}}</div><div class="label">{{.I18n.SeverityCritical}}</div></div>
 <div class="stat high"><div class="count">{{.Summary.High}}</div><div class="label">{{.I18n.SeverityHigh}}</div></div>
@@ -143,6 +152,18 @@ body{background:#fff;color:#1e293b;padding:1rem}
 <span>{{.I18n.TotalFindingsLabel}} {{.Total}}</span>
 <span>Fendix {{.Metadata.Version}}</span>
 </div>
+<section class="coverage">
+<h2>{{.I18n.CoverageTitle}}</h2>
+{{if .Metadata.Coverage}}
+<p class="coverage-verdict {{if .Metadata.Coverage.ConfiguredComplete}}ok{{else}}gap{{end}}">{{if .Metadata.Coverage.ConfiguredComplete}}{{.I18n.CoverageComplete}}{{else}}{{.I18n.CoverageIncomplete}} {{joinRefs .Metadata.Coverage.Gaps}}{{end}}</p>
+{{if .Metadata.Coverage.RequiredGaps}}<p class="coverage-verdict gap">{{.I18n.CoverageRequiredMissing}} {{joinRefs .Metadata.Coverage.RequiredGaps}}</p>{{end}}
+<table class="coverage-table">
+<thead><tr><th>{{.I18n.CoverageAnalyzer}}</th><th>{{.I18n.CoverageClass}}</th><th>{{.I18n.CoverageReason}}</th><th>{{.I18n.CoverageAttempts}}</th><th>{{.I18n.CoverageDetail}}</th></tr></thead>
+<tbody>
+{{range .Metadata.ScannerStatus}}<tr class="cov-{{.Class}}"><td>{{.Name}}</td><td>{{classLabel .Class}} <span class="muted">({{.Class}})</span></td><td>{{.Reason}}</td><td>{{if gt .Attempts 1}}{{itoa .Attempts}}{{end}}</td><td>{{.Detail}}</td></tr>
+{{end}}</tbody></table>
+{{else}}<p class="muted">{{.I18n.CoverageNotRecorded}}</p>{{end}}
+</section>
 </div>
 <script>
 function sortFindings(key,btn){
@@ -203,6 +224,12 @@ func RenderHTML(w io.Writer, findings []models.Finding, meta ScanMetadata) error
 // byte-identical to the pre-Sprint-10 output (modulo the new
 // <html lang="..."> attribute, which existing CSS doesn't care about).
 func RenderHTMLOpts(w io.Writer, findings []models.Finding, meta ScanMetadata, opts HTMLOptions) error {
+	lang := opts.Lang
+	if lang == "" {
+		lang = "en"
+	}
+	strs := i18n.Get(lang)
+
 	funcMap := template.FuncMap{
 		"joinRefs": func(refs []string) string {
 			return strings.Join(refs, ", ")
@@ -223,6 +250,9 @@ func RenderHTMLOpts(w io.Writer, findings []models.Finding, meta ScanMetadata, o
 		"sub": func(a, b int) int {
 			return a - b
 		},
+		"classLabel":   func(c string) string { return i18n.ClassLabel(strs, c) },
+		"verdictLabel": func(d, c string) string { return i18n.VerdictLabel(strs, d, c) },
+		"itoa":         func(n int) string { return strconv.Itoa(n) },
 	}
 
 	tmpl, err := template.New("report").Funcs(funcMap).Parse(htmlTemplate)
@@ -230,15 +260,15 @@ func RenderHTMLOpts(w io.Writer, findings []models.Finding, meta ScanMetadata, o
 		return fmt.Errorf("parsing HTML template: %w", err)
 	}
 
-	lang := opts.Lang
-	if lang == "" {
-		lang = "en"
-	}
 	// Strip bidi/zero-width/control characters from untrusted finding
 	// fields before they hit the template. html/template auto-escaping
 	// handles metachars, but not Trojan-Source bidi reordering or
 	// invisible control chars — NeutralizeFindings closes that gap.
 	findings = NeutralizeFindings(findings)
+	// Same treatment for the coverage table / verdict banner: ScannerStatus
+	// and Coverage fields are exactly as operator-controlled under
+	// `fendix report --input` as finding fields are.
+	meta = NeutralizeCoverageMetadata(meta)
 	data := htmlTemplateData{
 		JSONReport: JSONReport{
 			Metadata:  meta,
@@ -250,7 +280,7 @@ func RenderHTMLOpts(w io.Writer, findings []models.Finding, meta ScanMetadata, o
 		},
 		Lang: lang,
 		RTL:  i18n.IsRTL(lang),
-		I18n: i18n.Get(lang),
+		I18n: strs,
 	}
 
 	if err := tmpl.Execute(w, data); err != nil {

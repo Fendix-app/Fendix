@@ -78,5 +78,24 @@ func Arabic() Strings {
 		EndpointsLabel:     "النقاط النهائية:",            // TRANSLATION_REVIEW_NEEDED
 		TotalFindingsLabel: "إجمالي النتائج:",             // TRANSLATION_REVIEW_NEEDED
 		NoFindingsMessage:  "لم يتم العثور على نتائج.",    // TRANSLATION_REVIEW_NEEDED
+
+		CoverageTitle:                    "تغطية الماسحات",                                                                                       // TRANSLATION_REVIEW_NEEDED
+		CoverageAnalyzer:                 "المحلل",                                                                                               // TRANSLATION_REVIEW_NEEDED
+		CoverageClass:                    "الحالة",                                                                                               // TRANSLATION_REVIEW_NEEDED
+		CoverageReason:                   "السبب",                                                                                                // TRANSLATION_REVIEW_NEEDED
+		CoverageAttempts:                 "المحاولات",                                                                                            // TRANSLATION_REVIEW_NEEDED
+		CoverageDetail:                   "التفاصيل",                                                                                             // TRANSLATION_REVIEW_NEEDED
+		CoverageComplete:                 "التغطية كاملة",                                                                                        // TRANSLATION_REVIEW_NEEDED
+		CoverageIncomplete:               "التغطية غير كاملة:",                                                                                   // TRANSLATION_REVIEW_NEEDED
+		CoverageRequiredMissing:          "محللات مطلوبة لم تُنفَّذ:",                                                                            // TRANSLATION_REVIEW_NEEDED
+		CoverageNotRecorded:              "لم تُسجَّل التغطية في هذه النسخة من المحرك",                                                           // TRANSLATION_REVIEW_NEEDED
+		CoverageNotMeasured:              "لم تُقَس التغطية",                                                                                     // TRANSLATION_REVIEW_NEEDED
+		VerdictPass:                      "ناجح",                                                                                                 // TRANSLATION_REVIEW_NEEDED
+		VerdictWarn:                      "تحذير",                                                                                                // TRANSLATION_REVIEW_NEEDED
+		VerdictBlocked:                   "محجوب",                                                                                                // TRANSLATION_REVIEW_NEEDED
+		VerdictBlockedCoverageIncomplete: "محجوب — والتغطية غير كاملة أيضًا",                                                                     // TRANSLATION_REVIEW_NEEDED
+		VerdictCoverageIncomplete:        "التغطية غير كاملة",                                                                                    // TRANSLATION_REVIEW_NEEDED
+		ClassOK:                          "اشتغل", ClassNotApplicable: "غير قابل للتطبيق", ClassDisabled: "معطَّل", ClassUnavailable: "غير متاح", // TRANSLATION_REVIEW_NEEDED
+		ClassUnsupported: "غير مدعوم", ClassFailed: "فشل", ClassUnknown: "غير معروف", // TRANSLATION_REVIEW_NEEDED
 	}
 }

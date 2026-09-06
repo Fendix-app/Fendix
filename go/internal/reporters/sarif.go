@@ -64,6 +64,10 @@ type SARIFRun struct {
 	AutomationDetails *SARIFRunAutomationDetails `json:"automationDetails,omitempty"`
 	Results           []SARIFResult              `json:"results"`
 	Invocations       []SARIFInvocation          `json:"invocations,omitempty"`
+	// Properties is the run-level property bag (SARIF §3.14.29). Carries the
+	// coverage contract ("fendix/coverage") and, on hosted re-renders, the
+	// backend's verdict ("fendix/release"). Additive; omitted when empty.
+	Properties map[string]any `json:"properties,omitempty"`
 }
 
 // SARIFRunAutomationDetails identifies a run (SARIF §3.17). Only `id` is
@@ -954,6 +958,14 @@ func buildResultMessage(f models.Finding, locCtx string) string {
 // After the fix, "Missing CSP header" reported on 21 endpoints is one rule
 // referenced 21 times — which is what SARIF semantics expect.
 func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) error {
+	// Strip bidi/zero-width/control characters from the coverage/verdict
+	// metadata before anything below reads it. Under `fendix report
+	// --input`, ScannerStatus and Coverage arrive verbatim from an
+	// arbitrary parsed JSON report — exactly as untrusted as the finding
+	// fields neutralized below, and exactly what html.go and pdf.go
+	// already do before rendering their own coverage table / appendix.
+	meta = NeutralizeCoverageMetadata(meta)
+
 	// A rule is shared by every finding of the same check (category+title), and
 	// those findings may legitimately carry DIFFERENT severities: the engine's
 	// dedupKey (internal/engine/dedup.go) is severity|category|title, so
@@ -1174,23 +1186,68 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 		results = append(results, result)
 	}
 
-	// F-L13: executionSuccessful is false when any required scanner
-	// errored, and each failure becomes a toolExecutionNotification.
-	// Derived from ScanMetadata.ScannerStatus — a degraded scan must not
-	// present as a clean pass to SARIF consumers.
-	invocation := SARIFInvocation{ExecutionSuccessful: true}
+	// F-L13 / spec §5.6: executionSuccessful() picks one of three modes
+	// (default CLI, strict CLI, hosted export) from meta alone, and every
+	// non-ok ScannerStatus entry becomes its own toolExecutionNotification —
+	// a degraded or incomplete scan must not present as a clean pass to
+	// SARIF consumers.
+	invocation := SARIFInvocation{ExecutionSuccessful: executionSuccessful(meta)}
 	for _, s := range meta.ScannerStatus {
-		if s.Failed() {
-			invocation.ExecutionSuccessful = false
-			msg := s.Name + " scanner failed"
-			if s.Detail != "" {
-				msg += ": " + s.Detail
-			}
-			invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{
-				Level:   "error",
-				Message: SARIFMessage{Text: msg},
-			})
+		if s.State == ScannerOK {
+			continue
 		}
+		invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{
+			Level:   notificationLevel(s),
+			Message: SARIFMessage{Text: notificationText(s)},
+		})
+	}
+	if meta.Coverage != nil && meta.Coverage.Strict {
+		byName := map[string]ScannerStatus{}
+		for _, s := range meta.ScannerStatus {
+			byName[s.Name] = s
+		}
+		for _, name := range meta.Coverage.RequiredGaps {
+			// s is the zero value when the required name has no matching
+			// scanner_status entry at all (BuildCoverage supports that: an
+			// operator can require an analyzer the report never mentions).
+			// Its Reason is then "", so the parenthetical is omitted rather
+			// than rendered as a dangling "()".
+			s := byName[name]
+			text := fmt.Sprintf("required analyzer %s not delivered: %s", name, s.Class())
+			if s.Reason != "" {
+				text += fmt.Sprintf(" (%s)", s.Reason)
+			}
+			invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{Level: "error", Message: SARIFMessage{Text: NeutralizeText(text)}})
+		}
+	}
+	if meta.CoverageState == "incomplete" {
+		text := "Required coverage incomplete"
+		if names := hostedIncompleteGapNames(meta); len(names) > 0 {
+			text += ": " + strings.Join(names, ", ")
+		}
+		invocation.ToolExecutionNotifications = append(invocation.ToolExecutionNotifications, SARIFNotification{
+			Level: "warning",
+			// names can originate from ScannerStatus.Name or
+			// meta.Coverage.Gaps, both operator-controlled under
+			// `fendix report --input`, so the whole message is neutralized
+			// like every other notification text in this function.
+			Message: SARIFMessage{Text: NeutralizeText(text)},
+		})
+	}
+
+	var runProps map[string]any
+	if meta.Coverage != nil || len(meta.ScannerStatus) > 0 {
+		runProps = map[string]any{"fendix/coverage": map[string]any{"coverage": meta.Coverage, "scanner_status": meta.ScannerStatus}}
+	}
+	if meta.ReleaseDecision != "" || meta.CoverageState != "" {
+		if runProps == nil {
+			runProps = map[string]any{}
+		}
+		rel := map[string]any{"release_decision": meta.ReleaseDecision, "coverage_state": meta.CoverageState, "decision_policy_version": meta.DecisionPolicyVersion}
+		if len(meta.DecisionRationale) > 0 {
+			rel["decision_rationale"] = meta.DecisionRationale
+		}
+		runProps["fendix/release"] = rel
 	}
 
 	log := SARIFLog{
@@ -1212,6 +1269,7 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 				AutomationDetails: &SARIFRunAutomationDetails{ID: automationIDFor(meta.Mode)},
 				Results:           results,
 				Invocations:       []SARIFInvocation{invocation},
+				Properties:        runProps,
 			},
 		},
 	}
@@ -1248,6 +1306,109 @@ func neutralizeAll(in []string) []string {
 	out := make([]string, len(in))
 	for i, s := range in {
 		out[i] = NeutralizeText(s)
+	}
+	return out
+}
+
+// executionSuccessful implements the three modes of spec §5.6, decided from
+// the input alone so a re-render is faithful:
+//  1. hosted export (coverage_state present): false iff incomplete —
+//     regardless of any unrelated scanner failure, since the hosted
+//     release_decision is the verdict that matters here;
+//  2. strict CLI run: false iff Coverage.StrictOK() is false (a failed
+//     entry is already an engine gap, so configured_complete already
+//     covers it — no separate failure check needed);
+//  3. default CLI run: false iff an analyzer failed — unchanged behaviour.
+func executionSuccessful(meta ScanMetadata) bool {
+	if meta.CoverageState != "" {
+		return meta.CoverageState != "incomplete"
+	}
+	if meta.Coverage != nil && meta.Coverage.Strict {
+		return meta.Coverage.StrictOK()
+	}
+	for _, s := range meta.ScannerStatus {
+		if s.Failed() {
+			return false
+		}
+	}
+	return true
+}
+
+// notificationLevel maps a lifecycle class to a SARIF notification level:
+// a failure is an error, an unavailable dependency or an unclassifiable
+// entry is a warning, an intentional or structural skip is a note.
+func notificationLevel(s ScannerStatus) string {
+	switch s.Class() {
+	case ClassFailed:
+		return "error"
+	case ClassUnavailable, ClassUnknown:
+		return "warning"
+	}
+	return "note"
+}
+
+// notificationText renders "<name>: <class> (<reason>): <detail>". Detail
+// is neutralized because under `fendix report --input` it is operator
+// supplied.
+func notificationText(s ScannerStatus) string {
+	text := s.Name + ": " + s.Class()
+	if s.Reason != "" {
+		text += " (" + string(s.Reason) + ")"
+	}
+	if s.Detail != "" {
+		text += ": " + s.Detail
+	}
+	return NeutralizeText(text)
+}
+
+// hostedIncompleteGapNames names the analyzers behind a hosted
+// coverage_state=incomplete verdict, in order of preference:
+//  1. the backend's own rationale (spec §6.2 rationale v2 shape,
+//     "missing_coverage[].scanner"), decoded best-effort — any other
+//     shape, or no rationale at all, simply falls through; never an
+//     error, never a panic;
+//  2. else the engine's own Coverage.Gaps, when non-empty;
+//  3. else any local ScannerStatus entry that is a gap or unclassifiable.
+//
+// The result is deduplicated preserving order, and may be empty when
+// nothing can be named.
+func hostedIncompleteGapNames(meta ScanMetadata) []string {
+	var names []string
+	if len(meta.DecisionRationale) > 0 {
+		var rationale struct {
+			MissingCoverage []struct {
+				Scanner string `json:"scanner"`
+			} `json:"missing_coverage"`
+		}
+		if err := json.Unmarshal(meta.DecisionRationale, &rationale); err == nil {
+			for _, m := range rationale.MissingCoverage {
+				names = append(names, m.Scanner)
+			}
+		}
+	}
+	if len(names) == 0 && meta.Coverage != nil && len(meta.Coverage.Gaps) > 0 {
+		names = append(names, meta.Coverage.Gaps...)
+	}
+	if len(names) == 0 {
+		for _, s := range meta.ScannerStatus {
+			if s.IsGap() || s.Class() == ClassUnknown {
+				names = append(names, s.Name)
+			}
+		}
+	}
+	return dedupeStrings(names)
+}
+
+// dedupeStrings drops empty entries and repeats, preserving first-seen order.
+func dedupeStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
 	}
 	return out
 }

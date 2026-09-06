@@ -1,20 +1,25 @@
 package engine
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
 )
 
 func TestScannerStatusList_OkSkipFail(t *testing.T) {
 	var l scannerStatusList
 	l.ok("secrets")
-	l.skip("govulncheck", "offline mode")
-	l.fail("pip", errors.New("osv.dev returned 503"))
+	l.skip("govulncheck", reporters.ReasonNotApplicable, "offline mode")
+	l.fail("pip", reporters.ReasonExecutionError, errors.New("osv.dev returned 503"))
 
 	if len(l) != 3 {
 		t.Fatalf("got %d statuses; want 3", len(l))
@@ -30,15 +35,15 @@ func TestScannerStatusList_OkSkipFail(t *testing.T) {
 func TestScannerStatusList_HasFailure(t *testing.T) {
 	var clean scannerStatusList
 	clean.ok("secrets")
-	clean.skip("govulncheck", "offline")
+	clean.skip("govulncheck", reporters.ReasonNotApplicable, "offline")
 	if clean.hasFailure() {
 		t.Error("hasFailure should be false when only ok/skip recorded")
 	}
 
 	var dirty scannerStatusList
 	dirty.ok("secrets")
-	dirty.fail("pip", errors.New("boom"))
-	dirty.fail("npm", errors.New("kaboom"))
+	dirty.fail("pip", reporters.ReasonExecutionError, errors.New("boom"))
+	dirty.fail("npm", reporters.ReasonExecutionError, errors.New("kaboom"))
 	if !dirty.hasFailure() {
 		t.Error("hasFailure should be true when a scanner failed")
 	}
@@ -94,13 +99,72 @@ func TestRecordNpmScanResult_LockfileMissingIsSkip(t *testing.T) {
 	var status scannerStatusList
 	var findings []evidence.Evidence
 	findings = o.recordNpmScanResult(&status, &findings, nil, npm.ErrLockfileMissingButPackageJsonPresent)
-	if len(status) != 1 || status[0].State != reporters.ScannerSkipped {
-		t.Errorf("expected npm skipped, got %+v", status)
+	if len(status) != 1 || status[0].State != reporters.ScannerSkipped || status[0].Reason != reporters.ReasonUnsupportedTarget {
+		t.Errorf("expected npm skipped with unsupported_target reason, got %+v", status)
 	}
 	if len(findings) != 1 || findings[0].ID != "SEC-NPM_LOCKFILE_MISSING" {
 		t.Errorf("expected advisory finding, got %+v", findings)
 	}
 	if status.hasFailure() {
 		t.Error("lockfile-missing must not count as a failure")
+	}
+}
+
+func TestScannerStatusList_ReasonedRecording(t *testing.T) {
+	var l scannerStatusList
+	l.ok("secrets")
+	l.skip("semgrep", reporters.ReasonDependencyMissing, "semgrep binary not installed")
+	l.fail("pip", reporters.ReasonNetworkError, errors.New("post batch to https://api.osv.dev: connection reset"))
+	l.failDetail("dast", reporters.ReasonNoEndpoints, "URL configured, discovery found zero endpoints")
+	l.markAttempts("pip", 2)
+
+	if got := l[1]; got.State != reporters.ScannerSkipped || got.Reason != reporters.ReasonDependencyMissing || got.Detail == "" {
+		t.Fatalf("skip recorded wrong: %+v", got)
+	}
+	if got := l[2]; got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonNetworkError || got.Attempts != 2 {
+		t.Fatalf("fail/attempts recorded wrong: %+v", got)
+	}
+	if !l.has("dast") || l.has("npm") {
+		t.Fatal("has() must reflect recorded names")
+	}
+	if !l.hasFailure() {
+		t.Fatal("a failed entry must still count as a failure for --fail-on-scanner-error")
+	}
+}
+
+func TestScannerStatusList_SortedIsRegistryOrder(t *testing.T) {
+	var l scannerStatusList
+	l.ok("npm")
+	l.ok("python-engine/deps")
+	l.ok("dast")
+	l.ok("python-engine")
+	l.ok("secrets")
+	l.ok("custom-plugin-thing") // not in the registry: stable, last
+	got := l.sorted()
+	var names []string
+	for _, s := range got {
+		names = append(names, s.Name)
+	}
+	want := []string{"dast", "secrets", "npm", "python-engine", "python-engine/deps", "custom-plugin-thing"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("sorted names = %v, want %v", names, want)
+	}
+}
+
+func TestClassifyErr_MinimalMapping(t *testing.T) {
+	if got := classifyErr(context.DeadlineExceeded); got != reporters.ReasonTimeout {
+		t.Errorf("deadline → %s, want timeout", got)
+	}
+	if got := classifyErr(errors.New("boom")); got != reporters.ReasonExecutionError {
+		t.Errorf("plain error → %s, want execution_error", got)
+	}
+	if got := classifyErr(fmt.Errorf("wrap: %w", semgrep.ErrTimeout)); got != reporters.ReasonTimeout {
+		t.Errorf("semgrep.ErrTimeout → %s, want timeout", got)
+	}
+	if got := classifyErr(&neterr.LookupError{Scanner: "pip", Failed: 1, Total: 1, Cause: &neterr.StatusError{Host: "h", Code: 503}}); got != reporters.ReasonNetworkError {
+		t.Errorf("lookup 503 → %s, want network_error", got)
+	}
+	if got := classifyErr(&neterr.StatusError{Host: "h", Code: 404}); got != reporters.ReasonExecutionError {
+		t.Errorf("404 → %s, want execution_error (never transient)", got)
 	}
 }

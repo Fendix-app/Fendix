@@ -231,9 +231,9 @@ func TestScan_AcceptanceCryptographyPlusDjango(t *testing.T) {
 		"django":       djangoOSVRecords(),
 	})
 	defer ts.Close()
-	prev := osvAPIBase
-	osvAPIBase = ts.URL
-	defer func() { osvAPIBase = prev }()
+	prev := OSVBaseURL
+	OSVBaseURL = ts.URL
+	defer func() { OSVBaseURL = prev }()
 	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
@@ -325,9 +325,9 @@ func TestBatchPathHydratesAliasesAndFix(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()
@@ -382,9 +382,9 @@ func TestBatchPathHydrationFailureKeepsDegradedFinding(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	saved := osvAPIBase
-	osvAPIBase = srv.URL
-	defer func() { osvAPIBase = saved }()
+	saved := OSVBaseURL
+	OSVBaseURL = srv.URL
+	defer func() { OSVBaseURL = saved }()
 	t.Setenv("HOME", t.TempDir())
 
 	codeDir := t.TempDir()

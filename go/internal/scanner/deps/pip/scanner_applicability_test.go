@@ -31,9 +31,9 @@ func scanWithGisAdvisory(t *testing.T, sourceFile, sourceBody string) []evidence
 	t.Helper()
 	ts := newFakeOSVServer(t, map[string][]osvVuln{"django": gisAdvisory()})
 	defer ts.Close()
-	prev := osvAPIBase
-	osvAPIBase = ts.URL
-	defer func() { osvAPIBase = prev }()
+	prev := OSVBaseURL
+	OSVBaseURL = ts.URL
+	defer func() { OSVBaseURL = prev }()
 	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
@@ -131,9 +131,9 @@ func TestScan_UncataloguedAdvisoryIsUntouched(t *testing.T) {
 			Type: "ECOSYSTEM", Events: []osvEvent{{Fixed: "2.0.2"}}}}}},
 	}}})
 	defer ts.Close()
-	prev := osvAPIBase
-	osvAPIBase = ts.URL
-	defer func() { osvAPIBase = prev }()
+	prev := OSVBaseURL
+	OSVBaseURL = ts.URL
+	defer func() { OSVBaseURL = prev }()
 	t.Setenv("HOME", t.TempDir())
 
 	dir := t.TempDir()
