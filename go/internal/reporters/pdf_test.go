@@ -130,6 +130,18 @@ func TestRenderPDF_NeutralizesAndDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestRenderPDF_WithCoverageAndVerdictSucceeds(t *testing.T) {
+	status := []ScannerStatus{{Name: "secrets", State: ScannerOK}, {Name: "pip", State: ScannerFailed, Reason: ReasonNetworkError, Detail: "HTTP 503", Attempts: 2}}
+	cov := BuildCoverage(status, nil, false)
+	var buf bytes.Buffer
+	if err := RenderPDF(&buf, sampleFindings(), ScanMetadata{Version: "3.4.0", Mode: "whitebox", ScannerStatus: status, Coverage: &cov, ReleaseDecision: "block", CoverageState: "incomplete"}, PDFOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() < 1000 {
+		t.Fatalf("PDF suspiciously small: %d bytes", buf.Len())
+	}
+}
+
 func TestTopNBySeverity_OrdersCorrectly(t *testing.T) {
 	findings := []models.Finding{
 		{ID: "low", Severity: models.SeverityLow},

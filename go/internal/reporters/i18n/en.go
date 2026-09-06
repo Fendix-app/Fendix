@@ -2,7 +2,8 @@ package i18n
 
 // English returns the English Strings. This is the source language —
 // every other constructor mirrors its field set; the audit test
-// `TestStringsAllFieldsSet` ensures no field is accidentally empty.
+// `TestStrings_EveryFieldTranslatedInEveryLanguage` ensures no field is
+// accidentally empty.
 func English() Strings {
 	return Strings{
 		ReportTitle:       "Fendix Security Report",
@@ -55,5 +56,24 @@ func English() Strings {
 		EndpointsLabel:     "Endpoints:",
 		TotalFindingsLabel: "Total findings:",
 		NoFindingsMessage:  "No findings to report.",
+
+		CoverageTitle:                    "Scanner coverage",
+		CoverageAnalyzer:                 "Analyzer",
+		CoverageClass:                    "State",
+		CoverageReason:                   "Reason",
+		CoverageAttempts:                 "Attempts",
+		CoverageDetail:                   "Detail",
+		CoverageComplete:                 "coverage complete",
+		CoverageIncomplete:               "coverage incomplete:",
+		CoverageRequiredMissing:          "required analyzers not delivered:",
+		CoverageNotRecorded:              "coverage not recorded by this engine version",
+		CoverageNotMeasured:              "coverage not measured",
+		VerdictPass:                      "Passed",
+		VerdictWarn:                      "Warning",
+		VerdictBlocked:                   "Blocked",
+		VerdictBlockedCoverageIncomplete: "Blocked — coverage also incomplete",
+		VerdictCoverageIncomplete:        "Coverage incomplete",
+		ClassOK:                          "ran", ClassNotApplicable: "not applicable", ClassDisabled: "disabled", ClassUnavailable: "unavailable",
+		ClassUnsupported: "unsupported", ClassFailed: "failed", ClassUnknown: "unknown",
 	}
 }

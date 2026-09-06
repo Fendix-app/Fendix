@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters/i18n"
 )
 
 func TestRenderHTML_ValidOutput(t *testing.T) {
@@ -436,5 +437,55 @@ func TestRenderHTML_DecisionCards(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("HTML missing %q", want)
 		}
+	}
+}
+
+func TestRenderHTML_CoverageTableAndVerdict(t *testing.T) {
+	status := []ScannerStatus{
+		{Name: "secrets", State: ScannerOK},
+		{Name: "semgrep", State: ScannerSkipped, Reason: ReasonDependencyMissing, Detail: "semgrep binary not installed"},
+		{Name: "pip", State: ScannerOK, Attempts: 2},
+	}
+	cov := BuildCoverage(status, nil, false)
+	var buf bytes.Buffer
+	meta := ScanMetadata{Version: "3.4.0", Mode: "whitebox", ScannerStatus: status, Coverage: &cov,
+		ReleaseDecision: "block", CoverageState: "incomplete"}
+	if err := RenderHTML(&buf, sampleFindings(), meta); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{"Scanner coverage", "semgrep", "unavailable", "dependency_missing", "semgrep binary not installed", "Blocked — coverage also incomplete", "coverage incomplete: semgrep"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("HTML missing %q", want)
+		}
+	}
+	if !strings.Contains(out, ">2<") {
+		t.Error("attempts column must show the retry count")
+	}
+}
+
+func TestRenderHTML_IncompleteIsPrimaryOnlyWhenDecisionIsIncomplete(t *testing.T) {
+	var buf bytes.Buffer
+	cov := BuildCoverage(nil, nil, false)
+	_ = RenderHTML(&buf, nil, ScanMetadata{Version: "3.4.0", Mode: "whitebox", Coverage: &cov, ReleaseDecision: "incomplete", CoverageState: "incomplete"})
+	if !strings.Contains(buf.String(), "Coverage incomplete") || strings.Contains(buf.String(), "Blocked") {
+		t.Fatalf("release_decision=incomplete must render the incomplete verdict alone")
+	}
+}
+
+func TestRenderHTML_NoCoverageBlockSaysNotRecorded(t *testing.T) {
+	var buf bytes.Buffer
+	_ = RenderHTML(&buf, nil, ScanMetadata{Version: "3.3.0", Mode: "blackbox"})
+	if !strings.Contains(buf.String(), "not recorded by this engine version") {
+		t.Fatal("pre-contract input must say coverage was not recorded")
+	}
+}
+
+func TestRenderHTML_ArabicCoverageTitle(t *testing.T) {
+	var buf bytes.Buffer
+	cov := BuildCoverage([]ScannerStatus{{Name: "secrets", State: ScannerOK}}, nil, false)
+	_ = RenderHTMLOpts(&buf, nil, ScanMetadata{Version: "3.4.0", Mode: "whitebox", Coverage: &cov}, HTMLOptions{Lang: "ar"})
+	if !strings.Contains(buf.String(), i18n.Get("ar").CoverageTitle) {
+		t.Fatal("Arabic report must use the Arabic coverage title")
 	}
 }

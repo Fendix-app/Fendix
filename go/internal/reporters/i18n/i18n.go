@@ -78,6 +78,25 @@ type Strings struct {
 	EndpointsLabel     string
 	TotalFindingsLabel string
 	NoFindingsMessage  string
+
+	// Coverage (coverage contract v1)
+	CoverageTitle                                                                                             string
+	CoverageAnalyzer                                                                                          string
+	CoverageClass                                                                                             string
+	CoverageReason                                                                                            string
+	CoverageAttempts                                                                                          string
+	CoverageDetail                                                                                            string
+	CoverageComplete                                                                                          string
+	CoverageIncomplete                                                                                        string // followed by the gap list
+	CoverageRequiredMissing                                                                                   string // followed by the required_gaps list
+	CoverageNotRecorded                                                                                       string
+	CoverageNotMeasured                                                                                       string
+	VerdictPass                                                                                               string
+	VerdictWarn                                                                                               string
+	VerdictBlocked                                                                                            string
+	VerdictBlockedCoverageIncomplete                                                                          string
+	VerdictCoverageIncomplete                                                                                 string
+	ClassOK, ClassNotApplicable, ClassDisabled, ClassUnavailable, ClassUnsupported, ClassFailed, ClassUnknown string
 }
 
 // Get returns the strings for the given language code. Unknown codes
@@ -125,4 +144,49 @@ func IsRTL(lang string) bool {
 	default:
 		return false
 	}
+}
+
+// ClassLabel returns the localised label for a lifecycle class string.
+func ClassLabel(s Strings, class string) string {
+	switch class {
+	case "ok":
+		return s.ClassOK
+	case "not_applicable":
+		return s.ClassNotApplicable
+	case "disabled":
+		return s.ClassDisabled
+	case "unavailable":
+		return s.ClassUnavailable
+	case "unsupported":
+		return s.ClassUnsupported
+	case "failed":
+		return s.ClassFailed
+	}
+	return s.ClassUnknown
+}
+
+// VerdictLabel implements the verdict presentation rule: the release
+// decision is primary; incomplete coverage qualifies a BLOCK and is the
+// headline only when the decision itself is INCOMPLETE.
+func VerdictLabel(s Strings, decision, coverageState string) string {
+	var label string
+	switch decision {
+	case "block":
+		if coverageState == "incomplete" {
+			return s.VerdictBlockedCoverageIncomplete
+		}
+		label = s.VerdictBlocked
+	case "incomplete":
+		return s.VerdictCoverageIncomplete
+	case "warn":
+		label = s.VerdictWarn
+	case "pass":
+		label = s.VerdictPass
+	default:
+		return ""
+	}
+	if coverageState == "unknown" {
+		label += " — " + s.CoverageNotMeasured
+	}
+	return label
 }
