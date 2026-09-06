@@ -278,9 +278,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// The black-box entries describe what the check pass did, not what was
 	// configured: budget.Stats() covers the check phase because Reset() ran
 	// after discovery, and the probe audit log holds every active probe sent.
-	sent, rejected := budget.Stats()
+	_, rejected := budget.Stats()
 	recordBlackbox(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr,
-		summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), sent, rejected))
+		summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), rejected))
 
 	// Validate --code once. An unreadable path is an input error for every
 	// code analyzer (spec §4.4), recorded identically so a consumer sees one
@@ -1329,14 +1329,13 @@ type checkPhaseOutcome struct {
 // summarizeCheckPhase derives the outcome from the probe audit log (every
 // active check records each probe it sends; Status 0 means no HTTP response
 // came back), the budget counters, and the context.
-func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, sent, rejected int64) checkPhaseOutcome {
+func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, rejected int64) checkPhaseOutcome {
 	out := checkPhaseOutcome{Attempted: len(records), Rejected: rejected, Deadline: errors.Is(ctx.Err(), context.DeadlineExceeded)}
 	for _, r := range records {
 		if r.Status == 0 {
 			out.NoResponse++
 		}
 	}
-	_ = sent // reported in the budget summary line; not a coverage signal on its own
 	return out
 }
 

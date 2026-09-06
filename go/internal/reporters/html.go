@@ -94,6 +94,7 @@ body{background:#fff;color:#1e293b;padding:1rem}
 .verdict{padding:12px 16px;border-radius:8px;font-weight:600;margin:0 0 16px}
 .verdict-block{background:#3b0d0d;color:#ffb4b4}.verdict-incomplete{background:#3a2e08;color:#ffd97a}
 .verdict-warn{background:#3a2e08;color:#ffd97a}.verdict-pass{background:#0f2e1a;color:#9ae6b4}
+.verdict-partial{border-left:4px solid #ffd97a}
 .coverage-table{width:100%;border-collapse:collapse;font-size:13px}.coverage-table th,.coverage-table td{text-align:start;padding:4px 8px;border-bottom:1px solid #2a2a2a}
 .coverage-verdict.gap{color:#ffd97a}.coverage-verdict.ok{color:#9ae6b4}
 tr.cov-failed td,tr.cov-unavailable td,tr.cov-unknown td{color:#ffb4b4}tr.cov-unsupported td,tr.cov-disabled td{color:#bdbdbd}

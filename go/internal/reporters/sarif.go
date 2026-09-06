@@ -958,6 +958,14 @@ func buildResultMessage(f models.Finding, locCtx string) string {
 // After the fix, "Missing CSP header" reported on 21 endpoints is one rule
 // referenced 21 times — which is what SARIF semantics expect.
 func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) error {
+	// Strip bidi/zero-width/control characters from the coverage/verdict
+	// metadata before anything below reads it. Under `fendix report
+	// --input`, ScannerStatus and Coverage arrive verbatim from an
+	// arbitrary parsed JSON report — exactly as untrusted as the finding
+	// fields neutralized below, and exactly what html.go and pdf.go
+	// already do before rendering their own coverage table / appendix.
+	meta = NeutralizeCoverageMetadata(meta)
+
 	// A rule is shared by every finding of the same check (category+title), and
 	// those findings may legitimately carry DIFFERENT severities: the engine's
 	// dedupKey (internal/engine/dedup.go) is severity|category|title, so

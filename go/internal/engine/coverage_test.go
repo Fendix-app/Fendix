@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,30 @@ func writeCodeDir(t *testing.T) string {
 	return dir
 }
 
+// initGitRepo turns dir into a git repo with one commit covering every
+// file already written there, so a --diff scan against it has a real
+// baseline to diff against instead of erroring (which orchestrator.go
+// logs and falls back to a full scan from, silently NOT exercising the
+// diff-aware code paths this is meant to pin).
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=fendix-test", "GIT_AUTHOR_EMAIL=test@fendix.dev",
+			"GIT_COMMITTER_NAME=fendix-test", "GIT_COMMITTER_EMAIL=test@fendix.dev",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("add", "-A")
+	run("commit", "-q", "-m", "initial")
+}
+
 func countByName(report reporters.JSONReport) map[string]int {
 	counts := map[string]int{}
 	for _, s := range report.Metadata.ScannerStatus {
@@ -48,6 +73,12 @@ func countByName(report reporters.JSONReport) map[string]int {
 // with no snapshot keeps the dependency scanners off the network.
 func TestOrchestrator_CodeAnalyzersRecordedExactlyOnce(t *testing.T) {
 	dir := writeCodeDir(t)
+	// A real git repo (one commit, clean tree) so the "diff" case below
+	// exercises the actual diff-aware code paths (an empty changed-file
+	// set) instead of git failing and the orchestrator silently falling
+	// back to a full scan. Harmless for every other case in this table:
+	// none of them look at .git or care whether one is present.
+	initGitRepo(t, dir)
 	for _, tc := range []struct {
 		name string
 		mut  func(cfg *models.ScanConfig)
@@ -57,6 +88,15 @@ func TestOrchestrator_CodeAnalyzersRecordedExactlyOnce(t *testing.T) {
 		{"no-native-deps", func(cfg *models.ScanConfig) { cfg.NoNativeDeps = true }},
 		{"no-plugins", func(cfg *models.ScanConfig) { cfg.NoPlugins = true }},
 		{"python-engine-off", func(cfg *models.ScanConfig) { cfg.PythonEngine = false }},
+		// A clean tree under --diff means git reports zero changed files:
+		// secrets/textscan/semgrep and the dep scanners that check the
+		// allowlist before anything else must each still record exactly
+		// one reasoned (diff_unchanged) entry, not vanish from the list.
+		{"diff", func(cfg *models.ScanConfig) { cfg.Diff = true }},
+		// --enable-active with no --url has no endpoints to probe, but it
+		// still must not disturb the base code-analyzer bookkeeping this
+		// test pins.
+		{"enable-active", func(cfg *models.ScanConfig) { cfg.EnableActive = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "report.json")
@@ -83,6 +123,123 @@ func TestOrchestrator_CodeAnalyzersRecordedExactlyOnce(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestOrchestrator_ScannerStatusAndCoverageAreDeterministic pins spec §10's
+// determinism invariant: the same input, run twice, must produce
+// byte-identical scanner_status and coverage — a CI gate re-running the
+// same commit can never see the release decision flip on it.
+func TestOrchestrator_ScannerStatusAndCoverageAreDeterministic(t *testing.T) {
+	dir := writeCodeDir(t)
+	// The offline snapshot path is part of the input, not the per-run
+	// output — it must stay IDENTICAL across both runs, or its absent-file
+	// path (embedded in a skip Detail string) differs by construction and
+	// manufactures a "non-determinism" that has nothing to do with the
+	// orchestrator. Only the output path varies per run.
+	offlineDBPath := filepath.Join(t.TempDir(), "missing.json")
+	run := func() reporters.JSONReport {
+		out := filepath.Join(t.TempDir(), "report.json")
+		cfg := &models.ScanConfig{
+			CodePath: dir, Workers: 1, Timeout: 5, Format: "json", OutputPath: out,
+			Offline: true, OfflineDBPath: offlineDBPath,
+		}
+		if code := NewOrchestrator(cfg, "dev").Run(context.Background()); code != 0 {
+			t.Fatalf("exit %d, want 0", code)
+		}
+		return readReport(t, out)
+	}
+	first := run()
+	second := run()
+
+	if !reflect.DeepEqual(first.Metadata.ScannerStatus, second.Metadata.ScannerStatus) {
+		t.Fatalf("ScannerStatus differs between identical runs:\nrun 1: %+v\nrun 2: %+v", first.Metadata.ScannerStatus, second.Metadata.ScannerStatus)
+	}
+	if !reflect.DeepEqual(first.Metadata.Coverage, second.Metadata.Coverage) {
+		t.Fatalf("Coverage differs between identical runs:\nrun 1: %+v\nrun 2: %+v", first.Metadata.Coverage, second.Metadata.Coverage)
+	}
+
+	firstStatusJSON, err := json.Marshal(first.Metadata.ScannerStatus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondStatusJSON, err := json.Marshal(second.Metadata.ScannerStatus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstStatusJSON, secondStatusJSON) {
+		t.Fatalf("ScannerStatus JSON differs between identical runs:\nrun 1: %s\nrun 2: %s", firstStatusJSON, secondStatusJSON)
+	}
+
+	firstCovJSON, err := json.Marshal(first.Metadata.Coverage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCovJSON, err := json.Marshal(second.Metadata.Coverage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstCovJSON, secondCovJSON) {
+		t.Fatalf("Coverage JSON differs between identical runs:\nrun 1: %s\nrun 2: %s", firstCovJSON, secondCovJSON)
+	}
+}
+
+// TestOrchestrator_URLOnlyRecordsFullBaseListWithCodeAnalyzersNotApplicable
+// is the blackbox half of the exactly-once registry invariant (spec §10):
+// TestOrchestrator_CodeAnalyzersRecordedExactlyOnce above only ever drives
+// --code scans. A --url-only scan with no --code at all must still record
+// the full eleven-entry base list, once each, in registry order — with
+// every code-side analyzer (the six scanners --fail-on-scanner-error used
+// to name individually, plus python-engine and plugins) landing on
+// skipped/not_applicable ("no --code"), not simply absent from the list.
+func TestOrchestrator_URLOnlyRecordsFullBaseListWithCodeAnalyzersNotApplicable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no real ~/.fendix/plugins leaks into "plugins"
+
+	// A catch-all 200 handler (modelled on the raw-listener zero-endpoint
+	// test in discovery_status_test.go, but answering instead of hanging
+	// up) so the brute-force discovery pass — which runs unconditionally
+	// against any --url target — finds at least one endpoint without
+	// needing a spec, robots.txt, sitemap, or HTML crawl.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "report.json")
+	cfg := &models.ScanConfig{
+		URL: srv.URL, AllowPrivate: true, Workers: 1, Timeout: 5, CrawlDepth: 0,
+		Format: "json", OutputPath: out,
+	}
+	if code := NewOrchestrator(cfg, "dev").Run(context.Background()); code != 0 {
+		t.Fatalf("exit %d, want 0", code)
+	}
+	report := readReport(t, out)
+
+	var names []string
+	for _, s := range report.Metadata.ScannerStatus {
+		names = append(names, s.Name)
+	}
+	want := []string{"dast", "spec", "active-probes", "secrets", "textscan", "semgrep", "govulncheck", "pip", "npm", "python-engine", "plugins"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("entries are not the full base list in registry order: %v", names)
+	}
+
+	if s, ok := statusFor(report, AnalyzerDAST); !ok || s.State != reporters.ScannerOK {
+		t.Errorf("dast = %+v, want ok (the catch-all handler answers every discovery probe)", s)
+	}
+	if s, ok := statusFor(report, AnalyzerSpec); !ok || s.State != reporters.ScannerSkipped || s.Reason != reporters.ReasonNotApplicable {
+		t.Errorf("spec = %+v, want skipped/not_applicable (no --spec)", s)
+	}
+	if s, ok := statusFor(report, AnalyzerActiveProbes); !ok || s.State != reporters.ScannerSkipped || s.Reason != reporters.ReasonDisabledByFlag {
+		t.Errorf("active-probes = %+v, want skipped/disabled_by_flag (no --enable-active)", s)
+	}
+
+	// The code-side analyzers: not_applicable, not merely absent.
+	for _, name := range []string{AnalyzerSecrets, AnalyzerTextscan, AnalyzerSemgrep, AnalyzerGovulncheck, AnalyzerPip, AnalyzerNpm, AnalyzerPythonEngine, AnalyzerPlugins} {
+		s, ok := statusFor(report, name)
+		if !ok || s.State != reporters.ScannerSkipped || s.Reason != reporters.ReasonNotApplicable {
+			t.Errorf("%s = %+v, want skipped/not_applicable (no --code)", name, s)
+		}
 	}
 }
 

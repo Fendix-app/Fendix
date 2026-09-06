@@ -88,13 +88,13 @@ func TestRecordBlackbox_Table(t *testing.T) {
 
 func TestSummarizeCheckPhase(t *testing.T) {
 	records := []scanner.ProbeRecord{{Status: 200}, {Status: 0}, {Status: 500}, {Status: 0}}
-	got := summarizeCheckPhase(context.Background(), records, 120, 0)
+	got := summarizeCheckPhase(context.Background(), records, 0)
 	if got.Attempted != 4 || got.NoResponse != 2 || got.Rejected != 0 || got.Deadline {
 		t.Fatalf("phase = %+v", got)
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	if got := summarizeCheckPhase(ctx, nil, 10, 5); !got.Deadline || got.Rejected != 5 {
+	if got := summarizeCheckPhase(ctx, nil, 5); !got.Deadline || got.Rejected != 5 {
 		t.Fatalf("deadline/rejected not captured: %+v", got)
 	}
 }

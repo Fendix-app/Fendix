@@ -1013,6 +1013,70 @@ func TestRenderSARIF_HostedIncompleteNeutralizesGapName(t *testing.T) {
 	}
 }
 
+// TestRenderSARIF_RunPropertyBagNeutralized covers I1: the run-level
+// property bag ("fendix/coverage" / "fendix/release") is built straight
+// from meta.ScannerStatus / meta.Coverage / meta.ReleaseDecision /
+// meta.CoverageState, which RenderSARIF used to emit verbatim — unlike
+// html.go and pdf.go, which both call NeutralizeCoverageMetadata before
+// rendering their own coverage table. A bidi override in an
+// operator-supplied `fendix report --input` report must not reach the
+// property bag any more than it reaches a notification message.
+func TestRenderSARIF_RunPropertyBagNeutralized(t *testing.T) {
+	status := []ScannerStatus{{
+		Name:   "py" + rlo + "engine",
+		State:  ScannerFailed,
+		Reason: ReasonNetworkError,
+		Detail: "lookup" + rlo + "failed",
+	}}
+	cov := BuildCoverage(status, nil, false)
+	meta := ScanMetadata{
+		Version:               "3.4.0",
+		ScannerStatus:         status,
+		Coverage:              &cov,
+		ReleaseDecision:       "block" + rlo,
+		CoverageState:         "incomplete",
+		DecisionPolicyVersion: "1",
+	}
+
+	var buf bytes.Buffer
+	if err := RenderSARIF(&buf, sampleFindings(), meta); err != nil {
+		t.Fatalf("RenderSARIF: %v", err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte(rlo)) {
+		t.Fatalf("SARIF output still carries the bidi override char: %s", buf.Bytes())
+	}
+
+	var log SARIFLog
+	if err := json.Unmarshal(buf.Bytes(), &log); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	covProps, ok := log.Runs[0].Properties["fendix/coverage"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected fendix/coverage property bag, got %#v", log.Runs[0].Properties)
+	}
+	statusList, ok := covProps["scanner_status"].([]any)
+	if !ok || len(statusList) != 1 {
+		t.Fatalf("expected one scanner_status entry, got %#v", covProps["scanner_status"])
+	}
+	entry, ok := statusList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected scanner_status[0] to be an object, got %#v", statusList[0])
+	}
+	if got := entry["name"]; got != "pyengine" {
+		t.Errorf("scanner_status[0].name not sanitized in the property bag: got %q, want %q", got, "pyengine")
+	}
+	if got := entry["detail"]; got != "lookupfailed" {
+		t.Errorf("scanner_status[0].detail not sanitized in the property bag: got %q, want %q", got, "lookupfailed")
+	}
+	relProps, ok := log.Runs[0].Properties["fendix/release"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected fendix/release property bag, got %#v", log.Runs[0].Properties)
+	}
+	if got := relProps["release_decision"]; got != "block" {
+		t.Errorf("release_decision not sanitized in the property bag: got %q, want %q", got, "block")
+	}
+}
+
 // TestRenderSARIF_ExecutionSuccessfulHostedCompleteIgnoresUnrelatedFailure
 // pins the controller ruling: hosted mode looks at coverage_state alone, so
 // a "complete" hosted export stays successful even with an unrelated

@@ -174,16 +174,17 @@ func NeutralizeFindings(findings []models.Finding) []models.Finding {
 
 // NeutralizeCoverageMetadata returns a copy of meta with every
 // operator-controlled coverage/verdict field neutralized:
-// ScannerStatus.Name/Reason/Detail, Coverage.Gaps/RequiredGaps, and the
-// backend-passthrough ReleaseDecision/CoverageState strings. Under
-// `fendix report --input`, all of these arrive verbatim from an
-// arbitrary parsed JSON report — exactly as untrusted as the finding
-// fields NeutralizeFindings strips, and exactly the fields sarif.go
-// already treats as untrusted for the same coverage-incomplete scenario
-// (see TestRenderSARIF_HostedIncompleteNeutralizesGapName). html.go and
-// pdf.go both call this before rendering their coverage table / appendix
-// rows, mirroring the NeutralizeFindings call each already makes for
-// findings.
+// ScannerStatus.Name/Reason/Detail, Coverage.Gaps/RequiredGaps/
+// Limitations/RequiredAnalyzers/Retried, and the backend-passthrough
+// ReleaseDecision/CoverageState strings. Under `fendix report --input`,
+// all of these arrive verbatim from an arbitrary parsed JSON report —
+// exactly as untrusted as the finding fields NeutralizeFindings strips.
+// All three renderers (html.go, pdf.go, sarif.go) call this before
+// rendering or emitting their coverage table / appendix rows / run
+// property bag, mirroring the NeutralizeFindings call each already
+// makes for findings. DecisionRationale (json.RawMessage) is
+// deliberately left untouched: it is opaque, structured data that must
+// stay byte-identical.
 //
 // meta is passed and returned by value: the caller's ScannerStatus slice
 // and Coverage value are never mutated, only the local copy's fields are
@@ -206,6 +207,9 @@ func NeutralizeCoverageMetadata(meta ScanMetadata) ScanMetadata {
 		cov := *meta.Coverage
 		cov.Gaps = neutralizeAll(cov.Gaps)
 		cov.RequiredGaps = neutralizeAll(cov.RequiredGaps)
+		cov.Limitations = neutralizeAll(cov.Limitations)
+		cov.RequiredAnalyzers = neutralizeAll(cov.RequiredAnalyzers)
+		cov.Retried = neutralizeAll(cov.Retried)
 		meta.Coverage = &cov
 	}
 	meta.ReleaseDecision = NeutralizeText(meta.ReleaseDecision)
