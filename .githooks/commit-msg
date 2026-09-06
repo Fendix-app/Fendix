@@ -1,0 +1,28 @@
+#!/bin/sh
+# commit-msg hook: reject AI or model attribution in the commit message.
+# Rule: fendix-backend/CLAUDE.md, "Commits, PRs, tags" row.
+# Enable once per clone:  git config core.hooksPath .githooks
+set -eu
+
+msg_file="$1"
+
+# Drop git's comment lines (the staged-file list may legitimately mention
+# CLAUDE.md or .claude/), then drop those path tokens from the real text.
+cleaned=$(git stripspace --strip-comments < "$msg_file" \
+  | sed -E 's#CLAUDE\.md##g; s#\.claude(/|[[:space:]]|$)#\1#g')
+
+pattern='claude|anthropic|co-authored-by|generated with|(^|[^[:alnum:]_])(opus|sonnet|haiku|fable|mythos)([^[:alnum:]_]|$)'
+
+hits=$(printf '%s\n' "$cleaned" | grep -n -i -E "$pattern" || true)
+[ -z "$hits" ] && exit 0
+
+cat >&2 <<MSG
+commit-msg: rejected. The message contains AI or model attribution:
+
+$hits
+
+This repository records no model names, vendor names, "Generated with" lines
+or Co-Authored-By trailers in commit messages. Rewrite the message and commit
+again.
+MSG
+exit 1
