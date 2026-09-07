@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-09-07
+
+A toolchain currency release. No scanner, fingerprint or exit-code changes.
+
+### Changed
+
+- **The images build with Go 1.27** (`golang:1.27-alpine`, previously
+  1.25) and ship that toolchain, so `govulncheck` can load any module whose
+  `go.mod` requires Go 1.27 or older. Under `GOTOOLCHAIN=local` a module
+  that asks for a newer Go than the image carries still records
+  `govulncheck` as `failed/execution_error`; that ceiling moved from 1.25 to
+  1.27. The Go module floor (`go 1.25.0` in `go.mod`) is unchanged.
+
 ## [3.4.0] - 2026-09-06
 
 A coverage-integrity release. A scan can no longer look complete when it was

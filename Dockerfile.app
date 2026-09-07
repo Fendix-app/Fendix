@@ -14,7 +14,7 @@
 #           fendix-app
 
 # ---- Stage 1: Build the Go binaries ----
-FROM golang:1.25-alpine@sha256:8d22e29d960bc50cd025d93d5b7c7d220b1ee9aa7a239b3c8f55a57e987e8d45 AS go-builder
+FROM golang:1.27-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS go-builder
 # Base image pinned to digest — see Dockerfile for rationale.
 
 RUN apk add --no-cache git make
