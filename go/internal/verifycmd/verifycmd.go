@@ -25,9 +25,9 @@
 //
 //   - Correlated findings (source: correlated) — C4: re-test BOTH halves.
 //     The blackbox half is the endpoint's reachability; the whitebox half is
-//     the tainted source file's continued existence. A correlation is resolved
-//     the moment either half stops reproducing, so both are checked and the
-//     verdict is sound. Needs both --url and --code; missing one → unknown.
+//     the tainted source file's continued existence. Missing or inaccessible
+//     source is unknown, since checkout completeness is not established.
+//     Needs both --url and --code; missing one → unknown.
 //
 //   - Active injection-probe findings (blackbox injection/xss/ssrf/... under
 //     --enable-active) — C4: a gated endpoint (401/403/404/410) resolves the
@@ -368,6 +368,13 @@ func verifyURL(ctx context.Context, f *models.Finding, opts Options, out *Result
 		return
 	}
 	defer resp.Body.Close()
+	// A login/error page can carry secure headers without representing the
+	// application response whose missing header produced the finding.
+	if f.Category == "headers" && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf("header verification requires a successful application response; received HTTP %d", resp.StatusCode)
+		return
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 
 	// Apply a focused per-title heuristic. Each branch matches a
@@ -488,9 +495,9 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 	if !filepath.IsAbs(relPath) {
 		absFile = filepath.Join(opts.CodePath, relPath)
 	}
-	if _, err := os.Stat(absFile); err != nil {
-		out.Status = StatusResolved
-		out.Reason = fmt.Sprintf("file %s no longer exists — finding presumed resolved", absFile)
+	if err := inspectVerificationFile(opts.CodePath, absFile); err != nil {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf("cannot inspect source file %s; missing or inaccessible source is not proof of remediation: %v", absFile, err)
 		return
 	}
 
@@ -546,6 +553,11 @@ func verifyDep(ctx context.Context, f *models.Finding, opts Options, out *Result
 		absManifest = filepath.Join(opts.CodePath, manifest)
 	}
 	manifestDir := filepath.Dir(absManifest)
+	if err := inspectVerificationFile(opts.CodePath, absManifest); err != nil {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf("cannot inspect dependency manifest %s: %v", manifest, err)
+		return
+	}
 
 	var newFindings []models.Finding
 	var err error
@@ -555,8 +567,8 @@ func verifyDep(ctx context.Context, f *models.Finding, opts Options, out *Result
 		pipEv, err = pip.Scan(ctx, manifestDir)
 		newFindings = evidence.ToFindings(pipEv)
 		if errors.Is(err, pip.ErrNoRequirements) {
-			out.Status = StatusResolved
-			out.Reason = fmt.Sprintf("requirements.txt removed from %s — finding presumed resolved", manifestDir)
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf("requirements.txt unavailable at %s; dependency inventory is insufficient to verify remediation", manifestDir)
 			return
 		}
 	case strings.HasSuffix(manifest, "package.json") || strings.HasSuffix(manifest, "package-lock.json"):
@@ -564,8 +576,8 @@ func verifyDep(ctx context.Context, f *models.Finding, opts Options, out *Result
 		npmEv, err = npm.Scan(ctx, manifestDir)
 		newFindings = evidence.ToFindings(npmEv)
 		if errors.Is(err, npm.ErrNoLockfile) || errors.Is(err, npm.ErrLockfileMissingButPackageJsonPresent) {
-			out.Status = StatusResolved
-			out.Reason = fmt.Sprintf("package-lock.json no longer scannable at %s — finding presumed resolved (manual verify recommended)", manifestDir)
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf("package-lock.json is not scannable at %s; dependency inventory is insufficient to verify remediation", manifestDir)
 			return
 		}
 	default:
@@ -645,9 +657,9 @@ func isActiveProbeFinding(f *models.Finding) bool {
 // verifyCorrelated re-tests BOTH halves of a correlated finding. The blackbox
 // half is the endpoint's reachability (a gated 401/403/404/410 means the DAST
 // signal no longer reproduces); the whitebox half is the tainted source file's
-// continued existence. A correlation is RESOLVED the moment either half stops
-// holding — that is a sound verdict, not the one-sided guess the pre-C4 code
-// refused to give. Both halves need their input (--url and --code).
+// continued existence. Unavailable source cannot establish that the SAST half
+// was removed from the intended revision. Both halves need their input
+// (--url and --code); insufficient source context returns unknown.
 func verifyCorrelated(ctx context.Context, f *models.Finding, opts Options, out *Result) {
 	if opts.URL == "" || opts.CodePath == "" {
 		out.Status = StatusUnknown
@@ -665,11 +677,9 @@ func verifyCorrelated(ctx context.Context, f *models.Finding, opts Options, out 
 		if !filepath.IsAbs(abs) {
 			abs = filepath.Join(opts.CodePath, whiteboxFile)
 		}
-		if _, err := os.Stat(abs); err != nil {
-			out.Status = StatusResolved
-			out.Reason = fmt.Sprintf(
-				"correlation broken: the whitebox tainted-source file %q no longer exists, so the SAST half "+
-					"cannot reproduce — a correlated finding is resolved once either half is gone.", whiteboxFile)
+		if err := inspectVerificationFile(opts.CodePath, abs); err != nil {
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf("cannot inspect correlated source file %q; missing or inaccessible source is not proof of remediation: %v", whiteboxFile, err)
 			return
 		}
 	}
@@ -705,6 +715,45 @@ func verifyCorrelated(ctx context.Context, f *models.Finding, opts Options, out 
 		"correlation holds: the blackbox endpoint is still reachable (HTTP %d) AND the whitebox tainted-source "+
 			"file %q still exists. Both halves reproduce; re-run a full scan for a fresh taint-path confirmation.",
 		status, whiteboxFile)
+}
+
+// inspectVerificationFile excludes missing, unreadable, non-file and out-of-root
+// inputs before a scanner can interpret an empty result as remediation.
+// It does not establish checkout completeness or guard against later mutation;
+// governed resolution still requires independently collected execution evidence.
+func inspectVerificationFile(root, path string) error {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	rootAbs, err = filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return err
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	pathAbs, err = filepath.EvalSymlinks(pathAbs)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("verification input is outside the supplied code root")
+	}
+	info, err := os.Stat(pathAbs)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("verification input is not a regular file")
+	}
+	file, err := os.Open(pathAbs)
+	if err != nil {
+		return err
+	}
+	return file.Close()
 }
 
 // correlatedWhiteboxFile returns the source file that carries the correlated

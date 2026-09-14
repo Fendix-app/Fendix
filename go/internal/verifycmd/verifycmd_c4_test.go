@@ -30,11 +30,9 @@ func writeFile(t *testing.T, root, rel, content string) {
 // gives each a real re-test:
 //
 //   - Correlated: a correlated finding fuses a blackbox URL match with a
-//     whitebox file/taint match. It is RESOLVED the moment EITHER half is
-//     gone — the correlation cannot hold if the route is now gated OR the
-//     tainted sink file no longer exists. Only when BOTH halves still hold
-//     is it still-present. That is a correct verdict, not the misleading
-//     one-sided answer the old code refused to give.
+//     whitebox file/taint match. Missing source returns unknown because the
+//     checkout may be incomplete. Gated-route behavior remains a legacy
+//     heuristic, not governed resolution evidence.
 //
 //   - Active-probe: a blackbox injection/xss/ssrf/... finding produced by an
 //     active-tier check. Re-issuing the actual attack payload needs explicit
@@ -84,9 +82,8 @@ func TestVerifyCorrelated_BothHalvesHold_StillPresent(t *testing.T) {
 	}
 }
 
-func TestVerifyCorrelated_WhiteboxFileGone_Resolved(t *testing.T) {
-	// Blackbox half still open, but the tainted source file is gone → the
-	// correlation is broken → resolved.
+func TestVerifyCorrelated_WhiteboxFileGone_Unknown(t *testing.T) {
+	// Missing source may mean an incomplete checkout, not a fix.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -110,8 +107,8 @@ func TestVerifyCorrelated_WhiteboxFileGone_Resolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if r.Status != StatusResolved {
-		t.Fatalf("whitebox file gone → want resolved; got %v (%q)", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Fatalf("whitebox file gone → want unknown; got %v (%q)", r.Status, r.Reason)
 	}
 }
 
