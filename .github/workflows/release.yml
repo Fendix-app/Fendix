@@ -488,6 +488,46 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Verify Docker Hub ownership and synchronize brand metadata
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -eu
+          JWT="$({
+            jq -n \
+              --arg username "$DOCKERHUB_USERNAME" \
+              --arg password "$DOCKERHUB_TOKEN" \
+              '{username: $username, password: $password}' \
+              | curl --fail --silent --show-error \
+                  --header 'Content-Type: application/json' \
+                  --data-binary @- \
+                  https://hub.docker.com/v2/users/login/
+          } | jq -er '.token')"
+
+          curl --fail --silent --show-error \
+            --header "Authorization: JWT ${JWT}" \
+            https://hub.docker.com/v2/repositories/fendixapp/fendix/ \
+            | jq -e '
+                .namespace == "fendixapp" and
+                .name == "fendix" and
+                .is_private == false and
+                .permissions.write == true
+              ' >/dev/null
+
+          jq -n \
+            --arg description 'Explainable application security decisions from code, API, dependency, and third-party evidence.' \
+            --arg full_description $'Fendix is an evidence-driven application security scanner combining DAST, SAST, and SCA.\n\nWebsite: https://fendix.dev\n\nSource: https://github.com/Fendix-app/Fendix' \
+            '{description: $description, full_description: $full_description}' \
+            | curl --fail --silent --show-error \
+                --request PATCH \
+                --header "Authorization: JWT ${JWT}" \
+                --header 'Content-Type: application/json' \
+                --data-binary @- \
+                https://hub.docker.com/v2/repositories/fendixapp/fendix/ \
+                >/dev/null
+          unset JWT
+
       - name: Require the public Docker Hub repository and brand metadata
         run: |
           set -eu
