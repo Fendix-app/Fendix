@@ -494,20 +494,20 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -eu
-          JWT="$({
+          ACCESS_TOKEN="$({
             jq -n \
-              --arg username "$DOCKERHUB_USERNAME" \
-              --arg password "$DOCKERHUB_TOKEN" \
-              '{username: $username, password: $password}' \
+              --arg identifier "$DOCKERHUB_USERNAME" \
+              --arg secret "$DOCKERHUB_TOKEN" \
+              '{identifier: $identifier, secret: $secret}' \
               | curl --fail --silent --show-error \
                   --header 'Content-Type: application/json' \
                   --data-binary @- \
-                  https://hub.docker.com/v2/users/login/
-          } | jq -er '.token')"
+                  https://hub.docker.com/v2/auth/token
+          } | jq -er '.access_token')"
 
           curl --fail --silent --show-error \
-            --header "Authorization: JWT ${JWT}" \
-            https://hub.docker.com/v2/repositories/fendixapp/fendix/ \
+            --header "Authorization: Bearer ${ACCESS_TOKEN}" \
+            https://hub.docker.com/v2/namespaces/fendixapp/repositories/fendix \
             | jq -e '
                 .namespace == "fendixapp" and
                 .name == "fendix" and
@@ -521,12 +521,12 @@ jobs:
             '{description: $description, full_description: $full_description}' \
             | curl --fail --silent --show-error \
                 --request PATCH \
-                --header "Authorization: JWT ${JWT}" \
+                --header "Authorization: Bearer ${ACCESS_TOKEN}" \
                 --header 'Content-Type: application/json' \
                 --data-binary @- \
-                https://hub.docker.com/v2/repositories/fendixapp/fendix/ \
+                https://hub.docker.com/v2/namespaces/fendixapp/repositories/fendix \
                 >/dev/null
-          unset JWT
+          unset ACCESS_TOKEN
 
       - name: Require the public Docker Hub repository and brand metadata
         run: |
