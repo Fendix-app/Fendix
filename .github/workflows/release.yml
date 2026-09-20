@@ -831,9 +831,16 @@ jobs:
           DIGEST: ${{ steps.promote.outputs.digest }}
           DOCKERHUB_IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
           GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -eu
-          IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Migration/backfill runs are dispatched from the protected main
+            # workflow, so Fulcio binds their certificates to that exact ref.
+            IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/heads/main$'
+          else
+            IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          fi
           ISSUER='https://token.actions.githubusercontent.com'
           for IMAGE in "$DOCKERHUB_IMAGE" "$GHCR_IMAGE"; do
             REF="${IMAGE}@${DIGEST}"
