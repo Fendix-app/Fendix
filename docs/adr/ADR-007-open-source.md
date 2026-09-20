@@ -18,8 +18,8 @@ a deliberate strategic decision:
 2. **Reachability correlation (TASK-114)** is the long-term moat. The
    strategic question was raised: should we keep this closed? Build
    commercial-features as a separate repo? Re-license the engine?
-3. **Marketing posture** in the v0.7+ era leads with "DAST + SAST in
-   one PR check, fails only when both engines confirm" — a claim that
+3. **Marketing posture** leads with DAST + SAST + SCA in one
+   evidence-based release decision — a claim that
    evaluators want to verify by reading source. Closed-source posture
    on the engine would directly contradict the wedge.
 

@@ -119,7 +119,7 @@ Have these three drafts ready BEFORE launch so you have something to publish in 
 
 Pick ONE on launch morning based on what's already on the HN front page (don't compete with similar titles):
 
-- **A:** "Show HN: Fendix — DAST + SAST in one PR check. Fails only when both engines confirm. (MIT, Go)"
+- **A:** "Show HN: Fendix — DAST + SAST + SCA with evidence-based release decisions. (MIT, Go)"
 - **B:** "Show HN: I scanned 13 known-vulnerable repos with my SAST engine — 44/44 expectations met (MIT, Go)"
 - **C:** "Show HN: Fendix v0.15 — open source DAST+SAST scanner, no telemetry, single binary"
 
@@ -142,14 +142,14 @@ The v0.11 draft already has this shape. Refresh numbers + add a "What's new in v
 **Newsletter pitch (short, no PDF, no fluff):**
 > Subject: Open-source DAST+SAST scanner, 44/44 on real CVE-anchored repos — fit for [newsletter]?
 >
-> Hi [name], built [Fendix](https://github.com/Abdel-RahmanSaied/Fendix) — solo, MIT, Go, single binary. Show HN today. Heads-up in case it's a fit for next week's [newsletter]. Headline: every dependency-CVE / taint-chain / hardcoded-secret expectation met on 13 deliberately-vulnerable repos (Juliet, pygoat, dvpwa, nodegoat, juice-shop, +8). No reply needed if not a fit.
+> Hi [name], built [Fendix](https://github.com/Fendix-app/Fendix) — solo, MIT, Go, single binary. Show HN today. Heads-up in case it's a fit for next week's [newsletter]. Headline: every dependency-CVE / taint-chain / hardcoded-secret expectation met on 13 deliberately-vulnerable repos (Juliet, pygoat, dvpwa, nodegoat, juice-shop, +8). No reply needed if not a fit.
 >
 > — Abdel
 
 **Podcast pitch (also short):**
 > Subject: 10-min segment: how to make a DAST+SAST gate that doesn't cry wolf
 >
-> Hi [name], shipped Fendix today — open-source security scanner where findings only fail CI when both engines confirm. There's an interesting architectural story (NDJSON-over-pipes IPC + Go orchestrator + opt-in Python AST analyzer) that may or may not be a fit for an episode. No deck, no demo required.
+> Hi [name], shipped Fendix today — an open-source DAST + SAST + SCA scanner with evidence and confidence-aware release decisions. Strong deterministic evidence can block on its own; independent corroboration strengthens medium-confidence findings. There's an interesting architectural story (NDJSON-over-pipes IPC + Go orchestrator + opt-in Python AST analyzer) that may or may not be a fit for an episode. No deck, no demo required.
 >
 > Show HN: [link]. Repo: [link]. Happy to send 3-bullet outline if useful.
 >

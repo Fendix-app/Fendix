@@ -9,13 +9,13 @@
 #
 #   - uses: actions/checkout@v4
 #     with: { fetch-depth: 0 }          # diff mode needs history
-#   - uses: abdel-rahmansaied/fendix@v1
+#   - uses: Fendix-app/Fendix@v1
 #     with:
 #       code: .
 #
 # Usage (full — add a DAST target + fail the build on HIGH):
 #
-#   - uses: abdel-rahmansaied/fendix@v1
+#   - uses: Fendix-app/Fendix@v1
 #     with:
 #       url: ${{ secrets.STAGING_API_URL }}
 #       code: .

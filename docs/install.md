@@ -160,7 +160,7 @@ fendix version
 Requires Go 1.21+ and Python 3.9+.
 
 ```bash
-git clone https://github.com/Abdel-RahmanSaied/Fendix.git
+git clone https://github.com/Fendix-app/Fendix.git
 cd Fendix
 make build
 ./bin/fendix version

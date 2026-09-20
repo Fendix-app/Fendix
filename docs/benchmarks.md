@@ -1,8 +1,8 @@
 # Fendix benchmarks
 
 This page tracks Fendix's performance and detection coverage on
-deliberately-vulnerable target applications. The wedge — *"DAST + SAST
-in one PR check, fails only when both engines confirm"* — needs
+deliberately-vulnerable target applications. The wedge — *"DAST + SAST +
+SCA in one decision, with evidence and coverage-aware release policy"* — needs
 evidence, not just framing. This page is where we put the numbers.
 
 ## Cold-start latency (TASK-118 / TASK-136 — v0.9 → v0.11)
@@ -193,15 +193,14 @@ with affected-endpoint count).
 
 **What this row does NOT measure.** Juice-shop ships with intentional
 SQLi, XSS, IDOR, and broken-auth vulnerabilities. None of those are
-detectable by passive HTTP probing alone. Reproducing the wedge
-("DAST + SAST in one PR check, fails only when both engines confirm")
+detectable by passive HTTP probing alone. Reproducing the combined DAST + SAST evidence path
 on this fixture requires the `--enable-active` and/or `--code` flags
 plus a checkout of juice-shop's source — adding `--enable-active`
 runs SQLi / CMDi / CRLF probes; adding `--code ./juice-shop` runs
 the white-box engine and unlocks the `correlated` column. Both are
 follow-up commits to this benchmark.
 
-**Source.** Captured by [GitHub Actions run 25193548945](https://github.com/Abdel-RahmanSaied/Fendix/actions/runs/25193548945)
+**Source.** Captured by [GitHub Actions run 25193548945](https://github.com/Fendix-app/Fendix/actions/runs/25193548945)
 on 2026-05-01. Raw artifacts (findings.json, summary.json,
 scan.stderr) are downloadable from that run page for 30 days.
 

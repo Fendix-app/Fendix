@@ -111,6 +111,37 @@ jobs:
           fi
           echo "✓ all workflow action pins are SHAs"
 
+  public-claims:
+    name: Public namespace and claim regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Check current public claims and release namespace
+        run: scripts/check-public-claims.sh
+
+  container-smoke:
+    name: Container analyzer smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build release container
+        run: docker build --build-arg VERSION=ci -t fendix-ci .
+
+      - name: Verify CLI and offline analyzer coverage
+        run: |
+          set -eu
+          docker run --rm fendix-ci version | grep -F 'fendix version ci' >/dev/null
+          docker run --rm fendix-ci --help >/dev/null
+          docker run --rm --network none --entrypoint sh \
+            -v "$PWD/tests/fixtures/coverage-smoke:/src:ro" fendix-ci -c '
+              /usr/local/bin/fendix db update --source /src/osv-export.json --output /tmp/offline-db.json >/dev/null
+              /usr/local/bin/fendix scan --code /src --python-engine --offline --offline-db /tmp/offline-db.json \
+                --format json --output /tmp/report.json >/dev/null 2>&1 || true
+              cat /tmp/report.json' > smoke-container.json
+          scripts/coverage-smoke-check.sh --deterministic smoke-container.json
+
   e2e:
     name: End-to-End (CLI flag regression)
     runs-on: ubuntu-latest

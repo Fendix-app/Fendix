@@ -27,7 +27,7 @@ Plus **transitive SCA**: `poetry.lock` and `Pipfile.lock` are parsed as the full
 
 ## Show HN: Fendix — DAST + SAST in one PR check, F1 = 1.000 on the labeled corpus (MIT, single Go binary)
 
-**Link:** https://github.com/Abdel-RahmanSaied/Fendix
+**Link:** https://github.com/Fendix-app/Fendix
 
 **Text:**
 
@@ -37,7 +37,7 @@ I built Fendix because I was tired of running three separate security tools in C
 
 **The problem:** SAST tools find patterns that look dangerous but might be dead code. DAST tools confirm exploitability but can't tell you which line to fix. Running both means two reports, two triage workflows, and no connection between them.
 
-**The solution:** Fendix runs both engines in a single `fendix scan` invocation and cross-correlates the results. When both engines find the same vulnerability, Fendix merges them into a correlated finding with escalated severity and confidence. When taint analysis also proves data flows from a request source to a dangerous sink, severity escalates a second time (e.g., MEDIUM → CRITICAL). Set `--fail-on CRITICAL` and only confirmed, correlated, reachable findings block your build.
+**The solution:** Fendix runs DAST, SAST, and SCA in a single `fendix scan` invocation and cross-correlates compatible evidence. Independent corroboration raises confidence, but it is not universally required: a strong deterministic single-source finding can block, while a medium-confidence finding may require corroboration. Release policy decides the gate, and missing required coverage produces `INCOMPLETE` rather than proof that the release is clean.
 
 **What it does:**
 - **Black-box:** auth bypass, SQLi (time/error/boolean-based), CORS, headers, secrets in responses, rate-limit detection, exposed config files (.env / .git / .htaccess at known paths)
@@ -91,7 +91,7 @@ I'd love feedback on the correlation approach and the plugin contract. Is NDJSON
 
 Fendix is a hybrid API and code security scanner that runs both a black-box probe and static analysis in a single invocation, then cross-correlates the results.
 
-The key insight: when both engines find the same vulnerability, the finding gets escalated severity and confidence. Set `--fail-on CRITICAL` and only double-confirmed findings block your build — so the gate fires on findings both engines independently confirm. (That's the mechanism; we don't yet have a benchmark isolating the false-positive reduction, so we don't claim a number for it.)
+The key insight: independent evidence can escalate severity and confidence, while deterministic evidence can stand on its own when policy permits. The gate evaluates severity, confidence, evidence quality, and release policy; required coverage gaps remain a separate `INCOMPLETE` outcome. (We do not claim a false-positive reduction without an isolating benchmark.)
 
 **Headline numbers (v0.11.0):**
 - 6.1 ms p50 cold start (no Python required in the default path)
@@ -114,7 +114,7 @@ Or install the GitHub App → zero-config, automatic PR comments + SARIF annotat
 - `fendix ignore list/validate/prune` to manage suppression files without manual YAML editing
 - No telemetry, no cloud dependency
 
-GitHub: https://github.com/Abdel-RahmanSaied/Fendix
+GitHub: https://github.com/Fendix-app/Fendix
 
 Feedback welcome — especially on the correlation approach and whether the plugin contract (NDJSON stdin/stdout) is too minimal.
 
@@ -135,7 +135,7 @@ Built a security scanner where Go handles the entire default path: HTTP scanning
 - Single-flight token cache for GitHub App installation tokens
 - 22 packages, race-clean across the whole tree
 
-**What it does:** DAST + SAST in one `fendix scan`, cross-correlates findings, outputs SARIF for Code Scanning. Findings only fail CI when both engines confirm.
+**What it does:** DAST + SAST + SCA in one `fendix scan`, correlates supporting evidence, applies confidence-aware release policy, and outputs SARIF for Code Scanning. Strong deterministic evidence can block without correlation; medium-confidence evidence may require independent corroboration.
 
 **v0.11 highlights:**
 - Native Go secrets scanner (15 patterns, byte-for-byte parity with the deprecated Python wrapper)
@@ -146,7 +146,7 @@ Built a security scanner where Go handles the entire default path: HTTP scanning
 
 The labeled accuracy corpus (`scripts/accuracy/corpus/`) scores F1 = 1.000 on the current binary — reproduced and CI-gated (v0.26 disclosed one multi-hop SSRF false negative; v0.27 fixed the taint engine, see BENCHMARKS.md); the harness (`scripts/accuracy/run.py`) is reproducible and produces JSON for CI gating. Three Go bugs surfaced during the evaluation: `_is_open_redirect` was missing taint-chain posture (0/3 recall → 3/3 after fix), cmdi was firing on literal-string args (0.833 precision → 1.000), orchestrator code_path was relative when the spawner cwd was elsewhere (silent zero-finding bug on real codebases).
 
-https://github.com/Abdel-RahmanSaied/Fendix
+https://github.com/Fendix-app/Fendix
 
 Would love feedback on the NDJSON IPC approach vs alternatives (gRPC, Unix sockets, Wasm). We chose NDJSON for debuggability (`| jq .`) and language-agnostic plugin authoring; the 5 reference plugins (Python / Bash / Node / Ruby) demonstrate the contract is genuinely minimal.
 
@@ -183,6 +183,6 @@ Built a security scanner I'd actually use for my own audit work. Open-sourcing i
 
 MIT, self-hosted, no telemetry. Plugin contract is NDJSON over stdin/stdout — write a custom check in any language with 30 lines of code, drop it in `~/.fendix/plugins/`, it runs alongside the embedded engines and participates in correlation + dedup + ID assignment.
 
-https://github.com/Abdel-RahmanSaied/Fendix
+https://github.com/Fendix-app/Fendix
 
 Feedback welcome on the taint-chain shapes and the corpus methodology. Adversarial inputs especially appreciated.

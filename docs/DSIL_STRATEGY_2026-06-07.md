@@ -64,7 +64,7 @@ Five layers. You have 2.5 of them. Build the rest in order — each is only beli
 | **4. Prioritize** | Rank findings by *reachable × exploitable × exposed × business-context* | ❌ Missing | **High** (this is the DSIL identity) |
 | **5. Explain & Learn** | Why it matters, how to fix, + learns from accept/dismiss | ❌ Missing (ADR-008 opens AI door) | **Highest** (the data moat) |
 
-> **Insight:** Layers 1–3 make you *a good scanner*. Layers **4–5 make you an intelligence layer.** Today you are marketed at layer 2 ("both engines confirm") while sitting on layer 3. The whole repositioning is: *finish 3, build 4, start 5 — and say so.*
+> **Insight:** Layers 1–3 make you *a good scanner*. Layers **4–5 make you an intelligence layer.** The legacy message overemphasized correlation while the product already sat at layer 3. The whole repositioning is: *finish 3, build 4, start 5 — and say so.*
 
 ---
 
@@ -201,7 +201,7 @@ Each phase is a *theme with a shippable artifact and a public story*. Run them i
 
 ## 7. The 90-second pitch after this plan
 
-> **Before:** "Fendix is a DAST+SAST scanner that fails CI when both engines confirm."
+> **Before:** Correlation-only DAST + SAST positioning.
 > **After:** "Fendix is the developer security intelligence layer. It runs SAST, DAST, and dependency scanning in one CI check, **proves** which findings are actually reachable, **ranks** them so you fix the 3 that matter instead of triaging 119, and **learns** which findings your team actually acts on. Open source, single binary, no telemetry — and it gets smarter the more you use it."
 
 That last clause — *gets smarter the more you use it* — is the sentence that turns a replicable scanner into a fundable intelligence layer, and it's only true if you ship the feedback loop (P5) on top of an adopted base (P1). Everything in this plan serves that sentence.

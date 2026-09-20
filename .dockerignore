@@ -9,6 +9,12 @@ tasks/
 __pycache__/
 .pytest_cache/
 *.pyc
+**/__pycache__/
+**/.pytest_cache/
+**/.hypothesis/
+**/.ruff_cache/
+**/.DS_Store
+**/*.pyc
 python/tests/
 go/internal/embedded/engine/*
 !go/internal/embedded/engine/.gitkeep

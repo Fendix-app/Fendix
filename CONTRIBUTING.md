@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Fendix! This guide covers develop
 ### Getting started
 
 ```bash
-git clone https://github.com/Abdel-RahmanSaied/Fendix.git
+git clone https://github.com/Fendix-app/Fendix.git
 cd fendix
 
 # Build the Go binary

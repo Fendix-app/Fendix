@@ -1,148 +1,18 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fendix — DAST + SAST in one PR check</title>
-<meta name="description" content="Fendix runs DAST + SAST in one PR check and fails the build only when both engines confirm a vulnerability. Single binary, signed releases (cosign keyless), no telemetry. Install on macOS or Linux in one command.">
-
-<!-- OpenGraph + Twitter Card for shared previews -->
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://get.fendix.dev/">
-<meta property="og:title" content="Fendix — DAST + SAST in one PR check">
-<meta property="og:description" content="Fails the build only when both engines confirm. Single binary, signed releases, no telemetry.">
-<meta property="og:site_name" content="Fendix">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Fendix — DAST + SAST in one PR check">
-<meta name="twitter:description" content="Fails the build only when both engines confirm. Single binary, signed releases, no telemetry.">
-
-<link rel="canonical" href="https://get.fendix.dev/">
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    max-width: 720px;
-    margin: 4rem auto;
-    padding: 0 1.25rem;
-    color: #1a1a1a;
-    background: #fff;
-  }
-  @media (prefers-color-scheme: dark) {
-    body { color: #e6e6e6; background: #111; }
-    pre, code { background: #1d1d1d !important; border-color: #2c2c2c !important; }
-    a { color: #6cb6ff; }
-    .tagline { color: #ccc; }
-  }
-  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
-  h2 { font-size: 1.1rem; margin: 2rem 0 .5rem; }
-  p, li { margin: .5rem 0; }
-  small { color: #666; }
-  .tagline { font-size: 1.05rem; color: #333; margin: 0 0 1.5rem; }
-  .points { list-style: none; padding-left: 0; margin: 1.5rem 0 2rem; }
-  .points li { padding: .35rem 0; }
-  .points strong { display: inline; }
-  pre {
-    background: #f6f6f6;
-    border: 1px solid #e5e5e5;
-    border-radius: 6px;
-    padding: .9rem 1rem;
-    overflow-x: auto;
-    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  code {
-    background: #f6f6f6;
-    border: 1px solid #e5e5e5;
-    border-radius: 4px;
-    padding: 1px 5px;
-    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  }
-  pre code { background: none; border: 0; padding: 0; }
-  ul { padding-left: 1.25rem; }
-  hr { border: 0; border-top: 1px solid #e5e5e5; margin: 2.5rem 0; }
-  @media (prefers-color-scheme: dark) { hr { border-color: #2c2c2c; } small { color: #999; } }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fendix installation documentation moved</title>
+  <meta name="robots" content="noindex,follow">
+  <meta http-equiv="refresh" content="0; url=https://www.fendix.dev/docs/getting-started">
+  <link rel="canonical" href="https://www.fendix.dev/docs/getting-started">
+  <meta property="og:url" content="https://www.fendix.dev/docs/getting-started">
+  <script>window.location.replace("https://www.fendix.dev/docs/getting-started");</script>
 </head>
 <body>
-
-<h1>Fendix</h1>
-<p class="tagline">DAST + SAST in one PR check. Fails only when both engines confirm.</p>
-
-<ul class="points">
-  <li><strong>Confirmed findings.</strong> The runtime probe and static analysis must agree before fendix fails your build. False-positive flood, gone.</li>
-  <li><strong>Single binary.</strong> Drop into CI in 30 seconds. Active probes off by default; enable with one flag when you mean it.</li>
-  <li><strong>Signed &amp; silent.</strong> Releases signed with <a href="#verify-the-binary">cosign</a> (keyless via Sigstore). No telemetry — default outbound is only HTTP requests to your scan target. Verify with <code>tcpdump</code>.</li>
-</ul>
-
-<h2>Install (macOS &amp; Linux)</h2>
-<pre><code>curl -fsSL https://get.fendix.dev/install.sh | sh</code></pre>
-
-<p>Downloads the latest release binary for your platform, verifies its sha256 checksum, and installs it to <code>/usr/local/bin/fendix</code>.</p>
-
-<h2>First scan</h2>
-<pre><code>fendix scan --url https://api.example.com --format html --output report.html
-open report.html</code></pre>
-
-<p>Detects missing security headers, CORS misconfig, auth bypasses, sensitive data exposure, and rate-limiting gaps — without sending destructive payloads.</p>
-
-<h2>In your CI</h2>
-<p>Drop this into <code>.github/workflows/security.yml</code> for a PR-gated DAST + SAST check that uploads SARIF to the Security tab:</p>
-<pre><code>- name: Install Fendix
-  run: curl -fsSL https://get.fendix.dev/install.sh | sh
-
-- name: Scan
-  run: fendix scan --code ./ --format sarif --output fendix.sarif --fail-on HIGH
-
-- name: Upload SARIF
-  uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: fendix.sarif
-    category: fendix</code></pre>
-<p>Full reference workflow with PR-comment integration:
-<a href="https://github.com/Abdel-RahmanSaied/Fendix/blob/main/examples/github-actions/fendix-scan.yml">examples/github-actions/fendix-scan.yml</a>.</p>
-
-<h2 id="verify-the-binary">Verify the binary (cosign)</h2>
-<p>Releases are signed with <a href="https://docs.sigstore.dev/cosign/overview/">cosign</a> using keyless (Sigstore Fulcio) — no static public key to distribute. Verify any release artifact against the GitHub Actions OIDC identity that built it:</p>
-<pre><code>VERSION=v0.6.0
-ASSET=fendix-${VERSION}-linux-amd64
-
-curl -fsSL -o "$ASSET"      "https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/download/${VERSION}/${ASSET}"
-curl -fsSL -o "$ASSET.crt"  "https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/download/${VERSION}/${ASSET}.crt"
-curl -fsSL -o "$ASSET.sig"  "https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/download/${VERSION}/${ASSET}.sig"
-
-cosign verify-blob \
-  --certificate "$ASSET.crt" \
-  --signature   "$ASSET.sig" \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
-  --certificate-oidc-issuer     "https://token.actions.githubusercontent.com" \
-  "$ASSET"</code></pre>
-<p><small>Same pattern verifies <code>.deb</code>, <code>.rpm</code>, and Docker images. Releases cut before cosign was enabled fall back to <code>.sha256</code>.</small></p>
-
-<h2>Inspect before piping</h2>
-<p>Sane practice for any <code>curl | sh</code> installer:</p>
-<pre><code>curl -fsSL https://get.fendix.dev/install.sh | less</code></pre>
-
-<h2>Other install paths</h2>
-<ul>
-  <li><strong>Homebrew:</strong> <code>brew tap Abdel-RahmanSaied/fendix &amp;&amp; brew install fendix</code></li>
-  <li><strong>Debian/Ubuntu:</strong> download the <code>.deb</code> from <a href="https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/latest">the latest release</a></li>
-  <li><strong>RHEL/Fedora:</strong> download the <code>.rpm</code> from the same page</li>
-  <li><strong>Docker:</strong> <code>docker pull ghcr.io/abdel-rahmansaied/fendix:latest</code></li>
-  <li><strong>Manual:</strong> grab a binary + sha256 from the <a href="https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/latest">releases page</a></li>
-</ul>
-
-<h2>Customize</h2>
-<ul>
-  <li><code>FENDIX_DIR=$HOME/.local/bin</code> — install to a user-writable directory</li>
-  <li><code>FENDIX_VERSION=v0.6.0</code> — pin a specific version</li>
-</ul>
-
-<hr>
-
-<p><small>
-  Source: <a href="https://github.com/Abdel-RahmanSaied/Fendix">Abdel-RahmanSaied/Fendix</a>
-  &middot; Mirror: <a href="https://github.com/Abdel-RahmanSaied/homebrew-fendix">homebrew-fendix</a>
-  &middot; <a href="https://github.com/Abdel-RahmanSaied/Fendix/blob/main/SECURITY.md">Security</a>
-</small></p>
-
+  <p>Fendix installation documentation moved to
+    <a href="https://www.fendix.dev/docs/getting-started">fendix.dev/docs/getting-started</a>.
+  </p>
 </body>
 </html>

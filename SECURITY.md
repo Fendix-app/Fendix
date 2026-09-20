@@ -37,7 +37,7 @@ A patch release on the supported branch is the delivery vehicle for a fix
 Use one of the following private channels:
 
 - **GitHub private vulnerability report** (preferred):
-  <https://github.com/Abdel-RahmanSaied/Fendix/security/advisories/new>
+  <https://github.com/Fendix-app/Fendix/security/advisories/new>
 - **Email**: `security@fendix.dev` (PGP key on request)
 
 Include in your report:
@@ -193,7 +193,7 @@ procurement records).
 Pre-cosign releases (v0.5.0 and earlier) ship with `.sha256` sidecars
 only. Verify the SHA matches what GitHub publishes on the release page
 and that the URL is the canonical one
-(`https://github.com/Abdel-RahmanSaied/Fendix/releases/download/...`).
+(`https://github.com/Fendix-app/Fendix/releases/download/...`).
 We recommend pinning to a specific tag rather than `:latest` until
 you've cut a cosign-verified upgrade path into your installer.
 

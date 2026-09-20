@@ -7,7 +7,7 @@ set -euo pipefail
 # Prerequisites: gh CLI authenticated (gh auth status)
 # Usage: ./scripts/seed-issues.sh
 
-REPO="Abdel-RahmanSaied/Fendix"
+REPO="Fendix-app/Fendix"
 
 echo "Creating good-first-issue tickets on $REPO..."
 echo ""

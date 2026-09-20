@@ -106,7 +106,7 @@ The hook runs `fendix scan --code . --staged --fast --fail-on HIGH` on every com
 
 ## Installation
 
-> Engine source lives in this private repo; install artifacts (binaries, Homebrew formula, install script) are published to the public mirror at [`Abdel-RahmanSaied/homebrew-fendix`](https://github.com/Abdel-RahmanSaied/homebrew-fendix). All install paths below pull from the mirror.
+> Engine source lives in the public [`Fendix-app/Fendix`](https://github.com/Fendix-app/Fendix) repository. Binary, Homebrew, and installer artifacts remain on the legacy public distribution mirror at [`Abdel-RahmanSaied/homebrew-fendix`](https://github.com/Abdel-RahmanSaied/homebrew-fendix) until a brand-owned mirror is provisioned.
 
 ### Homebrew (macOS / Linux)
 
@@ -180,7 +180,7 @@ chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 Requires Go 1.21+ and Python 3.9+.
 
 ```bash
-git clone https://github.com/Abdel-RahmanSaied/Fendix.git
+git clone https://github.com/Fendix-app/Fendix.git
 cd Fendix
 make build
 ./bin/fendix version
@@ -572,7 +572,7 @@ jobs:
         with:
           fetch-depth: 0      # diff-aware scanning needs git history
 
-      - uses: abdel-rahmansaied/fendix@v1
+      - uses: Fendix-app/Fendix@v1
         with:
           code: .
           url: ${{ secrets.STAGING_API_URL }}   # optional — adds DAST

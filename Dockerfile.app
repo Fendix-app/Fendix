@@ -100,6 +100,8 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
     GOMODCACHE=/tmp/go/pkg/mod
 
 COPY python/ /opt/fendix/python/
+RUN chmod -R a+rX /opt/fendix/python
+ENV FENDIX_ENGINE=/opt/fendix/python/
 ENV FENDIX_PYTHON_ENGINE=/opt/fendix/python/
 
 # Non-root runtime user. The clone target lives under /tmp which the

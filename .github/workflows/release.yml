@@ -10,6 +10,12 @@ on:
       # support `[0-9]` classes and `*` but not regex `+`, so `[0-9]*`
       # matches one-or-more digits per segment.
       - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing stable tag to publish to the container registries (for migration/backfill only)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -47,6 +53,7 @@ jobs:
     name: Build & Release
     runs-on: ubuntu-latest
     needs: enforce-signing
+    if: github.event_name == 'push'
     strategy:
       matrix:
         include:
@@ -137,7 +144,7 @@ jobs:
       #   cosign verify-blob \
       #     --certificate fendix-vX.Y.Z-OS-ARCH.crt \
       #     --signature   fendix-vX.Y.Z-OS-ARCH.sig \
-      #     --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+      #     --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
       #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
       #     fendix-vX.Y.Z-OS-ARCH
       #
@@ -266,7 +273,7 @@ jobs:
       #
       #   cosign verify-blob-attestation \
       #     --signature   fendix-vX.Y.Z-OS-ARCH.intoto.jsonl \
-      #     --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+      #     --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
       #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
       #     --type slsaprovenance1 \
       #     fendix-vX.Y.Z-OS-ARCH
@@ -297,7 +304,7 @@ jobs:
           cat > "${BINARY}.predicate.json" <<EOF
           {
             "buildDefinition": {
-              "buildType": "https://github.com/Abdel-RahmanSaied/Fendix/build/release/v1",
+              "buildType": "https://github.com/Fendix-app/Fendix/build/release/v1",
               "externalParameters": {
                 "workflow": {
                   "ref": "${GITHUB_REF}",
@@ -358,6 +365,7 @@ jobs:
     name: Create GitHub Release
     needs: release
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -389,11 +397,75 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
-    name: Build & Push Docker Image
-    needs: release
+    name: Build, verify & publish container images
+    needs: [enforce-signing, release]
+    if: >-
+      always() &&
+      needs.enforce-signing.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.release.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Release images must be built from the exact commit selected by the
+          # tag event, even if the default branch advances during the run.
+          ref: ${{ inputs.release_tag || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve and validate release tag
+        id: release_ref
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          echo "$REQUESTED_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || {
+            echo "::error::Container releases require a semantic version tag."
+            exit 1
+          }
+          TAG_SHA="$(git rev-parse "refs/tags/${REQUESTED_TAG}^{commit}")"
+          CHECKOUT_SHA="$(git rev-parse HEAD)"
+          [ "$TAG_SHA" = "$CHECKOUT_SHA" ] || {
+            echo "::error::Checkout does not match ${REQUESTED_TAG}."
+            exit 1
+          }
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${REQUESTED_TAG}" \
+              --jq 'select(.draft == false and .prerelease == false) | .tag_name' \
+              | grep -Fx "$REQUESTED_TAG" >/dev/null || {
+                echo "::error::Backfill is limited to an existing published stable GitHub release."
+                exit 1
+              }
+          fi
+          {
+            echo "tag=${REQUESTED_TAG}"
+            echo "version=${REQUESTED_TAG#v}"
+            echo "sha=${TAG_SHA}"
+            case "$REQUESTED_TAG" in
+              *-*) echo "prerelease=true" ;;
+              *) echo "prerelease=false" ;;
+            esac
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Require Docker Hub publishing configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -eu
+          [ "$DOCKERHUB_USERNAME" = "fendixapp" ] || {
+            echo "::error::Set the DOCKERHUB_USERNAME Actions secret to fendixapp."
+            exit 1
+          }
+          [ -n "$DOCKERHUB_TOKEN" ] || {
+            echo "::error::Set DOCKERHUB_TOKEN to a Docker Hub access token with Read/Write permission."
+            exit 1
+          }
+          [ "${{ vars.COSIGN_ENABLED }}" = "true" ] || {
+            echo "::error::Docker Hub releases require vars.COSIGN_ENABLED=true."
+            exit 1
+          }
 
       - name: Set up QEMU
         # Required for cross-arch builds on ubuntu-latest (x86_64). Without
@@ -410,19 +482,56 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Require the public Docker Hub repository and brand metadata
+        run: |
+          set -eu
+          curl -fsSL https://hub.docker.com/v2/repositories/fendixapp/fendix/ > dockerhub-repository.json
+          jq -e '.namespace == "fendixapp" and .name == "fendix" and .is_private == false' dockerhub-repository.json >/dev/null
+          jq -er '(.description // "") + "\n" + (.full_description // "")' dockerhub-repository.json > dockerhub-description.txt
+          grep -F 'https://fendix.dev' dockerhub-description.txt >/dev/null
+          grep -F 'https://github.com/Fendix-app/Fendix' dockerhub-description.txt >/dev/null
+
       - name: Compute image references
         id: tags
+        env:
+          RELEASE_TAG: ${{ steps.release_ref.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release_ref.outputs.sha }}
         run: |
           REPO_LC="$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
           OWNER_LC="${REPO_LC%%/*}"
-          TAG="${GITHUB_REF_NAME}"
+          TAG="$RELEASE_TAG"
           {
-            echo "image=ghcr.io/${REPO_LC}"
+            echo "ghcr_image=ghcr.io/${REPO_LC}"
+            echo "dockerhub_image=docker.io/fendixapp/fendix"
             echo "candidate=ghcr.io/${OWNER_LC}/fendix-candidate"
-            echo "candidate_tag=${TAG}-${GITHUB_SHA::12}"
+            echo "candidate_tag=${TAG}-${RELEASE_SHA::12}"
             echo "tag=${TAG}"
             echo "version=${TAG#v}"
+            echo "minor=$(echo "${TAG#v}" | cut -d. -f1-2)"
+            echo "major=$(echo "${TAG#v}" | cut -d. -f1)"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Generate OCI metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: docker.io/fendixapp/fendix
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.tags.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Fendix-app/Fendix
+            org.opencontainers.image.url=https://fendix.dev
+            org.opencontainers.image.documentation=https://fendix.dev/docs
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.release_ref.outputs.sha }}
 
       # The candidate lives in a separate package. Nothing under the release
       # package name exists until the deterministic smoke has passed, so a
@@ -438,10 +547,12 @@ jobs:
           build-args: |
             VERSION=${{ steps.tags.outputs.tag }}
           tags: ${{ steps.tags.outputs.candidate }}:${{ steps.tags.outputs.candidate_tag }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.tags.outputs.version }}
-            org.opencontainers.image.licenses=MIT
+          labels: ${{ steps.meta.outputs.labels }}
+          # BuildKit emits native SBOM and max-mode provenance attestations.
+          # Final registry-specific attestations are also attached below so
+          # each canonical digest can be independently verified.
+          sbom: true
+          provenance: mode=max
 
       - name: Smoke (deterministic, no network) — packaging and capability gate
         env:
@@ -468,30 +579,97 @@ jobs:
               cat /tmp/report.json' > smoke-network.json
           scripts/coverage-smoke-check.sh --network smoke-network.json
 
-      # Promotion is a manifest copy of the exact digest that passed the gate.
-      # No rebuild, so the promoted image is byte-identical to the smoked one;
-      # the digest equality check makes that a hard assertion.
-      - name: Promote smoked candidate to release references
-        id: promote
+      - name: Refuse an immutable Docker Hub tag collision
+        env:
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          VERSION: ${{ steps.tags.outputs.version }}
         run: |
           set -eu
-          SRC="${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}"
-          docker buildx imagetools create \
-            -t "${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.tag }}" \
-            -t "${{ steps.tags.outputs.image }}:latest" \
-            "$SRC"
-          DIGEST="$(docker buildx imagetools inspect "${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.tag }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          [ "$DIGEST" = "${{ steps.build.outputs.digest }}" ] || { echo "::error::promoted digest $DIGEST differs from smoked candidate ${{ steps.build.outputs.digest }}"; exit 1; }
+          if EXISTING="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')"; then
+            [ "$EXISTING" = "$CANDIDATE_DIGEST" ] || {
+              echo "::error::Immutable tag ${IMAGE}:${VERSION} already points to a different digest."
+              exit 1
+            }
+          fi
+
+      # Copy, rather than rebuild, the exact multi-platform manifest that
+      # passed the deterministic gate. Only the immutable version is exposed
+      # before the clean-pull smoke test.
+      - name: Publish immutable Docker Hub version
+        id: promote
+        env:
+          CANDIDATE: ${{ steps.tags.outputs.candidate }}@${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          VERSION: ${{ steps.tags.outputs.version }}
+          EXPECTED_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -eu
+          docker buildx imagetools create -t "${IMAGE}:${VERSION}" "$CANDIDATE"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          [ "$DIGEST" = "$EXPECTED_DIGEST" ] || {
+            echo "::error::Published digest differs from the smoked candidate."
+            exit 1
+          }
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Verify immutable manifest platforms
+        env:
+          IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          VERSION: ${{ steps.tags.outputs.version }}
+        run: |
+          set -eu
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' > manifest.json
+          jq -e '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length == 1' manifest.json >/dev/null
+          jq -e '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length == 1' manifest.json >/dev/null
+
+      - name: Clean-pull and smoke immutable Docker Hub image
+        env:
+          IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          VERSION: ${{ steps.tags.outputs.version }}
+          RELEASE_TAG: ${{ steps.tags.outputs.tag }}
+        run: |
+          set -eu
+          REF="${IMAGE}:${VERSION}"
+          docker image rm "$REF" >/dev/null 2>&1 || true
+          docker pull "$REF"
+          VERSION_OUTPUT="$(docker run --rm "$REF" version)"
+          echo "$VERSION_OUTPUT" | grep -F "$RELEASE_TAG" >/dev/null || {
+            echo "::error::Container version output does not match ${RELEASE_TAG}."
+            exit 1
+          }
+          docker run --rm "$REF" --help >/dev/null
+          docker run --rm --network none --entrypoint sh \
+            -v "$PWD/tests/fixtures/coverage-smoke:/src:ro" "$REF" -c '
+              /usr/local/bin/fendix db update --source /src/osv-export.json --output /tmp/offline-db.json >/dev/null
+              /usr/local/bin/fendix scan --code /src --python-engine --offline --offline-db /tmp/offline-db.json \
+                --format json --output /tmp/report.json >/dev/null 2>&1 || true
+              cat /tmp/report.json' > smoke-dockerhub.json
+          scripts/coverage-smoke-check.sh --deterministic smoke-dockerhub.json
+          if docker image inspect "$REF" --format '{{json .Config.Env}}' | grep -Eq 'DOCKERHUB_TOKEN|GITHUB_TOKEN|DIST_REPO_TOKEN'; then
+            echo "::error::A publishing credential name is present in the runtime image configuration."
+            exit 1
+          fi
+
+      - name: Publish immutable brand-owned GHCR mirror
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          DOCKERHUB_IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          RELEASE_TAG: ${{ steps.tags.outputs.tag }}
+        run: |
+          set -eu
+          SRC="${DOCKERHUB_IMAGE}@${DIGEST}"
+          docker buildx imagetools create -t "${GHCR_IMAGE}:${RELEASE_TAG}" "$SRC"
+          ACTUAL="$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          [ "$ACTUAL" = "$DIGEST" ] || { echo "::error::Digest mismatch for ${GHCR_IMAGE}:${RELEASE_TAG}"; exit 1; }
 
       # Cosign keyless signing for the Docker image. Signs the multi-arch
       # manifest list digest (the recursive --recursive flag fans out to each
       # platform-specific image). Verify after release with:
       #
-      #   cosign verify ghcr.io/abdel-rahmansaied/fendix:vX.Y.Z \
-      #     # tag matches the Git tag including the `v` prefix; alternatively
-      #     # use a digest from the release notes for content-addressable verify
-      #     --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+      #   cosign verify docker.io/fendixapp/fendix@sha256:... \
+      #     --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v" \
       #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
       #
       # Same COSIGN_ENABLED toggle as the binary signing job — flip the repo
@@ -503,17 +681,17 @@ jobs:
         with:
           cosign-release: "v2.4.1"
 
-      - name: Sign Docker image (cosign keyless)
+      - name: Sign published images (cosign keyless)
         if: vars.COSIGN_ENABLED == 'true'
         env:
           COSIGN_YES: "true"
           DIGEST: ${{ steps.promote.outputs.digest }}
-          IMAGE: ${{ steps.tags.outputs.image }}
+          DOCKERHUB_IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
         run: |
           set -eu
-          # Sign by digest (immutable) rather than by tag (mutable) — best
-          # practice per Sigstore docs.
-          cosign sign --recursive "${IMAGE}@${DIGEST}"
+          cosign sign --recursive "${DOCKERHUB_IMAGE}@${DIGEST}"
+          cosign sign --recursive "${GHCR_IMAGE}@${DIGEST}"
 
       # ─── Docker image SBOM + attestation ────────────────────────────
       # `syft <image-ref>` reads the image straight from the registry
@@ -536,15 +714,18 @@ jobs:
         env:
           COSIGN_YES: "true"
           DIGEST: ${{ steps.promote.outputs.digest }}
-          IMAGE: ${{ steps.tags.outputs.image }}
+          DOCKERHUB_IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
         run: |
           set -eu
           # Pin to digest so syft scans exactly what cosign signed.
-          syft "${IMAGE}@${DIGEST}" -o cyclonedx-json=image.cdx.json
-          cosign attest --yes \
-            --predicate image.cdx.json \
-            --type cyclonedx \
-            "${IMAGE}@${DIGEST}"
+          syft "${DOCKERHUB_IMAGE}@${DIGEST}" -o cyclonedx-json=image.cdx.json
+          for IMAGE in "$DOCKERHUB_IMAGE" "$GHCR_IMAGE"; do
+            cosign attest --yes \
+              --predicate image.cdx.json \
+              --type cyclonedx \
+              "${IMAGE}@${DIGEST}"
+          done
 
       # ─── Docker image SLSA provenance attestation ───────────────────
       # Same SLSA v1.0 predicate shape as the binary attestation, but
@@ -552,34 +733,37 @@ jobs:
       #
       #   cosign verify-attestation \
       #     --type slsaprovenance1 \
-      #     --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+      #     --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
       #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-      #     ghcr.io/abdel-rahmansaied/fendix@sha256:...
+      #     docker.io/fendixapp/fendix@sha256:...
       - name: Attest SLSA provenance (image)
         if: vars.COSIGN_ENABLED == 'true'
         env:
           COSIGN_YES: "true"
           DIGEST: ${{ steps.promote.outputs.digest }}
-          IMAGE: ${{ steps.tags.outputs.image }}
+          DOCKERHUB_IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          RELEASE_REF: refs/tags/${{ steps.release_ref.outputs.tag }}
+          RELEASE_SHA: ${{ steps.release_ref.outputs.sha }}
         run: |
           set -eu
           cat > image.provenance.json <<EOF
           {
             "buildDefinition": {
-              "buildType": "https://github.com/Abdel-RahmanSaied/Fendix/build/docker-release/v1",
+              "buildType": "https://github.com/Fendix-app/Fendix/build/docker-release/v1",
               "externalParameters": {
                 "workflow": {
-                  "ref": "${GITHUB_REF}",
+                  "ref": "${RELEASE_REF}",
                   "repository": "https://github.com/${GITHUB_REPOSITORY}",
                   "path": ".github/workflows/release.yml"
                 },
-                "image": "${IMAGE}",
+                "image": "${DOCKERHUB_IMAGE}",
                 "digest": "${DIGEST}"
               },
               "resolvedDependencies": [
                 {
-                  "uri": "git+https://github.com/${GITHUB_REPOSITORY}@${GITHUB_REF}",
-                  "digest": { "sha1": "${GITHUB_SHA}" }
+                  "uri": "git+https://github.com/${GITHUB_REPOSITORY}@${RELEASE_REF}",
+                  "digest": { "sha1": "${RELEASE_SHA}" }
                 }
               ]
             },
@@ -593,10 +777,92 @@ jobs:
             }
           }
           EOF
-          cosign attest --yes \
-            --predicate image.provenance.json \
-            --type slsaprovenance1 \
-            "${IMAGE}@${DIGEST}"
+          for IMAGE in "$DOCKERHUB_IMAGE" "$GHCR_IMAGE"; do
+            cosign attest --yes \
+              --predicate image.provenance.json \
+              --type slsaprovenance1 \
+              "${IMAGE}@${DIGEST}"
+          done
+
+      - name: Verify signatures, SBOM and provenance
+        if: vars.COSIGN_ENABLED == 'true'
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          DOCKERHUB_IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+        run: |
+          set -eu
+          IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          ISSUER='https://token.actions.githubusercontent.com'
+          for IMAGE in "$DOCKERHUB_IMAGE" "$GHCR_IMAGE"; do
+            REF="${IMAGE}@${DIGEST}"
+            cosign verify \
+              --certificate-identity-regexp "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" \
+              "$REF" >/dev/null
+            cosign verify-attestation \
+              --type cyclonedx \
+              --certificate-identity-regexp "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" \
+              "$REF" >/dev/null
+            cosign verify-attestation \
+              --type slsaprovenance1 \
+              --certificate-identity-regexp "$IDENTITY" \
+              --certificate-oidc-issuer "$ISSUER" \
+              "$REF" >/dev/null
+          done
+
+      # Mutable convenience tags become visible only after the immutable tag
+      # has passed clean-pull smoke, signing and attestation verification.
+      - name: Publish verified convenience tags
+        if: steps.release_ref.outputs.prerelease == 'false'
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          DOCKERHUB_IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          GHCR_IMAGE: ${{ steps.tags.outputs.ghcr_image }}
+          MINOR: ${{ steps.tags.outputs.minor }}
+          MAJOR: ${{ steps.tags.outputs.major }}
+        run: |
+          set -eu
+          SRC="${DOCKERHUB_IMAGE}@${DIGEST}"
+          docker buildx imagetools create \
+            -t "${DOCKERHUB_IMAGE}:${MINOR}" \
+            -t "${DOCKERHUB_IMAGE}:${MAJOR}" \
+            -t "${DOCKERHUB_IMAGE}:latest" \
+            "$SRC"
+          docker buildx imagetools create -t "${GHCR_IMAGE}:latest" "$SRC"
+          for REF in \
+            "${DOCKERHUB_IMAGE}:${MINOR}" \
+            "${DOCKERHUB_IMAGE}:${MAJOR}" \
+            "${DOCKERHUB_IMAGE}:latest" \
+            "${GHCR_IMAGE}:latest"; do
+            ACTUAL="$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            [ "$ACTUAL" = "$DIGEST" ] || { echo "::error::Digest mismatch for $REF"; exit 1; }
+          done
+
+      - name: Verify unauthenticated Docker Hub pull
+        env:
+          IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
+          VERSION: ${{ steps.tags.outputs.version }}
+          RELEASE_TAG: ${{ steps.tags.outputs.tag }}
+        run: |
+          set -eu
+          docker logout >/dev/null 2>&1 || true
+          docker image rm "${IMAGE}:${VERSION}" >/dev/null 2>&1 || true
+          docker pull "${IMAGE}:${VERSION}"
+          docker run --rm "${IMAGE}:${VERSION}" version | grep -F "$RELEASE_TAG" >/dev/null
+
+      - name: Record published manifest
+        env:
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          VERSION: ${{ steps.tags.outputs.version }}
+        run: |
+          {
+            echo "### Container release"
+            echo "- Canonical image: \`docker.io/fendixapp/fendix:${VERSION}\`"
+            echo "- Manifest digest: \`${DIGEST}\`"
+            echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Prune old candidate images
         if: always()
@@ -610,6 +876,7 @@ jobs:
   mirror:
     name: Mirror release to public install repo
     needs: [publish, docker]
+    if: github.event_name == 'push' && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     env:
       MIRROR_REPO: Abdel-RahmanSaied/homebrew-fendix

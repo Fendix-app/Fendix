@@ -4,5 +4,5 @@ contact_links:
     url: https://get.fendix.dev
     about: Read the docs before filing a bug
   - name: Plugin authoring guide
-    url: https://github.com/Abdel-RahmanSaied/Fendix/blob/main/docs/plugins.md
+    url: https://github.com/Fendix-app/Fendix/blob/main/docs/plugins.md
     about: How to write a Fendix plugin

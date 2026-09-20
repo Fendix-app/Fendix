@@ -110,6 +110,10 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 
 # Copy the Python engine (for direct use, not just embedded)
 COPY python/ /opt/fendix/python/
+# Source worktrees may have owner-only directory modes. COPY preserves those
+# modes, which would make the engine modules invisible after USER fendix.
+# Normalize read/traverse permissions without granting write access.
+RUN chmod -R a+rX /opt/fendix/python
 # EnsureEngine (go/internal/engine/extract.go) resolves the taint engine via
 # the FENDIX_ENGINE env var — this MUST match that name. A prior typo set
 # FENDIX_PYTHON_ENGINE, which the Go side never reads, so resolution fell

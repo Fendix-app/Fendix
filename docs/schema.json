@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/Abdel-RahmanSaied/Fendix/blob/main/docs/schema.json",
+  "$id": "https://github.com/Fendix-app/Fendix/blob/main/docs/schema.json",
   "title": "FendixJSONReport",
   "description": "Schema for Fendix scan output produced by `fendix scan --format json`. Stable for the 1.x line: additive within 1.x, removals and type changes reserved for 2.0.0. Reports from the (end-of-life) 0.x line also validate, since every 0.x change was additive. See docs/schema.md.",
   "type": "object",

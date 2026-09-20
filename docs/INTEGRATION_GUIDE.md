@@ -50,7 +50,7 @@ Or run the published Docker image (bundles Python + all static-analysis deps, so
 docker run --rm ghcr.io/abdel-rahmansaied/fendix scan --url https://example.com
 ```
 
-> **Note:** `get.fendix.dev` is a CNAME to the public `Abdel-RahmanSaied/homebrew-fendix` mirror (served via GitHub Pages). The mirror exists because the engine source repo is private — anonymous users can't pull from a private Releases page, so all install paths route through the mirror.
+> **Note:** `get.fendix.dev` currently uses the legacy public `Abdel-RahmanSaied/homebrew-fendix` mirror for installer compatibility. Engine source now lives in the public `Fendix-app/Fendix` repository. The root marketing page is scheduled to redirect to the canonical Fendix documentation; `/install.sh` must remain available until the installer has a verified brand-owned endpoint.
 
 ### 2.2 The subcommands
 
@@ -343,9 +343,9 @@ Key facts:
 
 ## 3. Level 2 — CI/CD gate
 
-Goal: fail the build when a scan finds something at/above a severity threshold, and surface the findings to reviewers. There are **two ways to invoke the engine in CI**, and which you use hinges on a private-repo gotcha.
+Goal: fail the build when a scan finds something at/above a severity threshold, and surface the findings to reviewers. There are **two supported ways to invoke the engine in CI**: the public GitHub Action and the public container image.
 
-### 3.1 Option A — The GitHub Action (`uses: abdel-rahmansaied/fendix@v1`)
+### 3.1 Option A — The GitHub Action (`uses: Fendix-app/Fendix@v1`)
 
 A **composite** action that installs Fendix, syncs the Python taint engine, runs `fendix scan`, uploads SARIF, then enforces the fail-on gate. It needs `actions/checkout@v4` with `fetch-depth: 0` because diff mode needs git history.
 
@@ -367,7 +367,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0      # required: diff mode needs history
-      - uses: abdel-rahmansaied/fendix@v1
+      - uses: Fendix-app/Fendix@v1
         with:
           code: "."           # white-box SAST/secrets/SCA (default ".")
           url: ""             # optional: black-box DAST target
@@ -402,11 +402,11 @@ jobs:
 
 What the steps do: install via `curl … get.fendix.dev/install.sh | sh` → `fendix engine sync` (**fails loudly here if the SAST engine can't be resolved**, rather than silently degrading) → `fendix scan` under `set +e` (capturing exit code, deliberately exiting 0 so SARIF upload runs first) → `github/codeql-action/upload-sarif@v3` → a final `if: always()` step that re-raises the failure (`exit 1` on findings, `exit <code>` on error).
 
-### 3.2 GOTCHA: the engine repo is private — the Action may be unresolvable
+### 3.2 Public Action availability
 
-**This is the single most important CI fact.** The engine source repo (`Abdel-RahmanSaied/Fendix`) is **private**. Consequently, `uses: abdel-rahmansaied/fendix@v1` **cannot be resolved cross-repo from another private repo's runner** — that is the documented and *live-verified* failure mode.
+The engine source repository (`Fendix-app/Fendix`) is public, so `uses: Fendix-app/Fendix@v1` resolves from public and private consumers. Pin the Action to a full commit SHA in high-assurance workflows and update the pin deliberately.
 
-The resolvable alternative is the **public GHCR image, pulled directly**. The GHCR package is published with **public visibility**, so it can be pulled anonymously (no registry auth needed in CI).
+The existing GHCR compatibility image is also public and can be pulled anonymously. The canonical Docker Hub path will replace it in this guide only after `fendixapp/fendix` has been published and independently verified.
 
 ### 3.3 Option B — The GHCR image, invoked directly (the robust path)
 
@@ -857,7 +857,7 @@ Approval (admin-only) flips the org's plan to the requested plan, sets `status=A
 
 4. **The Python taint engine resolution.** `--python-engine` is off by default. The **released standalone Go binary DOES bundle the embedded Python engine** (`//go:embed all:engine`; every `v*` release runs `make embed-engine` before the build), extracted to `~/.fendix/engine` on first use. White-box secrets + semgrep + textscan + native SCA always run in pure Go regardless. The deeper **AST taint analysis** (Proven-Path route binding, interprocedural taint) needs the `python/` engine, resolved in order: `--dir` → `FENDIX_ENGINE` → `~/.fendix/config` (set by `fendix engine sync`) → **embedded payload** → `./python`. **Coverage note:** the published **Docker/GHCR image ships the engine source tree at `/opt/fendix/python/`** (`FENDIX_PYTHON_ENGINE` set) — but the engine binary inside the image is built **without** the embedded payload, so if that path isn't mounted/synced the implicit `--code` path **degrades to native-Go-only with a WARN** (this is the gap our CI run hit: `python engine not available — whitebox scanning disabled`). A missing engine is **fatal (exit 2) only if `--python-engine` was passed by name**; otherwise it degrades. In the GitHub Action, `fendix engine sync` **fails loudly** if the engine can't be resolved.
 
-5. **Private engine repo → Action may not resolve; SARIF may 403.** *Live-verified.* The engine repo is private, so `uses: abdel-rahmansaied/fendix@v1` is **unresolvable cross-repo from another private repo's runner** → use the **public GHCR image directly** (pin by digest). SARIF → Security-tab upload needs **GitHub Advanced Security**; on a private repo without GHAS it **403s** → use a `$GITHUB_STEP_SUMMARY` table or a PR comment instead.
+5. **SARIF permissions differ by repository.** The public `Fendix-app/Fendix@v1` Action resolves cross-repository. SARIF upload to the Security tab still needs `security-events: write` and may require GitHub Advanced Security for a private consumer repository; where it is unavailable, publish a `$GITHUB_STEP_SUMMARY` table or a PR comment instead.
 
 6. **Exit codes (memorize these for CI):** `0` = clean / nothing reached `BLOCK`; `1` = `--fail-on` gate tripped (severity **and**, since v2.0, a confidence band that supports the claim — `--enforce-confidence=false` restores the old severity-only gate); `2` = scan error (engine unresolvable, discovery failed, render failure, or `--fail-on-scanner-error` + a scanner failed), or `--fail-on-coverage-gap` (`configured_complete=false`) / `--require-analyzers` (an undelivered name). `fendix verify` uses its own scheme: `0` resolved, `1` still-present, `2` unknown/not-found — `2` now also covers a partial dependency lookup failure (`pip`/`npm` return a lookup error rather than a silent resolve), a fail-closed change from earlier builds that could answer "resolved" on the same partial failure.
 
