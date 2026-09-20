@@ -1,6 +1,6 @@
 # Official repository and container registry migration
 
-Status as of 2026-09-20: **publication blocked; release automation prepared**.
+Status as of 2026-09-20: **publication blocked only by Docker Hub repository metadata; release automation and image push authorization verified**.
 
 ## Canonical destinations
 
@@ -55,13 +55,29 @@ Prerelease tags such as `v3.5.0-rc.1` publish only their immutable Docker Hub ve
 
 ## Required infrastructure before publication
 
-The Docker Hub API currently returns `404` for `fendixapp/fendix`. The GitHub repository has Actions secrets named `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; their values were not inspected. Complete these steps outside source control:
+The public Docker Hub repository `fendixapp/fendix` now exists. Release run
+[`35510206549`](https://github.com/Fendix-app/Fendix/actions/runs/35510206549)
+verified all of the following without printing or inspecting the configured secret:
 
-1. In the Docker Hub `fendixapp` account, create a public repository named `fendix`.
-2. Set its description or full description to include both `https://fendix.dev` and `https://github.com/Fendix-app/Fendix`.
-3. Confirm that the existing `DOCKERHUB_TOKEN` has Read/Write permission for that repository and that the existing `DOCKERHUB_USERNAME` value is `fendixapp`. The release workflow validates the username and authenticates before building.
-4. Keep the repository variable `COSIGN_ENABLED=true`.
-5. Dispatch **Release** with `release_tag=v3.4.1`.
+- `DOCKERHUB_USERNAME` is `fendixapp`;
+- Docker Hub authentication succeeds;
+- the token can request both `pull` and `push` authorization for `fendixapp/fendix`;
+- the repository is public; and
+- `COSIGN_ENABLED=true`.
+
+The run then stopped before building or publishing because the repository's
+public metadata does not contain the required brand links. The repository has
+no tags. Its short description is present and its full description is empty.
+
+Complete this single owner action in Docker Hub:
+
+1. Open **My Hub → Repositories → fendixapp/fendix → General**.
+2. Edit the repository overview so it includes both `https://fendix.dev` and `https://github.com/Fendix-app/Fendix`.
+3. Dispatch **Release** with `release_tag=v3.4.1`.
+
+The existing CI token has the least-privilege image pull/push scope but not the
+separate `scope-repository-edit` metadata permission, so release automation
+deliberately validates the public metadata instead of silently changing it.
 
 Never paste the token into chat, source, build arguments, artifacts or reports.
 
