@@ -626,7 +626,7 @@ jobs:
           IMAGE: ${{ steps.tags.outputs.dockerhub_image }}
           VERSION: ${{ steps.tags.outputs.version }}
         run: |
-          set -eu
+          set -euo pipefail
           if EXISTING="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')"; then
             [ "$EXISTING" = "$CANDIDATE_DIGEST" ] || {
               echo "::error::Immutable tag ${IMAGE}:${VERSION} already points to a different digest."
