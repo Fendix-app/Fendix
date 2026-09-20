@@ -488,54 +488,55 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Verify Docker Hub ownership and synchronize brand metadata
+      - name: Verify Docker Hub image push authorization
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -eu
-          ACCESS_TOKEN="$({
-            jq -n \
-              --arg identifier "$DOCKERHUB_USERNAME" \
-              --arg secret "$DOCKERHUB_TOKEN" \
-              '{identifier: $identifier, secret: $secret}' \
-              | curl --fail --silent --show-error \
-                  --header 'Content-Type: application/json' \
-                  --data-binary @- \
-                  https://hub.docker.com/v2/auth/token
-          } | jq -er '.access_token')"
+          REGISTRY_TOKEN="$(
+            curl --fail --silent --show-error \
+              --user "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+              'https://auth.docker.io/token?service=registry.docker.io&scope=repository:fendixapp/fendix:pull,push' \
+              | jq -er '.token'
+          )"
+          export REGISTRY_TOKEN
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
 
-          curl --fail --silent --show-error \
-            --header "Authorization: Bearer ${ACCESS_TOKEN}" \
-            https://hub.docker.com/v2/namespaces/fendixapp/repositories/fendix \
-            | jq -e '
-                .namespace == "fendixapp" and
-                .name == "fendix" and
-                .is_private == false and
-                .permissions.write == true
-              ' >/dev/null
-
-          jq -n \
-            --arg description 'Explainable application security decisions from code, API, dependency, and third-party evidence.' \
-            --arg full_description $'Fendix is an evidence-driven application security scanner combining DAST, SAST, and SCA.\n\nWebsite: https://fendix.dev\n\nSource: https://github.com/Fendix-app/Fendix' \
-            '{description: $description, full_description: $full_description}' \
-            | curl --fail --silent --show-error \
-                --request PATCH \
-                --header "Authorization: Bearer ${ACCESS_TOKEN}" \
-                --header 'Content-Type: application/json' \
-                --data-binary @- \
-                https://hub.docker.com/v2/namespaces/fendixapp/repositories/fendix \
-                >/dev/null
-          unset ACCESS_TOKEN
+          payload = os.environ["REGISTRY_TOKEN"].split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          authorized = any(
+              access.get("type") == "repository"
+              and access.get("name") == "fendixapp/fendix"
+              and "push" in access.get("actions", [])
+              for access in claims.get("access", [])
+          )
+          if not authorized:
+              raise SystemExit("Docker Hub token is not authorized to push fendixapp/fendix")
+          PY
+          unset REGISTRY_TOKEN
 
       - name: Require the public Docker Hub repository and brand metadata
         run: |
           set -eu
           curl -fsSL https://hub.docker.com/v2/repositories/fendixapp/fendix/ > dockerhub-repository.json
-          jq -e '.namespace == "fendixapp" and .name == "fendix" and .is_private == false' dockerhub-repository.json >/dev/null
+          jq -e '.namespace == "fendixapp" and .name == "fendix" and .is_private == false' dockerhub-repository.json >/dev/null || {
+            echo "::error::Docker Hub repository fendixapp/fendix must exist and be public."
+            exit 1
+          }
           jq -er '(.description // "") + "\n" + (.full_description // "")' dockerhub-repository.json > dockerhub-description.txt
-          grep -F 'https://fendix.dev' dockerhub-description.txt >/dev/null
-          grep -F 'https://github.com/Fendix-app/Fendix' dockerhub-description.txt >/dev/null
+          grep -F 'https://fendix.dev' dockerhub-description.txt >/dev/null || {
+            echo "::error::Docker Hub repository metadata must link to https://fendix.dev."
+            exit 1
+          }
+          grep -F 'https://github.com/Fendix-app/Fendix' dockerhub-description.txt >/dev/null || {
+            echo "::error::Docker Hub repository metadata must link to https://github.com/Fendix-app/Fendix."
+            exit 1
+          }
 
       - name: Compute image references
         id: tags
