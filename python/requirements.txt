@@ -1,4 +1,4 @@
-semgrep>=1.45.0
+semgrep>=1.177.0
 bandit>=1.9.4
 pyyaml>=6.0.3
 openapi-spec-validator>=0.9.0
