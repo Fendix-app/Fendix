@@ -54,7 +54,8 @@ docker run -d \
 port=$(docker port "$container_name" 8080/tcp | sed 's/.*://')
 health_file="$artifact_dir/healthz-${arch}.txt"
 curl --fail --silent --show-error --retry 15 --retry-delay 1 \
-  --retry-connrefused "http://127.0.0.1:${port}/healthz" > "$health_file"
+  --retry-connrefused --retry-all-errors \
+  "http://127.0.0.1:${port}/healthz" > "$health_file"
 grep -Fx "fendix-app ${expected_version}" "$health_file" >/dev/null
 
 docker logs "$container_name" > "$artifact_dir/container-${arch}.log" 2>&1
