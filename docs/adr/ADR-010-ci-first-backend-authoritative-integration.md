@@ -27,6 +27,10 @@ The GitHub App may return only as an adapter to the same managed scan,
 evidence, evaluation, Decision Record, and publication contracts. It cannot
 calculate, persist, or publish a separate authoritative decision.
 
+Standalone or local engine decisions remain local diagnostic outcomes. They
+must never be stored, labeled, or presented as managed Fendix Security Decision
+Records; only the backend's authoritative terminal evaluation can create one.
+
 The desired managed flow does **not** exist today. The Marketplace Action runs
 the engine locally, derives a local exit code, and optionally uploads SARIF. It
 does not authenticate to Fendix SaaS, bind the run to an Asset or immutable
