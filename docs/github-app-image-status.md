@@ -15,9 +15,11 @@ release `v3.4.1`, whose commit is
 `1bc69125c1af330d303f0ddd58e4db10fc6f2d3c`. No independent application
 release existed before this migration. The first official application image
 therefore uses immutable image tag `3.4.1`, built from that exact source
-revision. The separate `fendix-app-v3.4.1` Git tag identifies the reviewed
-publication workflow revision; it does not change or recreate source release
-`v3.4.1`.
+revision. Separate `fendix-app-v3.4.1-rN` Git tags identify immutable reviewed
+publication-workflow revisions; they do not change or recreate source release
+`v3.4.1`. Revision `r1` failed safely during candidate verification before any
+Docker Hub tag was published. The contract advances to `r2` for the corrected
+workflow and retains `r1` as audit history.
 
 The machine-readable contract is
 [`deploy/fendix-app-release.json`](../deploy/fendix-app-release.json). The
@@ -29,7 +31,8 @@ build can publish.
 [`.github/workflows/fendix-app-image.yml`](../.github/workflows/fendix-app-image.yml)
 builds `Dockerfile.app` from the exact contract revision. Pull requests build
 and run both declared platforms without registry credentials. A
-`fendix-app-vX.Y.Z` tag can publish only when it matches the contract version.
+`fendix-app-vX.Y.Z-rN` tag can publish only when it exactly matches the
+contract's publication revision.
 The workflow then:
 
 1. validates the stable source release, public Docker Hub repository, and

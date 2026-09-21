@@ -22,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       application_release_tag:
-        description: "Existing fendix-app-vX.Y.Z tag to publish (backfill/recovery only)"
+        description: "Existing fendix-app-vX.Y.Z-rN tag to publish (backfill/recovery only)"
         required: true
         type: string
 
@@ -58,10 +58,12 @@ jobs:
           set -euo pipefail
           IMAGE="$(jq -er .image deploy/fendix-app-release.json)"
           VERSION="$(jq -er .version deploy/fendix-app-release.json)"
+          PUBLICATION_TAG="$(jq -er .publication_tag deploy/fendix-app-release.json)"
           SOURCE_TAG="$(jq -er .source_tag deploy/fendix-app-release.json)"
           SOURCE_COMMIT="$(jq -er .source_commit deploy/fendix-app-release.json)"
           [ "$IMAGE" = "docker.io/fendixapp/fendix-app" ]
           echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          echo "$PUBLICATION_TAG" | grep -Eq "^fendix-app-v${VERSION}-r[1-9][0-9]*$"
           [ "$SOURCE_TAG" = "v${VERSION}" ]
           echo "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
           jq -e '.platforms == ["linux/amd64", "linux/arm64"]' deploy/fendix-app-release.json >/dev/null
@@ -154,9 +156,9 @@ jobs:
           set -euo pipefail
           IMAGE="$(jq -er .image deploy/fendix-app-release.json)"
           VERSION="$(jq -er .version deploy/fendix-app-release.json)"
+          EXPECTED_APP_TAG="$(jq -er .publication_tag deploy/fendix-app-release.json)"
           SOURCE_TAG="$(jq -er .source_tag deploy/fendix-app-release.json)"
           SOURCE_COMMIT="$(jq -er .source_commit deploy/fendix-app-release.json)"
-          EXPECTED_APP_TAG="fendix-app-v${VERSION}"
           [ "$IMAGE" = "docker.io/fendixapp/fendix-app" ]
           [ "$SOURCE_TAG" = "v${VERSION}" ]
           [ "$REQUESTED_TAG" = "$EXPECTED_APP_TAG" ] || {
@@ -323,6 +325,9 @@ jobs:
           set -euo pipefail
           for PLATFORM in linux/amd64 linux/arm64; do
             ARCH="${PLATFORM#linux/}"
+            # Docker Engine cannot load two platform variants under one
+            # manifest-digest reference simultaneously.
+            docker image rm "$CANDIDATE" >/dev/null 2>&1 || true
             mkdir -p "artifacts/${ARCH}"
             cp artifacts/build.log "artifacts/${ARCH}/build.log"
             automation/scripts/verify-fendix-app-image.sh \
