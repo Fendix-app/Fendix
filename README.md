@@ -106,12 +106,12 @@ The hook runs `fendix scan --code . --staged --fast --fail-on HIGH` on every com
 
 ## Installation
 
-> Engine source lives in the public [`Fendix-app/Fendix`](https://github.com/Fendix-app/Fendix) repository. Binary, Homebrew, and installer artifacts remain on the legacy public distribution mirror at [`Abdel-RahmanSaied/homebrew-fendix`](https://github.com/Abdel-RahmanSaied/homebrew-fendix) until a brand-owned mirror is provisioned.
+Engine source and release assets live in the official [`Fendix-app/Fendix`](https://github.com/Fendix-app/Fendix) repository. The official [`Fendix-app/homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix) repository provides the Homebrew tap and the `get.fendix.dev` compatibility installer host.
 
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew tap Abdel-RahmanSaied/fendix
+brew tap Fendix-app/fendix
 brew install fendix
 ```
 
@@ -121,9 +121,9 @@ brew install fendix
 curl -fsSL https://get.fendix.dev/install.sh | sh
 ```
 
-Downloads the latest release binary, verifies its sha256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v2.0.1`.
+Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.4.1`.
 
-`get.fendix.dev` is the engine repo's short URL — it's a CNAME to the [`homebrew-fendix`](https://github.com/Abdel-RahmanSaied/homebrew-fendix) mirror, served via GitHub Pages. To inspect the script before piping to a shell:
+`get.fendix.dev` is served from the official [`homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix) repository through GitHub Pages. To inspect the script before piping to a shell:
 
 ```bash
 curl -fsSL https://get.fendix.dev/install.sh | less
@@ -135,8 +135,8 @@ If `get.fendix.dev` is ever unreachable, the `raw.githubusercontent.com` URL is 
 
 ```bash
 ARCH=$(dpkg --print-architecture)   # amd64 or arm64
-VERSION=v2.0.1
-URL="https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${ARCH}.deb"
+VERSION=v3.4.1
+URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${ARCH}.deb"
 curl -fsSL -o fendix.deb "${URL}"
 sudo dpkg -i fendix.deb && sudo apt-get install -f
 ```
@@ -151,26 +151,26 @@ case "$(uname -m)" in
   x86_64)  PKG_ARCH=amd64 ;;
   aarch64) PKG_ARCH=arm64 ;;
 esac
-VERSION=v2.0.1
+VERSION=v3.4.1
 sudo dnf install \
-  "https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
+  "https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
 ```
 
 ### Docker
 
 ```bash
-docker pull ghcr.io/abdel-rahmansaied/fendix:latest
-docker run --rm ghcr.io/abdel-rahmansaied/fendix scan --url https://api.example.com
+docker pull fendixapp/fendix:3.4.1
+docker run --rm fendixapp/fendix:3.4.1 scan --url https://api.example.com
 ```
 
-The Docker image includes Python and all static analysis dependencies, so hybrid mode works out of the box. Available from **v0.4.1 onwards** (the v0.4.0 release predates the Docker publish workflow).
+The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and includes Python and the static-analysis dependencies, so hybrid mode works out of the box. Pin a version or digest for reproducible use.
 
 ### Manual binary download
 
-Pick a binary for your platform from the [latest release](https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/latest) (linux/amd64, darwin/amd64, darwin/arm64), verify the matching `.sha256` file, and place it on your PATH:
+Pick a binary for your platform from the [latest official engine release](https://github.com/Fendix-app/Fendix/releases/latest) (`linux/amd64`, `linux/arm64`, `darwin/amd64`, or `darwin/arm64`), verify the matching `.sha256` file, and place it on your PATH:
 
 ```bash
-curl -fsSL -o fendix https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/download/v2.0.1/fendix-v2.0.1-darwin-arm64
+curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.4.1/fendix-v3.4.1-darwin-arm64
 shasum -a 256 fendix  # compare against the .sha256 alongside the binary
 chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 ```
@@ -201,9 +201,9 @@ Every release artifact (binary, `.deb`, `.rpm`, multi-arch Docker manifest) ship
 Verify a binary:
 
 ```bash
-VERSION=v2.0.1
+VERSION=v3.4.1
 ASSET=fendix-${VERSION}-linux-amd64
-BASE="https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/download/${VERSION}"
+BASE="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}"
 
 curl -fsSL -o "$ASSET"     "$BASE/$ASSET"
 curl -fsSL -o "$ASSET.crt" "$BASE/$ASSET.crt"
@@ -212,17 +212,19 @@ curl -fsSL -o "$ASSET.sig" "$BASE/$ASSET.sig"
 cosign verify-blob \
   --certificate "$ASSET.crt" \
   --signature   "$ASSET.sig" \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+  --certificate-identity "https://github.com/Abdel-RahmanSaied/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com" \
   "$ASSET"
 # → Verified OK
 ```
 
-Same pattern verifies a `.deb`, `.rpm`, or Docker image — swap the asset name. For Docker, use `cosign verify` (not `verify-blob`) against the image reference:
+The v3.4.1 binary certificate above retains its immutable pre-transfer workflow identity. Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity.
+
+For the current Docker image, use `cosign verify` against the immutable digest and the official workflow identity:
 
 ```bash
-cosign verify ghcr.io/abdel-rahmansaied/fendix:v2.0.1 \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+cosign verify fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a \
+  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com"
 ```
 

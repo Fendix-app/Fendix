@@ -112,7 +112,7 @@ Only after these checks succeed may public Docker instructions switch from the c
 ## Intentional legacy identifiers
 
 - The Go module path and Go imports remain `github.com/Abdel-RahmanSaied/Fendix`. Changing them would break import compatibility and requires a separate major-version migration.
-- `Abdel-RahmanSaied/homebrew-fendix` remains the binary/Homebrew distribution mirror until a brand-owned tap and mirror are provisioned.
+- `Fendix-app/homebrew-fendix` is the official Homebrew tap and compatibility installer host. The canonical tap command is `brew tap Fendix-app/fendix`.
 - Historical changelog, audit and authorship records are retained where changing them would misrepresent history.
 - The previous GHCR package remains pullable for existing users. No shutdown date is set.
 

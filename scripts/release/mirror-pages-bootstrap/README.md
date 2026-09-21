@@ -1,7 +1,7 @@
 # `get.fendix.dev` compatibility host
 
-These files are synchronized into the legacy public distribution mirror
-`Abdel-RahmanSaied/homebrew-fendix` by `.github/workflows/release.yml`.
+These files are synchronized into the official public distribution repository
+`Fendix-app/homebrew-fendix` by `.github/workflows/release.yml`.
 GitHub Pages currently serves the custom domain `get.fendix.dev` from that
 mirror.
 
@@ -23,6 +23,6 @@ to an HTML page. See `docs/container-registry-migration.md` for the cutover and
 verification steps.
 
 The engine source repository is public at
-<https://github.com/Fendix-app/Fendix>. The personal-name distribution mirror
-is retained only for binary/Homebrew compatibility until a brand-owned mirror
-is provisioned.
+<https://github.com/Fendix-app/Fendix>. Historical GitHub redirects may keep
+older tap checkouts working, but new installations use the organization-owned
+tap and release assets directly from the engine repository.

@@ -6,21 +6,22 @@
 #   curl -fsSL https://get.fendix.dev/install.sh | sh
 #
 # Direct-from-mirror fallback (works even if get.fendix.dev DNS is down):
-#   curl -fsSL https://raw.githubusercontent.com/Abdel-RahmanSaied/homebrew-fendix/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Fendix-app/homebrew-fendix/main/install.sh | sh
 #
 # Options (environment variables):
 #   FENDIX_VERSION  — specific version to install (default: latest)
 #   FENDIX_DIR      — install directory (default: /usr/local/bin)
-#   FENDIX_REPO     — override source repo (default: Abdel-RahmanSaied/homebrew-fendix)
+#   FENDIX_REPO     — override source repo (default: Fendix-app/Fendix)
+#   FENDIX_SIGN_REPO — override the expected GitHub Actions signer repository
 
-set -e
+set -eu
+umask 077
 
-REPO="${FENDIX_REPO:-Abdel-RahmanSaied/homebrew-fendix}"
+REPO="${FENDIX_REPO:-Fendix-app/Fendix}"
 # SIGN_REPO is the repo whose GitHub Actions OIDC identity cosign-signed the
 # release. It is the MAIN engine repo (not the homebrew tap that may host the
 # download), so it must NOT default to $REPO. Matches the verify command in
 # README "Verifying signed releases". Overridable for forks.
-SIGN_REPO="${FENDIX_SIGN_REPO:-Abdel-RahmanSaied/Fendix}"
 INSTALL_DIR="${FENDIX_DIR:-/usr/local/bin}"
 
 # Colors (if terminal supports them)
@@ -58,19 +59,44 @@ detect_platform() {
 
 # Get the latest release version from GitHub
 get_version() {
-    if [ -n "$FENDIX_VERSION" ]; then
+    if [ -n "${FENDIX_VERSION:-}" ]; then
         VERSION="$FENDIX_VERSION"
-        return
+    else
+        info "Fetching latest version..."
+        VERSION=$(curl --proto '=https' --tlsv1.2 -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+            | grep '"tag_name"' \
+            | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
     fi
-
-    info "Fetching latest version..."
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-        | grep '"tag_name"' \
-        | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
 
     if [ -z "$VERSION" ]; then
         error "Could not determine latest version. Set FENDIX_VERSION manually."
     fi
+
+    case "$VERSION" in
+        v[0-9]* ) ;;
+        * ) error "Invalid version: $VERSION" ;;
+    esac
+    case "$VERSION" in
+        *[!A-Za-z0-9._+-]* ) error "Invalid version: $VERSION" ;;
+    esac
+}
+
+signing_repo() {
+    if [ -n "${FENDIX_SIGN_REPO:-}" ]; then
+        printf '%s\n' "$FENDIX_SIGN_REPO"
+        return
+    fi
+
+    # Certificates through v3.4.1 are immutable and retain the repository's
+    # pre-transfer workflow identity. Later releases use the organization.
+    case "$VERSION" in
+        v0.*|v1.*|v2.*|v3.0.*|v3.1.*|v3.2.*|v3.3.*|v3.4.0|v3.4.1)
+            printf '%s\n' "Abdel-RahmanSaied/Fendix"
+            ;;
+        *)
+            printf '%s\n' "Fendix-app/Fendix"
+            ;;
+    esac
 }
 
 # Download and install
@@ -83,7 +109,7 @@ install() {
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT
 
-    if ! curl -fsSL -o "${TMP_DIR}/fendix" "$URL"; then
+    if ! curl --proto '=https' --tlsv1.2 -fsSL -o "${TMP_DIR}/fendix" "$URL"; then
         error "Download failed. Check that version ${VERSION} exists for ${OS}/${ARCH}."
     fi
 
@@ -94,9 +120,16 @@ install() {
     # missing hashing tool or a failed checksum download silently skipped
     # verification (fail-open); that is the F-M2 trust gap this closes.
     CHECKSUM_URL="${URL}.sha256"
-    if curl -fsSL -o "${TMP_DIR}/fendix.sha256" "$CHECKSUM_URL" 2>/dev/null; then
+    if curl --proto '=https' --tlsv1.2 -fsSL -o "${TMP_DIR}/fendix.sha256" "$CHECKSUM_URL" 2>/dev/null; then
         info "Verifying checksum..."
         EXPECTED=$(awk '{print $1}' "${TMP_DIR}/fendix.sha256")
+        case "$EXPECTED" in
+            [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]* ) ;;
+            * ) error "Published checksum is malformed. Refusing to install." ;;
+        esac
+        if [ "${#EXPECTED}" -ne 64 ]; then
+            error "Published checksum is malformed. Refusing to install."
+        fi
         if command -v sha256sum >/dev/null 2>&1; then
             ACTUAL=$(sha256sum "${TMP_DIR}/fendix" | awk '{print $1}')
         elif command -v shasum >/dev/null 2>&1; then
@@ -124,13 +157,14 @@ install() {
     # missing sidecars on older tags, is informational. Identity/issuer match
     # README "Verifying signed releases" and release.yml.
     if command -v cosign >/dev/null 2>&1; then
-        if curl -fsSL -o "${TMP_DIR}/fendix.sig" "${URL}.sig" 2>/dev/null \
-            && curl -fsSL -o "${TMP_DIR}/fendix.crt" "${URL}.crt" 2>/dev/null; then
+        if curl --proto '=https' --tlsv1.2 -fsSL -o "${TMP_DIR}/fendix.sig" "${URL}.sig" 2>/dev/null \
+            && curl --proto '=https' --tlsv1.2 -fsSL -o "${TMP_DIR}/fendix.crt" "${URL}.crt" 2>/dev/null; then
             info "Verifying cosign signature..."
+            SIGN_REPO=$(signing_repo)
             if cosign verify-blob \
                 --certificate "${TMP_DIR}/fendix.crt" \
                 --signature "${TMP_DIR}/fendix.sig" \
-                --certificate-identity-regexp "^https://github.com/${SIGN_REPO}/" \
+                --certificate-identity "https://github.com/${SIGN_REPO}/.github/workflows/release.yml@refs/tags/${VERSION}" \
                 --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
                 "${TMP_DIR}/fendix" >/dev/null 2>&1; then
                 info "cosign signature verified."
@@ -171,11 +205,11 @@ install() {
 # Verify installation
 verify() {
     if command -v fendix >/dev/null 2>&1; then
-        printf "\n${BOLD}${GREEN}✓ fendix installed successfully!${RESET}\n\n"
+        printf '\n%s%s✓ fendix installed successfully!%s\n\n' "$BOLD" "$GREEN" "$RESET"
         fendix version
         printf "\nGet started:\n"
-        printf "  ${BOLD}fendix scan --url https://api.example.com${RESET}\n"
-        printf "  ${BOLD}fendix scan --code ./src --spec openapi.yaml${RESET}\n\n"
+        printf '  %sfendix scan --url https://api.example.com%s\n' "$BOLD" "$RESET"
+        printf '  %sfendix scan --code ./src --spec openapi.yaml%s\n\n' "$BOLD" "$RESET"
     else
         warn "fendix installed but not in PATH. Add ${INSTALL_DIR} to your PATH,"
         warn "or re-run with FENDIX_DIR pointing at a directory already on PATH:"
