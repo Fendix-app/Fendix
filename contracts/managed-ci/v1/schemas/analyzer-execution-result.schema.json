@@ -1,0 +1,50 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v1/analyzer-execution-result.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "analyzer_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/identifier"
+    },
+    "analyzer_version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "attempts": {
+      "maximum": 10,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "duration_ms": {
+      "maximum": 86400000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "finding_count": {
+      "maximum": 10000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "reason_code": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "status": {
+      "enum": ["completed", "failed", "skipped", "not_applicable"]
+    }
+  },
+  "required": [
+    "analyzer_id",
+    "analyzer_version",
+    "status",
+    "reason_code",
+    "attempts",
+    "duration_ms",
+    "finding_count"
+  ],
+  "title": "Analyzer execution result",
+  "type": "object"
+}

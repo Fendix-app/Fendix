@@ -1,0 +1,41 @@
+{
+  "forbid_absolute_paths": true,
+  "forbid_user_path_prefixes": [
+    "Users/",
+    "home/"
+  ],
+  "maximum_canonical_body_bytes": 8388608,
+  "path_fields": [
+    "path"
+  ],
+  "prohibited_keys": [
+    "authoritative_verdict",
+    "authorization",
+    "coverage_conclusion",
+    "env",
+    "environment_variables",
+    "github_token",
+    "headers",
+    "http_body",
+    "logs",
+    "raw_github_token",
+    "raw_log",
+    "request_body",
+    "response_body",
+    "repository_archive",
+    "risk_score",
+    "source_archive",
+    "source_content",
+    "source_file",
+    "verdict"
+  ],
+  "schema_version": "managed-ci-semantic-rules/v1",
+  "secret_patterns": [
+    "TEST_SECRET_DO_NOT_USE_[A-Za-z0-9]{8,}",
+    "github_pat_[A-Za-z0-9_]{20,}",
+    "gh[pousr]_[A-Za-z0-9]{20,}",
+    "AKIA[0-9A-Z]{16}",
+    "-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+    "(?:authorization|Authorization)\\s*:\\s*bearer\\s+\\S+"
+  ]
+}

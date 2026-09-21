@@ -4,3 +4,4 @@ pyyaml>=6.0.3
 openapi-spec-validator>=0.9.0
 detect-secrets>=1.5.0
 packaging>=26.2
+jsonschema>=4.25.1,<5

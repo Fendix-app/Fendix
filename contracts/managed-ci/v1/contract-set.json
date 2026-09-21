@@ -1,0 +1,63 @@
+{
+  "contract": "managed-ci/v1",
+  "json_schema_draft": "2020-12",
+  "maximum_analyzers": 200,
+  "maximum_canonical_body_bytes": 8388608,
+  "maximum_findings": 10000,
+  "schemas": [
+    {
+      "file": "schemas/analyzer-execution-result.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/analyzer-execution-result.schema.json"
+    },
+    {
+      "file": "schemas/authoritative-decision-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/authoritative-decision-response.schema.json"
+    },
+    {
+      "file": "schemas/common.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json"
+    },
+    {
+      "file": "schemas/coverage-state.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/coverage-state.schema.json"
+    },
+    {
+      "file": "schemas/decision-record-reference.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/decision-record-reference.schema.json"
+    },
+    {
+      "file": "schemas/error-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/error-response.schema.json"
+    },
+    {
+      "file": "schemas/evidence-manifest.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/evidence-manifest.schema.json"
+    },
+    {
+      "file": "schemas/evidence-submission-request.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/evidence-submission-request.schema.json"
+    },
+    {
+      "file": "schemas/evidence-submission-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/evidence-submission-response.schema.json"
+    },
+    {
+      "file": "schemas/managed-scan-context.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/managed-scan-context.schema.json"
+    },
+    {
+      "file": "schemas/sanitized-github-summary.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/sanitized-github-summary.schema.json"
+    },
+    {
+      "file": "schemas/sanitized-sarif-publication-input.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/sanitized-sarif-publication-input.schema.json"
+    },
+    {
+      "file": "schemas/scan-status-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v1/scan-status-response.schema.json"
+    }
+  ],
+  "semantic_rules": "semantic-rules.json",
+  "state_machine": "state-machine.json"
+}

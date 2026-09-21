@@ -1,0 +1,67 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v1/coverage-state.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "files_considered": {
+      "maximum": 10000000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "gaps": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "analyzer_id": {
+            "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/identifier"
+          },
+          "detail": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "required": ["analyzer_id", "reason_code"],
+        "type": "object"
+      },
+      "maxItems": 200,
+      "type": "array"
+    },
+    "manifests_considered": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "observed_analyzers": {
+      "items": {
+        "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/identifier"
+      },
+      "maxItems": 200,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "required_analyzers": {
+      "items": {
+        "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/identifier"
+      },
+      "maxItems": 200,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "contract_version",
+    "required_analyzers",
+    "observed_analyzers",
+    "gaps"
+  ],
+  "title": "Coverage facts supplied by the runner",
+  "type": "object"
+}

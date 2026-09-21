@@ -1,0 +1,9 @@
+{
+  "accepted_at": "2026-09-21T12:03:01Z",
+  "api_version": "managed-ci/v1",
+  "evidence_submission_id": "44444444-4444-4444-8444-444444444444",
+  "expires_at": "2026-09-21T12:18:01Z",
+  "scan_execution_id": "33333333-3333-4333-8333-333333333333",
+  "state": "accepted",
+  "status_url": "https://api.fendix.dev/api/ci/v1/submissions/44444444-4444-4444-8444-444444444444"
+}

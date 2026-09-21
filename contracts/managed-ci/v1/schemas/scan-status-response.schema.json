@@ -1,0 +1,121 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v1/scan-status-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "completed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "$ref": "https://schemas.fendix.dev/managed-ci/v1/authoritative-decision-response.schema.json"
+          },
+          "retryable": {
+            "const": false
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "failed",
+              "cancelled",
+              "superseded"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "retryable": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "superseded"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "superseded_by_scan_execution_id": {
+            "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/uuid"
+          }
+        },
+        "required": [
+          "superseded_by_scan_execution_id"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "api_version": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/api_version"
+    },
+    "decision": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/authoritative-decision-response.schema.json"
+    },
+    "error": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/error-response.schema.json"
+    },
+    "evidence_submission_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/uuid"
+    },
+    "poll_after_ms": {
+      "maximum": 60000,
+      "minimum": 250,
+      "type": "integer"
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "scan_execution_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/uuid"
+    },
+    "state": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/state"
+    },
+    "superseded_by_scan_execution_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/uuid"
+    },
+    "updated_at": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "api_version",
+    "scan_execution_id",
+    "evidence_submission_id",
+    "state",
+    "retryable",
+    "updated_at"
+  ],
+  "title": "Managed scan status response",
+  "type": "object"
+}
