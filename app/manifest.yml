@@ -19,12 +19,10 @@ hook_attributes:
   # active is true by default; explicit for clarity.
   active: true
 redirect_url: https://get.fendix.dev/installed
+# Detailed decision semantics live in docs/DECISION_POLICY.md.
 description: |
-  DAST + SAST as one PR check. Fails only when both engines confirm.
-  Fendix scans every pull request: black-box probes against the deployed
-  preview, white-box analysis against the source diff, and posts a single
-  PR comment plus uploads SARIF to the Code Scanning tab. Findings only
-  fail the build when both the runtime probe and the static analyzer agree.
+  Applies release policy to supported security evidence and returns
+  explainable BLOCK, WARN, INFO, or INCOMPLETE decisions.
 public: true
 default_events:
   # The PR-event handler clones the head SHA, runs fendix scan, and posts
@@ -39,7 +37,7 @@ default_permissions:
   # Read+write to Code Scanning to upload the scan's SARIF.
   security_events: write
   # Read+write to checks so the App can publish a check-run that gates
-  # the merge button on confirmed findings.
+  # the merge button on policy-blocking findings.
   checks: write
   # Write to PRs so the App can post the findings-summary comment.
   pull_requests: write

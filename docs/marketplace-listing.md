@@ -12,7 +12,7 @@ Fendix
 
 ## Short description (80 chars max)
 
-DAST + SAST as one PR check. Correlated findings get elevated severity.
+Evidence-backed application security decisions for CI/CD.
 
 ## Detailed description
 
@@ -22,7 +22,7 @@ Fendix scans every pull request with two engines working together:
 
 **White-box (SAST):** Analyzes your source code for hardcoded secrets, dependency CVEs (real call-graph reachability for Go via `golang.org/x/vuln`, OSV.dev for PyPI and npm), and taint chains across 7 sink classes — SQL injection, SSRF, open redirect, XSS, command injection, path traversal, and insecure deserialization.
 
-**The key insight:** When both engines agree on the same vulnerability, Fendix escalates severity and confidence — correlated findings rise above the noise. When taint analysis also proves data flows from a request source to a dangerous sink, severity escalates a second time (e.g., MEDIUM → CRITICAL). You control the `fail_on` threshold, so you can choose to only block merges on high-confidence correlated findings.
+**The key insight:** Independent evidence about the same vulnerability can raise confidence and severity, while strong deterministic single-source evidence can also block. Medium-confidence evidence may require corroboration, and incomplete coverage remains distinct from a security finding. The committed policy and confidence rules determine BLOCK, WARN, INFO, or INCOMPLETE outcomes; see [DECISION_POLICY.md](DECISION_POLICY.md).
 
 **Measured accuracy (current binary, 2026-06-30):** F1 = 1.000 on the labeled synthetic corpus (38 TPs / 0 FPs / 0 FNs across 7 detection categories — reproduced and CI-gated; v0.26 disclosed one multi-hop SSRF false negative, fixed in v0.27); P/R/F1 = 1.000 on the 40-case Python taint-engine corpus (CI-gated). Real-world: DVWA 13/13 and OWASP Juice Shop 12 findings (regression coverage of the unauthenticated surface; 5 raw FPs — no FP-*rate* claimed without a negative corpus). Full methodology + caveats + reproduce commands in [BENCHMARKS.md](https://github.com/Fendix-app/Fendix/blob/main/BENCHMARKS.md).
 
@@ -32,7 +32,8 @@ Fendix scans every pull request with two engines working together:
 2. Runs a hybrid scan (SAST over source + DAST if a preview URL is available)
 3. Posts a single PR comment summarizing findings by severity
 4. Uploads SARIF to the Code Scanning tab (inline annotations on changed lines)
-5. Blocks merge based on your configured `fail_on` threshold (default: HIGH)
+5. Applies the committed confidence and evidence policy at your configured
+   `fail_on` severity threshold (default: HIGH)
 
 ### Features
 

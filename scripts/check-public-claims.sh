@@ -1,16 +1,8 @@
 #!/bin/sh
 set -eu
 
-# Keep the retired "both engines must confirm" marketing rule from returning.
-# Correlation can raise confidence, but current policy may also block a strong,
-# deterministic single-source finding; coverage gaps are a separate INCOMPLETE
-# outcome.
-if rg -n -i \
-  'fails?( the build)? only when both engines confirm|both engines must agree|runtime probe and static analysis must agree before fendix fails|multiple engines confirm a vulnerability|findings only fail ci when both engines confirm|only (confirmed, )?correlated(, reachable)? findings block' \
-  README.md docs scripts/release/mirror-pages-bootstrap; then
-  echo "obsolete multi-engine-only claim found" >&2
-  exit 1
-fi
+python3 scripts/check-public-claims.py --self-test
+python3 scripts/check-public-claims.py
 
 REDIRECT='https://www.fendix.dev/docs/getting-started'
 grep -F "http-equiv=\"refresh\" content=\"0; url=${REDIRECT}\"" scripts/release/mirror-pages-bootstrap/index.html >/dev/null

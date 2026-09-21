@@ -1,7 +1,7 @@
 # Shipping Fendix — Release Runbook
 
-> Use this every time you cut a new version. Last updated: 2026-08-05
-> (reconciled against `.github/workflows/release.yml` at v1.1.0).
+> Use this every time you cut a new version. Last updated: 2026-09-21
+> (reconciled against `.github/workflows/release.yml` after v3.4.1).
 >
 > Operator-only prerequisites that an agent cannot perform (cosign repo
 > variable, DNS, license posture) live in [`RELEASE_RUNBOOK.md`](RELEASE_RUNBOOK.md).
@@ -49,11 +49,12 @@ The pipeline at `.github/workflows/release.yml` runs end-to-end on every `v*` ta
 |---|---|---|
 | `enforce-signing` | Gate: fails the tag unless `vars.COSIGN_ENABLED=true` (or the explicit `allow-unsigned` escape hatch). Runs first; everything else `needs` it | Pass/fail — an unsigned official release cannot happen by accident |
 | `release` (×4 matrix) | Cross-compiles for linux/amd64, **linux/arm64**, darwin/amd64, darwin/arm64 (no embedded Python engine since TASK-118 — `make embed-engine` resets the embed dir to a placeholder); builds `.deb` + `.rpm` via nfpm on the linux targets; cosign-signs binaries + packages + SBOMs; emits CycloneDX + SPDX SBOMs and SLSA v1.0 provenance; computes sha256 | Workflow artifacts `fendix-{linux,darwin}-{amd64,arm64}` plus `.deb`/`.rpm`/`.sig`/`.crt`/`.cdx.json`/`.spdx.json`/`.intoto.jsonl` sidecars |
-| `publish` | Downloads matrix artifacts, creates engine-repo GitHub Release | <https://github.com/Abdel-RahmanSaied/Fendix/releases/tag/vX.Y.Z> |
-| `docker` | Builds + pushes multi-arch container image to GHCR (linux/amd64 + linux/arm64) | `ghcr.io/abdel-rahmansaied/fendix:vX.Y.Z` and `:latest` |
-| `mirror` | Creates mirror release with binaries+sha256, auto-rewrites `Formula/fendix.rb` in mirror's main with fresh SHA256s | <https://github.com/Abdel-RahmanSaied/homebrew-fendix/releases/tag/vX.Y.Z> |
+| `publish` | Downloads matrix artifacts, creates the engine-repository GitHub Release | <https://github.com/Fendix-app/Fendix/releases/tag/vX.Y.Z> |
+| `docker` | Gates a multi-architecture candidate, publishes the immutable version to Docker Hub, verifies its clean pull and attestations, then moves convenience tags | `docker.io/fendixapp/fendix:X.Y.Z`, `:X.Y`, `:X`, and `:latest` for stable releases |
+| `mirror` | Creates the public mirror release with binaries and checksums, then updates `Formula/fendix.rb` with fresh SHA-256 values | <https://github.com/Fendix-app/homebrew-fendix/releases/tag/vX.Y.Z> |
 
-The mirror exists because the engine repo is private — anonymous users can't pull from a private GitHub Releases page, so install paths are routed through the public `homebrew-fendix` mirror.
+The public mirror provides the Homebrew tap, installer host, and compatibility
+release assets independently of the source repository.
 
 ---
 
@@ -61,9 +62,9 @@ The mirror exists because the engine repo is private — anonymous users can't p
 
 ```bash
 # Verify (~30 sec)
-gh release view vX.Y.Z -R Abdel-RahmanSaied/Fendix
-gh release view vX.Y.Z -R Abdel-RahmanSaied/homebrew-fendix
-docker pull ghcr.io/abdel-rahmansaied/fendix:vX.Y.Z  # multi-arch manifest picks the right platform
+gh release view vX.Y.Z -R Fendix-app/Fendix
+gh release view vX.Y.Z -R Fendix-app/homebrew-fendix
+docker pull docker.io/fendixapp/fendix:X.Y.Z  # multi-arch manifest picks the right platform
 ```
 
 Optional: spot-check that `brew install fendix` (with the tap already added) picks up the new version.
@@ -74,7 +75,7 @@ No README update needed for normal patch/minor releases — the install commands
 
 ## Versioning rules of thumb
 
-Fendix is post-1.0 (current release **v1.1.0**, 2026-07-08), so SemVer applies
+Fendix is post-1.0 (current release **v3.4.1**), so SemVer applies
 at full strength — the pre-1.0 "minor bump = breaking is fine" latitude is gone.
 
 | Bump | When | Examples from history |
@@ -118,7 +119,7 @@ When unsure, prefer the larger bump. Cheap.
 To re-tag:
 
 ```bash
-gh release delete vX.Y.Z -R Abdel-RahmanSaied/Fendix --cleanup-tag --yes
+gh release delete vX.Y.Z -R Fendix-app/Fendix --cleanup-tag --yes
 git tag -d vX.Y.Z
 # fix on main, push, then:
 git tag -a vX.Y.Z -m "..."
@@ -131,10 +132,10 @@ git push origin vX.Y.Z
 
 **One-time setup (already done; don't redo):**
 
-- Public mirror repo: `Abdel-RahmanSaied/homebrew-fendix`
+- Public mirror repo: `Fendix-app/homebrew-fendix`
 - `DIST_REPO_TOKEN` secret on engine repo (PAT with `Contents: write` on the mirror)
-- GHCR package visibility set to public for `ghcr.io/abdel-rahmansaied/fendix`
-- Homebrew tap usable as `brew tap Abdel-RahmanSaied/fendix`
+- Docker Hub repository metadata and CI credentials configured for `fendixapp/fendix`
+- Homebrew tap usable as `brew tap Fendix-app/fendix`
 
 **Every release:**
 

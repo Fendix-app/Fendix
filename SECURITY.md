@@ -106,7 +106,7 @@ keyless mode** — Sigstore Fulcio + GitHub Actions OIDC. There is no
 shared key to leak; signatures are bound to the GitHub Actions
 identity that produced them.
 
-### Verifying a binary
+### Verifying current binaries
 
 ```sh
 # After downloading both fendix-vX.Y.Z-linux-amd64 and the .sig + .crt
@@ -114,7 +114,7 @@ identity that produced them.
 cosign verify-blob \
   --certificate fendix-vX.Y.Z-linux-amd64.crt \
   --signature   fendix-vX.Y.Z-linux-amd64.sig \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   fendix-vX.Y.Z-linux-amd64
 ```
@@ -125,9 +125,14 @@ identity, wrong signing time, tampered binary — exits non-zero.
 ### Verifying the Docker image
 
 ```sh
-cosign verify ghcr.io/abdel-rahmansaied/fendix:vX.Y.Z \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+REF='docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/heads/main$'
+ISSUER='https://token.actions.githubusercontent.com'
+
+cosign verify \
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$REF"
 ```
 
 ### Verifying SLSA build provenance
@@ -141,17 +146,21 @@ the source commit SHA, the runner identity, and the build inputs.
 # Per-binary SLSA provenance (the .intoto.jsonl sidecar):
 cosign verify-blob-attestation \
   --signature fendix-vX.Y.Z-linux-amd64.intoto.jsonl \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   --type slsaprovenance1 \
   fendix-vX.Y.Z-linux-amd64
 
-# Docker image SLSA provenance (via Rekor):
+# Docker image SLSA provenance for the immutable v3.4.1 digest (via Rekor):
+REF='docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/heads/main$'
+ISSUER='https://token.actions.githubusercontent.com'
+
 cosign verify-attestation \
   --type slsaprovenance1 \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/abdel-rahmansaied/fendix:vX.Y.Z
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$REF"
 ```
 
 SLSA level claim: **L2** (hosted, non-forgeable OIDC, automated,
@@ -172,21 +181,46 @@ carries an in-toto attestation uploaded to Rekor.
 cosign verify-blob \
   --certificate fendix-vX.Y.Z-linux-amd64.cdx.json.crt \
   --signature   fendix-vX.Y.Z-linux-amd64.cdx.json.sig \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
+  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   fendix-vX.Y.Z-linux-amd64.cdx.json
 
 # Docker image SBOM attestation (verifies against the Rekor log):
+REF='docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/heads/main$'
+ISSUER='https://token.actions.githubusercontent.com'
+
 cosign verify-attestation \
   --type cyclonedx \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/abdel-rahmansaied/fendix:vX.Y.Z
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$REF"
 ```
 
 Pipe the verified CycloneDX into your usual SBOM-consuming tooling
 (e.g. `grype` for CVE scanning, the Dependency-Track upload API for
 procurement records).
+
+### Historical binary verification through v3.4.1
+
+Binary certificates through v3.4.1 retain the immutable workflow identity
+from before the repository transfer. Use the historical identity only for
+those existing artifacts:
+
+```sh
+VERSION=v3.4.1
+ASSET=fendix-${VERSION}-linux-amd64
+
+cosign verify-blob \
+  --certificate "$ASSET.crt" \
+  --signature "$ASSET.sig" \
+  --certificate-identity "https://github.com/Abdel-RahmanSaied/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "$ASSET"
+```
+
+Do not use this historical identity for current releases or the official
+Docker Hub image.
 
 ### Until cosign is enabled
 

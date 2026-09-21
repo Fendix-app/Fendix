@@ -1,0 +1,122 @@
+[
+  {
+    "id": "changelog-personal-engine-links",
+    "path": "CHANGELOG.md",
+    "detector": "personal_repository_url",
+    "pattern": "https://github\\.com/Abdel-RahmanSaied/Fendix",
+    "expected_count": 4,
+    "reason": "Immutable historical release notes record the repository and signing identity in use when those releases shipped.",
+    "classification": "historical",
+    "removal_condition": "Permanent historical record; do not rewrite released changelog entries."
+  },
+  {
+    "id": "changelog-personal-mirror-links",
+    "path": "CHANGELOG.md",
+    "detector": "personal_repository_url",
+    "pattern": "https://github\\.com/Abdel-RahmanSaied/homebrew-fendix",
+    "expected_count": 3,
+    "reason": "Immutable historical release notes record the public mirror used by those releases.",
+    "classification": "historical",
+    "removal_condition": "Permanent historical record; do not rewrite released changelog entries."
+  },
+  {
+    "id": "changelog-personal-container-paths",
+    "path": "CHANGELOG.md",
+    "detector": "personal_ghcr_path",
+    "pattern": "ghcr\\.io/abdel-rahmansaied/fendix",
+    "expected_count": 3,
+    "reason": "Immutable release notes describe the registry path that existed when those versions shipped.",
+    "classification": "historical",
+    "removal_condition": "Permanent historical record; do not rewrite released changelog entries."
+  },
+  {
+    "id": "changelog-retired-positioning",
+    "path": "CHANGELOG.md",
+    "detector": "obsolete_multi_engine_blocking_claim",
+    "pattern": "fails only\\s+when\\s+both engines confirm",
+    "expected_count": 3,
+    "reason": "Immutable release notes quote the marketing wording introduced by those releases.",
+    "classification": "historical",
+    "removal_condition": "Permanent historical record; current product surfaces must not repeat the wording."
+  },
+  {
+    "id": "historical-due-diligence-positioning",
+    "path": "FENDIX_VC_DUE_DILIGENCE_2026-06-07.md",
+    "detector": "obsolete_multi_engine_blocking_claim",
+    "pattern": "(?:fails only when both engines confirm|both engines must agree)",
+    "expected_count": 4,
+    "reason": "Dated diligence report preserves the claims and conclusions assessed on 2026-06-07.",
+    "classification": "historical",
+    "removal_condition": "Permanent dated audit record; it is not current product metadata."
+  },
+  {
+    "id": "readme-v341-historical-signer",
+    "path": "README.md",
+    "detector": "personal_repository_url",
+    "pattern": "https://github\\.com/Abdel-RahmanSaied/Fendix",
+    "expected_count": 1,
+    "reason": "The v3.4.1 binary certificate is immutable and requires its pre-transfer signer identity.",
+    "classification": "historical",
+    "removal_condition": "Permanent while v3.4.1 binary verification remains documented; the surrounding text must label it historical."
+  },
+  {
+    "id": "security-v341-historical-signer",
+    "path": "SECURITY.md",
+    "detector": "personal_repository_url",
+    "pattern": "https://github\\.com/Abdel-RahmanSaied/Fendix",
+    "expected_count": 1,
+    "reason": "The dedicated historical subsection verifies immutable binary certificates through v3.4.1.",
+    "classification": "historical",
+    "removal_condition": "Permanent while affected release artifacts remain available; never reuse as the current identity."
+  },
+  {
+    "id": "install-v341-historical-signers",
+    "path": "docs/install.md",
+    "detector": "personal_repository_url",
+    "pattern": "https://github\\.com/Abdel-RahmanSaied/Fendix",
+    "expected_count": 2,
+    "reason": "Binary and package examples verify immutable v3.4.1 certificates issued before the transfer.",
+    "classification": "historical",
+    "removal_condition": "Permanent while v3.4.1 installation verification remains documented; keep the historical label."
+  },
+  {
+    "id": "engine-registry-migration-compatibility",
+    "path": "docs/container-registry-migration.md",
+    "detector": "personal_ghcr_path",
+    "pattern": "ghcr\\.io/abdel-rahmansaied/fendix",
+    "expected_count": 1,
+    "reason": "The migration record identifies the retained engine compatibility image and instructs maintainers not to delete it.",
+    "classification": "compatibility",
+    "removal_condition": "Remove only after the documented compatibility window ends and no supported installation depends on it."
+  },
+  {
+    "id": "github-app-unverified-compatibility-image",
+    "path": "deploy/k8s/fendix-app.yaml",
+    "detector": "personal_ghcr_path",
+    "pattern": "ghcr\\.io/abdel-rahmansaied/fendix-app",
+    "expected_count": 1,
+    "reason": "The application image has no verified brand-owned replacement; changing this reference now would invent an unavailable image.",
+    "classification": "compatibility",
+    "removal_condition": "Replace with a verified brand-owned immutable digest after the publication gates in docs/github-app-image-status.md pass."
+  },
+  {
+    "id": "historical-dast-plan-container",
+    "path": "docs/superpowers/plans/2026-06-18-dast-full-upgrade.md",
+    "detector": "personal_ghcr_path",
+    "pattern": "ghcr\\.io/abdel-rahmansaied/fendix",
+    "expected_count": 1,
+    "reason": "Dated implementation plan records the container path used by the original rollout.",
+    "classification": "historical",
+    "removal_condition": "Permanent dated design record; current installation guidance is enforced separately."
+  },
+  {
+    "id": "historical-dast-spec-container",
+    "path": "docs/superpowers/specs/2026-06-18-dast-module-refactor-design.md",
+    "detector": "personal_ghcr_path",
+    "pattern": "ghcr\\.io/abdel-rahmansaied/fendix",
+    "expected_count": 1,
+    "reason": "Dated architecture specification records the container path used by the original design.",
+    "classification": "historical",
+    "removal_condition": "Permanent dated design record; current installation guidance is enforced separately."
+  }
+]

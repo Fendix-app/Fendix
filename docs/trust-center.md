@@ -77,13 +77,20 @@ fendix scan --code . --offline
 # Reproduce the benchmark baseline:
 fendix benchmark run --target all
 
-# Verify a release signature (if you have cosign):
-cosign verify-blob --certificate fendix-<ver>-<os>-<arch>.crt \
-  --signature fendix-<ver>-<os>-<arch>.sig \
-  --certificate-identity-regexp "^https://github.com/Abdel-RahmanSaied/Fendix/" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  fendix-<ver>-<os>-<arch>
+# Verify the current public container at its immutable v3.4.1 digest:
+REF='docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/heads/main$'
+ISSUER='https://token.actions.githubusercontent.com'
+
+cosign verify \
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$REF"
 ```
+
+See [install.md](install.md#verifying-release-artifacts-cosign) for binary verification,
+including the clearly scoped historical identity required by releases through
+v3.4.1.
 
 Found a gap between a claim here and reality? That's a security report —
 see [SECURITY.md](../SECURITY.md).

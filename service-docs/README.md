@@ -149,7 +149,7 @@ fendix scan --url https://api.example.com --fail-on CRITICAL
 ### Build from source
 
 ```bash
-git clone https://github.com/Abdel-RahmanSaied/Fendix.git
+git clone https://github.com/Fendix-app/Fendix.git
 cd fendix
 make build
 # Binary at: ./bin/fendix
