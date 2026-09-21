@@ -34,7 +34,7 @@ A white-box `--code` scan over a **working tree** reads gitignored files too. If
 ### 2.1 Install
 
 ```bash
-# Install script (routes through the public homebrew-fendix mirror)
+# Install script (served from the official Homebrew compatibility host)
 curl -fsSL https://get.fendix.dev/install.sh | sh
 
 # Pin a specific version
@@ -47,10 +47,10 @@ fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
 Or run the published Docker image (bundles Python + all static-analysis deps, so hybrid mode works out of the box):
 
 ```bash
-docker run --rm ghcr.io/abdel-rahmansaied/fendix scan --url https://example.com
+docker run --rm fendixapp/fendix:3.4.1 scan --url https://example.com
 ```
 
-> **Note:** `get.fendix.dev` currently uses the legacy public `Abdel-RahmanSaied/homebrew-fendix` mirror for installer compatibility. Engine source now lives in the public `Fendix-app/Fendix` repository. The root marketing page is scheduled to redirect to the canonical Fendix documentation; `/install.sh` must remain available until the installer has a verified brand-owned endpoint.
+> **Note:** `get.fendix.dev` is served from the official `Fendix-app/homebrew-fendix` repository. Its root page redirects clients to the canonical documentation, while `/install.sh` remains the stable installer endpoint.
 
 ### 2.2 The subcommands
 
@@ -406,14 +406,14 @@ What the steps do: install via `curl … get.fendix.dev/install.sh | sh` → `fe
 
 The engine source repository (`Fendix-app/Fendix`) is public, so `uses: Fendix-app/Fendix@v1` resolves from public and private consumers. Pin the Action to a full commit SHA in high-assurance workflows and update the pin deliberately.
 
-The existing GHCR compatibility image is also public and can be pulled anonymously. The canonical Docker Hub path will replace it in this guide only after `fendixapp/fendix` has been published and independently verified.
+The canonical Docker Hub image is public and can be pulled anonymously. The previous GHCR image remains a compatibility path for existing consumers.
 
-### 3.3 Option B — The GHCR image, invoked directly (the robust path)
+### 3.3 Option B — The Docker image, invoked directly
 
 Bypass `uses:` and run the public image. It bundles Python + all static-analysis deps, so hybrid/white-box work out of the box.
 
 ```yaml
-name: Fendix Security Scan (GHCR direct)
+name: Fendix Security Scan (Docker direct)
 on: [pull_request, push]
 
 permissions:
@@ -424,7 +424,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Pin by digest for reproducibility / supply-chain integrity
-      image: ghcr.io/abdel-rahmansaied/fendix@sha256:163ca22b8d36b6649a45161efa1daa51677bcd6565158e97f393dd89ec8e703d
+      image: fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a
     steps:
       - uses: actions/checkout@v4
         with:
@@ -447,11 +447,11 @@ Or as a one-shot `docker run` step (e.g. from a non-container job):
 
 ```bash
 docker run --rm -v "$PWD:/src" -w /src \
-  ghcr.io/abdel-rahmansaied/fendix@sha256:163ca22b8d36b6649a45161efa1daa51677bcd6565158e97f393dd89ec8e703d \
+  fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a \
   scan --code . --format json --output findings.json --fail-on HIGH
 ```
 
-- **Version v0.19.0 image digest:** `sha256:163ca22b8d36b6649a45161efa1daa51677bcd6565158e97f393dd89ec8e703d` (public, anonymously pullable; multi-arch linux/amd64 + linux/arm64).
+- **Version v3.4.1 image digest:** `sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a` (public, anonymously pullable; multi-arch `linux/amd64` + `linux/arm64`).
 - **Pin by digest** (not a floating tag) for reproducible, tamper-evident builds — this is the form the release workflow itself signs and references.
 
 ### 3.4 `--fail-on` gating and exit codes
@@ -968,7 +968,7 @@ Approval (admin-only) flips the org's plan to the requested plan, sets `status=A
 | `extra-args` | `""` | Raw args appended to `fendix scan` |
 | `engine_path` | `""` | Python engine dir (empty = auto) |
 
-**Pinned image (v0.19.0):** `ghcr.io/abdel-rahmansaied/fendix@sha256:163ca22b8d36b6649a45161efa1daa51677bcd6565158e97f393dd89ec8e703d`
+**Pinned image (v3.4.1):** `fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a`
 
 ---
 
