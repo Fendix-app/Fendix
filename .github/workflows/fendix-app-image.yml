@@ -58,7 +58,7 @@ jobs:
       - name: Install Kustomize and Kubeconform
         run: |
           go install sigs.k8s.io/kustomize/kustomize/v5@v5.8.1
-          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
 
       - name: Render and validate Kubernetes resources
         run: |
