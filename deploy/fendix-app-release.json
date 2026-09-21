@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "image": "docker.io/fendixapp/fendix-app",
+  "version": "3.4.1",
+  "publication_tag": "fendix-app-v3.4.1-r2",
+  "source_tag": "v3.4.1",
+  "source_commit": "1bc69125c1af330d303f0ddd58e4db10fc6f2d3c",
+  "digest": "sha256:cdd0fabae6e80abbc3724628e876680f630f2005d378fd47b19265c86fd24d46",
+  "platform_digests": {
+    "linux/amd64": "sha256:45333aba57779d7a5d0b4d16b443b8585401c73880dd16642c82706cfed27e63",
+    "linux/arm64": "sha256:b7303fb1ccca2a2be2c1fa605a7da31c68a7593edf29c12072e865fb9879a3aa"
+  },
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "publication_run": "https://github.com/Fendix-app/Fendix/actions/runs/35589325882",
+  "certificate_identity": "https://github.com/Fendix-app/Fendix/.github/workflows/fendix-app-image.yml@refs/tags/fendix-app-v3.4.1-r2"
+}

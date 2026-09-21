@@ -9,10 +9,10 @@
 # Deploy:
 #   kubectl apply -f deploy/k8s/fendix-app.yaml
 #
-# This is a starting template, not a production-ready deployment. Its retained
-# image reference has not passed the current official publication gates; see
-# docs/github-app-image-status.md before using this manifest. Adjust the image,
-# replicas, ingress class/host, and TLS secret to your cluster's conventions.
+# This is a starting template, not a production-ready deployment. The official
+# image is pinned to its verified manifest digest and supports linux/amd64 and
+# linux/arm64. Pull access is anonymous. Adjust replicas, ingress class/host,
+# and the TLS secret to your cluster's conventions.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -54,7 +54,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: fendix-app
-          image: ghcr.io/abdel-rahmansaied/fendix-app:latest
+          # Official application image version: 3.4.1
+          image: docker.io/fendixapp/fendix-app@sha256:cdd0fabae6e80abbc3724628e876680f630f2005d378fd47b19265c86fd24d46
           ports:
             - containerPort: 8080
               protocol: TCP

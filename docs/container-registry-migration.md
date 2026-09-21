@@ -100,6 +100,21 @@ Public Docker instructions now use `fendixapp/fendix`. The compatibility GHCR
 image remains available for existing consumers and has no announced retirement
 date.
 
+## GitHub App image migration
+
+The GitHub App image is a separate distribution from the CLI/engine image. Its
+official public repository is `docker.io/fendixapp/fendix-app`. Version `3.4.1`
+is pinned by the Kubernetes reference deployment to:
+
+```text
+docker.io/fendixapp/fendix-app@sha256:cdd0fabae6e80abbc3724628e876680f630f2005d378fd47b19265c86fd24d46
+```
+
+The previous `ghcr.io/abdel-rahmansaied/fendix-app:latest` reference is retained
+here only as migration history. It is no longer used by a current deployment
+manifest and must not be restored as an official application-image path. The
+migration did not delete, overwrite, or retag that legacy package.
+
 ## Intentional legacy identifiers
 
 - The Go module path and Go imports remain `github.com/Abdel-RahmanSaied/Fendix`. Changing them would break import compatibility and requires a separate major-version migration.
