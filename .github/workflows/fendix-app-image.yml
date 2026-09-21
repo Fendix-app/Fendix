@@ -1,0 +1,558 @@
+name: Official Fendix App Image
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/fendix-app-image.yml"
+      - "Dockerfile.app"
+      - "deploy/fendix-app-release.json"
+      - "deploy/k8s/fendix-app.yaml"
+      - "docs/github-app-image-status.md"
+      - "docs/github-app.md"
+      - "docs/container-registry-migration.md"
+      - "go/cmd/fendix-app/**"
+      - "go/internal/ghapp/**"
+      - "python/**"
+      - "scripts/check-public-claims.py"
+      - "scripts/public-claims-allowlist.json"
+      - "scripts/verify-fendix-app-image.sh"
+  push:
+    tags:
+      - "fendix-app-v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      application_release_tag:
+        description: "Existing fendix-app-vX.Y.Z tag to publish (backfill/recovery only)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fendix-app-image-${{ github.event.pull_request.number || inputs.application_release_tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-source-and-platforms:
+    name: Validate app image (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Check out reviewed automation
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: automation
+
+      - name: Validate release contract
+        id: contract
+        working-directory: automation
+        run: |
+          set -euo pipefail
+          IMAGE="$(jq -er .image deploy/fendix-app-release.json)"
+          VERSION="$(jq -er .version deploy/fendix-app-release.json)"
+          SOURCE_TAG="$(jq -er .source_tag deploy/fendix-app-release.json)"
+          SOURCE_COMMIT="$(jq -er .source_commit deploy/fendix-app-release.json)"
+          [ "$IMAGE" = "docker.io/fendixapp/fendix-app" ]
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          [ "$SOURCE_TAG" = "v${VERSION}" ]
+          echo "$SOURCE_COMMIT" | grep -Eq '^[0-9a-f]{40}$'
+          jq -e '.platforms == ["linux/amd64", "linux/arm64"]' deploy/fendix-app-release.json >/dev/null
+          REMOTE_COMMIT="$(git ls-remote https://github.com/Fendix-app/Fendix.git "refs/tags/${SOURCE_TAG}^{}" | awk '{print $1}')"
+          [ -n "$REMOTE_COMMIT" ] || REMOTE_COMMIT="$(git ls-remote https://github.com/Fendix-app/Fendix.git "refs/tags/${SOURCE_TAG}" | awk '{print $1}')"
+          [ "$REMOTE_COMMIT" = "$SOURCE_COMMIT" ] || {
+            echo "::error::${SOURCE_TAG} does not resolve to ${SOURCE_COMMIT}."
+            exit 1
+          }
+          {
+            echo "image=$IMAGE"
+            echo "version=$VERSION"
+            echo "source_tag=$SOURCE_TAG"
+            echo "source_commit=$SOURCE_COMMIT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact application source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: Fendix-app/Fendix
+          ref: ${{ steps.contract.outputs.source_commit }}
+          path: source
+
+      - name: Confirm exact source revision
+        env:
+          SOURCE_COMMIT: ${{ steps.contract.outputs.source_commit }}
+        run: test "$(git -C source rev-parse HEAD)" = "$SOURCE_COMMIT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build exact source for this platform
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SOURCE_TAG: ${{ steps.contract.outputs.source_tag }}
+        run: |
+          set -euo pipefail
+          ARCH="${PLATFORM#linux/}"
+          mkdir -p "artifacts/${ARCH}"
+          docker buildx build \
+            --platform "$PLATFORM" \
+            --load \
+            --build-arg "VERSION=${SOURCE_TAG}" \
+            --label org.opencontainers.image.source=https://github.com/Fendix-app/Fendix \
+            --label "org.opencontainers.image.version=${SOURCE_TAG#v}" \
+            --label "org.opencontainers.image.revision=${{ steps.contract.outputs.source_commit }}" \
+            --file source/Dockerfile.app \
+            --tag "fendix-app-validation:${ARCH}" \
+            source 2>&1 | tee "artifacts/${ARCH}/build.log"
+
+      - name: Verify startup, health and credential boundaries
+        env:
+          FENDIX_SKIP_PULL: "1"
+          PLATFORM: ${{ matrix.platform }}
+          SOURCE_TAG: ${{ steps.contract.outputs.source_tag }}
+        run: |
+          ARCH="${PLATFORM#linux/}"
+          automation/scripts/verify-fendix-app-image.sh \
+            "fendix-app-validation:${ARCH}" "$PLATFORM" "$SOURCE_TAG" "artifacts/${ARCH}"
+
+  publish:
+    name: Publish, attest and verify immutable image
+    if: github.event_name != 'pull_request'
+    needs: validate-source-and-platforms
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.promote.outputs.digest }}
+      amd64_digest: ${{ steps.manifest.outputs.amd64_digest }}
+      arm64_digest: ${{ steps.manifest.outputs.arm64_digest }}
+    steps:
+      - name: Check out reviewed automation
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.application_release_tag || github.sha }}
+          fetch-depth: 0
+          path: automation
+
+      - name: Resolve and validate application release
+        id: contract
+        working-directory: automation
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_TAG: ${{ inputs.application_release_tag || github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IMAGE="$(jq -er .image deploy/fendix-app-release.json)"
+          VERSION="$(jq -er .version deploy/fendix-app-release.json)"
+          SOURCE_TAG="$(jq -er .source_tag deploy/fendix-app-release.json)"
+          SOURCE_COMMIT="$(jq -er .source_commit deploy/fendix-app-release.json)"
+          EXPECTED_APP_TAG="fendix-app-v${VERSION}"
+          [ "$IMAGE" = "docker.io/fendixapp/fendix-app" ]
+          [ "$SOURCE_TAG" = "v${VERSION}" ]
+          [ "$REQUESTED_TAG" = "$EXPECTED_APP_TAG" ] || {
+            echo "::error::Expected application release tag ${EXPECTED_APP_TAG}."
+            exit 1
+          }
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            [ "$GITHUB_REF" = "refs/heads/main" ] || {
+              echo "::error::Manual recovery publication must run from main."
+              exit 1
+            }
+          fi
+          APP_TAG_COMMIT="$(git rev-parse "refs/tags/${REQUESTED_TAG}^{commit}")"
+          [ "$APP_TAG_COMMIT" = "$(git rev-parse HEAD)" ] || {
+            echo "::error::The reviewed workflow checkout does not match ${REQUESTED_TAG}."
+            exit 1
+          }
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${SOURCE_TAG}" \
+            --jq 'select(.draft == false and .prerelease == false) | .tag_name' \
+            | grep -Fx "$SOURCE_TAG" >/dev/null || {
+              echo "::error::Source tag must have a published stable GitHub release."
+              exit 1
+            }
+          {
+            echo "image=$IMAGE"
+            echo "version=$VERSION"
+            echo "source_tag=$SOURCE_TAG"
+            echo "source_commit=$SOURCE_COMMIT"
+            echo "application_tag=$REQUESTED_TAG"
+            echo "application_commit=$APP_TAG_COMMIT"
+            echo "workflow_identity_ref=$GITHUB_REF"
+            echo "minor=$(echo "$VERSION" | cut -d. -f1-2)"
+            echo "major=$(echo "$VERSION" | cut -d. -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact application source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: Fendix-app/Fendix
+          ref: ${{ steps.contract.outputs.source_commit }}
+          path: source
+
+      - name: Confirm exact source revision and release membership
+        env:
+          SOURCE_COMMIT: ${{ steps.contract.outputs.source_commit }}
+          SOURCE_TAG: ${{ steps.contract.outputs.source_tag }}
+        run: |
+          set -euo pipefail
+          [ "$(git -C source rev-parse HEAD)" = "$SOURCE_COMMIT" ]
+          REMOTE_COMMIT="$(git -C source ls-remote origin "refs/tags/${SOURCE_TAG}^{}" | awk '{print $1}')"
+          [ -n "$REMOTE_COMMIT" ] || REMOTE_COMMIT="$(git -C source ls-remote origin "refs/tags/${SOURCE_TAG}" | awk '{print $1}')"
+          [ "$REMOTE_COMMIT" = "$SOURCE_COMMIT" ]
+          test -f source/Dockerfile.app
+
+      - name: Require publishing configuration
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -eu
+          [ "$DOCKERHUB_USERNAME" = "fendixapp" ] || {
+            echo "::error::DOCKERHUB_USERNAME must be fendixapp."
+            exit 1
+          }
+          [ -n "$DOCKERHUB_TOKEN" ] || {
+            echo "::error::DOCKERHUB_TOKEN must grant Read/Write to fendixapp/fendix-app."
+            exit 1
+          }
+          [ "${{ vars.COSIGN_ENABLED }}" = "true" ] || {
+            echo "::error::Official app publication requires COSIGN_ENABLED=true."
+            exit 1
+          }
+
+      - name: Validate public repository and publisher authorization
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://hub.docker.com/v2/repositories/fendixapp/fendix-app/ > dockerhub-repository.json
+          jq -e '.namespace == "fendixapp" and .name == "fendix-app" and .is_private == false' dockerhub-repository.json >/dev/null
+          jq -er '(.description // "") + "\n" + (.full_description // "")' dockerhub-repository.json > dockerhub-description.txt
+          grep -F 'https://fendix.dev' dockerhub-description.txt >/dev/null
+          grep -F 'https://github.com/Fendix-app/Fendix' dockerhub-description.txt >/dev/null
+          REGISTRY_TOKEN="$(curl --fail --silent --show-error \
+            --user "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+            'https://auth.docker.io/token?service=registry.docker.io&scope=repository:fendixapp/fendix-app:pull,push' \
+            | jq -er .token)"
+          export REGISTRY_TOKEN
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+
+          part = os.environ["REGISTRY_TOKEN"].split(".")[1]
+          part += "=" * (-len(part) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(part))
+          allowed = any(
+              item.get("type") == "repository"
+              and item.get("name") == "fendixapp/fendix-app"
+              and "push" in item.get("actions", [])
+              for item in claims.get("access", [])
+          )
+          if not allowed:
+              raise SystemExit("Docker Hub token cannot push fendixapp/fendix-app")
+          PY
+          unset REGISTRY_TOKEN
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to candidate registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push isolated multi-platform candidate
+        id: build
+        env:
+          SOURCE_TAG: ${{ steps.contract.outputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.contract.outputs.source_commit }}
+          APP_TAG: ${{ steps.contract.outputs.application_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          CANDIDATE="ghcr.io/fendix-app/fendix-app-candidate:${APP_TAG}-${SOURCE_COMMIT::12}"
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push \
+            --sbom=true \
+            --provenance=mode=max \
+            --build-arg "VERSION=${SOURCE_TAG}" \
+            --label org.opencontainers.image.source=https://github.com/Fendix-app/Fendix \
+            --label org.opencontainers.image.url=https://fendix.dev \
+            --label org.opencontainers.image.licenses=MIT \
+            --label "org.opencontainers.image.version=${SOURCE_TAG#v}" \
+            --label "org.opencontainers.image.revision=${SOURCE_COMMIT}" \
+            --file source/Dockerfile.app \
+            --tag "$CANDIDATE" \
+            --metadata-file artifacts/build-metadata.json \
+            source 2>&1 | tee artifacts/build.log
+          DIGEST="$(jq -er '."containerimage.digest"' artifacts/build-metadata.json)"
+          {
+            echo "candidate=$CANDIDATE"
+            echo "digest=$DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run candidate startup and health gates on both architectures
+        env:
+          CANDIDATE: ${{ steps.build.outputs.candidate }}@${{ steps.build.outputs.digest }}
+          SOURCE_TAG: ${{ steps.contract.outputs.source_tag }}
+        run: |
+          set -euo pipefail
+          for PLATFORM in linux/amd64 linux/arm64; do
+            ARCH="${PLATFORM#linux/}"
+            mkdir -p "artifacts/${ARCH}"
+            cp artifacts/build.log "artifacts/${ARCH}/build.log"
+            automation/scripts/verify-fendix-app-image.sh \
+              "$CANDIDATE" "$PLATFORM" "$SOURCE_TAG" "artifacts/${ARCH}"
+          done
+
+      - name: Scan build and runtime evidence for publisher credentials
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          GH_TOKEN_VALUE: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' FILE; do
+            for VALUE in "$DOCKERHUB_TOKEN" "$GH_TOKEN_VALUE"; do
+              [ -n "$VALUE" ] || continue
+              if grep -aFq -- "$VALUE" "$FILE"; then
+                echo "::error::Publishing credential found in ${FILE}."
+                exit 1
+              fi
+            done
+          done < <(find artifacts -type f -print0)
+
+      - name: Refuse immutable tag overwrite
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          VERSION: ${{ steps.contract.outputs.version }}
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if EXISTING="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')"; then
+            [ "$EXISTING" = "$CANDIDATE_DIGEST" ] || {
+              echo "::error::Immutable tag ${IMAGE}:${VERSION} already has a different digest."
+              exit 1
+            }
+          fi
+
+      - name: Publish exact candidate as immutable version
+        id: promote
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          VERSION: ${{ steps.contract.outputs.version }}
+          CANDIDATE: ${{ steps.build.outputs.candidate }}@${{ steps.build.outputs.digest }}
+          EXPECTED_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${IMAGE}:${VERSION}" "$CANDIDATE"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          [ "$DIGEST" = "$EXPECTED_DIGEST" ] || {
+            echo "::error::Published digest differs from verified candidate."
+            exit 1
+          }
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Verify manifest and record platform digests
+        id: manifest
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --format '{{json .Manifest}}' > artifacts/manifest.json
+          AMD64="$(jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("amd64 manifest count") end' artifacts/manifest.json)"
+          ARM64="$(jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | if length == 1 then .[0].digest else error("arm64 manifest count") end' artifacts/manifest.json)"
+          EXTRA="$(jq '[.manifests[] | select(.platform.os != "unknown") | select(.platform.os != "linux" or (.platform.architecture != "amd64" and .platform.architecture != "arm64"))] | length' artifacts/manifest.json)"
+          [ "$EXTRA" -eq 0 ]
+          {
+            echo "amd64_digest=$AMD64"
+            echo "arm64_digest=$ARM64"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Anonymous pull and runtime verification by digest
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          SOURCE_TAG: ${{ steps.contract.outputs.source_tag }}
+        run: |
+          set -euo pipefail
+          ANON_DOCKER_CONFIG="$(mktemp -d)"
+          trap 'rm -rf "$ANON_DOCKER_CONFIG"' EXIT
+          for PLATFORM in linux/amd64 linux/arm64; do
+            ARCH="${PLATFORM#linux/}"
+            docker image rm "${IMAGE}@${DIGEST}" >/dev/null 2>&1 || true
+            DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull --platform "$PLATFORM" "${IMAGE}@${DIGEST}" >/dev/null
+            mkdir -p "artifacts/anonymous-${ARCH}"
+            cp artifacts/build.log "artifacts/anonymous-${ARCH}/build.log"
+            DOCKER_CONFIG="$ANON_DOCKER_CONFIG" automation/scripts/verify-fendix-app-image.sh \
+              "${IMAGE}@${DIGEST}" "$PLATFORM" "$SOURCE_TAG" "artifacts/anonymous-${ARCH}"
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v2.4.1"
+
+      - name: Sign exact manifest digest
+        env:
+          COSIGN_YES: "true"
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: cosign sign --recursive "${IMAGE}@${DIGEST}"
+
+      - name: Set up Go for Syft
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.25"
+
+      - name: Install Syft
+        run: go install github.com/anchore/syft/cmd/syft@v1.18.1
+
+      - name: Generate and attest CycloneDX SBOM
+        env:
+          COSIGN_YES: "true"
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          set -euo pipefail
+          syft "${IMAGE}@${DIGEST}" -o cyclonedx-json=artifacts/fendix-app.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' artifacts/fendix-app.cdx.json >/dev/null
+          cosign attest --yes --predicate artifacts/fendix-app.cdx.json --type cyclonedx "${IMAGE}@${DIGEST}"
+
+      - name: Generate and attest SLSA provenance
+        env:
+          COSIGN_YES: "true"
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          SOURCE_TAG: ${{ steps.contract.outputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.contract.outputs.source_commit }}
+          APP_TAG: ${{ steps.contract.outputs.application_tag }}
+          APP_COMMIT: ${{ steps.contract.outputs.application_commit }}
+          WORKFLOW_IDENTITY_REF: ${{ steps.contract.outputs.workflow_identity_ref }}
+        run: |
+          set -euo pipefail
+          cat > artifacts/fendix-app.provenance.json <<EOF_JSON
+          {
+            "buildDefinition": {
+              "buildType": "https://github.com/Fendix-app/Fendix/build/fendix-app-image/v1",
+              "externalParameters": {
+                "workflow": {
+                  "repository": "https://github.com/${GITHUB_REPOSITORY}",
+                  "path": ".github/workflows/fendix-app-image.yml",
+                  "ref": "${WORKFLOW_IDENTITY_REF}",
+                  "commit": "${APP_COMMIT}"
+                },
+                "sourceTag": "${SOURCE_TAG}",
+                "image": "${IMAGE}",
+                "digest": "${DIGEST}",
+                "platforms": ["linux/amd64", "linux/arm64"]
+              },
+              "resolvedDependencies": [
+                {
+                  "uri": "git+https://github.com/Fendix-app/Fendix@refs/tags/${SOURCE_TAG}",
+                  "digest": {"sha1": "${SOURCE_COMMIT}"}
+                }
+              ]
+            },
+            "runDetails": {
+              "builder": {"id": "https://github.com/actions/runner/github-hosted"},
+              "metadata": {
+                "invocationId": "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
+              }
+            }
+          }
+          EOF_JSON
+          cosign attest --yes --predicate artifacts/fendix-app.provenance.json \
+            --type slsaprovenance1 "${IMAGE}@${DIGEST}"
+
+      - name: Verify official identity, SBOM and provenance
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          WORKFLOW_IDENTITY_REF: ${{ steps.contract.outputs.workflow_identity_ref }}
+        run: |
+          set -euo pipefail
+          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/fendix-app-image.yml@${WORKFLOW_IDENTITY_REF}"
+          ISSUER="https://token.actions.githubusercontent.com"
+          cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "${IMAGE}@${DIGEST}" > artifacts/cosign-signature.json
+          cosign verify-attestation --type cyclonedx --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "${IMAGE}@${DIGEST}" > artifacts/cosign-cyclonedx.json
+          cosign verify-attestation --type slsaprovenance1 --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "${IMAGE}@${DIGEST}" > artifacts/cosign-slsa.json
+          jq -e 'length > 0' artifacts/cosign-signature.json >/dev/null
+          jq -e 'length > 0' artifacts/cosign-cyclonedx.json >/dev/null
+          jq -e 'length > 0' artifacts/cosign-slsa.json >/dev/null
+
+      - name: Move convenience tags after every immutable gate
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          MINOR: ${{ steps.contract.outputs.minor }}
+          MAJOR: ${{ steps.contract.outputs.major }}
+        run: |
+          set -euo pipefail
+          SOURCE="${IMAGE}@${DIGEST}"
+          for TAG in "$MINOR" "$MAJOR" latest; do
+            docker buildx imagetools create -t "${IMAGE}:${TAG}" "$SOURCE"
+            ACTUAL="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+            [ "$ACTUAL" = "$DIGEST" ] || {
+              echo "::error::${IMAGE}:${TAG} does not match the verified digest."
+              exit 1
+            }
+          done
+
+      - name: Final anonymous pull after convenience-tag promotion
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+        run: |
+          set -euo pipefail
+          ANON_DOCKER_CONFIG="$(mktemp -d)"
+          trap 'rm -rf "$ANON_DOCKER_CONFIG"' EXIT
+          docker image rm "${IMAGE}@${DIGEST}" >/dev/null 2>&1 || true
+          DOCKER_CONFIG="$ANON_DOCKER_CONFIG" docker pull "${IMAGE}@${DIGEST}" >/dev/null
+
+      - name: Record publication result
+        env:
+          IMAGE: ${{ steps.contract.outputs.image }}
+          VERSION: ${{ steps.contract.outputs.version }}
+          DIGEST: ${{ steps.promote.outputs.digest }}
+          AMD64_DIGEST: ${{ steps.manifest.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.manifest.outputs.arm64_digest }}
+          WORKFLOW_IDENTITY_REF: ${{ steps.contract.outputs.workflow_identity_ref }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF_SUMMARY
+          ## Official Fendix App image verified
+
+          - Immutable tag: \`${IMAGE}:${VERSION}\`
+          - Canonical reference: \`${IMAGE}@${DIGEST}\`
+          - linux/amd64: \`${AMD64_DIGEST}\`
+          - linux/arm64: \`${ARM64_DIGEST}\`
+          - Workflow identity: \`https://github.com/${GITHUB_REPOSITORY}/.github/workflows/fendix-app-image.yml@${WORKFLOW_IDENTITY_REF}\`
+          - Anonymous pull: PASS
+          - Startup and /healthz, both platforms: PASS
+          - Credential scans: PASS
+          - Cosign signature, CycloneDX SBOM and SLSA provenance: PASS
+          - Convenience tags moved after all gates: PASS
+          EOF_SUMMARY

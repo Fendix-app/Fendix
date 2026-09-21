@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "image": "docker.io/fendixapp/fendix-app",
+  "version": "3.4.1",
+  "source_tag": "v3.4.1",
+  "source_commit": "1bc69125c1af330d303f0ddd58e4db10fc6f2d3c",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ]
+}

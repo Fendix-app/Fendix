@@ -1,47 +1,69 @@
-# GitHub App container status
+# GitHub App container publication
 
-The `fendix-app` service remains supported in source. It is built by
-[`Dockerfile.app`](../Dockerfile.app), which compiles `go/cmd/fendix-app` and
-packages the webhook service, the Fendix CLI, the embedded Python engine, and
-the runtime dependencies used during scans.
+Status as of 2026-09-21: **publication candidate under review; deployment remains gated**.
 
-The repository does not currently publish an official `fendix-app` container:
+The `fendix-app` service is built by [`Dockerfile.app`](../Dockerfile.app). It
+packages the GitHub webhook service, Fendix CLI, Python engine, Git, and runtime
+dependencies. It is a different product surface from the CLI/engine image at
+`docker.io/fendixapp/fendix`; the two images are never substituted for one
+another.
 
-- none of the workflows in `.github/workflows/` builds or publishes
-  `Dockerfile.app`;
-- no brand-owned package has been established or verified;
-- no immutable application-image version or digest is documented;
-- public versus authenticated pull behavior has not been selected;
-- supported container architectures have not been declared or tested; and
-- no application-image signature, SBOM, or provenance has been verified.
+## Version decision
 
-The image reference in
-[`deploy/k8s/fendix-app.yaml`](../deploy/k8s/fendix-app.yaml) is retained only as
-a compatibility reference. It is not evidence of an official, pullable, or
-production-ready image. The manifest itself is a reference template rather
-than a paved-road deployment path. Do not substitute the Fendix engine image:
-the two containers have different entry points and responsibilities.
+The application source and `Dockerfile.app` are both present in signed source
+release `v3.4.1`, whose commit is
+`1bc69125c1af330d303f0ddd58e4db10fc6f2d3c`. No independent application
+release existed before this migration. The first official application image
+therefore uses immutable image tag `3.4.1`, built from that exact source
+revision. The separate `fendix-app-v3.4.1` Git tag identifies the reviewed
+publication workflow revision; it does not change or recreate source release
+`v3.4.1`.
 
-## Publication gate
+The machine-readable contract is
+[`deploy/fendix-app-release.json`](../deploy/fendix-app-release.json). The
+workflow checks that the source tag resolves to the recorded commit before any
+build can publish.
 
-An owner must choose whether the application image is public or private and
-add an official workflow that builds `Dockerfile.app` from this repository.
-Before the Kubernetes reference may point to a brand-owned image, that image
-must pass all of these gates:
+## Publication automation
 
-1. Publish an immutable version tag from the official repository.
-2. Declare and verify each supported architecture (preferably `linux/amd64`
-   and `linux/arm64`).
-3. Pull the exact digest using the documented deployment model. Public images
-   require an unauthenticated clean pull; private images require documented
-   `imagePullSecrets` without embedded credentials.
-4. Start the container and verify `/healthz` with non-secret test settings.
-5. Inspect configuration and image history for secret leakage.
-6. Verify the cosign identity, CycloneDX SBOM, and SLSA provenance required by
-   the release policy.
-7. Replace the compatibility reference in the Kubernetes template with the
-   verified brand-owned digest and re-run Kubernetes validation.
+[`.github/workflows/fendix-app-image.yml`](../.github/workflows/fendix-app-image.yml)
+builds `Dockerfile.app` from the exact contract revision. Pull requests build
+and run both declared platforms without registry credentials. A
+`fendix-app-vX.Y.Z` tag can publish only when it matches the contract version.
+The workflow then:
 
-Until those gates pass, the GitHub App can be built locally or deployed as a
-native binary as described in [github-app.md](github-app.md), while the public
-Kubernetes publication gate remains blocked.
+1. validates the stable source release, public Docker Hub repository, and
+   scoped publisher authorization;
+2. builds an isolated `linux/amd64` and `linux/arm64` candidate with BuildKit
+   SBOM and provenance enabled;
+3. starts both candidate images with generated test credentials and verifies
+   `/healthz` and the compiled version;
+4. scans build output, image configuration, history, layers, and logs for
+   generated or publishing credential material;
+5. refuses to replace an existing immutable version with different bytes;
+6. copies the verified candidate to `docker.io/fendixapp/fendix-app:X.Y.Z`;
+7. anonymously pulls and re-runs both platform smoke tests by manifest digest;
+8. signs that digest with keyless Cosign, attaches a CycloneDX SBOM and SLSA
+   provenance, and verifies all three against the exact official workflow
+   identity; and
+9. moves `X.Y`, `X`, and `latest` only after every immutable gate succeeds.
+
+GitHub Actions secrets provide Docker Hub credentials. They are never copied
+into source, workflow output, build arguments, or the image.
+
+## Deployment gate
+
+The Kubernetes manifest intentionally retains its compatibility image until a
+workflow run has published and independently verified the official digest.
+After that run succeeds, the same focused change must:
+
+- pin `deploy/k8s/fendix-app.yaml` to
+  `docker.io/fendixapp/fendix-app@sha256:...`;
+- record the human-readable `3.4.1` tag beside the digest;
+- remove the narrow compatibility allowlist entry;
+- add a regression assertion for the exact official repository and digest;
+- pass rendered-manifest and Kubeconform checks; and
+- preserve the old reference only in the historical migration record.
+
+Until those steps are complete, the application image must not be announced as
+the supported Kubernetes deployment image.
