@@ -90,14 +90,14 @@
     "removal_condition": "Remove only after the documented compatibility window ends and no supported installation depends on it."
   },
   {
-    "id": "github-app-unverified-compatibility-image",
-    "path": "deploy/k8s/fendix-app.yaml",
+    "id": "github-app-registry-migration-history",
+    "path": "docs/container-registry-migration.md",
     "detector": "personal_ghcr_path",
     "pattern": "ghcr\\.io/abdel-rahmansaied/fendix-app",
     "expected_count": 1,
-    "reason": "The application image has no verified brand-owned replacement; changing this reference now would invent an unavailable image.",
-    "classification": "compatibility",
-    "removal_condition": "Replace with a verified brand-owned immutable digest after the publication gates in docs/github-app-image-status.md pass."
+    "reason": "The migration record identifies the previous application-image reference without presenting it as a supported deployment path.",
+    "classification": "historical",
+    "removal_condition": "Permanent migration record; current deployment manifests are pinned to the verified official digest."
   },
   {
     "id": "historical-dast-plan-container",

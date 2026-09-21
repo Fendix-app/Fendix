@@ -1,6 +1,6 @@
 # GitHub App container publication
 
-Status as of 2026-09-21: **publication candidate under review; deployment remains gated**.
+Status as of 2026-09-21: **published, independently verified, and pinned for deployment**.
 
 The `fendix-app` service is built by [`Dockerfile.app`](../Dockerfile.app). It
 packages the GitHub webhook service, Fendix CLI, Python engine, Git, and runtime
@@ -54,19 +54,48 @@ The workflow then:
 GitHub Actions secrets provide Docker Hub credentials. They are never copied
 into source, workflow output, build arguments, or the image.
 
-## Deployment gate
+## Published result
 
-The Kubernetes manifest intentionally retains its compatibility image until a
-workflow run has published and independently verified the official digest.
-After that run succeeds, the same focused change must:
+[Workflow run 35589325882](https://github.com/Fendix-app/Fendix/actions/runs/35589325882)
+published immutable tag `3.4.1` and moved `3.4`, `3`, and `latest` only after
+all publication gates passed. Every tag resolves to this manifest digest:
 
-- pin `deploy/k8s/fendix-app.yaml` to
-  `docker.io/fendixapp/fendix-app@sha256:...`;
-- record the human-readable `3.4.1` tag beside the digest;
-- remove the narrow compatibility allowlist entry;
-- add a regression assertion for the exact official repository and digest;
-- pass rendered-manifest and Kubeconform checks; and
-- preserve the old reference only in the historical migration record.
+```text
+sha256:cdd0fabae6e80abbc3724628e876680f630f2005d378fd47b19265c86fd24d46
+```
 
-Until those steps are complete, the application image must not be announced as
-the supported Kubernetes deployment image.
+The verified platform manifests are:
+
+```text
+linux/amd64  sha256:45333aba57779d7a5d0b4d16b443b8585401c73880dd16642c82706cfed27e63
+linux/arm64  sha256:b7303fb1ccca2a2be2c1fa605a7da31c68a7593edf29c12072e865fb9879a3aa
+```
+
+The GitHub Actions and independent follow-up checks passed anonymous pulls,
+startup and `/healthz`, image configuration/history/layer/log credential
+scans, the Cosign signature, the CycloneDX SBOM attestation, and the SLSA
+provenance attestation. The verified certificate identity is:
+
+```text
+https://github.com/Fendix-app/Fendix/.github/workflows/fendix-app-image.yml@refs/tags/fendix-app-v3.4.1-r2
+```
+
+The Kubernetes reference deployment is pinned to the manifest digest above.
+`scripts/check-public-claims.py` rejects a personal namespace, mutable tag,
+different digest, additional application image, or private pull configuration.
+`deploy/k8s/kustomization.yaml` supplies the rendered manifest checked by
+Kubeconform.
+
+## Independent verification
+
+```bash
+REF='docker.io/fendixapp/fendix-app@sha256:cdd0fabae6e80abbc3724628e876680f630f2005d378fd47b19265c86fd24d46'
+IDENTITY='https://github.com/Fendix-app/Fendix/.github/workflows/fendix-app-image.yml@refs/tags/fendix-app-v3.4.1-r2'
+ISSUER='https://token.actions.githubusercontent.com'
+
+docker buildx imagetools inspect "$REF"
+DOCKER_CONFIG="$(mktemp -d)" docker pull "$REF"
+cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REF"
+cosign verify-attestation --type cyclonedx --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REF"
+cosign verify-attestation --type slsaprovenance1 --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$REF"
+```

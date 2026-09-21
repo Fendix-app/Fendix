@@ -160,20 +160,25 @@ the server logs `webhook ping ack` on success.
 
 ### Docker
 
-A multi-stage [`Dockerfile.app`](../Dockerfile.app) lives at the repo
-root. It bundles `fendix-app`, the `fendix` CLI, the embedded Python
-engine, and `git` (required for the clone step) into a single
-runtime image:
+A multi-stage [`Dockerfile.app`](../Dockerfile.app) lives at the repo root. The
+official public image bundles `fendix-app`, the `fendix` CLI, the embedded
+Python engine, and `git` (required for the clone step). Pull the verified
+multi-platform manifest by digest:
 
 ```bash
-docker build -f Dockerfile.app -t fendix-app:local .
+FENDIX_APP_IMAGE='docker.io/fendixapp/fendix-app@sha256:cdd0fabae6e80abbc3724628e876680f630f2005d378fd47b19265c86fd24d46'
+docker pull "$FENDIX_APP_IMAGE"
 
 docker run --rm -p 8080:8080 \
   -e FENDIX_APP_ID=1234567 \
   -e FENDIX_APP_PRIVATE_KEY="$(cat private-key.pem)" \
   -e FENDIX_WEBHOOK_SECRET="$WEBHOOK_SECRET" \
-  fendix-app:local
+  "$FENDIX_APP_IMAGE"
 ```
+
+The human-readable version is `3.4.1`; the digest pin prevents a mutable tag
+from changing deployed bytes. For local development, use
+`docker build -f Dockerfile.app -t fendix-app:local .`.
 
 Image size is dominated by the Python engine + `git` + Debian base
 (~250 MiB). For self-hosted runners that already have these on the
@@ -183,10 +188,10 @@ under `systemd` is a smaller-footprint alternative.
 ### Kubernetes
 
 A reference Deployment + Service + Ingress lives at
-[`deploy/k8s/fendix-app.yaml`](../deploy/k8s/fendix-app.yaml). It is
-a starting template, not a paved-road production manifest — adjust
-the image tag, replicas, ingress class/host, and TLS secret to your
-cluster's conventions. Highlights:
+[`deploy/k8s/fendix-app.yaml`](../deploy/k8s/fendix-app.yaml). It is a starting
+template, not a paved-road production manifest. Its official image is already
+pinned to the verified `3.4.1` digest; adjust replicas, ingress class/host, and
+the TLS secret to your cluster's conventions. Highlights:
 
 - 2 replicas behind a `ClusterIP` Service. Webhook idempotency comes
   from the `X-GitHub-Delivery` UUID — duplicate scans waste a cycle

@@ -21,7 +21,8 @@ esac
 mkdir -p "$artifact_dir"
 arch=${platform#linux/}
 container_name="fendix-app-smoke-${arch}-$$"
-key_file="$(mktemp "${TMPDIR:-/tmp}/fendix-app-key.XXXXXX.pem")"
+# Keep the X template at the end so this works with both GNU and BSD mktemp.
+key_file="$(mktemp "${TMPDIR:-/tmp}/fendix-app-key.XXXXXX")"
 runtime_canary="fendix-app-smoke-$(openssl rand -hex 24)"
 
 cleanup() {

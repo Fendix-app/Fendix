@@ -15,6 +15,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST_PATH = ROOT / "scripts" / "public-claims-allowlist.json"
+APP_RELEASE_PATH = ROOT / "deploy" / "fendix-app-release.json"
+APP_MANIFEST_PATH = ROOT / "deploy" / "k8s" / "fendix-app.yaml"
 
 
 @dataclass(frozen=True)
@@ -162,6 +164,41 @@ def classify(
     return violations, counts
 
 
+def validate_app_deployment(manifest: str, contract: dict[str, object]) -> None:
+    image = contract.get("image")
+    version = contract.get("version")
+    digest = contract.get("digest")
+    platforms = contract.get("platforms")
+    platform_digests = contract.get("platform_digests")
+    if image != "docker.io/fendixapp/fendix-app":
+        raise ValueError("fendix-app release contract must use the official image")
+    if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("fendix-app release contract has an invalid version")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError("fendix-app release contract has an invalid manifest digest")
+    if platforms != ["linux/amd64", "linux/arm64"]:
+        raise ValueError("fendix-app release contract must declare exactly two supported platforms")
+    if not isinstance(platform_digests, dict) or set(platform_digests) != set(platforms):
+        raise ValueError("fendix-app release contract platform digests are incomplete")
+    if any(
+        not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+        for value in platform_digests.values()
+    ):
+        raise ValueError("fendix-app release contract has an invalid platform digest")
+
+    references = re.findall(r"^\s*image:\s*([^\s#]+)", manifest, re.MULTILINE)
+    expected = f"{image}@{digest}"
+    if references != [expected]:
+        raise ValueError(
+            "deploy/k8s/fendix-app.yaml must contain exactly the verified "
+            f"application image {expected}; found {references}"
+        )
+    if f"Official application image version: {version}" not in manifest:
+        raise ValueError("Kubernetes image digest must retain its human-readable version")
+    if re.search(r"^\s*imagePullSecrets\s*:", manifest, re.MULTILINE):
+        raise ValueError("the public fendix-app image must use anonymous pull access")
+
+
 def self_test() -> None:
     cases = (
         ("obsolete_multi_engine_blocking_claim", "Fails only when both engines confirm.", True),
@@ -211,9 +248,37 @@ def self_test() -> None:
     for sample in public_samples:
         if not is_public_surface(sample):
             raise AssertionError(f"public-surface regression for {sample}")
+    digest = "sha256:" + "a" * 64
+    contract = {
+        "image": "docker.io/fendixapp/fendix-app",
+        "version": "3.4.1",
+        "digest": digest,
+        "platforms": ["linux/amd64", "linux/arm64"],
+        "platform_digests": {
+            "linux/amd64": "sha256:" + "b" * 64,
+            "linux/arm64": "sha256:" + "c" * 64,
+        },
+    }
+    valid_manifest = (
+        "# Official application image version: 3.4.1\n"
+        f"          image: docker.io/fendixapp/fendix-app@{digest}\n"
+    )
+    validate_app_deployment(valid_manifest, contract)
+    invalid_manifests = (
+        valid_manifest.replace("docker.io/fendixapp", "ghcr.io/personal"),
+        valid_manifest.replace(f"@{digest}", ":latest"),
+        valid_manifest.replace(digest, "sha256:" + "d" * 64),
+        valid_manifest + "imagePullSecrets: []\n",
+    )
+    for invalid_manifest in invalid_manifests:
+        try:
+            validate_app_deployment(invalid_manifest, contract)
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid app deployment accepted: {invalid_manifest!r}")
     print(
         f"public-claims self-test passed ({len(cases)} detector cases, "
-        f"{len(public_samples)} surface cases)"
+        f"{len(public_samples)} surface cases, 5 application-image cases)"
     )
 
 
@@ -228,6 +293,10 @@ def main() -> int:
 
     files = tracked_files()
     allowlist = load_allowlist()
+    contract = json.loads(APP_RELEASE_PATH.read_text(encoding="utf-8"))
+    validate_app_deployment(
+        APP_MANIFEST_PATH.read_text(encoding="utf-8"), contract
+    )
     findings = scan(files)
     violations, counts = classify(findings, allowlist)
     stale = [
