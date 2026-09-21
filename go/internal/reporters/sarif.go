@@ -1259,7 +1259,7 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 					Driver: SARIFDriver{
 						Name:           "Fendix",
 						Version:        meta.Version,
-						InformationURI: "https://github.com/Abdel-RahmanSaied/homebrew-fendix",
+						InformationURI: "https://github.com/Fendix-app/Fendix",
 						Rules:          rules,
 					},
 				},

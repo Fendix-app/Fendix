@@ -22,7 +22,7 @@
 #       spec: openapi.yaml
 #       fail-on: HIGH
 name: "Fendix Security Scan"
-description: "DAST + SAST in one PR check — fails only when both engines confirm. Diff-aware on pull requests."
+description: "Evidence-backed application security decisions for CI/CD."
 author: "Fendix"
 branding:
   icon: "shield"
@@ -42,7 +42,7 @@ inputs:
     required: false
     default: ""
   fail-on:
-    description: "Fail the build when a finding at or above this severity is found (CRITICAL, HIGH, MEDIUM). Empty never fails the build."
+    description: "Minimum severity considered by release policy (CRITICAL, HIGH, MEDIUM). Confidence and evidence rules still govern BLOCK; empty disables blocking."
     required: false
     default: "HIGH"
   diff:
@@ -79,7 +79,7 @@ outputs:
     description: "Path to the generated report file."
     value: ${{ steps.scan.outputs.report }}
   exit-code:
-    description: "The fendix exit code (0 clean, 1 findings at/above fail-on, 2 error)."
+    description: "The fendix exit code (0 no blocking decision, 1 BLOCK-status finding, 2 error)."
     value: ${{ steps.scan.outputs.exit-code }}
 
 runs:
@@ -175,9 +175,9 @@ runs:
         FAIL_ON: ${{ inputs.fail-on }}
       run: |
         if [ "$CODE" = "0" ]; then
-          echo "✓ Fendix: no BLOCK-status findings (nothing at or above the fail-on threshold)."
+          echo "✓ Fendix: release policy produced no BLOCK-status findings."
         elif [ "$CODE" = "1" ]; then
-          echo "✗ Fendix: BLOCK-status findings (severity at or above '${FAIL_ON}') — see the Security tab annotations + decision summary."
+          echo "✗ Fendix: release policy produced BLOCK-status findings at the '${FAIL_ON}' severity threshold — see the Security tab annotations + decision summary."
           exit 1
         else
           echo "✗ Fendix: scan error (exit $CODE)."

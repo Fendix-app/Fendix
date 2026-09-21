@@ -1220,8 +1220,12 @@ func TestRenderSARIF_SchemaValidation(t *testing.T) {
 	if _, ok := driver["version"].(string); !ok {
 		t.Error("driver.version must be a string")
 	}
-	if _, ok := driver["informationUri"].(string); !ok {
-		t.Error("driver.informationUri must be a string")
+	informationURI, ok := driver["informationUri"].(string)
+	if !ok {
+		t.Fatal("driver.informationUri must be a string")
+	}
+	if informationURI != "https://github.com/Fendix-app/Fendix" {
+		t.Errorf("driver.informationUri = %q, want official repository", informationURI)
 	}
 
 	// 3. Rules array

@@ -9,8 +9,10 @@
 # Deploy:
 #   kubectl apply -f deploy/k8s/fendix-app.yaml
 #
-# This is a starting template — adjust image tag, replicas, ingress
-# class/host, and TLS secret to your cluster's conventions.
+# This is a starting template, not a production-ready deployment. Its retained
+# image reference has not passed the current official publication gates; see
+# docs/github-app-image-status.md before using this manifest. Adjust the image,
+# replicas, ingress class/host, and TLS secret to your cluster's conventions.
 ---
 apiVersion: apps/v1
 kind: Deployment

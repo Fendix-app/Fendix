@@ -1,6 +1,6 @@
 # Official repository and container registry migration
 
-Status as of 2026-09-20: **publication blocked only by Docker Hub repository metadata; release automation and image push authorization verified**.
+Status as of 2026-09-21: **complete and independently verified**.
 
 ## Canonical destinations
 
@@ -53,37 +53,22 @@ A tag push runs the normal release. The manual `workflow_dispatch` path is conta
 
 Prerelease tags such as `v3.5.0-rc.1` publish only their immutable Docker Hub version and GHCR tag. They do not move Docker Hub major, minor, or `latest` tags and do not update the stable Homebrew mirror.
 
-## Required infrastructure before publication
+## Published result
 
-The public Docker Hub repository `fendixapp/fendix` now exists. Release run
-[`35510206549`](https://github.com/Fendix-app/Fendix/actions/runs/35510206549)
-verified all of the following without printing or inspecting the configured secret:
+The public Docker Hub repository metadata links to the official website and
+source repository. Release `v3.4.1` is available under immutable tag `3.4.1`
+and convenience tags `3.4`, `3`, and `latest`. All four tags resolve to:
 
-- `DOCKERHUB_USERNAME` is `fendixapp`;
-- Docker Hub authentication succeeds;
-- the token can request both `pull` and `push` authorization for `fendixapp/fendix`;
-- the repository is public; and
-- `COSIGN_ENABLED=true`.
+```text
+sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a
+```
 
-The run then stopped before building or publishing because the repository's
-public metadata does not contain the required brand links. The repository has
-no tags. Its short description is present and its full description is empty.
+The manifest contains `linux/amd64` and `linux/arm64`. An unauthenticated clean
+pull, version/help/analyzer fixture smoke tests, cosign signature, CycloneDX
+SBOM, SLSA provenance, and secret-leakage review all passed before `latest`
+moved.
 
-Complete this single owner action in Docker Hub:
-
-1. Open **My Hub → Repositories → fendixapp/fendix → General**.
-2. Edit the repository overview so it includes both `https://fendix.dev` and `https://github.com/Fendix-app/Fendix`.
-3. Dispatch **Release** with `release_tag=v3.4.1`.
-
-The existing CI token has the least-privilege image pull/push scope but not the
-separate `scope-repository-edit` metadata permission, so release automation
-deliberately validates the public metadata instead of silently changing it.
-
-Never paste the token into chat, source, build arguments, artifacts or reports.
-
-## Verification after the first successful run
-
-Record the digest reported in the Actions job summary, then independently run:
+## Verification commands
 
 ```bash
 docker buildx imagetools inspect fendixapp/fendix:3.4.1
@@ -91,23 +76,29 @@ docker pull fendixapp/fendix:3.4.1
 docker run --rm fendixapp/fendix:3.4.1 version
 docker run --rm fendixapp/fendix:3.4.1 --help
 
+REF='docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/heads/main$'
+ISSUER='https://token.actions.githubusercontent.com'
+
 cosign verify \
-  --certificate-identity-regexp '^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3\.4\.1$' \
-  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  fendixapp/fendix@sha256:REPLACE_WITH_VERIFIED_DIGEST
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$REF"
 
 cosign verify-attestation --type cyclonedx \
-  --certificate-identity-regexp '^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3\.4\.1$' \
-  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  fendixapp/fendix@sha256:REPLACE_WITH_VERIFIED_DIGEST
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$REF"
 
 cosign verify-attestation --type slsaprovenance1 \
-  --certificate-identity-regexp '^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3\.4\.1$' \
-  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  fendixapp/fendix@sha256:REPLACE_WITH_VERIFIED_DIGEST
+  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-oidc-issuer "$ISSUER" \
+  "$REF"
 ```
 
-Only after these checks succeed may public Docker instructions switch from the compatibility GHCR image to `fendixapp/fendix`.
+Public Docker instructions now use `fendixapp/fendix`. The compatibility GHCR
+image remains available for existing consumers and has no announced retirement
+date.
 
 ## Intentional legacy identifiers
 
