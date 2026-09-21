@@ -1,0 +1,25 @@
+{
+  "decision": "BLOCK",
+  "fail_gate": true,
+  "head_sha": "1111111111111111111111111111111111111111",
+  "record": {
+    "created_at": "2026-09-21T12:03:10Z",
+    "decision_record_id": "55555555-5555-4555-8555-555555555555",
+    "record_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "revision": 1,
+    "url": "https://app.fendix.dev/en/decisions/55555555-5555-4555-8555-555555555555"
+  },
+  "repository": "acme/payments",
+  "results": [
+    {
+      "end_line": 42,
+      "fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "level": "error",
+      "message": "Potential injection path requires review",
+      "path": "src/query.ts",
+      "rule_id": "SEC-INJECTION-001",
+      "start_line": 42
+    }
+  ],
+  "schema_version": "sarif-publication-input/v1"
+}

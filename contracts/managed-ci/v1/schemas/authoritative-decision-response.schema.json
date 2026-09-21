@@ -1,0 +1,56 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v1/authoritative-decision-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "backend_policy_version": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "type": "string"
+    },
+    "coverage_state": {
+      "enum": ["complete", "incomplete"]
+    },
+    "decision": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/decision"
+    },
+    "evidence_submission_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/uuid"
+    },
+    "fail_gate": {
+      "type": "boolean"
+    },
+    "reason_codes": {
+      "items": {
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "type": "string"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "record": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/decision-record-reference.schema.json"
+    },
+    "scan_execution_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v1/common.schema.json#/$defs/uuid"
+    },
+    "schema_version": {
+      "const": "authoritative-decision/v1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "scan_execution_id",
+    "evidence_submission_id",
+    "decision",
+    "fail_gate",
+    "coverage_state",
+    "backend_policy_version",
+    "reason_codes",
+    "record"
+  ],
+  "title": "Authoritative managed decision response",
+  "type": "object"
+}
