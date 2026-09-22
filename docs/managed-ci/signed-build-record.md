@@ -70,6 +70,13 @@ Unknown, mismatched, expired and withdrawn builds fail closed with
 `unsupported_version`. **Version alone is never sufficient**: it is a string
 the submitter controls, and two binaries can report the same one.
 
+Once a deployment has imported **any** record, the records are authoritative
+— not only while one is active. Otherwise withdrawing the last active record
+would fall back to whatever bootstrap allowlist the deployment started with,
+and that allowlist still names the build just withdrawn, so the withdrawal
+would accept exactly what it was issued to stop. Withdrawing every record
+accepts nothing, which is the direction this control fails.
+
 ## Threat model
 
 | Threat                                                                     | What stops it                                                                                                                            |
