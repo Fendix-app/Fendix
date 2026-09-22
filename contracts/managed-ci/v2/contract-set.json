@@ -1,0 +1,84 @@
+{
+  "contract": "managed-ci/v2",
+  "decision_cases": "fixtures/decision-cases.json",
+  "finding_policies": [
+    {
+      "specification": "policy/finding-policy-1.0.0.json",
+      "vectors": "policy/finding-policy-1.0.0.vectors.json",
+      "version": "1.0.0"
+    }
+  ],
+  "json_schema_draft": "2020-12",
+  "maximum_analyzers": 200,
+  "maximum_canonical_body_bytes": 8388608,
+  "maximum_corroborating_tools": 20,
+  "maximum_findings": 10000,
+  "release_policy": "policy/managed-release-2.0.0.json",
+  "schemas": [
+    {
+      "file": "schemas/analyzer-execution-result.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/analyzer-execution-result.schema.json"
+    },
+    {
+      "file": "schemas/authoritative-decision-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "file": "schemas/common.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json"
+    },
+    {
+      "file": "schemas/coverage-state.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/coverage-state.schema.json"
+    },
+    {
+      "file": "schemas/decision-record-reference.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/decision-record-reference.schema.json"
+    },
+    {
+      "file": "schemas/error-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/error-response.schema.json"
+    },
+    {
+      "file": "schemas/evidence-facts.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/evidence-facts.schema.json"
+    },
+    {
+      "file": "schemas/evidence-manifest.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/evidence-manifest.schema.json"
+    },
+    {
+      "file": "schemas/evidence-submission-request.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "file": "schemas/evidence-submission-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-response.schema.json"
+    },
+    {
+      "file": "schemas/managed-scan-context.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/managed-scan-context.schema.json"
+    },
+    {
+      "file": "schemas/sanitized-github-summary.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/sanitized-github-summary.schema.json"
+    },
+    {
+      "file": "schemas/sanitized-sarif-publication-input.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/sanitized-sarif-publication-input.schema.json"
+    },
+    {
+      "file": "schemas/scan-status-response.schema.json",
+      "id": "https://schemas.fendix.dev/managed-ci/v2/scan-status-response.schema.json"
+    }
+  ],
+  "semantic_rules": "semantic-rules.json",
+  "state_machine": "state-machine.json",
+  "superseded_contracts": [
+    {
+      "behavior": "unsupported_version",
+      "contract": "managed-ci/v1",
+      "reason": "v1 carries no normalized evidence facts, so authoritative classification cannot be calculated from it. Superseded before release."
+    }
+  ]
+}

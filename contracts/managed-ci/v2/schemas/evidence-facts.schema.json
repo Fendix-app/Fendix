@@ -1,0 +1,83 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v2/evidence-facts.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Normalized, lower-level observations about one finding. These are the ONLY inputs to authoritative classification. They are facts, not conclusions: the backend computes confidence score, band, corroboration and status from them. The closed vocabulary is defined by the finding-policy specification named in engine.finding_policy_version; which facts are mandatory is decided there, not here, so a missing fact is an unclassifiable finding (INCOMPLETE) rather than a malformed submission.",
+  "properties": {
+    "analyzer_implementation": {
+      "description": "Implementation class of the analyzer that produced the finding.",
+      "enum": ["native", "tree_sitter", "semgrep", "unspecified"]
+    },
+    "auth_expectation": {
+      "description": "What an authoritative source (for example an OpenAPI security requirement) declared about authentication for the affected endpoint.",
+      "enum": ["unknown", "public", "required"]
+    },
+    "corroborating_tools": {
+      "description": "Identities of independent tools that reported the same normalized weakness at the same normalized location. Non-empty exactly when cross_tool_corroborated is true.",
+      "items": {
+        "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/identifier"
+      },
+      "maxItems": 20,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "cross_tool_corroborated": {
+      "description": "An independent tool reported the same normalized weakness at the same normalized location.",
+      "type": "boolean"
+    },
+    "dependency_applicability": {
+      "description": "Whether the vulnerable component of a dependency advisory is used by the scanned code.",
+      "enum": ["unknown", "applicable", "evidence_against"]
+    },
+    "direct_observation": {
+      "description": "The claim is a deterministic read of a single live response (a header, cookie attribute or CORS value present or absent).",
+      "type": "boolean"
+    },
+    "fixture_shaped_value": {
+      "description": "The matched credential value matches the deterministic fixture/placeholder heuristics.",
+      "type": "boolean"
+    },
+    "in_test_code": {
+      "description": "Every occurrence of the finding lies in test or fixture code.",
+      "type": "boolean"
+    },
+    "observation_source": {
+      "description": "How the finding was observed: static analysis, live analysis, both independently, or an imported external report.",
+      "enum": ["whitebox", "blackbox", "correlated", "imported"]
+    },
+    "payload_validated": {
+      "description": "An active probe's payload elicited the response the check predicted. The payload and response themselves are never submitted.",
+      "type": "boolean"
+    },
+    "proven_path": {
+      "description": "A live request confirmed the route AND a reachable taint path to the sink was proven.",
+      "type": "boolean"
+    },
+    "provider_anchored_secret": {
+      "description": "The matched credential value carries a known provider's signature (for example an AKIA access-key id).",
+      "type": "boolean"
+    },
+    "reachable_taint_path": {
+      "description": "Static analysis proved a source-to-sink taint path.",
+      "type": "boolean"
+    },
+    "response_context": {
+      "description": "Context of the live response the finding fired on.",
+      "enum": ["none", "client_error_4xx", "static_asset"]
+    },
+    "route_confirmed": {
+      "description": "A live request confirmed the vulnerable route.",
+      "type": "boolean"
+    },
+    "rule_precision": {
+      "description": "The emitting rule's declared detection precision: a static property of the rule (a literal match versus a graded heuristic), not a conclusion about this finding.",
+      "enum": ["high", "medium", "low"]
+    },
+    "unconfirmed_by_live_scan": {
+      "description": "Correlation ran against a live scan and did not confirm this finding.",
+      "type": "boolean"
+    }
+  },
+  "title": "Normalized evidence facts",
+  "type": "object"
+}

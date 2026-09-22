@@ -1,0 +1,17 @@
+{
+  "backend_policy_version": "2.0.0",
+  "coverage_state": "complete",
+  "decision": "INCOMPLETE",
+  "evidence_submission_id": "44444444-4444-4444-8444-444444444444",
+  "fail_gate": true,
+  "reason_codes": ["classification_facts_missing"],
+  "record": {
+    "created_at": "2026-09-21T12:03:10Z",
+    "decision_record_id": "55555555-5555-4555-8555-555555555555",
+    "record_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "revision": 1,
+    "url": "https://app.fendix.dev/en/decisions/55555555-5555-4555-8555-555555555555"
+  },
+  "scan_execution_id": "33333333-3333-4333-8333-333333333333",
+  "schema_version": "authoritative-decision/v1"
+}

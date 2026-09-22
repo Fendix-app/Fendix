@@ -1,0 +1,67 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v2/sanitized-github-summary.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/decision"
+    },
+    "facts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[^\\u0000\\r\\n`<>]+$",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 512,
+            "pattern": "^[^\\u0000\\r\\n`<>]+$",
+            "type": "string"
+          }
+        },
+        "required": ["label", "value"],
+        "type": "object"
+      },
+      "maxItems": 20,
+      "type": "array"
+    },
+    "fail_gate": {
+      "type": "boolean"
+    },
+    "head_sha": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/git_sha"
+    },
+    "record": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/decision-record-reference.schema.json"
+    },
+    "repository": {
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "github-summary/v1"
+    },
+    "title": {
+      "maxLength": 120,
+      "minLength": 1,
+      "pattern": "^[^\\u0000\\r\\n`<>]+$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "title",
+    "decision",
+    "fail_gate",
+    "repository",
+    "head_sha",
+    "record",
+    "facts"
+  ],
+  "title": "Sanitized GitHub Actions summary input",
+  "type": "object"
+}

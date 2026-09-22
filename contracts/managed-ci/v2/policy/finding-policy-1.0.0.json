@@ -1,0 +1,479 @@
+{
+  "schema_version": "managed-ci-finding-policy-spec/v1",
+  "finding_policy_version": "1.0.0",
+  "engine_reference": {
+    "policy_version": "go/internal/decision/policy_version.go PolicyVersion",
+    "score": "go/internal/confidence/confidence.go Score, HasDeterministicDetection",
+    "corroboration": "go/internal/decision/decision.go corroborate",
+    "gate": "go/internal/decision/decision.go decide, applyConfidenceGate, applyApplicabilityGate, DecideWithOptions",
+    "severity_cap": "go/internal/models/scoring.go MaxSeverityForConfidence",
+    "parity_test": "go/internal/decision/managed_ci_policy_vectors_test.go"
+  },
+  "predicate_grammar": {
+    "all": "every listed predicate holds",
+    "any": "at least one listed predicate holds",
+    "not": "the predicate does not hold",
+    "always": "holds unconditionally",
+    "predicate": "the named entry of `predicates` holds",
+    "ref": "compare a value: facts.<name>, finding.severity, finding.category, options.<name>, or derived.<name>; with exactly one of eq, in, gte (a number) or gte_ref (another ref)"
+  },
+  "facts": {
+    "analyzer_implementation": {
+      "type": "enum",
+      "values": ["native", "tree_sitter", "semgrep", "unspecified"]
+    },
+    "auth_expectation": {
+      "type": "enum",
+      "values": ["unknown", "public", "required"]
+    },
+    "corroborating_tools": { "type": "identifier_set", "max_items": 20 },
+    "cross_tool_corroborated": { "type": "boolean" },
+    "dependency_applicability": {
+      "type": "enum",
+      "values": ["unknown", "applicable", "evidence_against"]
+    },
+    "direct_observation": { "type": "boolean" },
+    "fixture_shaped_value": { "type": "boolean" },
+    "in_test_code": { "type": "boolean" },
+    "observation_source": {
+      "type": "enum",
+      "values": ["whitebox", "blackbox", "correlated", "imported"]
+    },
+    "payload_validated": { "type": "boolean" },
+    "proven_path": { "type": "boolean" },
+    "provider_anchored_secret": { "type": "boolean" },
+    "reachable_taint_path": { "type": "boolean" },
+    "response_context": {
+      "type": "enum",
+      "values": ["none", "client_error_4xx", "static_asset"]
+    },
+    "route_confirmed": { "type": "boolean" },
+    "rule_precision": { "type": "enum", "values": ["high", "medium", "low"] },
+    "unconfirmed_by_live_scan": { "type": "boolean" }
+  },
+  "required_facts": [
+    "analyzer_implementation",
+    "auth_expectation",
+    "corroborating_tools",
+    "cross_tool_corroborated",
+    "dependency_applicability",
+    "direct_observation",
+    "fixture_shaped_value",
+    "in_test_code",
+    "observation_source",
+    "payload_validated",
+    "proven_path",
+    "provider_anchored_secret",
+    "reachable_taint_path",
+    "response_context",
+    "route_confirmed",
+    "rule_precision",
+    "unconfirmed_by_live_scan"
+  ],
+  "missing_fact_behavior": "classification_facts_missing",
+  "conflicting_fact_behavior": "conflicting_evidence_facts",
+  "unknown_fact_behavior": "reject_submission",
+  "options": {
+    "managed_ci_default": {
+      "enforce_confidence": true,
+      "deescalate_tests": true,
+      "block_on_inapplicable": false
+    }
+  },
+  "fail_on_values": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+  "severity_rank": {
+    "INFO": 0,
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4
+  },
+  "severity_cap_by_rule_precision": {
+    "low": "MEDIUM",
+    "medium": "HIGH",
+    "high": "CRITICAL"
+  },
+  "derived_values": {
+    "severity_rank": "severity_rank[finding.severity]",
+    "severity_cap_rank": "severity_rank[severity_cap_by_rule_precision[facts.rule_precision]]",
+    "corroborating_tool_count": "number of facts.corroborating_tools",
+    "above_threshold": "severity_rank >= severity_rank[fail_on]",
+    "score": "clamped score",
+    "band": "band of score",
+    "independent_signal_count": "number of independent signals that fired",
+    "signal_count": "number of independent and self-evident signals that fired",
+    "status": "current status while classification and adjustments run"
+  },
+  "predicates": {
+    "has_static": {
+      "ref": "facts.observation_source",
+      "in": ["whitebox", "correlated"]
+    },
+    "has_runtime": {
+      "ref": "facts.observation_source",
+      "in": ["blackbox", "correlated"]
+    },
+    "imported": { "ref": "facts.observation_source", "eq": "imported" },
+    "deterministic_detection": {
+      "all": [
+        { "predicate": "has_static" },
+        { "ref": "facts.rule_precision", "eq": "high" },
+        { "not": { "ref": "facts.analyzer_implementation", "eq": "semgrep" } },
+        { "ref": "facts.in_test_code", "eq": false },
+        { "ref": "facts.fixture_shaped_value", "eq": false }
+      ]
+    }
+  },
+  "consistency_rules": [
+    {
+      "code": "cross_tool_flag_matches_tools",
+      "violated_when": {
+        "any": [
+          {
+            "all": [
+              { "ref": "facts.cross_tool_corroborated", "eq": true },
+              { "ref": "derived.corroborating_tool_count", "eq": 0 }
+            ]
+          },
+          {
+            "all": [
+              { "ref": "facts.cross_tool_corroborated", "eq": false },
+              { "ref": "derived.corroborating_tool_count", "gte": 1 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "proven_path_requires_route_and_taint",
+      "violated_when": {
+        "all": [
+          { "ref": "facts.proven_path", "eq": true },
+          {
+            "any": [
+              { "ref": "facts.route_confirmed", "eq": false },
+              { "ref": "facts.reachable_taint_path", "eq": false },
+              { "ref": "facts.analyzer_implementation", "eq": "semgrep" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "code": "direct_observation_requires_live_source",
+      "violated_when": {
+        "all": [
+          { "ref": "facts.direct_observation", "eq": true },
+          { "not": { "predicate": "has_runtime" } }
+        ]
+      }
+    },
+    {
+      "code": "payload_validation_requires_live_source",
+      "violated_when": {
+        "all": [
+          { "ref": "facts.payload_validated", "eq": true },
+          { "not": { "predicate": "has_runtime" } }
+        ]
+      }
+    },
+    {
+      "code": "severity_within_rule_precision_cap",
+      "violated_when": {
+        "not": {
+          "ref": "derived.severity_cap_rank",
+          "gte_ref": "derived.severity_rank"
+        }
+      }
+    }
+  ],
+  "score": {
+    "base": { "code": "base_detection", "delta": 35 },
+    "rules": [
+      {
+        "code": "static_evidence",
+        "delta": 10,
+        "when": { "predicate": "has_static" }
+      },
+      {
+        "code": "runtime_evidence",
+        "delta": 10,
+        "when": { "predicate": "has_runtime" }
+      },
+      {
+        "code": "cross_engine_agreement",
+        "delta": 25,
+        "when": { "ref": "facts.observation_source", "eq": "correlated" }
+      },
+      {
+        "code": "imported_evidence",
+        "delta": 10,
+        "when": { "predicate": "imported" }
+      },
+      {
+        "code": "imported_high_precision",
+        "delta": 25,
+        "when": {
+          "all": [
+            { "predicate": "imported" },
+            { "ref": "facts.rule_precision", "eq": "high" }
+          ]
+        }
+      },
+      {
+        "code": "imported_low_precision",
+        "delta": -10,
+        "when": {
+          "all": [
+            { "predicate": "imported" },
+            { "ref": "facts.rule_precision", "eq": "low" }
+          ]
+        }
+      },
+      {
+        "code": "route_confirmed",
+        "delta": 10,
+        "when": { "ref": "facts.route_confirmed", "eq": true }
+      },
+      {
+        "code": "reachable_taint_path",
+        "delta": 10,
+        "when": { "ref": "facts.reachable_taint_path", "eq": true }
+      },
+      {
+        "code": "proven_path",
+        "delta": 5,
+        "when": { "ref": "facts.proven_path", "eq": true }
+      },
+      {
+        "code": "payload_validated",
+        "delta": 10,
+        "when": { "ref": "facts.payload_validated", "eq": true }
+      },
+      {
+        "code": "direct_observation",
+        "delta": 30,
+        "when": {
+          "all": [
+            { "predicate": "has_runtime" },
+            { "ref": "facts.direct_observation", "eq": true }
+          ]
+        }
+      },
+      {
+        "code": "deterministic_detection",
+        "delta": 30,
+        "when": { "predicate": "deterministic_detection" }
+      },
+      {
+        "code": "tier_tree_sitter",
+        "delta": 5,
+        "when": { "ref": "facts.analyzer_implementation", "eq": "tree_sitter" }
+      },
+      {
+        "code": "tier_semgrep",
+        "delta": -5,
+        "when": { "ref": "facts.analyzer_implementation", "eq": "semgrep" }
+      },
+      {
+        "code": "cross_tool_corroborated",
+        "delta": 15,
+        "when": { "ref": "facts.cross_tool_corroborated", "eq": true }
+      },
+      {
+        "code": "http_context_4xx",
+        "delta": -15,
+        "when": { "ref": "facts.response_context", "eq": "client_error_4xx" }
+      },
+      {
+        "code": "http_context_static_asset",
+        "delta": -15,
+        "when": { "ref": "facts.response_context", "eq": "static_asset" }
+      },
+      {
+        "code": "fixture_shaped_value",
+        "delta": -20,
+        "when": { "ref": "facts.fixture_shaped_value", "eq": true }
+      },
+      {
+        "code": "component_not_imported",
+        "delta": -10,
+        "when": {
+          "ref": "facts.dependency_applicability",
+          "eq": "evidence_against"
+        }
+      }
+    ],
+    "ceiling": { "max": 100, "code": "corroboration_ceiling" },
+    "floor": 0,
+    "bands": [
+      { "band": "HIGH", "min": 70 },
+      { "band": "MEDIUM", "min": 40 },
+      { "band": "LOW", "min": 0 }
+    ]
+  },
+  "signals": {
+    "independent": [
+      {
+        "name": "cross-engine agreement",
+        "when": { "ref": "facts.observation_source", "eq": "correlated" }
+      },
+      {
+        "name": "confirmed route",
+        "when": { "ref": "facts.route_confirmed", "eq": true }
+      },
+      {
+        "name": "reachable taint path",
+        "when": { "ref": "facts.reachable_taint_path", "eq": true }
+      },
+      {
+        "name": "proven path",
+        "when": { "ref": "facts.proven_path", "eq": true }
+      },
+      {
+        "name": "payload-validated probe",
+        "when": { "ref": "facts.payload_validated", "eq": true }
+      },
+      {
+        "name": "independent cross-tool corroboration",
+        "when": { "ref": "facts.cross_tool_corroborated", "eq": true }
+      },
+      {
+        "name": "contradicted authentication requirement",
+        "when": { "ref": "facts.auth_expectation", "eq": "required" }
+      }
+    ],
+    "self_evident": [
+      {
+        "name": "direct observation of a live response",
+        "when": { "ref": "facts.direct_observation", "eq": true }
+      },
+      {
+        "name": "deterministic detection in production code",
+        "when": { "predicate": "deterministic_detection" }
+      },
+      {
+        "name": "imported high-precision rule",
+        "when": {
+          "all": [
+            { "predicate": "imported" },
+            { "ref": "facts.rule_precision", "eq": "high" }
+          ]
+        }
+      }
+    ]
+  },
+  "classification": {
+    "at_or_above_threshold": [
+      {
+        "code": "held_unconfirmed_by_live_scan",
+        "status": "WARN",
+        "when": {
+          "all": [
+            { "ref": "facts.unconfirmed_by_live_scan", "eq": true },
+            { "ref": "derived.independent_signal_count", "eq": 0 }
+          ]
+        }
+      },
+      {
+        "code": "held_confidence_low",
+        "status": "WARN",
+        "when": { "ref": "derived.band", "eq": "LOW" }
+      },
+      {
+        "code": "held_uncorroborated",
+        "status": "WARN",
+        "when": { "ref": "derived.signal_count", "eq": 0 }
+      },
+      {
+        "code": "held_medium_no_independent_signal",
+        "status": "WARN",
+        "when": {
+          "all": [
+            { "ref": "derived.band", "eq": "MEDIUM" },
+            { "ref": "derived.independent_signal_count", "eq": 0 }
+          ]
+        }
+      },
+      {
+        "code": "block_corroborated",
+        "status": "BLOCK",
+        "when": { "always": true }
+      }
+    ],
+    "below_threshold": [
+      {
+        "code": "actionable_below_threshold",
+        "status": "WARN",
+        "when": { "ref": "derived.severity_rank", "gte": 2 }
+      },
+      { "code": "informational", "status": "INFO", "when": { "always": true } }
+    ],
+    "adjustments": [
+      {
+        "code": "not_applicable_component_absent",
+        "status": "WARN",
+        "when": {
+          "all": [
+            { "ref": "derived.above_threshold", "eq": true },
+            { "ref": "options.block_on_inapplicable", "eq": false },
+            { "ref": "derived.status", "in": ["BLOCK", "WARN"] },
+            { "ref": "finding.category", "eq": "deps" },
+            {
+              "ref": "facts.dependency_applicability",
+              "eq": "evidence_against"
+            }
+          ]
+        }
+      },
+      {
+        "code": "deescalated_test_fixture_threshold_met",
+        "status": "WARN",
+        "when": {
+          "all": [
+            { "ref": "options.deescalate_tests", "eq": true },
+            { "ref": "facts.in_test_code", "eq": true },
+            { "ref": "derived.status", "eq": "BLOCK" },
+            { "ref": "derived.independent_signal_count", "eq": 0 }
+          ]
+        }
+      },
+      {
+        "code": "deescalated_test_fixture",
+        "status": "INFO",
+        "when": {
+          "all": [
+            { "ref": "options.deescalate_tests", "eq": true },
+            { "ref": "facts.in_test_code", "eq": true },
+            { "ref": "derived.status", "eq": "WARN" },
+            { "ref": "derived.above_threshold", "eq": false }
+          ]
+        }
+      },
+      {
+        "code": "deescalated_test_fixture_corroborated",
+        "status": "INFO",
+        "when": {
+          "all": [
+            { "ref": "options.deescalate_tests", "eq": true },
+            { "ref": "facts.in_test_code", "eq": true },
+            { "ref": "derived.status", "eq": "WARN" },
+            { "ref": "derived.independent_signal_count", "eq": 0 },
+            { "ref": "facts.fixture_shaped_value", "eq": true },
+            { "ref": "facts.provider_anchored_secret", "eq": false }
+          ]
+        }
+      }
+    ]
+  },
+  "evaluation_order": [
+    "Reject the submission if evidence_facts contains a name outside `facts` (unknown_fact_behavior).",
+    "If any `required_facts` entry is absent, the finding is unclassifiable: classification_facts_missing.",
+    "If any `consistency_rules` entry is violated, the finding is unclassifiable: conflicting_evidence_facts.",
+    "Score: start at score.base; apply every score.rules entry whose `when` holds, in order; if the sum exceeds ceiling.max record ceiling.code with the negative excess; clamp to [floor, ceiling.max]; band is the first `bands` entry whose min is <= score.",
+    "Signals: evaluate signals.independent then signals.self_evident in order; each firing entry contributes its name.",
+    "Status: if derived.above_threshold, take the first classification.at_or_above_threshold entry whose `when` holds; otherwise the first classification.below_threshold entry. Its code starts the rule trace.",
+    "Adjustments: evaluate classification.adjustments in order exactly once each against the CURRENT status; each whose `when` holds sets status and appends its code to the rule trace.",
+    "A finding's final status is BLOCK, WARN or INFO."
+  ]
+}

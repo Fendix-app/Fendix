@@ -1,0 +1,114 @@
+{
+  "schema_version": "managed-ci-release-policy-spec/v1",
+  "backend_policy_version": "2.0.0",
+  "description": "How the backend turns classified findings, analyzer health and coverage facts into one authoritative managed-CI decision. Finding classification itself is finding-policy-<version>.json. The runner's producer_diagnostics and coverage.required_analyzers are never inputs.",
+  "binding_policy": {
+    "fail_on_values": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+    "default_fail_on": "HIGH",
+    "minimum_required_analyzers": ["sast", "sca"],
+    "rule": "A binding may add required analyzers; it can never remove the minimum. The snapshot in force at acceptance is the one evaluated."
+  },
+  "finding_status_counts": {
+    "BLOCK": "blocking",
+    "WARN": "warning",
+    "INFO": "informational"
+  },
+  "provenance_rules": [
+    "Every finding's analyzer_id names an entry of manifest.analyzers; otherwise the submission is invalid_evidence (finding_analyzer_unreported).",
+    "Every analyzer's finding_count equals the number of findings naming it; otherwise the submission is invalid_evidence (analyzer_finding_count_mismatch).",
+    "coverage.observed_analyzers is a subset of manifest.analyzers; otherwise the submission is invalid_evidence (observed_analyzer_unreported)."
+  ],
+  "coverage": {
+    "required_analyzer_invariant": "A required analyzer is satisfied ONLY when its manifest.analyzers entry has status completed AND its id appears in coverage.observed_analyzers. Absence and every other status (failed, skipped, not_applicable, or any status a later contract adds) produce an incomplete coverage result. For the pilot an SCA analyzer that finds no supported manifest completes successfully with zero findings; not_applicable cannot satisfy a required analyzer.",
+    "required_analyzer_outcomes": [
+      {
+        "condition": "status completed and present in coverage.observed_analyzers",
+        "reason_codes": []
+      },
+      {
+        "condition": "status failed",
+        "reason_codes": ["required_analyzer_failed"]
+      },
+      {
+        "condition": "status skipped with reason_code diff_unchanged",
+        "reason_codes": [
+          "differential_scope_rejected",
+          "required_coverage_missing"
+        ]
+      },
+      {
+        "condition": "status skipped with any other reason_code",
+        "reason_codes": ["required_coverage_missing"]
+      },
+      {
+        "condition": "status not_applicable",
+        "reason_codes": ["required_coverage_missing"]
+      },
+      {
+        "condition": "status completed but absent from coverage.observed_analyzers",
+        "reason_codes": ["required_coverage_missing"]
+      },
+      {
+        "condition": "no manifest.analyzers entry",
+        "reason_codes": ["required_coverage_missing"]
+      },
+      {
+        "condition": "any other status",
+        "reason_codes": ["required_coverage_missing"]
+      }
+    ],
+    "reported_gap_on_required_analyzer": [
+      "reported_coverage_gap",
+      "required_coverage_missing"
+    ],
+    "optional_analyzer_outcomes": [
+      {
+        "condition": "status failed",
+        "reason_codes": ["optional_analyzer_failed"]
+      },
+      {
+        "condition": "status completed, skipped or not_applicable",
+        "reason_codes": []
+      }
+    ],
+    "order": "required analyzers in ascending id order, then coverage.gaps in submitted order, then optional analyzers in submitted order; each reason code is kept at its first occurrence",
+    "coverage_state": "incomplete when any coverage reason code is present, otherwise complete"
+  },
+  "unclassifiable_findings": {
+    "reason_codes_in_order": [
+      "classification_facts_missing",
+      "conflicting_evidence_facts"
+    ],
+    "rule": "An unclassifiable finding is counted in no status bucket. Its reason code joins the decision's reason codes."
+  },
+  "ranking": [
+    {
+      "decision": "BLOCK",
+      "when": "blocking > 0",
+      "lead_reason_code": "blocking_findings"
+    },
+    {
+      "decision": "INCOMPLETE",
+      "when": "coverage_state is incomplete",
+      "lead_reason_code": null
+    },
+    {
+      "decision": "INCOMPLETE",
+      "when": "any finding is unclassifiable",
+      "lead_reason_code": null
+    },
+    {
+      "decision": "WARN",
+      "when": "warning > 0",
+      "lead_reason_code": "non_blocking_findings"
+    },
+    {
+      "decision": "PASS",
+      "when": "otherwise",
+      "lead_reason_code": "policy_passed"
+    }
+  ],
+  "reason_codes": "[lead_reason_code, if any] + coverage reason codes + unclassifiable reason codes, each kept at its first occurrence",
+  "fail_gate_decisions": ["BLOCK", "INCOMPLETE"],
+  "never_emitted": ["INFO"]
+}

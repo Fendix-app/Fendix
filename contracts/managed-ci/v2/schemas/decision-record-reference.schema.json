@@ -1,0 +1,36 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v2/decision-record-reference.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/timestamp"
+    },
+    "decision_record_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/uuid"
+    },
+    "record_hash": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/sha256"
+    },
+    "revision": {
+      "maximum": 2147483647,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "url": {
+      "maxLength": 2048,
+      "minLength": 1,
+      "pattern": "^https://[^\\s]+$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "decision_record_id",
+    "revision",
+    "record_hash",
+    "url",
+    "created_at"
+  ],
+  "title": "Immutable Security Decision Record reference",
+  "type": "object"
+}

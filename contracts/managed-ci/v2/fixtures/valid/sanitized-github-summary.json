@@ -1,0 +1,25 @@
+{
+  "decision": "PASS",
+  "facts": [
+    {
+      "label": "Coverage",
+      "value": "Complete: SAST and SCA"
+    },
+    {
+      "label": "Policy",
+      "value": "2.0.0"
+    }
+  ],
+  "fail_gate": false,
+  "head_sha": "1111111111111111111111111111111111111111",
+  "record": {
+    "created_at": "2026-09-21T12:03:10Z",
+    "decision_record_id": "55555555-5555-4555-8555-555555555555",
+    "record_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "revision": 1,
+    "url": "https://app.fendix.dev/en/decisions/55555555-5555-4555-8555-555555555555"
+  },
+  "repository": "acme/payments",
+  "schema_version": "github-summary/v1",
+  "title": "Fendix managed decision"
+}

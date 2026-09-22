@@ -1,0 +1,41 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accepted_at": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/timestamp"
+    },
+    "api_version": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/api_version"
+    },
+    "evidence_submission_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/uuid"
+    },
+    "expires_at": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/timestamp"
+    },
+    "scan_execution_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/uuid"
+    },
+    "state": {
+      "const": "accepted"
+    },
+    "status_url": {
+      "maxLength": 2048,
+      "pattern": "^https://[^\\s]+$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "api_version",
+    "scan_execution_id",
+    "evidence_submission_id",
+    "state",
+    "status_url",
+    "accepted_at",
+    "expires_at"
+  ],
+  "title": "Accepted evidence submission response",
+  "type": "object"
+}
