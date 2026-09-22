@@ -283,3 +283,35 @@ func TestEvidenceHashNeverCarriesTheItem(t *testing.T) {
 		t.Errorf("evidence hash is wrong: %q", hash)
 	}
 }
+
+// A scan that found nothing must still produce a valid document: the schema
+// admits an empty array, never null.
+func TestACleanScanProducesAnEmptyFindingsArray(t *testing.T) {
+	in := testInput()
+	in.Findings = nil
+	in.Analyzers[0].FindingCount = 0
+	submission, body, err := Build(in)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if submission.Manifest.Findings == nil {
+		t.Error("findings is nil")
+	}
+	if !strings.Contains(string(body), `"findings":[]`) {
+		t.Errorf("a clean scan did not serialize findings as []: %s", body)
+	}
+	if strings.Contains(string(body), `"findings":null`) {
+		t.Error("findings serialized as null")
+	}
+	empty := testInput()
+	empty.Findings = nil
+	empty.Analyzers = nil
+	empty.Coverage.ObservedAnalyzers = nil
+	_, cleanBody, err := Build(empty)
+	if err != nil {
+		t.Fatalf("Build with no analyzers: %v", err)
+	}
+	if strings.Contains(string(cleanBody), `"analyzers":null`) {
+		t.Error("analyzers serialized as null")
+	}
+}

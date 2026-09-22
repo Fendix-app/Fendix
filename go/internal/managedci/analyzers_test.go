@@ -41,6 +41,7 @@ func TestFamilyAggregationIsPessimistic(t *testing.T) {
 			observed: true,
 		},
 		{
+			// A family that broke part-way cannot vouch for the target.
 			name:      "any failure wins over a success",
 			members:   map[string]Execution{"textscan": ok("textscan"), "semgrep": failed("semgrep", reporters.ReasonTimeout)},
 			status:    statusFailed,
@@ -48,10 +49,20 @@ func TestFamilyAggregationIsPessimistic(t *testing.T) {
 			reportGap: true,
 		},
 		{
-			name:      "a real skip beats a success",
-			members:   map[string]Execution{"textscan": ok("textscan"), "semgrep": skipped("semgrep", reporters.ReasonDependencyMissing)},
+			// A stock runner without semgrep still performed static
+			// analysis. Reporting the family as skipped here made every
+			// managed scan INCOMPLETE regardless of the code.
+			name:     "a member the runner does not have does not unrun the family",
+			members:  map[string]Execution{"textscan": ok("textscan"), "semgrep": skipped("semgrep", reporters.ReasonDependencyMissing)},
+			status:   statusCompleted,
+			reason:   "completed",
+			observed: true,
+		},
+		{
+			name:      "nothing ran",
+			members:   map[string]Execution{"textscan": skipped("textscan", reporters.ReasonDisabledByFlag), "semgrep": skipped("semgrep", reporters.ReasonDependencyMissing)},
 			status:    statusSkipped,
-			reason:    "dependency_missing",
+			reason:    "disabled_by_flag",
 			reportGap: true,
 		},
 		{
