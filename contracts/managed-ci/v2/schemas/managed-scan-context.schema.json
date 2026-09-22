@@ -1,0 +1,109 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v2/managed-scan-context.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "asset_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/uuid"
+    },
+    "base_sha": {
+      "oneOf": [
+        {
+          "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/git_sha"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "environment": {
+      "enum": ["sandbox", "staging", "production"]
+    },
+    "event_name": {
+      "enum": ["pull_request"]
+    },
+    "head_sha": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/git_sha"
+    },
+    "provider": {
+      "const": "github"
+    },
+    "pull_request": {
+      "oneOf": [
+        {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "repository": {
+      "maxLength": 200,
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "type": "string"
+    },
+    "repository_id": {
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "type": "string"
+    },
+    "repository_owner_id": {
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "type": "string"
+    },
+    "run_attempt": {
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "run_id": {
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "type": "string"
+    },
+    "scan_execution_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/uuid"
+    },
+    "schema_version": {
+      "const": "managed-scan-context/v1"
+    },
+    "tenant_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/uuid"
+    },
+    "workflow_name": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[^\\u0000\\r\\n]+$",
+      "type": "string"
+    },
+    "workflow_ref": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000\\r\\n]+$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "scan_execution_id",
+    "tenant_id",
+    "asset_id",
+    "environment",
+    "provider",
+    "repository_id",
+    "repository_owner_id",
+    "repository",
+    "head_sha",
+    "base_sha",
+    "pull_request",
+    "workflow_name",
+    "workflow_ref",
+    "run_id",
+    "run_attempt",
+    "event_name"
+  ],
+  "title": "Managed scan context",
+  "type": "object"
+}

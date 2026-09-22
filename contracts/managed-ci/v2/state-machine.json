@@ -1,0 +1,108 @@
+{
+  "schema_version": "managed-ci-state-machine/v1",
+  "states": {
+    "accepted": {
+      "retryable": true,
+      "terminal": false
+    },
+    "cancelled": {
+      "retryable": false,
+      "terminal": true
+    },
+    "completed": {
+      "retryable": false,
+      "terminal": true
+    },
+    "evaluating": {
+      "retryable": true,
+      "terminal": false
+    },
+    "failed": {
+      "retryable": false,
+      "terminal": true
+    },
+    "superseded": {
+      "retryable": false,
+      "terminal": true
+    },
+    "validating": {
+      "retryable": true,
+      "terminal": false
+    }
+  },
+  "transitions": [
+    {
+      "audit_event": "ci.submission.accepted",
+      "from": null,
+      "owner": "ingestion_api",
+      "to": "accepted"
+    },
+    {
+      "audit_event": "ci.validation.started",
+      "from": "accepted",
+      "owner": "validation_worker",
+      "to": "validating"
+    },
+    {
+      "audit_event": "ci.validation.succeeded",
+      "from": "validating",
+      "owner": "validation_worker",
+      "to": "evaluating"
+    },
+    {
+      "audit_event": "ci.validation.failed",
+      "from": "validating",
+      "owner": "validation_worker",
+      "to": "failed"
+    },
+    {
+      "audit_event": "ci.decision.completed",
+      "creates_decision_record": true,
+      "from": "evaluating",
+      "owner": "decision_worker",
+      "to": "completed"
+    },
+    {
+      "audit_event": "ci.evaluation.failed",
+      "from": "evaluating",
+      "owner": "decision_worker",
+      "to": "failed"
+    },
+    {
+      "audit_event": "ci.scan.cancelled",
+      "from": "accepted",
+      "owner": "api_or_lease_reconciler",
+      "to": "cancelled"
+    },
+    {
+      "audit_event": "ci.scan.cancelled",
+      "from": "validating",
+      "owner": "api_or_lease_reconciler",
+      "to": "cancelled"
+    },
+    {
+      "audit_event": "ci.scan.cancelled",
+      "from": "evaluating",
+      "owner": "api_or_lease_reconciler",
+      "to": "cancelled"
+    },
+    {
+      "audit_event": "ci.scan.superseded",
+      "from": "accepted",
+      "owner": "ordering_reconciler",
+      "to": "superseded"
+    },
+    {
+      "audit_event": "ci.scan.superseded",
+      "from": "validating",
+      "owner": "ordering_reconciler",
+      "to": "superseded"
+    },
+    {
+      "audit_event": "ci.scan.superseded",
+      "from": "evaluating",
+      "owner": "ordering_reconciler",
+      "to": "superseded"
+    }
+  ]
+}

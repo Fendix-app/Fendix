@@ -1,5 +1,10 @@
 # Managed CI contract v1
 
+> **Superseded by [`managed-ci/v2`](../v2/README.md) before release.** v1 carries
+> no normalized evidence facts, so an authoritative confidence calculation
+> cannot be made from it. A v1 document is rejected with `unsupported_version`.
+> This bundle is retained for history and is no longer exported.
+
 ## Authority boundary
 
 The runner may attest normalized facts. It may not select an authoritative

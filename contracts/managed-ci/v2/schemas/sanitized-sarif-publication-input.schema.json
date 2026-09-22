@@ -1,0 +1,78 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v2/sanitized-sarif-publication-input.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/decision"
+    },
+    "fail_gate": {
+      "type": "boolean"
+    },
+    "head_sha": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/git_sha"
+    },
+    "record": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/decision-record-reference.schema.json"
+    },
+    "repository": {
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "type": "string"
+    },
+    "results": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "end_line": {
+            "maximum": 100000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "fingerprint": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "level": {
+            "enum": ["error", "warning", "note", "none"]
+          },
+          "message": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^[^\\u0000\\r]+$",
+            "type": "string"
+          },
+          "path": {
+            "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/relative_path"
+          },
+          "rule_id": {
+            "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/identifier"
+          },
+          "start_line": {
+            "maximum": 100000000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": ["rule_id", "level", "message", "path", "fingerprint"],
+        "type": "object"
+      },
+      "maxItems": 10000,
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "sarif-publication-input/v1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "repository",
+    "head_sha",
+    "decision",
+    "fail_gate",
+    "record",
+    "results"
+  ],
+  "title": "Sanitized SARIF publication input",
+  "type": "object"
+}

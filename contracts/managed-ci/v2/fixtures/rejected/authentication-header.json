@@ -1,0 +1,73 @@
+{
+  "api_version": "managed-ci/v2",
+  "evidence_submission_id": "44444444-4444-4444-8444-444444444444",
+  "idempotency_key": "github:123456:987654:1:1111111111111111111111111111111111111111",
+  "manifest": {
+    "analyzers": [
+      {
+        "analyzer_id": "sast",
+        "analyzer_version": "1.0.0",
+        "attempts": 1,
+        "duration_ms": 1200,
+        "finding_count": 0,
+        "reason_code": "completed",
+        "status": "completed"
+      },
+      {
+        "analyzer_id": "sca",
+        "analyzer_version": "1.0.0",
+        "attempts": 1,
+        "duration_ms": 800,
+        "finding_count": 0,
+        "reason_code": "completed",
+        "status": "completed"
+      }
+    ],
+    "artifact_hash": "sha256:8e424989003d58ea30588a89a784d5726a077fb0e0eb691dad0772420bf43789",
+    "configuration_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "context": {
+      "asset_id": "22222222-2222-4222-8222-222222222222",
+      "base_sha": "2222222222222222222222222222222222222222",
+      "environment": "staging",
+      "event_name": "pull_request",
+      "head_sha": "1111111111111111111111111111111111111111",
+      "provider": "github",
+      "pull_request": 17,
+      "repository": "acme/payments",
+      "repository_id": "123456",
+      "repository_owner_id": "7654321",
+      "run_attempt": 1,
+      "run_id": "987654",
+      "scan_execution_id": "33333333-3333-4333-8333-333333333333",
+      "schema_version": "managed-scan-context/v1",
+      "tenant_id": "11111111-1111-4111-8111-111111111111",
+      "workflow_name": "Fendix managed scan",
+      "workflow_ref": "acme/payments/.github/workflows/fendix.yml@refs/heads/main"
+    },
+    "coverage": {
+      "contract_version": 1,
+      "files_considered": 42,
+      "gaps": [],
+      "manifests_considered": 2,
+      "observed_analyzers": ["sast", "sca"],
+      "required_analyzers": ["sast", "sca"]
+    },
+    "engine": {
+      "build_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "finding_policy_version": "1.0.0",
+      "report_schema_version": 2,
+      "version": "v3.4.1"
+    },
+    "findings": [],
+    "generated_at": "2026-09-21T12:03:00Z",
+    "headers": {
+      "Authorization": "Bearer example"
+    },
+    "sanitization": {
+      "profile": "managed-ci-default/v1",
+      "redaction_count": 0,
+      "source_excerpts_included": false
+    },
+    "schema_version": "evidence-manifest/v2"
+  }
+}

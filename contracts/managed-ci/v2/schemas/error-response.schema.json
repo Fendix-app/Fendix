@@ -1,0 +1,67 @@
+{
+  "$id": "https://schemas.fendix.dev/managed-ci/v2/error-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/api_version"
+    },
+    "error": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_evidence",
+            "unsupported_version",
+            "payload_too_large",
+            "binding_mismatch",
+            "idempotency_conflict",
+            "rate_limited",
+            "not_found",
+            "not_authorized",
+            "processing_failed",
+            "cancelled",
+            "superseded"
+          ]
+        },
+        "details": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "maxLength": 128,
+                "pattern": "^[a-z][a-z0-9_]*$",
+                "type": "string"
+              },
+              "field": {
+                "maxLength": 256,
+                "type": "string"
+              }
+            },
+            "required": ["field", "code"],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "message": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": ["code", "message", "retryable"],
+      "type": "object"
+    },
+    "request_id": {
+      "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/uuid"
+    }
+  },
+  "required": ["api_version", "error", "request_id"],
+  "title": "Standard managed CI error response",
+  "type": "object"
+}

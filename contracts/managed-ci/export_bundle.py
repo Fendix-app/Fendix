@@ -18,10 +18,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
-    parser.add_argument("--source", type=Path, default=Path(__file__).parent / "v1")
+    parser.add_argument("--source", type=Path, default=Path(__file__).parent / "v2")
     args = parser.parse_args()
     source = args.source.resolve()
     destination = args.destination.resolve()
+    contract = json.loads((source / "contract-set.json").read_text(encoding="utf-8"))["contract"]
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(source, destination)
@@ -31,7 +32,7 @@ def main() -> int:
         if path.is_file()
     }
     lock = {
-        "contract": "managed-ci/v1",
+        "contract": contract,
         "generated": True,
         "source_repository": "https://github.com/Fendix-app/Fendix",
         "source_revision": args.source_revision,

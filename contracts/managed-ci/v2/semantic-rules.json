@@ -1,0 +1,52 @@
+{
+  "forbid_absolute_paths": true,
+  "forbid_user_path_prefixes": ["Users/", "home/"],
+  "maximum_canonical_body_bytes": 8388608,
+  "path_fields": ["path"],
+  "prohibited_keys": [
+    "authoritative_verdict",
+    "authorization",
+    "blocking",
+    "confidence",
+    "confidence_band",
+    "confidence_level",
+    "confidence_score",
+    "confidence_tier",
+    "coverage_conclusion",
+    "env",
+    "environment_variables",
+    "exit_code",
+    "finding_status",
+    "github_token",
+    "headers",
+    "http_body",
+    "is_blocking",
+    "logs",
+    "raw_github_token",
+    "raw_log",
+    "repository_archive",
+    "request_body",
+    "response_body",
+    "risk_score",
+    "source_archive",
+    "source_content",
+    "source_file",
+    "tier",
+    "verdict"
+  ],
+  "provenance": {
+    "analyzer_finding_count_must_match": true,
+    "finding_analyzer_must_be_reported": true,
+    "observed_analyzers_must_be_reported": true
+  },
+  "schema_version": "managed-ci-semantic-rules/v2",
+  "secret_patterns": [
+    "TEST_SECRET_DO_NOT_USE_[A-Za-z0-9]{8,}",
+    "github_pat_[A-Za-z0-9_]{20,}",
+    "gh[pousr]_[A-Za-z0-9]{20,}",
+    "AKIA[0-9A-Z]{16}",
+    "-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+    "(?:authorization|Authorization)\\s*:\\s*bearer\\s+\\S+"
+  ],
+  "unsupported_finding_policy": "unsupported_version"
+}

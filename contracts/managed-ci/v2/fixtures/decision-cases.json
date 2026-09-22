@@ -1,0 +1,235 @@
+{
+  "binding_policy_default": {
+    "fail_on_severity": "HIGH",
+    "required_analyzers": ["sast", "sca"]
+  },
+  "cases": [
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/pass.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "clean-pass",
+      "proves": "clean complete evidence",
+      "submission": "valid/full-head-pass.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/warn.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "band": "MEDIUM",
+          "finding_id": "SEC-HEADERS-004",
+          "independent_signals": [],
+          "rule_trace": ["actionable_below_threshold"],
+          "score": 45,
+          "score_codes": ["base_detection", "static_evidence"],
+          "self_evident_signals": [],
+          "status": "WARN"
+        }
+      ],
+      "id": "non-blocking-warn",
+      "proves": "a MEDIUM finding below the HIGH threshold warns",
+      "submission": "valid/non-blocking-warn.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/high-uncorroborated-warn.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "band": "MEDIUM",
+          "finding_id": "SEC-INJECTION-001",
+          "independent_signals": [],
+          "rule_trace": ["held_uncorroborated"],
+          "score": 45,
+          "score_codes": ["base_detection", "static_evidence"],
+          "self_evident_signals": [],
+          "status": "WARN"
+        }
+      ],
+      "id": "high-uncorroborated-warn",
+      "proves": "HIGH severity with medium rule precision and no corroboration is held at WARN",
+      "submission": "valid/high-uncorroborated-warn.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/block.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "band": "HIGH",
+          "finding_id": "SEC-SECRET-001",
+          "independent_signals": [],
+          "rule_trace": ["block_corroborated"],
+          "score": 75,
+          "score_codes": [
+            "base_detection",
+            "static_evidence",
+            "deterministic_detection"
+          ],
+          "self_evident_signals": [
+            "deterministic detection in production code"
+          ],
+          "status": "BLOCK"
+        }
+      ],
+      "id": "high-deterministic-block",
+      "proves": "HIGH severity with deterministic detection in production code blocks",
+      "submission": "valid/high-deterministic-block.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/cross-tool-corroborated-block.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "band": "MEDIUM",
+          "finding_id": "SEC-INJECTION-001",
+          "independent_signals": ["independent cross-tool corroboration"],
+          "rule_trace": ["block_corroborated"],
+          "score": 60,
+          "score_codes": [
+            "base_detection",
+            "static_evidence",
+            "cross_tool_corroborated"
+          ],
+          "self_evident_signals": [],
+          "status": "BLOCK"
+        }
+      ],
+      "id": "cross-tool-corroborated-block",
+      "proves": "the same HIGH finding blocks once an independent tool corroborates it",
+      "submission": "valid/cross-tool-corroborated-block.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/backend-overrides-local-diagnostic.decision.json",
+      "expected_findings": [
+        {
+          "band": "HIGH",
+          "finding_id": "SEC-SECRET-001",
+          "independent_signals": [],
+          "rule_trace": ["block_corroborated"],
+          "score": 75,
+          "score_codes": [
+            "base_detection",
+            "static_evidence",
+            "deterministic_detection"
+          ],
+          "self_evident_signals": [
+            "deterministic detection in production code"
+          ],
+          "status": "BLOCK"
+        }
+      ],
+      "id": "backend-overrides-local-diagnostic",
+      "proves": "a forged local PASS and LOW confidence label cannot override backend BLOCK",
+      "submission": "valid/backend-overrides-local-diagnostic.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/forged-local-block-clean.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "forged-local-block-clean",
+      "proves": "a forged local BLOCK cannot override a clean backend PASS",
+      "submission": "valid/forged-local-block-clean.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/forged-confidence-cannot-promote.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "band": "MEDIUM",
+          "finding_id": "SEC-INJECTION-001",
+          "independent_signals": [],
+          "rule_trace": ["held_uncorroborated"],
+          "score": 45,
+          "score_codes": ["base_detection", "static_evidence"],
+          "self_evident_signals": [],
+          "status": "WARN"
+        }
+      ],
+      "id": "forged-confidence-cannot-promote",
+      "proves": "a forged HIGH confidence label cannot promote an uncorroborated finding",
+      "submission": "valid/forged-confidence-cannot-promote.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/missing-classification-facts-incomplete.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "finding_id": "SEC-INJECTION-001",
+          "unclassifiable": "classification_facts_missing"
+        }
+      ],
+      "id": "missing-classification-facts",
+      "proves": "a finding missing mandatory classification facts makes the decision INCOMPLETE",
+      "submission": "valid/missing-classification-facts.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/conflicting-evidence-facts-incomplete.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "finding_id": "SEC-INJECTION-001",
+          "unclassifiable": "conflicting_evidence_facts"
+        }
+      ],
+      "id": "conflicting-evidence-facts",
+      "proves": "proven_path without a confirmed route and taint path is conflicting and INCOMPLETE",
+      "submission": "valid/conflicting-evidence-facts.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/analyzer-failure-incomplete.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "required-analyzer-failure",
+      "proves": "a failed required analyzer is INCOMPLETE",
+      "submission": "valid/required-analyzer-failure.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/missing-coverage-incomplete.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "required-coverage-gap",
+      "proves": "a missing required analyzer is INCOMPLETE even when the runner declares it unrequired",
+      "submission": "valid/required-coverage-gap.submission.json"
+    }
+  ],
+  "finding_policy": "policy/finding-policy-1.0.0.json",
+  "release_policy": "policy/managed-release-2.0.0.json",
+  "schema_version": "managed-ci-decision-cases/v1"
+}

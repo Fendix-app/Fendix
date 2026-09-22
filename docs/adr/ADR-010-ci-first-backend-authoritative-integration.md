@@ -15,6 +15,80 @@ This is an evidence-based architecture record. It does not authorize an
 application change, deployment, release, DNS change, credential change, merge,
 push, or announcement.
 
+## Amendment 1 — evidence facts and backend-owned classification (2026-09-22)
+
+**Status:** proposed for owner review, together with the canonical
+`managed-ci/v2` contract. It resolves two defects the Phase 1 backend review
+confirmed before merge.
+
+**C5 — the authority fixture was not an evidence-to-decision vector.**
+`backend-overrides-local-diagnostic.submission.json` had no findings, yet its
+paired decision was BLOCK, and no evidence-derived policy can produce that. The
+v2 fixture keeps an untrusted local PASS (with a LOW local confidence label and
+exit 0) and adds one production-code credential finding. Its evidence facts
+earn deterministic detection, so the decision is BLOCK. The decision is
+derived by the reference interpreter from evidence and policy, not asserted,
+and consumers read the fixture exactly as stored.
+
+**C6 — severity-only classification is rejected.** The v1 manifest carried no
+defined facts from which confidence could be calculated. The Phase 1 backend
+fell back to severity versus threshold, so a HIGH, medium-precision,
+uncorroborated finding was WARN in the engine and BLOCK in the backend. The
+pilot does not accept that divergence. The backend must calculate confidence,
+corroboration and status itself from normalized facts, and must never trust a
+local confidence label, verdict, decision, risk score, exit code or
+pre-classified status.
+
+**Engine classification path traced** (the authoritative implementation):
+`engine.Orchestrator.finalize` → `CorrelateCrossTool` → projection with
+`evidence.NewProvenanceIndex` → `escalateNonCorrelatedReachable` →
+`CollapseDuplicateLocations` → `Deduplicate` (proof union) →
+`enforceConsistency` (`models.MaxSeverityForConfidence`) → `stampDecisions` →
+`ProvenanceIndex.Restore` → `decision.DecideWithOptions`. That last step runs
+`confidence.Score` (deltas, bands at 70/40), `corroborate` (independent versus
+self-evident signals), `applyConfidenceGate`, `applyApplicabilityGate`, the
+test-fixture de-escalations and `settleOverride`. The policy is versioned by
+`decision.PolicyVersion = 1.0.0` and documented in `docs/DECISION_POLICY.md`.
+`internal/policy` only loads `.fendix.yaml` and does not classify.
+
+**Decision.**
+
+1. The smallest sufficient amendment is a closed, typed `evidence_facts`
+   object on every finding, plus a required `analyzer_id` for provenance.
+   The 17 facts are the engine's scoring and decision inputs, the fields
+   `ScoringProvenance` already carries across the engine's own projection
+   boundary, expressed without payloads or free text. The existing `signals`
+   array was not reused. Its kinds are free-form and its values untyped, so
+   making it authoritative would have required duplicate, conflict and type
+   rules that a typed object gets structurally. `signals` stays as
+   non-authoritative display context.
+2. The engine policy is encoded once, declaratively, in
+   `contracts/managed-ci/v2/policy/finding-policy-1.0.0.json`. The engine
+   generates the parity vectors from its real `DecideWithOptions`. The Python
+   reference interpreter, and later the backend, must reproduce every vector.
+   Required, missing, conflicting and unknown fact behavior is defined there.
+   Missing and conflicting facts make a finding unclassifiable, and so the
+   decision INCOMPLETE. Unknown facts reject the submission.
+3. **Versioning.** The accepted compatibility rule requires a new major for
+   required, enum, meaning or authority changes. This amendment adds required
+   fields and changes what decides a finding. v1 was unreleased, but it had
+   generated consumers, so it is superseded rather than amended in place. The
+   contract becomes `managed-ci/v2` (`evidence-manifest/v2`, ingestion
+   `/api/ci/v2`). A v1 document is rejected with `unsupported_version`, and v1
+   is no longer exported. The state machine, authentication, idempotency and
+   decision-response contracts are unchanged.
+4. The managed-CI release aggregation (`policy/managed-release-2.0.0.json`)
+   keeps the backend ranking BLOCK > INCOMPLETE > WARN > PASS. It adds only
+   that an unclassifiable finding makes a non-blocking result INCOMPLETE. INFO
+   is still never emitted as a managed decision.
+
+**Consequences.** Phase 2's evidence exporter must emit these facts from the
+finalized, provenance-restored evidence it already computes. The backend must
+replace severity-only classification with an interpreter of the specification.
+Changing the finding policy now requires bumping `PolicyVersion`, a new
+specification and vectors, and backend support before any producer emits the
+new version.
+
 ## Executive recommendation
 
 Use customer-controlled CI as the primary managed integration for the first
