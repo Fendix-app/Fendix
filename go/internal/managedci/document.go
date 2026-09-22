@@ -216,9 +216,14 @@ func Build(in Input) (Submission, []byte, error) {
 	if len(in.Analyzers) > MaxAnalyzers {
 		return zero, nil, ErrTooLarge{Limit: "analyzer count", Actual: len(in.Analyzers), Max: MaxAnalyzers}
 	}
-	analyzers := append([]Analyzer(nil), in.Analyzers...)
+	// Never nil: a clean scan has an EMPTY findings array, not a null one,
+	// and the schema admits only an array. A scan that found nothing is the
+	// most important document to get right.
+	analyzers := make([]Analyzer, 0, len(in.Analyzers))
+	analyzers = append(analyzers, in.Analyzers...)
 	sort.Slice(analyzers, func(i, j int) bool { return analyzers[i].AnalyzerID < analyzers[j].AnalyzerID })
-	findings := append([]Finding(nil), in.Findings...)
+	findings := make([]Finding, 0, len(in.Findings))
+	findings = append(findings, in.Findings...)
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Fingerprint != findings[j].Fingerprint {
 			return findings[i].Fingerprint < findings[j].Fingerprint

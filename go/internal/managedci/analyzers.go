@@ -13,8 +13,22 @@ import (
 // backend's binding policy requires `sast` and `sca`, and neither it nor the
 // customer should have to know that SCA is three different engine analyzers.
 //
-// Aggregation is deliberately pessimistic: a family is `failed` if ANY of its
-// members failed, because a family that half-ran cannot vouch for the target.
+// Aggregation is pessimistic about FAILURE and honest about capability:
+//
+//   - any member that FAILED fails the family, because a family that broke
+//     part-way cannot vouch for the target;
+//   - otherwise a family that ran at all is `completed`. Which concrete
+//     analyzers a runner has is engine-internal detail — the binding requires
+//     the CAPABILITY, and a stock runner without semgrep installed still
+//     performed static analysis;
+//   - a family where nothing ran is `not_applicable` when its members had
+//     nothing to look at, and `skipped` otherwise.
+//
+// The strict reading (any absent member skips the family) was tried first and
+// is wrong: on a runner without semgrep it made `sast` permanently unobserved,
+// so every managed scan would have been INCOMPLETE no matter how clean the
+// code was. The engine's own report still records each analyzer's state for
+// the customer; the manifest states what the CAPABILITY did.
 const (
 	AnalyzerSAST    = "sast"
 	AnalyzerSCA     = "sca"
@@ -137,9 +151,8 @@ func memberStatuses(executions map[string]Execution, members []string) []Executi
 
 // aggregate folds the members of one family into a single contract status.
 //
-// Order matters and is pessimistic: any failure wins, then a real skip, then
-// not-applicable, and only a family where something actually ran and nothing
-// failed is `completed`.
+// Order matters: any failure wins, then anything that actually ran, then the
+// reason nothing did.
 func aggregate(members []Execution) (string, string) {
 	var (
 		failed        *reporters.ScannerStatus
@@ -169,10 +182,10 @@ func aggregate(members []Execution) (string, string) {
 	switch {
 	case failed != nil:
 		return statusFailed, reasonOf(*failed, "execution_error")
-	case skipped != nil:
-		return statusSkipped, reasonOf(*skipped, "unsupported_target")
 	case completed:
 		return statusCompleted, "completed"
+	case skipped != nil:
+		return statusSkipped, reasonOf(*skipped, "unsupported_target")
 	case notApplicable != nil:
 		return statusNotApplicable, "not_applicable"
 	default:
