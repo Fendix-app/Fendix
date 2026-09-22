@@ -1,0 +1,164 @@
+{
+  "$id": "https://schemas.fendix.dev/engine-build-record/v1/build-record.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A signed statement by the Fendix release pipeline about one engine release: which sources built it, which executables it produced, and which managed-CI contract and finding policy those executables implement. The backend imports a verified record administratively and then accepts managed evidence only from an executable it names. The record states facts about a build; it never states a security decision.",
+  "properties": {
+    "artifacts": {
+      "description": "One entry per published executable. Executable digests differ per OS and architecture, so a release has several — and each is pinned separately, because an allowlist keyed by version alone would accept any of them, including one never published.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "architecture": {
+            "description": "Target architecture of this executable.",
+            "enum": ["amd64", "arm64"]
+          },
+          "download_name": {
+            "description": "Name of the published release asset this executable was distributed as. Identity for humans and for the installer; it is never what the backend matches on.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "executable_sha256": {
+            "$ref": "#/$defs/sha256",
+            "description": "SHA-256 of the EXECUTABLE ITSELF, uncompressed and unwrapped. Never an archive checksum, a container manifest digest or a source hash: managed evidence carries the digest of the running binary, and only the same kind of digest can match it."
+          },
+          "os": {
+            "description": "Target operating system of this executable.",
+            "enum": ["linux", "darwin", "windows"]
+          }
+        },
+        "required": [
+          "os",
+          "architecture",
+          "executable_sha256",
+          "download_name"
+        ],
+        "type": "object"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "contract": {
+      "additionalProperties": false,
+      "description": "The managed-CI contract these executables were built against.",
+      "properties": {
+        "bundle_sha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "Digest of the canonical contract bundle as built, so a record cannot claim a revision whose contents differ from what was used."
+        },
+        "finding_policy_version": {
+          "description": "The finding policy the engine implements and whose vectors it reproduces.",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "type": "string"
+        },
+        "name": {
+          "const": "managed-ci/v2",
+          "description": "Contract these executables produce evidence for."
+        },
+        "revision": {
+          "$ref": "#/$defs/commit",
+          "description": "Canonical repository commit the bundle was taken from."
+        }
+      },
+      "required": [
+        "name",
+        "revision",
+        "bundle_sha256",
+        "finding_policy_version"
+      ],
+      "type": "object"
+    },
+    "created_at": {
+      "description": "When the release pipeline produced this record (UTC, RFC 3339).",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "type": "string"
+    },
+    "engine_version": {
+      "description": "The released engine version, exactly as the executable reports it.",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "engine-build-record/v1",
+      "description": "Version of this record format."
+    },
+    "source": {
+      "additionalProperties": false,
+      "description": "What was built.",
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/commit",
+          "description": "Exact commit the release was built from."
+        },
+        "repository": {
+          "description": "Source repository, as owner/name.",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "type": "string"
+        },
+        "tag": {
+          "description": "Release tag the pipeline ran for.",
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": ["repository", "commit", "tag"],
+      "type": "object"
+    },
+    "workflow": {
+      "additionalProperties": false,
+      "description": "The release workflow identity that must also appear in the signature's certificate. The signature proves who signed; this states who the signer must be, so the two can be compared rather than trusted separately.",
+      "properties": {
+        "issuer": {
+          "description": "OIDC issuer expected in the signing certificate.",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "ref": {
+          "description": "Git ref the workflow ran on, normally the release tag ref.",
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "identity": {
+          "description": "Workflow identity, for example owner/repo/.github/workflows/release.yml@refs/tags/v3.5.0.",
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "run_id": {
+          "description": "The workflow run that produced the artifacts.",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "type": "string"
+        }
+      },
+      "required": ["identity", "issuer", "ref", "run_id"],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "engine_version",
+    "created_at",
+    "source",
+    "workflow",
+    "contract",
+    "artifacts"
+  ],
+  "title": "Signed engine build record",
+  "type": "object",
+  "$defs": {
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  }
+}
