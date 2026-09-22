@@ -82,7 +82,8 @@
             "$ref": "https://schemas.fendix.dev/managed-ci/v2/common.schema.json#/$defs/identifier"
           },
           "fingerprint": {
-            "pattern": "^[0-9a-f]{64}$",
+            "description": "The producer's stable finding identity. Hex, either 40 or 64 characters: a producer may truncate its digest to stay the width of an identity it replaces, and the backend compares fingerprints, never re-derives them.",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
             "type": "string"
           },
           "locations": {

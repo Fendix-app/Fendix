@@ -4,6 +4,8 @@ import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = REPOSITORY_ROOT / "contracts" / "managed-ci"
 VALIDATOR_PATH = CONTRACTS / "validate_bundle.py"
@@ -68,6 +70,44 @@ def test_a_conclusion_cannot_be_declared_as_an_evidence_fact(tmp_path):
     errors = _validator_module().validate_bundle(root)
     assert any("a conclusion is declared as a fact" in e for e in errors)
     assert any("fact vocabulary differs from evidence-facts schema" in e for e in errors)
+
+
+# The engine truncates its v2 fingerprint to 20 bytes so it stays the width of
+# the v1 sha1 it replaced; saved baselines and `.fendix-ignore` fingerprint
+# rules depend on that width. The contract therefore accepts the producer's
+# identity at either width and never re-derives it.
+@pytest.mark.parametrize(
+    "fingerprint,accepted",
+    [
+        ("e" * 40, True),
+        ("e" * 64, True),
+        ("e" * 39, False),
+        ("e" * 41, False),
+        ("e" * 63, False),
+        ("E" * 40, False),
+        ("g" * 40, False),
+    ],
+)
+def test_a_producer_fingerprint_is_accepted_at_either_width(fingerprint, accepted):
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads((CONTRACTS / "v2" / "schemas" / "evidence-manifest.schema.json").read_text())
+    node = schema["properties"]["findings"]["items"]["properties"]["fingerprint"]
+    valid = Draft202012Validator(node).is_valid(fingerprint)
+    assert valid is accepted, fingerprint
+
+
+def test_the_engine_fingerprint_width_is_what_the_contract_accepts():
+    # Guards the specific defect this amendment fixed: the pattern was 64-only
+    # while every real engine fingerprint is 40, so no real document could
+    # validate.
+    from jsonschema import Draft202012Validator
+
+    source = (REPOSITORY_ROOT / "go" / "internal" / "models" / "fingerprint.go").read_text()
+    assert "hex.EncodeToString(sum[:20])" in source, "the engine no longer truncates to 20 bytes"
+    schema = json.loads((CONTRACTS / "v2" / "schemas" / "evidence-manifest.schema.json").read_text())
+    node = schema["properties"]["findings"]["items"]["properties"]["fingerprint"]
+    assert Draft202012Validator(node).is_valid("a" * 40)
 
 
 def _reference():
