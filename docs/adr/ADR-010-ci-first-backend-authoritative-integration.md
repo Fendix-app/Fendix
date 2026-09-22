@@ -80,7 +80,14 @@ test-fixture de-escalations and `settleOverride`. The policy is versioned by
 4. The managed-CI release aggregation (`policy/managed-release-2.0.0.json`)
    keeps the backend ranking BLOCK > INCOMPLETE > WARN > PASS. It adds only
    that an unclassifiable finding makes a non-blocking result INCOMPLETE. INFO
-   is still never emitted as a managed decision.
+   is still never emitted as a managed decision. A confirmed BLOCK outranks
+   coverage gaps and unclassifiable findings, whose reason codes stay visible.
+5. Required-analyzer invariant, approved at owner review: a required analyzer
+   is satisfied only by status `completed` plus presence in
+   `observed_analyzers`. Absence and every other status, `not_applicable`
+   included, are coverage gaps. A pilot SCA analyzer with no supported
+   manifest completes with zero findings rather than reporting not applicable.
+   `not_applicable` stays harmless only for optional analyzers.
 
 **Consequences.** Phase 2's evidence exporter must emit these facts from the
 finalized, provenance-restored evidence it already computes. The backend must

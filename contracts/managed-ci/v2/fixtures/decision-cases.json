@@ -227,6 +227,132 @@
       "id": "required-coverage-gap",
       "proves": "a missing required analyzer is INCOMPLETE even when the runner declares it unrequired",
       "submission": "valid/required-coverage-gap.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/required-sast-not-applicable-incomplete.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "required-sast-not-applicable",
+      "proves": "a required SAST analyzer reported not_applicable does not satisfy coverage",
+      "submission": "valid/required-sast-not-applicable.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/required-sca-not-applicable-incomplete.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "required-sca-not-applicable",
+      "proves": "a required SCA analyzer reported not_applicable does not satisfy coverage; with no supported manifest it must complete with zero findings",
+      "submission": "valid/required-sca-not-applicable.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/optional-analyzer-not-applicable.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "optional-analyzer-not-applicable",
+      "proves": "an optional analyzer reported not_applicable is not a coverage gap",
+      "submission": "valid/optional-analyzer-not-applicable.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/required-completed-not-observed-incomplete.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "required-completed-not-observed",
+      "proves": "a required analyzer that completed but is absent from observed_analyzers is a coverage gap",
+      "submission": "valid/required-completed-not-observed.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/required-analyzer-skipped-incomplete.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "required-analyzer-skipped",
+      "proves": "a required analyzer skipped for any reason is a coverage gap",
+      "submission": "valid/required-analyzer-skipped.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/required-analyzer-diff-unchanged-incomplete.authoritative-decision.json",
+      "expected_findings": [],
+      "id": "required-analyzer-diff-unchanged",
+      "proves": "a differential skip of a required analyzer reports both differential_scope_rejected and required_coverage_missing",
+      "submission": "valid/required-analyzer-diff-unchanged.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/block-with-required-coverage-gap.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "band": "HIGH",
+          "finding_id": "SEC-SECRET-001",
+          "independent_signals": [],
+          "rule_trace": ["block_corroborated"],
+          "score": 75,
+          "score_codes": [
+            "base_detection",
+            "static_evidence",
+            "deterministic_detection"
+          ],
+          "self_evident_signals": [
+            "deterministic detection in production code"
+          ],
+          "status": "BLOCK"
+        }
+      ],
+      "id": "block-with-required-coverage-gap",
+      "proves": "a confirmed BLOCK outranks a required-coverage gap, which stays visible in the reason codes",
+      "submission": "valid/block-with-required-coverage-gap.submission.json"
+    },
+    {
+      "binding_policy": {
+        "fail_on_severity": "HIGH",
+        "required_analyzers": ["sast", "sca"]
+      },
+      "decision": "valid/block-with-unclassifiable-finding.authoritative-decision.json",
+      "expected_findings": [
+        {
+          "band": "HIGH",
+          "finding_id": "SEC-SECRET-001",
+          "independent_signals": [],
+          "rule_trace": ["block_corroborated"],
+          "score": 75,
+          "score_codes": [
+            "base_detection",
+            "static_evidence",
+            "deterministic_detection"
+          ],
+          "self_evident_signals": [
+            "deterministic detection in production code"
+          ],
+          "status": "BLOCK"
+        },
+        {
+          "finding_id": "SEC-INJECTION-001",
+          "unclassifiable": "classification_facts_missing"
+        }
+      ],
+      "id": "block-with-unclassifiable-finding",
+      "proves": "a confirmed BLOCK outranks an unclassifiable finding, whose reason code stays visible",
+      "submission": "valid/block-with-unclassifiable-finding.submission.json"
     }
   ],
   "finding_policy": "policy/finding-policy-1.0.0.json",

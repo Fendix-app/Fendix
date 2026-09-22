@@ -141,6 +141,86 @@
       "schema": "https://schemas.fendix.dev/managed-ci/v2/sanitized-sarif-publication-input.schema.json"
     },
     {
+      "expected": "valid",
+      "path": "valid/required-sast-not-applicable.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-sast-not-applicable-incomplete.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-sca-not-applicable.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-sca-not-applicable-incomplete.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/optional-analyzer-not-applicable.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/optional-analyzer-not-applicable.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-completed-not-observed.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-completed-not-observed-incomplete.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-analyzer-skipped.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-analyzer-skipped-incomplete.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-analyzer-diff-unchanged.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/required-analyzer-diff-unchanged-incomplete.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/block-with-required-coverage-gap.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/block-with-required-coverage-gap.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/block-with-unclassifiable-finding.submission.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json"
+    },
+    {
+      "expected": "valid",
+      "path": "valid/block-with-unclassifiable-finding.authoritative-decision.json",
+      "schema": "https://schemas.fendix.dev/managed-ci/v2/authoritative-decision-response.schema.json"
+    },
+    {
       "expected": "rejected",
       "path": "rejected/unsupported-schema.json",
       "schema": "https://schemas.fendix.dev/managed-ci/v2/evidence-submission-request.schema.json",

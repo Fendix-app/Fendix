@@ -138,16 +138,19 @@ def coverage_codes(manifest: dict, required: list) -> list:
     codes = []
     for name in sorted(required):
         entry = analyzers.get(name)
-        if entry is None:
-            codes.append("required_coverage_missing")
-        elif entry["status"] == "failed":
+        # The invariant: a required analyzer is satisfied ONLY by status
+        # `completed` AND presence in observed_analyzers. Every other status —
+        # not_applicable included, and any status a future contract adds — and
+        # absence are gaps. Written as the one positive case so a new status
+        # can never fall through as covered.
+        if entry is not None and entry["status"] == "completed" and name in observed:
+            continue
+        if entry is not None and entry["status"] == "failed":
             codes.append("required_analyzer_failed")
-        elif entry["status"] == "skipped":
-            if entry["reason_code"] == "diff_unchanged":
-                codes.append("differential_scope_rejected")
-            codes.append("required_coverage_missing")
-        elif entry["status"] == "completed" and name not in observed:
-            codes.append("required_coverage_missing")
+            continue
+        if entry is not None and entry["status"] == "skipped" and entry["reason_code"] == "diff_unchanged":
+            codes.append("differential_scope_rejected")
+        codes.append("required_coverage_missing")
     for gap in manifest["coverage"]["gaps"]:
         if gap["analyzer_id"] in required:
             codes += ["reported_coverage_gap", "required_coverage_missing"]

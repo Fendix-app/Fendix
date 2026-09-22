@@ -161,6 +161,30 @@ never emitted. `fail_gate` is true for BLOCK and INCOMPLETE. Required analyzers
 come from the binding's backend-owned policy (minimum `sast`, `sca`), never
 from the runner's `coverage.required_analyzers`.
 
+**Required-analyzer invariant.** A required analyzer is satisfied only when its
+`analyzers` entry has status `completed` and its id appears in
+`coverage.observed_analyzers`. Absence, and every other status, produces an
+incomplete coverage result. That includes `not_applicable` and any status a
+later contract adds.
+
+| Required analyzer                            | Reason codes                                               |
+| -------------------------------------------- | ---------------------------------------------------------- |
+| `completed` and observed                     | none                                                       |
+| `failed`                                     | `required_analyzer_failed`                                 |
+| `skipped` with `diff_unchanged`              | `differential_scope_rejected`, `required_coverage_missing` |
+| `skipped` for any other reason               | `required_coverage_missing`                                |
+| `not_applicable`                             | `required_coverage_missing`                                |
+| `completed` but absent from observed         | `required_coverage_missing`                                |
+| absent from `analyzers`, or any other status | `required_coverage_missing`                                |
+
+For the pilot, an SCA analyzer that finds no supported manifest completes
+successfully with zero findings. `not_applicable` cannot satisfy a required
+analyzer. An optional analyzer reported `not_applicable` (or `completed` or
+`skipped`) is not a gap; an optional analyzer that `failed` still reports
+`optional_analyzer_failed`. A confirmed BLOCK outranks every coverage gap and
+unclassifiable finding. The decision stays BLOCK and those reason codes stay
+visible.
+
 `fixtures/decision-cases.json` pairs every valid submission fixture with its
 decision fixture and per-finding outcomes. The validator re-derives each pair
 with the reference interpreter, so no decision fixture is asserted by hand.
