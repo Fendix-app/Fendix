@@ -69,6 +69,34 @@ inputs:
     description: "Additional raw arguments appended to the fendix scan command."
     required: false
     default: ""
+  # --- Managed mode (ADR-010) -------------------------------------------
+  # Managed mode submits sanitized evidence to the Fendix backend, which
+  # DECIDES. The runner never computes, infers or falls back to a local
+  # decision, so none of the local gating inputs above apply to it.
+  mode:
+    description: "'local' (default) runs entirely on the runner and gates on --fail-on. 'managed' submits evidence to the Fendix backend and gates on the backend's Decision Record."
+    required: false
+    default: "local"
+  token:
+    description: "Managed mode only. The repository-scoped Fendix CI credential (fxci_…). Pass it from a secret; it is masked and is never written to argv, logs, artifacts or summaries."
+    required: false
+    default: ""
+  tenant-id:
+    description: "Managed mode only. Organization (tenant) UUID from the Fendix binding."
+    required: false
+    default: ""
+  asset-id:
+    description: "Managed mode only. Asset UUID from the Fendix binding."
+    required: false
+    default: ""
+  environment:
+    description: "Managed mode only. sandbox, staging or production — must match the credential's environment."
+    required: false
+    default: ""
+  api-base:
+    description: "Managed mode only. Backend API origin."
+    required: false
+    default: "https://api.fendix.dev"
   engine_path:
     description: "Path to the Fendix Python engine directory. Leave empty to use auto-resolution."
     required: false
@@ -78,6 +106,12 @@ outputs:
   report:
     description: "Path to the generated report file."
     value: ${{ steps.scan.outputs.report }}
+  decision:
+    description: "Managed mode only. The backend's authoritative decision (PASS, WARN, BLOCK or INCOMPLETE)."
+    value: ${{ steps.managed.outputs.decision }}
+  decision-record:
+    description: "Managed mode only. The immutable Decision Record id the decision came from."
+    value: ${{ steps.managed.outputs.decision-record }}
   exit-code:
     description: "The fendix exit code (0 no blocking decision, 1 BLOCK-status finding, 2 error)."
     value: ${{ steps.scan.outputs.exit-code }}
@@ -85,16 +119,73 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # Managed mode is a different trust model, so its inputs are checked
+    # before anything runs. Everything the local mode allows and managed mode
+    # does not is refused here rather than ignored: silently dropping an input
+    # someone set is how a scan ends up narrower than its author believed.
+    - name: Validate managed inputs
+      if: ${{ inputs.mode == 'managed' }}
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        VERSION: ${{ inputs.version }}
+        EXTRA_ARGS: ${{ inputs.extra-args }}
+        URL: ${{ inputs.url }}
+        SPEC: ${{ inputs.spec }}
+        TENANT: ${{ inputs.tenant-id }}
+        ASSET: ${{ inputs.asset-id }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        API_BASE: ${{ inputs.api-base }}
+      run: |
+        set -euo pipefail
+        # Mask first, before any later step can echo it. GitHub masks secrets
+        # it knows about; this covers a token that reached the input by any
+        # other route.
+        if [ -n "$TOKEN" ]; then echo "::add-mask::$TOKEN"; fi
+        fail() { echo "::error::$1"; exit 1; }
+        [ -n "$TOKEN" ] || fail "managed mode requires 'token' (a repository-scoped fxci_ credential)"
+        [ -n "$TENANT" ] || fail "managed mode requires 'tenant-id'"
+        [ -n "$ASSET" ] || fail "managed mode requires 'asset-id'"
+        [ -n "$ENVIRONMENT" ] || fail "managed mode requires 'environment'"
+        case "$API_BASE" in
+          https://*) ;;
+          http://127.0.0.1*|http://localhost*) ;;
+          *) fail "managed mode requires an https 'api-base'" ;;
+        esac
+        # The backend accepts only allowlisted engine builds, so the version
+        # must be an exact release. 'latest' would submit whatever happens to
+        # be newest, which no allowlist can describe in advance.
+        case "$VERSION" in
+          v[0-9]*.[0-9]*.[0-9]*) ;;
+          *) fail "managed mode requires an exact engine version such as v3.4.1, not '$VERSION'" ;;
+        esac
+        # Raw argument passthrough cannot be allowlisted, and the contract
+        # replaces it with typed inputs.
+        [ -z "$EXTRA_ARGS" ] || fail "managed mode does not accept 'extra-args'; use typed inputs"
+        # The pilot is full-head SAST/SCA. A DAST target would produce
+        # evidence the pilot's binding policy does not require and cannot
+        # attribute.
+        [ -z "$URL" ] || fail "managed mode does not scan a URL in the pilot"
+        [ -z "$SPEC" ] || fail "managed mode does not take a spec in the pilot"
+
     - name: Install Fendix
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
+        # The installer reads the pin from the environment. Passing it as an
+        # argv option silently installed 'latest' instead, which managed mode
+        # cannot tolerate and local mode never wanted.
         if [ "$VERSION" = "latest" ]; then
           curl -fsSL https://get.fendix.dev/install.sh | sh
         else
-          curl -fsSL https://get.fendix.dev/install.sh | sh -s -- --version "$VERSION"
+          curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION="$VERSION" sh
+          installed="$(fendix version 2>/dev/null | head -1)"
+          case "$installed" in
+            *"$VERSION"*) ;;
+            *) echo "::error::requested $VERSION but installed $installed"; exit 1 ;;
+          esac
         fi
         fendix version
 
@@ -111,6 +202,7 @@ runs:
 
     - name: Run Fendix scan
       id: scan
+      if: ${{ inputs.mode != 'managed' }}
       shell: bash
       env:
         # Route every input through env (never interpolate ${{ }} into a run:
@@ -159,14 +251,81 @@ runs:
         # then re-raise the failure in the final step so findings are visible.
         exit 0
 
+    # Managed scan: full-head SAST/SCA, no diff scoping, no local gate. The
+    # engine writes the exact document the backend will receive; the runner
+    # does not assemble or edit evidence.
+    - name: Run Fendix managed scan
+      if: ${{ inputs.mode == 'managed' }}
+      shell: bash
+      env:
+        CODE: ${{ inputs.code }}
+        TENANT: ${{ inputs.tenant-id }}
+        ASSET: ${{ inputs.asset-id }}
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: |
+        set -euo pipefail
+        workdir="${RUNNER_TEMP:-/tmp}/fendix-managed"
+        mkdir -p "$workdir"
+        chmod 700 "$workdir"
+        fendix managed context \
+          --tenant-id "$TENANT" --asset-id "$ASSET" --environment "$ENVIRONMENT" \
+          --out "$workdir/context.json"
+        # No --diff and no --fail-on: the pilot submits full-head evidence,
+        # and the threshold is the binding's, held by the backend.
+        set +e
+        fendix scan --code "${CODE:-.}" \
+          --format json --output "$workdir/report.json" \
+          --managed-evidence "$workdir/evidence.json" \
+          --managed-context "$workdir/context.json"
+        code=$?
+        set -e
+        # Exit 1 is the LOCAL gate firing, which managed mode ignores by
+        # design. Anything else is a real scan failure, and a managed run
+        # that produced no evidence must not continue as if it had.
+        if [ "$code" != "0" ] && [ "$code" != "1" ]; then
+          echo "::error::the managed scan failed (exit $code); no evidence was produced"
+          exit "$code"
+        fi
+        [ -s "$workdir/evidence.json" ] || { echo "::error::no managed evidence was written"; exit 2; }
+        echo "FENDIX_MANAGED_DIR=$workdir" >> "$GITHUB_ENV"
+
+    # Submit and wait for the BACKEND's decision. The credential reaches one
+    # process through the environment and never appears in argv.
+    - name: Submit evidence and await the backend decision
+      id: managed
+      if: ${{ inputs.mode == 'managed' }}
+      shell: bash
+      env:
+        FENDIX_CI_TOKEN: ${{ inputs.token }}
+        API_BASE: ${{ inputs.api-base }}
+      run: |
+        set -euo pipefail
+        workdir="$FENDIX_MANAGED_DIR"
+        set +e
+        fendix managed submit \
+          --evidence "$workdir/evidence.json" \
+          --api-base "$API_BASE" \
+          --decision-output "$workdir/decision.json"
+        code=$?
+        set -e
+        # `fendix managed submit` writes the decision and its record id to
+        # $GITHUB_OUTPUT itself, so no JSON is parsed in shell here.
+        if [ "$code" != "0" ]; then
+          # 1 is a decision that fails the gate; anything else is NO decision.
+          # Neither may fall back to the local scan's own result.
+          exit "$code"
+        fi
+
     - name: Upload SARIF to code scanning
-      if: ${{ inputs.upload-sarif == 'true' && inputs.format == 'sarif' && always() }}
+      if: ${{ inputs.mode != 'managed' && inputs.upload-sarif == 'true' && inputs.format == 'sarif' && always() }}
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ inputs.output }}
 
+    # Local gate only. In managed mode the gate is the backend's decision,
+    # enforced by the submit step's exit code above.
     - name: Enforce fail-on threshold
-      if: ${{ always() }}
+      if: ${{ inputs.mode != 'managed' && always() }}
       shell: bash
       env:
         # Route inputs through env (never interpolate ${{ }} into a run:
