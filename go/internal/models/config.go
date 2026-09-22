@@ -172,6 +172,16 @@ type ScanConfig struct {
 	// unavailable or failed. Disabled, not-applicable and unsupported never
 	// trip it. Off by default (coverage contract v1).
 	FailOnCoverageGap bool
+	// ManagedEvidencePath, when set, writes the managed-CI submission
+	// document (contract managed-ci/v2) for the runner to POST. It needs
+	// ManagedContextPath, and any failure to produce it fails the scan:
+	// a managed run that cannot produce evidence must never look like one
+	// that produced clean evidence.
+	ManagedEvidencePath string
+	// ManagedContextPath is the runner-supplied CI identity for that
+	// document (managed-scan-context/v1 plus the submission id).
+	ManagedContextPath string
+
 	// RequiredAnalyzers names analyzers that must be delivered — recorded ok
 	// or not_applicable — for the run to exit 0. Stricter than
 	// FailOnCoverageGap: a disabled or unsupported required analyzer exits 2,

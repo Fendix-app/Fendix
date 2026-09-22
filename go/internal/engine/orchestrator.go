@@ -53,6 +53,11 @@ type Orchestrator struct {
 	// python-engine entry so an implicit --code scan without a tree is a
 	// visible dependency_missing rather than a stderr line.
 	engineMissing error
+	// analyzerTimings accumulates wall-clock time per registry analyzer.
+	// Managed evidence (contract managed-ci/v2) reports duration_ms per
+	// analyzer; nothing else reads it, and an analyzer the engine does not
+	// time simply reports 0.
+	analyzerTimings map[string]time.Duration
 	// metrics is the opt-in product-metrics collector (v0.20). It is a
 	// NoopCollector unless FENDIX_METRICS is set, so the scan path pays
 	// nothing when metrics are disabled. nil only when an Orchestrator is
@@ -416,9 +421,11 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			slog.Debug("diff-aware scan: go.mod/go.sum unchanged, skipping govulncheck")
 			scanStatus.skip(AnalyzerGovulncheck, reporters.ReasonDiffUnchanged, "diff: go.mod/go.sum unchanged")
 		} else {
+			started := time.Now()
 			nativeFindings, attempts, err := retryTransient(ctx, AnalyzerGovulncheck, func() ([]evidence.Evidence, error) {
 				return govulncheck.Scan(ctx, o.cfg.CodePath)
 			})
+			o.recordAnalyzerTime(AnalyzerGovulncheck, started)
 			switch {
 			case err == nil:
 				slog.Info("native go deps scan complete", "findings", len(nativeFindings))
@@ -473,9 +480,11 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			}
 			slog.Debug("native pypi dep-CVE scan starting", "mode", pipMode)
 			var attempts int
+			started := time.Now()
 			pipFindings, attempts, pipErr = retryTransient(ctx, AnalyzerPip, func() ([]evidence.Evidence, error) {
 				return pip.ScanRecursiveWithOptions(ctx, o.cfg.CodePath, pip.DefaultRecurseDepth, pip.Options{UsePipAudit: o.cfg.UsePipAudit})
 			})
+			o.recordAnalyzerTime(AnalyzerPip, started)
 			o.recordDepScanResult(&scanStatus, AnalyzerPip, "native pypi deps scan", &evid, pipFindings, pipErr)
 			if attempts > 1 {
 				scanStatus.markAttempts(AnalyzerPip, attempts)
@@ -500,9 +509,11 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
 		default:
 			var attempts int
+			started := time.Now()
 			npmFindings, attempts, npmErr = retryTransient(ctx, AnalyzerNpm, func() ([]evidence.Evidence, error) {
 				return npm.Scan(ctx, o.cfg.CodePath)
 			})
+			o.recordAnalyzerTime(AnalyzerNpm, started)
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
 			if attempts > 1 {
 				scanStatus.markAttempts(AnalyzerNpm, attempts)
@@ -528,7 +539,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	case diffEmpty:
 		// recorded diff_unchanged above
 	default:
+		started := time.Now()
 		secretEvidence, err := secrets.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
+		o.recordAnalyzerTime(AnalyzerSecrets, started)
 		switch {
 		case err == nil:
 			slog.Info("native secrets scan complete", "findings", len(secretEvidence))
@@ -568,7 +581,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	case diffEmpty:
 		// recorded diff_unchanged above
 	default:
+		started := time.Now()
 		semgrepFindings, err := semgrep.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
+		o.recordAnalyzerTime(AnalyzerSemgrep, started)
 		switch {
 		case err == nil:
 			slog.Info("native semgrep scan complete", "findings", len(semgrepFindings))
@@ -602,7 +617,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	case diffEmpty:
 		// recorded diff_unchanged above
 	default:
+		started := time.Now()
 		textFindings, err := textscan.ScanWithAllowlist(o.cfg.CodePath, textscan.AllRules(), allow)
+		o.recordAnalyzerTime(AnalyzerTextscan, started)
 		switch {
 		case err != nil:
 			slog.Warn("native textscan failed", "error", err)
@@ -643,7 +660,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		} else {
 			slog.Info("python available", "version", pyStatus.Version, "binary", pyStatus.Binary)
 			bundle.SetPythonVersion(pyStatus.Version)
+			started := time.Now()
 			wbFindings, result := o.runWhiteboxScan(ctx)
+			o.recordAnalyzerTime(AnalyzerPythonEngine, started)
 			evid = append(evid, wbFindings...)
 			recordPythonEngine(&scanStatus, result)
 		}
@@ -994,6 +1013,20 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	}
 	decisions := stampDecisions(findings, prov, o.cfg.FailOn, o.decisionOptions())
 
+	// 10.5. Managed CI (ADR-010, contract managed-ci/v2): write the exact
+	// submission document the runner POSTs. It is built HERE because this is
+	// the only point where the final findings and the provenance-restored
+	// Evidence behind each decision exist together. Nothing scored or decided
+	// is exported — only observations. A failure fails the scan (exit 2): a
+	// managed run that produced no evidence must never resemble one that
+	// produced clean evidence.
+	if o.cfg.ManagedEvidencePath != "" {
+		if err := o.writeManagedEvidence(findings, decisions, meta); err != nil {
+			fmt.Fprintf(os.Stderr, "managed evidence: %v\n", err)
+			return nil, nil, 2
+		}
+	}
+
 	// 11. Sanitize credentials from findings before rendering
 	findings = reporters.SanitizeFindings(findings, o.cfg.Auth, o.cfg.AuthUser2)
 
@@ -1132,6 +1165,16 @@ func loadImports(paths []string) ([]evidence.Evidence, []reporters.ImportedTool,
 // showed an inline literal could be rewritten to a constant without any
 // engine-package test noticing: every test built decision.Options itself, so
 // nothing observed the two being connected.
+// recordAnalyzerTime accumulates one analyzer's wall-clock time. Retries are
+// included: the elapsed time an analyzer cost the run is what a duration is
+// for.
+func (o *Orchestrator) recordAnalyzerTime(name string, started time.Time) {
+	if o.analyzerTimings == nil {
+		o.analyzerTimings = map[string]time.Duration{}
+	}
+	o.analyzerTimings[name] += time.Since(started)
+}
+
 func (o *Orchestrator) decisionOptions() decision.Options {
 	return decision.Options{
 		DeescalateTests:     o.cfg.DeescalateTests,

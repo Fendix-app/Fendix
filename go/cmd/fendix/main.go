@@ -357,6 +357,8 @@ func newScanCmd() *cobra.Command {
 			respectRobots, _ := flags.GetBool("respect-robots")
 			allowPrivateTargets, _ := flags.GetBool("allow-private-targets")
 			debugBundleFlag, _ := flags.GetString("debug-bundle")
+			managedEvidenceFlag, _ := flags.GetString("managed-evidence")
+			managedContextFlag, _ := flags.GetString("managed-context")
 			noPluginsFlag, _ := flags.GetBool("no-plugins")
 			allowRepoLocalPluginsFlag, _ := flags.GetBool("allow-repo-local-plugins")
 			noNativeDepsFlag, _ := flags.GetBool("no-native-deps")
@@ -472,6 +474,8 @@ func newScanCmd() *cobra.Command {
 				RespectRobots:         respectRobots,
 				AllowPrivate:          allowPrivateTargets,
 				DebugBundlePath:       debugBundleFlag,
+				ManagedEvidencePath:   managedEvidenceFlag,
+				ManagedContextPath:    managedContextFlag,
 				NoPlugins:             noPluginsFlag,
 				AllowRepoLocalPlugins: allowRepoLocalPluginsFlag,
 				NoNativeDeps:          noNativeDepsFlag,
@@ -591,6 +595,10 @@ func newScanCmd() *cobra.Command {
 	flags.Bool("respect-robots", false, "Treat robots.txt Disallow as a hard restriction (default: queue as discovery hints)")
 	flags.Bool("allow-private-targets", false, "Allow the scanner to connect to private/loopback/link-local addresses and the cloud metadata IP (disables the SSRF egress guard). Auto-enabled when --url already resolves to a private/loopback host.")
 	flags.String("debug-bundle", "", "Write a redacted diagnostic tarball to this path at scan end (intended for bug reports)")
+	// Managed CI (ADR-010). Both flags are set by the Fendix Action in managed
+	// mode; a local run has no reason to use them.
+	flags.String("managed-evidence", "", "Write the managed-CI submission document (contract managed-ci/v2) to this path. Requires --managed-context.")
+	flags.String("managed-context", "", "Path to the runner-supplied managed-CI context (managed-scan-context/v1 plus evidence_submission_id).")
 	flags.Bool("no-plugins", false, "Disable out-of-tree plugin discovery in .fendix/plugins/ + ~/.fendix/plugins/")
 	flags.Bool("allow-repo-local-plugins", false, "Opt in to running repo-local plugins under <scan-dir>/.fendix/plugins/ (UNSAFE on untrusted PRs; ~/.fendix/plugins/ is always trusted)")
 	flags.Bool("no-native-deps", false, "Disable the in-process Go dep-CVE scanner (TASK-119). Defer to the Python deps.py path instead.")
