@@ -225,6 +225,13 @@ retention and one-submission binding; that flow is outside v2.
 - `decision_record_id` identifies the immutable backend decision record.
 - a future `publication_output_id` identifies one provider publication command
   or result and is never any of the three IDs above.
+- `finding.fingerprint` is the PRODUCER's stable finding identity, not a
+  backend-derived one. It is hex of 40 or 64 characters: a producer may
+  truncate its digest to stay the width of an identity it replaces, and the
+  Fendix engine does exactly that (sha256 truncated to 20 bytes, so a v2
+  fingerprint is the width of the v1 sha1 it replaced and stored baselines,
+  ignore rules and history keep matching). The backend compares fingerprints
+  and never re-derives them, so the width is the producer's to choose.
 
 The GitHub pilot idempotency key is:
 
