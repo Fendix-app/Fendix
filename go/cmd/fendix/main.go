@@ -208,6 +208,7 @@ Get started:
 	root.AddCommand(hookcmd.NewCmd())
 	root.AddCommand(newBenchmarkCmd())
 	root.AddCommand(newMetricsCmd())
+	root.AddCommand(newManagedCmd())
 
 	return root
 }
