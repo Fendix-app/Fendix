@@ -40,10 +40,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out reviewed deployment
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up validation tools
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.25"
 
@@ -101,7 +101,7 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - name: Check out reviewed automation
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: automation
 
@@ -135,7 +135,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Check out exact application source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Fendix-app/Fendix
           ref: ${{ steps.contract.outputs.source_commit }}
@@ -193,7 +193,7 @@ jobs:
       arm64_digest: ${{ steps.manifest.outputs.arm64_digest }}
     steps:
       - name: Check out reviewed automation
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.application_release_tag || github.sha }}
           fetch-depth: 0
@@ -249,7 +249,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Check out exact application source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Fendix-app/Fendix
           ref: ${{ steps.contract.outputs.source_commit }}
@@ -484,7 +484,7 @@ jobs:
         run: cosign sign --recursive "${IMAGE}@${DIGEST}"
 
       - name: Set up Go for Syft
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.25"
 
