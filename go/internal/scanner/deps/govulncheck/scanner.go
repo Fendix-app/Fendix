@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,6 +43,14 @@ import (
 // (the package isn't a Go module) versus surface an error.
 var ErrNoGoMod = errors.New("govulncheck: no go.mod at path root")
 
+// ErrGoCommand is wrapped by Scan when the path DOES contain a go.mod but
+// the go command cannot resolve it: no `go` on PATH, a failed toolchain
+// switch, module mode turned off. The target is a Go module that went
+// unscanned, so this is a failure and never ErrNoGoMod. x/vuln reports every
+// one of these as "no go.mod file" and discards the go command's own
+// diagnosis, which is why Scan asks the go command itself first.
+var ErrGoCommand = errors.New("govulncheck: go command cannot resolve the module")
+
 // Scan runs govulncheck against the Go module rooted at modulePath and
 // returns one Finding per OSV-with-call-trace.
 //
@@ -51,7 +60,8 @@ var ErrNoGoMod = errors.New("govulncheck: no go.mod at path root")
 //
 // Returns ErrNoGoMod when modulePath has no go.mod — callers should
 // check errors.Is(err, ErrNoGoMod) and treat it as "not a Go module,
-// nothing to do" rather than a real failure.
+// nothing to do" rather than a real failure. Every other error, ErrGoCommand
+// included, means a Go module went unscanned and is a failure.
 func Scan(ctx context.Context, modulePath string) ([]evidence.Evidence, error) {
 	abs, err := filepath.Abs(modulePath)
 	if err != nil {
@@ -62,6 +72,9 @@ func Scan(ctx context.Context, modulePath string) ([]evidence.Evidence, error) {
 			return nil, ErrNoGoMod
 		}
 		return nil, fmt.Errorf("govulncheck: stat go.mod: %w", err)
+	}
+	if err := resolveGoMod(ctx, abs); err != nil {
+		return nil, err
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -81,6 +94,45 @@ func Scan(ctx context.Context, modulePath string) ([]evidence.Evidence, error) {
 	}
 
 	return parseFindings(stdout.Bytes(), filepath.Base(abs))
+}
+
+// resolveGoMod runs the probe x/vuln runs before loading packages — `go env
+// GOMOD` in the module directory, with the same inherited environment — and
+// returns the go command's own reason when it fails. x/vuln collapses every
+// failure of that probe into "no go.mod file", which misreports a Go module
+// the scan could not load as a directory that is not a Go module at all.
+//
+// The go command's stderr is typed like govulncheck's (a toolchain download
+// that could not reach the network is a network failure); everything else
+// stays an execution failure. dir is known to contain go.mod.
+func resolveGoMod(ctx context.Context, dir string) error {
+	cmd := exec.CommandContext(ctx, "go", "env", "GOMOD")
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("%w: go env GOMOD: %w", ErrGoCommand, ctxErr)
+		}
+		excerpt := firstLines(stderr.String(), 3)
+		switch neterr.ClassifyText(stderr.String()) {
+		case neterr.KindNetwork:
+			return fmt.Errorf("%w: %w: go env GOMOD: %v (stderr: %s)", ErrGoCommand, neterr.ErrSubprocessNetwork, err, excerpt)
+		case neterr.KindTimeout:
+			return fmt.Errorf("%w: %w: go env GOMOD: %v (stderr: %s)", ErrGoCommand, neterr.ErrSubprocessTimeout, err, excerpt)
+		}
+		if excerpt != "" {
+			return fmt.Errorf("%w: go env GOMOD: %v (stderr: %s)", ErrGoCommand, err, excerpt)
+		}
+		return fmt.Errorf("%w: go env GOMOD: %v", ErrGoCommand, err)
+	}
+	// Module mode off reports "" and a directory outside any module reports
+	// os.DevNull; either way the go command will not load this go.mod.
+	if gomod := strings.TrimSpace(string(out)); gomod == "" || gomod == os.DevNull {
+		return fmt.Errorf("%w: go env GOMOD reported %q although go.mod exists (module mode disabled?)", ErrGoCommand, gomod)
+	}
+	return nil
 }
 
 // classifyRunErr wraps a govulncheck failure with a transport sentinel when
