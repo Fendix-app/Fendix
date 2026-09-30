@@ -63,6 +63,19 @@ func TestFamilyAggregationIsPessimistic(t *testing.T) {
 			reportGap: true,
 		},
 		{
+			// The same when the toolchain download could not reach the
+			// network: the reason differs, the outcome may not.
+			name: "a govulncheck blocked by the network fails sca even when pip completed",
+			members: map[string]Execution{
+				"govulncheck": failed("govulncheck", reporters.ReasonNetworkError),
+				"pip":         ok("pip"),
+				"npm":         skipped("npm", reporters.ReasonNotApplicable),
+			},
+			status:    statusFailed,
+			reason:    "network_error",
+			reportGap: true,
+		},
+		{
 			// A stock runner without semgrep still performed static
 			// analysis. Reporting the family as skipped here made every
 			// managed scan INCOMPLETE regardless of the code.
