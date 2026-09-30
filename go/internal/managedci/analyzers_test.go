@@ -49,6 +49,20 @@ func TestFamilyAggregationIsPessimistic(t *testing.T) {
 			reportGap: true,
 		},
 		{
+			// A Go module govulncheck could not load went unscanned. That a
+			// Python manifest in the same repository scanned cleanly must
+			// not let SCA vouch for the target.
+			name: "a govulncheck that could not run fails sca even when pip completed",
+			members: map[string]Execution{
+				"govulncheck": failed("govulncheck", reporters.ReasonExecutionError),
+				"pip":         ok("pip"),
+				"npm":         skipped("npm", reporters.ReasonNotApplicable),
+			},
+			status:    statusFailed,
+			reason:    "execution_error",
+			reportGap: true,
+		},
+		{
 			// A stock runner without semgrep still performed static
 			// analysis. Reporting the family as skipped here made every
 			// managed scan INCOMPLETE regardless of the code.
