@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -164,6 +165,19 @@ type Submission struct {
 	Manifest             Manifest `json:"manifest"`
 }
 
+// The ceilings ErrTooLarge names, as its Limit field reports them.
+const (
+	LimitFindingCount  = "finding count"
+	LimitAnalyzerCount = "analyzer count"
+	LimitRequestBody   = "request body"
+)
+
+// CeilingRefusalPrefix opens the one line a runner prints when evidence
+// exceeds a contract ceiling. It is stable on purpose: the Action matches it
+// to name the ceiling in the job's error annotation and summary, instead of
+// reporting a generic scan or submission failure.
+const CeilingRefusalPrefix = "fendix: managed evidence exceeds a contract ceiling: "
+
 // ErrTooLarge reports evidence that exceeds a contract ceiling. It is a
 // fail-closed condition: the runner reports an error and makes NO managed
 // PASS, WARN or BLOCK claim.
@@ -175,6 +189,60 @@ type ErrTooLarge struct {
 
 func (e ErrTooLarge) Error() string {
 	return fmt.Sprintf("managed evidence exceeds the %s limit: %d > %d", e.Limit, e.Actual, e.Max)
+}
+
+// Refusal is the terminal line for evidence over a ceiling. It names the
+// ceiling, the actual size and the maximum, and states the two facts a
+// reader of a failed job needs: nothing left the runner, and no managed
+// decision exists for the run. Nothing is truncated or split to fit.
+func (e ErrTooLarge) Refusal() string {
+	unit := ""
+	if e.Limit == LimitRequestBody {
+		unit = " bytes"
+	}
+	return fmt.Sprintf("%s%s %d%s > maximum %d%s. "+
+		"Nothing was submitted; there is no managed PASS, WARN or BLOCK decision for this run.",
+		CeilingRefusalPrefix, e.Limit, e.Actual, unit, e.Max, unit)
+}
+
+// CeilingRefusal reports whether err is, or wraps, a contract-ceiling
+// refusal, and returns the terminal line to print for it.
+func CeilingRefusal(err error) (string, bool) {
+	var tooLarge ErrTooLarge
+	if errors.As(err, &tooLarge) {
+		return tooLarge.Refusal(), true
+	}
+	return "", false
+}
+
+// CheckCeilings refuses a serialized submission over any contract ceiling.
+// Build already refuses such evidence; this repeats the check at the point
+// where bytes would leave the runner, so a document that was edited, written
+// by another build or assembled by hand is refused before any request too.
+//
+// Only the ceilings are decided here. A body that does not parse as a
+// submission is not this check's to judge: the backend refuses it, and that
+// refusal is a missing decision, never a pass.
+func CheckCeilings(body []byte) error {
+	if len(body) > MaxBodyBytes {
+		return ErrTooLarge{Limit: LimitRequestBody, Actual: len(body), Max: MaxBodyBytes}
+	}
+	var counts struct {
+		Manifest struct {
+			Analyzers []json.RawMessage `json:"analyzers"`
+			Findings  []json.RawMessage `json:"findings"`
+		} `json:"manifest"`
+	}
+	if err := json.Unmarshal(body, &counts); err != nil {
+		return nil
+	}
+	if n := len(counts.Manifest.Findings); n > MaxFindings {
+		return ErrTooLarge{Limit: LimitFindingCount, Actual: n, Max: MaxFindings}
+	}
+	if n := len(counts.Manifest.Analyzers); n > MaxAnalyzers {
+		return ErrTooLarge{Limit: LimitAnalyzerCount, Actual: n, Max: MaxAnalyzers}
+	}
+	return nil
 }
 
 // ErrProvenance reports a manifest whose parts do not account for each other.
@@ -211,10 +279,10 @@ func Build(in Input) (Submission, []byte, error) {
 		return zero, nil, err
 	}
 	if len(in.Findings) > MaxFindings {
-		return zero, nil, ErrTooLarge{Limit: "finding count", Actual: len(in.Findings), Max: MaxFindings}
+		return zero, nil, ErrTooLarge{Limit: LimitFindingCount, Actual: len(in.Findings), Max: MaxFindings}
 	}
 	if len(in.Analyzers) > MaxAnalyzers {
-		return zero, nil, ErrTooLarge{Limit: "analyzer count", Actual: len(in.Analyzers), Max: MaxAnalyzers}
+		return zero, nil, ErrTooLarge{Limit: LimitAnalyzerCount, Actual: len(in.Analyzers), Max: MaxAnalyzers}
 	}
 	// Never nil: a clean scan has an EMPTY findings array, not a null one,
 	// and the schema admits only an array. A scan that found nothing is the
@@ -288,7 +356,7 @@ func Build(in Input) (Submission, []byte, error) {
 		return zero, nil, fmt.Errorf("serialize managed evidence: %w", err)
 	}
 	if len(body) > MaxBodyBytes {
-		return zero, nil, ErrTooLarge{Limit: "request body", Actual: len(body), Max: MaxBodyBytes}
+		return zero, nil, ErrTooLarge{Limit: LimitRequestBody, Actual: len(body), Max: MaxBodyBytes}
 	}
 	return submission, body, nil
 }

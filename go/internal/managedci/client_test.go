@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -233,6 +234,39 @@ func TestOversizedEvidenceIsNeverSent(t *testing.T) {
 	}
 	if sent {
 		t.Error("oversized evidence was sent to the backend anyway")
+	}
+}
+
+// The finding ceiling is enforced where bytes leave the runner too, not only
+// when the engine builds the document: a document with 10,001 findings that
+// fits in 8 MiB must not reach the backend, or carry the credential there.
+func TestEvidenceOverEitherCeilingIsNeverSent(t *testing.T) {
+	cases := map[string]struct {
+		body  []byte
+		limit string
+	}{
+		"finding count": {submissionWith(MaxFindings+1, 1, 0), LimitFindingCount},
+		"request body":  {submissionWith(100, 1, MaxBodyBytes/100), LimitRequestBody},
+	}
+	for name, tc := range cases {
+		if name == "finding count" && len(tc.body) > MaxBodyBytes {
+			t.Fatalf("the finding-count document is %d bytes; it must fit the body ceiling to test the count alone", len(tc.body))
+		}
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		client, _ := testClient(t, server.URL)
+		_, err := client.Submit(context.Background(), tc.body)
+		server.Close()
+		var tooLarge ErrTooLarge
+		if !errors.As(err, &tooLarge) || tooLarge.Limit != tc.limit {
+			t.Errorf("%s: error = %v, want the %s ceiling", name, err, tc.limit)
+		}
+		if n := requests.Load(); n != 0 {
+			t.Errorf("%s: the backend received %d request(s); evidence over a ceiling must never be sent", name, n)
+		}
 	}
 }
 

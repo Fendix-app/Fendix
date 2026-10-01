@@ -26,7 +26,9 @@ import (
 //
 //	0  the backend decided, and the decision does not fail the gate
 //	1  the backend decided, and the decision fails the gate (BLOCK/INCOMPLETE)
-//	2  no decision was obtained — never treated as a pass
+//	2  no decision was obtained — never treated as a pass. This includes
+//	   evidence over a contract ceiling, which is refused before any request
+//	   and reported on one line that opens with managedci.CeilingRefusalPrefix
 const tokenEnv = "FENDIX_CI_TOKEN" //nolint:gosec // the NAME of the variable, not a credential
 
 func newManagedCmd() *cobra.Command {
@@ -124,6 +126,11 @@ func newManagedSubmitCmd() *cobra.Command {
 			started := time.Now()
 			submitted, err := client.Submit(ctx, body)
 			if err != nil {
+				if refusal, ok := managedci.CeilingRefusal(err); ok {
+					// Exit 2 like every other run without a decision, on a
+					// line the Action can name instead of a generic error.
+					return cli.ExitWithCode(2, refusal)
+				}
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "evidence accepted: submission %s\n", submitted.EvidenceSubmissionID)
