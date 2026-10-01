@@ -3,6 +3,7 @@ package managedci
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +240,107 @@ func TestEvidenceOverEitherCeilingFailsClosed(t *testing.T) {
 	if tooLarge.Max != MaxBodyBytes {
 		t.Errorf("body ceiling = %d, want %d", tooLarge.Max, MaxBodyBytes)
 	}
+}
+
+// The refusal is the one line a failed managed job shows, and the Action
+// matches its prefix, so its exact text is pinned here.
+func TestCeilingRefusalNamesTheLimitTheActualAndTheMaximum(t *testing.T) {
+	const tail = ". Nothing was submitted; there is no managed PASS, WARN or BLOCK decision for this run."
+	cases := map[string]struct {
+		err  ErrTooLarge
+		want string
+	}{
+		"finding count": {
+			ErrTooLarge{Limit: LimitFindingCount, Actual: 10001, Max: MaxFindings},
+			"fendix: managed evidence exceeds a contract ceiling: finding count 10001 > maximum 10000" + tail,
+		},
+		"request body": {
+			ErrTooLarge{Limit: LimitRequestBody, Actual: 9500057, Max: MaxBodyBytes},
+			"fendix: managed evidence exceeds a contract ceiling: request body 9500057 bytes > maximum 8388608 bytes" + tail,
+		},
+		"analyzer count": {
+			ErrTooLarge{Limit: LimitAnalyzerCount, Actual: 201, Max: MaxAnalyzers},
+			"fendix: managed evidence exceeds a contract ceiling: analyzer count 201 > maximum 200" + tail,
+		},
+	}
+	for name, tc := range cases {
+		got, ok := CeilingRefusal(tc.err)
+		if !ok || got != tc.want {
+			t.Errorf("%s: CeilingRefusal = %q, %v\nwant %q", name, got, ok, tc.want)
+		}
+		// Callers wrap errors; the refusal must survive that.
+		if got, ok := CeilingRefusal(fmt.Errorf("export: %w", tc.err)); !ok || got != tc.want {
+			t.Errorf("%s: a wrapped ceiling error lost its refusal: %q, %v", name, got, ok)
+		}
+		if !strings.HasPrefix(got, CeilingRefusalPrefix) || strings.Contains(got, "\n") {
+			t.Errorf("%s: the refusal is not one line opening with the stable prefix: %q", name, got)
+		}
+	}
+	// Every other failure keeps its own message: only a ceiling is a ceiling.
+	for _, err := range []error{
+		nil,
+		ErrProvenance{Reason: "finding SEC-1 identifies no evidence"},
+		ErrNoDecision{Stage: "submission", Reason: "the backend could not be reached"},
+		errors.New("managed evidence requires the engine build digest"),
+	} {
+		if got, ok := CeilingRefusal(err); ok || got != "" {
+			t.Errorf("CeilingRefusal(%v) = %q, %v; want no refusal", err, got, ok)
+		}
+	}
+}
+
+// CheckCeilings judges a serialized document, the form in which evidence
+// actually leaves the runner. Each ceiling is independent of the others.
+func TestCheckCeilingsRefusesASerializedDocumentOverEitherCeiling(t *testing.T) {
+	var tooLarge ErrTooLarge
+	if err := CheckCeilings(submissionWith(MaxFindings+1, 1, 0)); !errors.As(err, &tooLarge) ||
+		tooLarge != (ErrTooLarge{Limit: LimitFindingCount, Actual: MaxFindings + 1, Max: MaxFindings}) {
+		t.Errorf("10,001 findings: error = %v", err)
+	}
+	if err := CheckCeilings(submissionWith(1, MaxAnalyzers+1, 0)); !errors.As(err, &tooLarge) ||
+		tooLarge.Limit != LimitAnalyzerCount || tooLarge.Actual != MaxAnalyzers+1 {
+		t.Errorf("201 analyzers: error = %v", err)
+	}
+	// Few findings, but bulky ones: the body ceiling is its own limit.
+	bulky := submissionWith(100, 1, MaxBodyBytes/100)
+	if err := CheckCeilings(bulky); !errors.As(err, &tooLarge) ||
+		tooLarge != (ErrTooLarge{Limit: LimitRequestBody, Actual: len(bulky), Max: MaxBodyBytes}) {
+		t.Errorf("an 8 MiB+ body with 100 findings: error = %v", err)
+	}
+	// Exactly at each ceiling is within it.
+	if err := CheckCeilings(submissionWith(MaxFindings, MaxAnalyzers, 0)); err != nil {
+		t.Errorf("a document at the count ceilings was refused: %v", err)
+	}
+	// A body that does not parse is the backend's to refuse, not a ceiling.
+	if err := CheckCeilings([]byte(`{"api_version":`)); err != nil {
+		t.Errorf("a malformed body was reported as a ceiling: %v", err)
+	}
+	_, body, err := Build(testInput())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := CheckCeilings(body); err != nil {
+		t.Errorf("a document Build accepted was refused at submission: %v", err)
+	}
+}
+
+// submissionWith serializes a submission-shaped document with the given
+// numbers of findings and analyzers, each finding padded by pad bytes.
+func submissionWith(findings, analyzers, pad int) []byte {
+	type doc struct {
+		Manifest struct {
+			Analyzers []Analyzer `json:"analyzers"`
+			Findings  []Finding  `json:"findings"`
+		} `json:"manifest"`
+	}
+	var out doc
+	out.Manifest.Analyzers = make([]Analyzer, analyzers)
+	out.Manifest.Findings = make([]Finding, findings)
+	for i := range out.Manifest.Findings {
+		out.Manifest.Findings[i].FindingID = strings.Repeat("x", pad)
+	}
+	body, _ := json.Marshal(out)
+	return body
 }
 
 func TestLocationsAreRepositoryRelativeOrOmitted(t *testing.T) {

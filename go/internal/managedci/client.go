@@ -117,10 +117,12 @@ func NewClient(baseURL, token string) *Client {
 }
 
 // Submit posts the evidence document and returns the receipt's status URL.
+// Evidence over a contract ceiling is refused before any request is built,
+// so neither the document nor the credential leaves the runner.
 func (c *Client) Submit(ctx context.Context, body []byte) (receipt, error) {
 	var out receipt
-	if len(body) > MaxBodyBytes {
-		return out, ErrTooLarge{Limit: "request body", Actual: len(body), Max: MaxBodyBytes}
+	if err := CheckCeilings(body); err != nil {
+		return out, err
 	}
 	attempt := 0
 	for {

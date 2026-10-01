@@ -19,6 +19,7 @@ import (
 	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/gitdiff"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/logagg"
+	"github.com/Abdel-RahmanSaied/Fendix/internal/managedci"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/metrics"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 	"github.com/Abdel-RahmanSaied/Fendix/internal/offline"
@@ -1022,7 +1023,14 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// produced clean evidence.
 	if o.cfg.ManagedEvidencePath != "" {
 		if err := o.writeManagedEvidence(findings, decisions, meta); err != nil {
-			fmt.Fprintf(os.Stderr, "managed evidence: %v\n", err)
+			// A contract ceiling gets its own terminal line, which the
+			// Action surfaces verbatim: nothing is truncated or split, no
+			// document is written, and the run has no managed decision.
+			if refusal, ok := managedci.CeilingRefusal(err); ok {
+				fmt.Fprintln(os.Stderr, refusal)
+			} else {
+				fmt.Fprintf(os.Stderr, "managed evidence: %v\n", err)
+			}
 			return nil, nil, 2
 		}
 	}

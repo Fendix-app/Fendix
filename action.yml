@@ -271,19 +271,28 @@ runs:
           --tenant-id "$TENANT" --asset-id "$ASSET" --environment "$ENVIRONMENT" \
           --out "$workdir/context.json"
         # No --diff and no --fail-on: the pilot submits full-head evidence,
-        # and the threshold is the binding's, held by the backend.
+        # and the threshold is the binding's, held by the backend. The output
+        # is kept as well as shown, so a contract-ceiling refusal can be named.
         set +e
         fendix scan --code "${CODE:-.}" \
           --format json --output "$workdir/report.json" \
           --managed-evidence "$workdir/evidence.json" \
-          --managed-context "$workdir/context.json"
-        code=$?
+          --managed-context "$workdir/context.json" 2>&1 | tee "$workdir/scan.log"
+        code=${PIPESTATUS[0]}
         set -e
         # Exit 1 is the LOCAL gate firing, which managed mode ignores by
         # design. Anything else is a real scan failure, and a managed run
         # that produced no evidence must not continue as if it had.
         if [ "$code" != "0" ] && [ "$code" != "1" ]; then
-          echo "::error::the managed scan failed (exit $code); no evidence was produced"
+          # Evidence over a contract ceiling is never truncated or split: the
+          # engine names the ceiling on one line, and that line is the error.
+          ceiling="$(grep -m1 '^fendix: managed evidence exceeds a contract ceiling: ' "$workdir/scan.log" || true)"
+          if [ -n "$ceiling" ]; then
+            echo "::error::${ceiling//%/%25}"
+            printf '## Fendix managed evidence refused\n\n%s\n' "$ceiling" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          else
+            echo "::error::the managed scan failed (exit $code); no evidence was produced"
+          fi
           exit "$code"
         fi
         [ -s "$workdir/evidence.json" ] || { echo "::error::no managed evidence was written"; exit 2; }
@@ -305,12 +314,19 @@ runs:
         fendix managed submit \
           --evidence "$workdir/evidence.json" \
           --api-base "$API_BASE" \
-          --decision-output "$workdir/decision.json"
-        code=$?
+          --decision-output "$workdir/decision.json" 2>&1 | tee "$workdir/submit.log"
+        code=${PIPESTATUS[0]}
         set -e
         # `fendix managed submit` writes the decision and its record id to
         # $GITHUB_OUTPUT itself, so no JSON is parsed in shell here.
         if [ "$code" != "0" ]; then
+          # Evidence over a contract ceiling is refused before any request;
+          # the command names the ceiling on one line, and that is the error.
+          ceiling="$(grep -m1 '^fendix: managed evidence exceeds a contract ceiling: ' "$workdir/submit.log" || true)"
+          if [ -n "$ceiling" ]; then
+            echo "::error::${ceiling//%/%25}"
+            printf '## Fendix managed evidence refused\n\n%s\n' "$ceiling" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          fi
           # 1 is a decision that fails the gate; anything else is NO decision.
           # Neither may fall back to the local scan's own result.
           exit "$code"
