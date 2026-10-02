@@ -280,9 +280,12 @@ runs:
           --managed-context "$workdir/context.json" 2>&1 | tee "$workdir/scan.log"
         code=${PIPESTATUS[0]}
         set -e
-        # Exit 1 is the LOCAL gate firing, which managed mode ignores by
-        # design. Anything else is a real scan failure, and a managed run
-        # that produced no evidence must not continue as if it had.
+        # This step passes no --fail-on, so the local scan never decides
+        # anything: its summary is labelled a diagnostic, and the decision
+        # is the backend's (next step). Exit 1 can still come from a
+        # repository policy file that sets fail_on; managed mode ignores it
+        # by design. Anything else is a real scan failure, and a managed
+        # run that produced no evidence must not continue as if it had.
         if [ "$code" != "0" ] && [ "$code" != "1" ]; then
           # Evidence over a contract ceiling is never truncated or split: the
           # engine names the ceiling on one line, and that line is the error.

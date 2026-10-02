@@ -170,7 +170,7 @@ func newManagedSubmitCmd() *cobra.Command {
 
 func report(cmd *cobra.Command, decision *managedci.Decision, elapsed time.Duration) {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "backend decision: %s (coverage %s, policy %s, %s)\n",
+	fmt.Fprintf(out, "authoritative decision (Fendix backend): %s (coverage %s, policy %s, %s)\n",
 		decision.Decision, decision.CoverageState, decision.BackendPolicyVersion, elapsed.Round(time.Millisecond))
 	if len(decision.ReasonCodes) > 0 {
 		fmt.Fprintf(out, "reasons: %s\n", strings.Join(decision.ReasonCodes, ", "))
@@ -213,13 +213,14 @@ func writeStepSummary(path string, decision *managedci.Decision) {
 	}
 	defer func() { _ = file.Close() }()
 	var summary strings.Builder
-	summary.WriteString("## Fendix managed decision\n\n")
+	summary.WriteString("## Fendix managed decision (authoritative)\n\n")
 	summary.WriteString(fmt.Sprintf("**%s** — coverage %s, backend policy %s\n\n",
 		decision.Decision, decision.CoverageState, decision.BackendPolicyVersion))
 	if len(decision.ReasonCodes) > 0 {
 		summary.WriteString("Reasons: `" + strings.Join(decision.ReasonCodes, "`, `") + "`\n\n")
 	}
-	summary.WriteString(fmt.Sprintf("Decision record `%s` (revision %d)\n",
+	summary.WriteString(fmt.Sprintf("Decision record `%s` (revision %d)\n\n",
 		decision.Record.DecisionRecordID, decision.Record.Revision))
+	summary.WriteString("Issued by the Fendix backend. Any local scan summary in this job's log is diagnostic only.\n")
 	_, _ = file.WriteString(summary.String())
 }

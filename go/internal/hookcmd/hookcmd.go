@@ -33,6 +33,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
 )
 
 // hookSentinel marks a pre-commit file as fendix-managed so `status` and
@@ -126,6 +128,12 @@ func hooksDir() (string, error) {
 }
 
 func runInstall(cmd *cobra.Command, force bool, failOn string) error {
+	// The threshold is written into the hook; an invalid one would make
+	// every commit fail with a usage error. Refuse it here instead.
+	failOn, err := models.ParseFailOn(failOn)
+	if err != nil {
+		return err
+	}
 	dir, err := hooksDir()
 	if err != nil {
 		return fmt.Errorf("not a git repository (run inside a repo, or `git init` first): %w", err)

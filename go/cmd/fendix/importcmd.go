@@ -39,6 +39,10 @@ func newImportCmd() *cobra.Command {
 			outputFlag, _ := flags.GetString("output")
 			formatFlag, _ := flags.GetString("format")
 			failOnFlag, _ := flags.GetString("fail-on")
+			failOnFlag, err := models.ParseFailOn(failOnFlag)
+			if err != nil {
+				return err
+			}
 			baselineFlag, _ := flags.GetString("baseline")
 			saveBaselineFlag, _ := flags.GetString("save-baseline")
 			ignoreFlag, _ := flags.GetString("ignore")

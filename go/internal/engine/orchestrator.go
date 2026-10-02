@@ -1009,8 +1009,12 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// status/score/band/reasons are stamped back, and SanitizeFindings copies
 	// those four fields through unchanged.
 	if o.cfg.FailOn != "" && models.SeverityRank(models.Severity(o.cfg.FailOn)) == 0 {
-		// Preserve the legacy invalid-threshold WARN (was in checkFailOn).
-		slog.Warn("invalid --fail-on value — use CRITICAL, HIGH, or MEDIUM", "value", o.cfg.FailOn)
+		// The CLI refuses an unrecognised threshold before scanning
+		// (models.ParseFailOn). This is the backstop for any other caller: an
+		// unrecognised threshold used to warn and decide with NO threshold,
+		// silently disabling the gate. Fail the run instead.
+		fmt.Fprintf(os.Stderr, "fendix: invalid --fail-on %q: use CRITICAL, HIGH, MEDIUM or LOW\n", o.cfg.FailOn)
+		return nil, nil, 2
 	}
 	decisions := stampDecisions(findings, prov, o.cfg.FailOn, o.decisionOptions())
 
@@ -1061,9 +1065,27 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// Reads the same CountStatuses the JSON/SARIF reports use, so the blocking
 	// count is consistent with the exit code.
 	sc := reporters.CountStatuses(findings)
-	fmt.Fprintf(os.Stderr,
-		"\nDecision summary: %d findings — %d blocking, %d warning, %d informational (%d high-confidence)\n",
-		sc.Total, sc.Blocking, sc.Warning, sc.Informational, sc.Confirmed)
+	if o.cfg.ManagedEvidencePath != "" {
+		// Managed CI: the decision belongs to the backend's Decision Record,
+		// returned by `fendix managed submit`. This local count is a
+		// diagnostic only, and the managed step runs with no --fail-on, so
+		// it can never show BLOCK. Say so on the line itself, so a CI log can
+		// never be read as the managed outcome.
+		fmt.Fprintf(os.Stderr,
+			"\nLocal diagnostic summary (NOT the managed decision): %d findings — %d blocking, %d warning, %d informational (%d high-confidence)\n",
+			sc.Total, sc.Blocking, sc.Warning, sc.Informational, sc.Confirmed)
+		threshold := o.cfg.FailOn
+		if threshold == "" {
+			threshold = "none"
+		}
+		fmt.Fprintf(os.Stderr,
+			"Local threshold: %s. The authoritative decision is the Fendix backend's, reported by `fendix managed submit`.\n",
+			threshold)
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"\nDecision summary: %d findings — %d blocking, %d warning, %d informational (%d high-confidence)\n",
+			sc.Total, sc.Blocking, sc.Warning, sc.Informational, sc.Confirmed)
+	}
 
 	return findings, decisions, 0
 }
