@@ -221,8 +221,8 @@ polling, Decision Record ID, step summary, or dashboard-link input/output.
 `examples/github-actions/fendix-scan.yml` is a second, different implementation:
 
 - it pins third-party Actions to full SHAs;
-- it installs `github.com/Abdel-RahmanSaied/Fendix/cmd/fendix@v0.15.0`, an old
-  personal-namespace version rather than the current official release;
+- it runs the official v3.4.1 Docker Hub image by immutable manifest digest,
+  including the version-matched Python tree and Go toolchain;
 - it caches a baseline, runs local JSON, re-renders SARIF, uploads it, posts a
   new pull-request comment, and enforces the local exit;
 - it asks for `pull-requests: write` on untrusted pull-request workflows;

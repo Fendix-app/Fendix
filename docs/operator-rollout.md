@@ -1,5 +1,11 @@
 # Operator Rollout Checklist
 
+> **Historical, non-authoritative checklist.** This document records the
+> v0.11 GitHub App rollout plan and must not be used to launch the current
+> v3.4.1 product. ADR-010 authorizes contracts/conformance only; the managed
+> runtime remains not ready for deployment. Preserve the versioned steps below
+> as history.
+
 > Step-by-step guide to take Fendix from "engine shipped" to "live on GitHub Marketplace."
 > Steps are sequential (each builds on the prior). Estimated total: ~1 hour of operator time.
 

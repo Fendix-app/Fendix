@@ -2,7 +2,7 @@
 
 **Engine:** Go (white-box) — `go/internal/scanner/secrets/`, native since TASK-115
 **Category:** `secrets`
-**Default severity:** CRITICAL – MEDIUM
+**Emitted severity:** CRITICAL or HIGH
 **Active probing:** No (static analysis)
 
 ## What It Detects
@@ -61,10 +61,12 @@ Credential material is now replaced at capture time with a deterministic marker:
   the assignment's variable name all survive.
 
 > **Evidence text changed for every secrets finding.** A snapshot or golden file
-> that pinned it needs regenerating. Fingerprints do not move:
-> `models.Fingerprint` hashes `(category, endpoint, title)` and the dedup key
-> hashes `(severity, category, title)` — neither reads evidence — so
-> `.fendix-ignore` rules and `--baseline` entries are unaffected.
+> that pinned it needs regenerating. Fingerprints do not move: current builds
+> emit the `fendix/v2` semantic fingerprint, which keys a secret on its rule,
+> repository-relative file, and safe identifier. Evidence, credential material,
+> line/column coordinates, severity, and decision fields are excluded, so
+> capture-time redaction does not re-key `.fendix-ignore` rules or baseline
+> entries.
 
 ## Fixture-shaped values (v2.0)
 
@@ -100,7 +102,7 @@ Stripe's documentation key, a 48-character OpenAI key, or a database password.
 > both are serialized into JSON and SARIF. Severity, `status`'s severity input
 > and the `confidence` enum are untouched. Because a `LOW` band never blocks,
 > this can change an exit code — see
-> [`--enforce-confidence`](../../README.md#scan-flags).
+> [`--enforce-confidence`](../../README.md#common-scan-flags).
 
 ## Example Finding
 

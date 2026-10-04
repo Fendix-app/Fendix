@@ -1,31 +1,37 @@
 # Fendix Integration Guide
 
-The authoritative guide for integrating **Fendix** — an API/code security scanner — into any project. It covers three integration levels, from a one-shot local CLI scan to a full SaaS dashboard wired through customer-hosted runners. TwiScope (a Django/DRF backend) is used as the worked example where helpful.
+The authoritative guide for integrating **Fendix** — an API/code security scanner — into a project through its supported public surfaces. It covers the local CLI, CI/CD, reports, SARIF, and customer-hosted runner setup. TwiScope (a Django/DRF backend) is used as the scanning target in worked examples where helpful.
 
-Everything here is drawn from verified source reads of the Fendix engine (Go + Python), the GitHub Action, the pre-commit hook, and the Fendix backend (Django REST). Flags, endpoints, and fields not listed here do not exist or were out of scope — do not assume otherwise.
+Everything here is drawn from verified source reads of the Fendix engine (Go + Python), the GitHub Action, and the pre-commit hook. See the [engine contract reconciliation](../audits/engine-contract-reconciliation-2026-10-03.md) for the exhaustive CLI inventory. The hosted Fendix backend and its OpenAPI document are private service contracts used by Fendix applications; they are not supported public developer APIs.
 
 ---
 
 ## 1. Overview
 
-Fendix has **three distinct integration surfaces**. They share the same engine and the same JSON report schema, so you can mix and match.
+Fendix has **three supported integration paths**. They share the same engine and report semantics, so teams can move from local evaluation to CI and then to a hosted workspace without changing the underlying security model.
 
-| Level | What it is | Who runs it | Output |
+| Path | What it is | Who runs it | Output |
 |---|---|---|---|
-| **Level 1 — Local CLI** | The `fendix` Go binary run by hand or in a script | A developer / a shell | JSON / HTML / SARIF / PDF report, exit code |
-| **Level 2 — CI/CD gate** | The same binary (or GHCR image) run on every push/PR, failing the build on findings | A CI runner (GitHub Actions, GitLab CI, CircleCI) | SARIF → Security tab / PR comment / job summary, build pass-fail |
-| **Level 3 — SaaS API + dashboard** | The Fendix backend (Django REST) that stores scans, aggregates findings, and accepts externally-run results from customer **runners** | Your app/CI calls the API; runners push results | Persisted scans, dashboard, multi-tenant org workspaces |
+| **Path 1 — Local CLI** | The `fendix` Go binary run by hand or in a script | A developer / a shell | JSON / HTML / SARIF / PDF report, exit code |
+| **Path 2 — CI/CD gate** | The same binary (or official container) run on every push/PR | A CI runner | SARIF, job summary, artifacts, build decision |
+| **Path 3 — Hosted workspace** | The Fendix product for persistent history, decisions, organization workspaces, and approved customer-hosted runners | A team through supported product setup | Dashboard history, governed decisions, private-target coverage |
 
 ### Quick decision guide
 
-- **"I just want to scan something once."** → Level 1. `fendix scan --url ...` or `--code .`.
-- **"I want every PR gated and findings in the GitHub Security tab."** → Level 2. Use the GitHub Action, or the GHCR image directly if the action can't resolve (private-repo gotcha, see §3.2).
-- **"I want a persistent history, a dashboard, org workspaces, and to scan private/internal targets from CI."** → Level 3. Drive the SaaS API; use the **runner protocol** to get CI/white-box scans into the dashboard.
-- **"My target is inside a private network / behind a VPN."** → Level 3 runner (it runs in-network and submits results back), because the SaaS backend itself enforces SSRF egress protection.
+- **"I just want to scan something once."** → Path 1. Run the local CLI.
+- **"I want every PR gated and findings in the GitHub Security tab."** → Path 2. Use the public Action or official container.
+- **"I want persistent history, organization workspaces, and governed release decisions."** → Use the hosted workspace and its documented product integrations.
+- **"My target is inside a private network / behind a VPN."** → Use the Enterprise customer-hosted runner through Fendix onboarding. It executes inside your network and connects outward to the hosted workspace.
 
 ### The one safety rule that spans all levels
 
-A white-box `--code` scan over a **working tree** reads gitignored files too. If your repo has local secret files (`.env`, `firebase_cred.json`, service-account keys), their **credential evidence ends up in the report**. **Never publish a working-tree report to the SaaS.** A CI checkout is a *fresh clone of tracked files only*, so it is inherently safe. See §5.
+A white-box `--code` scan over a **working tree** reads gitignored files too.
+Secret values are redacted at capture time, but findings still reveal that a
+credential-shaped value exists, along with its safe identifier and file
+location. Review a working-tree report before sharing it. Prefer a fresh CI
+checkout containing only the files you intend to scan, and review any
+out-of-tree plugin because it is executable code with its own output behavior.
+See §5.
 
 ---
 
@@ -37,8 +43,8 @@ A white-box `--code` scan over a **working tree** reads gitignored files too. If
 # Install script (served from the official Homebrew compatibility host)
 curl -fsSL https://get.fendix.dev/install.sh | sh
 
-# Pin a specific version
-curl -fsSL https://get.fendix.dev/install.sh | sh -s -- --version v0.19.0
+# Pin the current stable version
+curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.4.1 sh
 
 # Verify
 fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
@@ -62,7 +68,7 @@ Root command is `fendix` (cobra). It prints its own errors (`SilenceUsage`/`Sile
 | `fendix report` | Re-render a saved JSON report to HTML/SARIF/PDF **without re-scanning**. |
 | `fendix init` | Scaffold a CI workflow + `.fendix.yaml` policy + `.fendix-ignore`. |
 | `fendix hook` | Install/uninstall/status the git pre-commit hook. |
-| `fendix db` | Manage the offline CVE-database snapshot (air-gapped mode). |
+| `fendix db` | Manage the native dependency-advisory snapshot. |
 | `fendix verify <id>` | Re-run a single finding from a saved baseline. |
 | `fendix engine` | Manage the Python whitebox (taint) engine location. |
 | `fendix plugins` / `fendix ignore` / `fendix version` | Plugin discovery, ignore-file management, version print. |
@@ -132,6 +138,16 @@ Files written:
 - `gitlab` → `.gitlab-ci.fendix.yml` + `NEXT-STEPS-fendix.md` + policy/ignore
 - `circleci` → `.circleci/fendix-config.yml` + `NEXT-STEPS-fendix.md` + policy/ignore
 
+**Known product defect:** the generated CI workflows are historical and are
+not current drop-ins. The GitHub file installs mutable source and supplies no
+Python analyzer tree; GitLab and CircleCI pin obsolete v0.13.0
+personal-namespace release assets with placeholder checksums while their
+next-step files name a different version. The GitLab file also declares SARIF
+under `artifacts:reports:sast`, which expects GitLab's own SAST JSON schema.
+Use the checked-in pinned-container reference workflow or author an equivalent
+current container job until the generator is corrected. The generated policy
+and ignore starters remain independently usable.
+
 #### `fendix hook` — git pre-commit gate
 
 ```bash
@@ -141,9 +157,9 @@ fendix hook status                   # installed / not installed / present-but-n
 fendix hook uninstall
 ```
 
-The installed hook runs `fendix scan --code . --staged --fast --fail-on <severity>` — staged-only, fast mode (secrets + textscan natively, no semgrep, no network dep calls), so commit-time budget is tens of milliseconds. A finding at/above `--fail-on` aborts the commit; bypass once with `git commit --no-verify`. It honours `core.hooksPath` and worktrees, refuses to clobber a non-fendix hook without `--force`, and is recognized by a sentinel comment `# fendix-managed-pre-commit-hook`.
+The installed hook runs `fendix scan --code . --staged --fast --fail-on <severity>`. `--fast` skips semgrep and the native dependency passes, but it does not currently suppress the Python engine auto-enabled by `--code`; add `--python-engine=false` to a manual invocation when native-only latency is required. The generated hook does not yet add that flag, so its sub-second claim is an unresolved product defect. A finding at/above `--fail-on` aborts the commit only when it reaches `BLOCK`; bypass once with `git commit --no-verify`. The hook honours `core.hooksPath` and worktrees, refuses to clobber a non-fendix hook without `--force`, and is recognized by a sentinel comment `# fendix-managed-pre-commit-hook`.
 
-#### `fendix db` — offline CVE snapshot (air-gapped)
+#### `fendix db` — native offline dependency-advisory snapshot
 
 ```bash
 # Build a snapshot from an OSV-shaped JSON export (top-level array or {"advisories":[...]})
@@ -151,9 +167,17 @@ fendix db update --source osv-export.json          # → ~/.fendix/offline-db.js
 fendix db list                                     # print snapshot metadata
 fendix db verify                                   # sha256 <hash>  <path>
 
-# Then scan offline (zero outbound calls; pip+npm consult the snapshot; govulncheck is SKIPPED)
-fendix scan --code . --offline
+# Native-only hermetic scan: snapshot-backed pip/npm; govulncheck is SKIPPED.
+# --no-plugins excludes third-party executable code.
+fendix scan --code . --offline --python-engine=false --no-plugins
 ```
+
+**Known product defect:** `--offline` is not propagated into the Python deps
+check that `--code` auto-enables. With the default check set, that phase may
+invoke `pip-audit`, `npm audit`, or `govulncheck`. To retain the Python AST
+checks in a hermetic run, use
+`--offline --checks auth,injection --no-plugins`; use the command above for a
+native-only run. This is current behavior, not the intended offline contract.
 
 #### `fendix verify <finding-id>` — re-test one finding
 
@@ -163,7 +187,12 @@ fendix verify SEC-014 --baseline findings.json --url https://api.example.com --j
 
 Has **its own exit-code scheme**: `0` = resolved, `1` = still present (CI should fail), `2` = unknown or not found in baseline.
 
-### 2.3 `fendix scan` flag reference
+### 2.3 Common `fendix scan` flags
+
+This section explains commonly integrated flags. The running binary's
+`fendix scan --help` output is authoritative and exhaustive; the stable/current
+inventory is recorded in
+[`../audits/engine-contract-reconciliation-2026-10-03.md`](../audits/engine-contract-reconciliation-2026-10-03.md).
 
 #### Target
 
@@ -179,7 +208,7 @@ Has **its own exit-code scheme**: `0` = resolved, `1` = still present (CI should
 |---|---|---|---|
 | `--diff` | string | `""` (bare = `HEAD`) | Diff-aware scan: only changed files vs a git ref. `--diff=origin/main` = vs that ref. Whitebox scanners scoped to changed files; dep-CVE scanners run only when a manifest changed. |
 | `--staged` | bool | `false` | Diff over staged changes (`git diff --cached`). Implies `--diff`. What the pre-commit hook runs. |
-| `--fast` | bool | `false` | Run only instant native scanners (secrets + textscan); skip semgrep + network dep-CVE scanners. Sub-second. |
+| `--fast` | bool | `false` | Skip semgrep and native dep-CVE scanners. It does not suppress Python auto-enabled by `--code`; add `--python-engine=false` for the native-only path. |
 | `--max-endpoints` | int | `500` | Cap discovered endpoints (0 = no cap). |
 | `--max-requests` | int64 | `0` | Soft-cap on total HTTP requests (0 = no cap). Armed after discovery. |
 | `--max-duration` | duration | `0` | Soft-cap on wall-clock time, e.g. `5m` (0 = no cap). |
@@ -190,8 +219,8 @@ Has **its own exit-code scheme**: `0` = resolved, `1` = still present (CI should
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--auth` | string | `""` | Auth header value, e.g. `"Bearer token123"`. |
-| `--auth-type` | string | `""` (auto) | `bearer` / `apikey` / `basic` / `cookie`. |
-| `--auth-header` | string | `Authorization` | Custom auth header name. |
+| `--auth-type` | string | `""` (auto) | `bearer` / `apikey` / `apikey-query` / `basic` / `cookie`. |
+| `--auth-header` | string | `Authorization` | Header name; in `apikey-query` mode this is the query-parameter name. Pass `api_key` explicitly for the conventional CLI value. |
 | `--auth-user2` | string | `""` | Second user for IDOR checks. |
 | `--profile` | string | `""` | Auth profile from `~/.fendix/profiles/<name>.yaml`. |
 
@@ -202,8 +231,8 @@ Credentials are masked as `[REDACTED]` in all report output.
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--enable-active` | bool | `false` | Enable active injection probes (SQLi/cmd/header injection). Prints a legal disclaimer. |
-| `--fail-on` | string | `""` | Severity floor for the build gate: `CRITICAL` / `HIGH` / `MEDIUM`. Exit 1 when a finding at or above it reaches status `BLOCK` — since v2.0 that also requires the confidence band to support the claim, see [3.4](#34---fail-on-gating-and-exit-codes). Invalid value → WARN + no gate (exit 0). |
-| `--enforce-confidence` | bool | `true` | **v2.0.** `BLOCK` only when the deterministic confidence band supports the claim: `HIGH` always, `MEDIUM` with ≥ 1 corroborating signal, `LOW` never. `false` restores the pre-2.0 severity-only gate byte-for-byte. |
+| `--fail-on` | string | `""` | Severity floor: `CRITICAL` / `HIGH` / `MEDIUM` / `LOW`. Exit 1 when a finding at or above it reaches `BLOCK`; since v2.0 the confidence/evidence policy also applies, see [3.4](#34---fail-on-gating-and-exit-codes). **Stable v3.4.1:** an invalid value warns and effectively disables the gate. **Development/RC:** invalid values are rejected before scanning with exit 2. |
+| `--enforce-confidence` | bool | `true` | **v2.0.** `BLOCK` only when the deterministic confidence band and evidence support the claim: `HIGH` needs an independent or self-evident signal, `MEDIUM` needs an independent signal, and `LOW` never blocks. `false` restores the pre-2.0 severity-only gate byte-for-byte. |
 | `--deescalate-tests` | bool | `true` | Findings in test/fixture code report as `INFO` instead of `WARN`, and an **uncorroborated** one at or above `--fail-on` is held at `WARN` instead of blocking. Evidence is always preserved. Independent of `--enforce-confidence`. |
 | `--fail-on-scanner-error` | bool | `false` | Exit 2 if any scanner ran and errored. Skipped scanners don't count. Checked before `--fail-on`. |
 | `--ignore` | string | `""` | Path to `.fendix-ignore`. An unparseable file is a hard error (exit 2). |
@@ -232,7 +261,7 @@ Credentials are masked as `[REDACTED]` in all report output.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `--offline` | bool | `false` | Air-gapped: consult local offline-db snapshot for dep CVEs. govulncheck recorded SKIPPED. Zero outbound calls. |
+| `--offline` | bool | `false` | Native scanners consult the local snapshot and native govulncheck is recorded `SKIPPED`. Known defect: the Python deps check does not receive this flag; use `--checks auth,injection` or `--python-engine=false`, plus `--no-plugins`, for hermetic execution. |
 | `--offline-db` | string | `""` (falls back to `~/.fendix/offline-db.json`) | Snapshot path. Only effective with `--offline`. Cobra's registered default is empty; the `~/.fendix/offline-db.json` path is the runtime fallback when unset. |
 | `--no-native-deps` | bool | `false` | Disable the in-process Go dep-CVE scanner. |
 | `--use-pip-audit` | bool | `false` | Shell out to `pip-audit` instead of native OSV.dev for Python. Falls back to OSV.dev with a warning if absent. |
@@ -252,18 +281,31 @@ Three surfaces, each driven by a flag:
 **Black-box / DAST (`--url`)** — 15 ordered checks. Passive ones are always on; auth-tiered ones need `--auth`; multiuser ones need `--auth` + `--auth-user2`; active ones need `--enable-active`.
 
 - **Passive (always on):** `configleak` (CRITICAL — `.env/.git/.aws/.ssh/...` exposed), `headers` (HSTS/CSP/X-Frame-Options/...), `cors`, `exposure` (secrets/PII/stack traces in response bodies), `ratelimit`, `cookie-flags`.
-- **Auth-tiered (needs `--auth`):** `auth` — missing authentication + JWT bypasses (malformed/expired/`alg:none`), all CRITICAL.
+- **Auth-tiered (needs `--auth`):** `auth` — missing-auth observations are
+  CRITICAL when the specification declares authentication required, MEDIUM
+  when no requirement is known, and INFO when the operation is declared
+  public; confirmed malformed/expired/`alg:none` JWT acceptance is CRITICAL.
 - **Multiuser (needs `--auth-user2`):** `idor` — two-user response compare, HIGH.
 - **Active (`--enable-active`):** `injection` (time/error/boolean SQLi across 5 DB engines, command injection, CRLF), `xss`, `open-redirect`, `ssrf` (in-band), `host-header`, `graphql`, `method-tamper`.
 
 **White-box / SAST + SCA (`--code`)** — run natively in Go, regardless of `--python-engine`. `--enable-active` is irrelevant (no runtime probing):
 
-- **Secrets** — 15 provider patterns + `ENV_SECRET` (AWS/GitHub/Stripe/Anthropic/OpenAI/GCP keys → CRITICAL; generic keys/passwords/JWT/DB strings → HIGH).
-- **textscan / IaC** — Go (4), JS (6), and IaC (Dockerfile/k8s, 7) regex rules.
+- **Secrets** — 17 general patterns + `ENV_SECRET` (AWS/GitHub/Stripe/Anthropic/OpenAI/GCP/npm keys → CRITICAL; generic keys/passwords/JWT/DB strings → HIGH).
+- **textscan / IaC** — 29 rules: Go (4), JS/TS (6), Java (11), and IaC (Dockerfile/Kubernetes, 8).
 - **semgrep** — shim to host `semgrep` binary (4 embedded rule packs). Gracefully absent → skipped with an install hint.
 - **SCA / dependency CVEs (backed by OSV.dev):** Go (`go.mod` via govulncheck, reachable-only), npm (`package-lock.json` via OSV.dev), Python (`requirements.txt`/`poetry.lock`/`Pipfile.lock` via OSV.dev; `--use-pip-audit` to shell out).
 
-**OpenAPI spec (`--spec`)** — feeds endpoint discovery (Go crawler) and is analyzed white-box (Python `spec_parser`: no global security, HTTP/plaintext schemes, anonymous endpoints, HTTP Basic).
+**OpenAPI spec (`--spec`)** — always feeds endpoint discovery through the Go
+crawler. Python `spec_parser` adds white-box checks for missing security,
+HTTP/plaintext schemes, anonymous endpoints and HTTP Basic only when the Python
+phase runs. `--code` auto-enables that phase; a spec-only invocation currently
+requires explicit `--python-engine` and a resolvable engine tree.
+
+For a remote spec, the current Go/Python fetch behavior is not uniform. Go
+accepts HTTP(S) through its guarded client; when Python runs it refetches HTTPS
+through `urllib` without inheriting the Go private-IP guard and rejects
+plaintext HTTP. This is a product defect. Prefer a reviewed local spec file
+when that network boundary matters.
 
 **Endpoint discovery priority (black-box):** spec > robots.txt > sitemap.xml > JavaScript source > HTML link crawl > common-path brute-force.
 
@@ -274,34 +316,43 @@ Three surfaces, each driven by a flag:
 ```json
 {
   "metadata": {
-    "schema_version": 1,
+    "schema_version": 2,
     "target": "https://api.example.com",
     "started_at": "2026-06-20T10:00:00Z",
     "duration": "4.521s",
-    "version": "0.18.0",
+    "version": "3.4.1",
     "mode": "blackbox",
     "endpoints_scanned": 42,
     "active_probes": false,
-    "checks_run": ["headers", "cors", "secrets", "semgrep", "deps"],
+    "checks_run": ["configleak", "headers", "cors", "exposure", "ratelimit", "cookie-flags"],
     "scanner_status": [
-      { "name": "govulncheck", "state": "ok" },
-      { "name": "semgrep", "state": "skipped", "reason": "dependency_missing", "detail": "binary not found" }
+      { "name": "dast", "state": "ok" },
+      { "name": "spec", "state": "skipped", "reason": "not_applicable", "detail": "no --spec" },
+      { "name": "active-probes", "state": "skipped", "reason": "disabled_by_flag", "detail": "--enable-active not set" },
+      { "name": "secrets", "state": "skipped", "reason": "not_applicable", "detail": "no --code" },
+      { "name": "textscan", "state": "skipped", "reason": "not_applicable", "detail": "no --code" },
+      { "name": "semgrep", "state": "skipped", "reason": "not_applicable", "detail": "no --code" },
+      { "name": "govulncheck", "state": "skipped", "reason": "not_applicable", "detail": "no --code" },
+      { "name": "pip", "state": "skipped", "reason": "not_applicable", "detail": "no --code" },
+      { "name": "npm", "state": "skipped", "reason": "not_applicable", "detail": "no --code" },
+      { "name": "python-engine", "state": "skipped", "reason": "not_applicable", "detail": "no --code or --spec" },
+      { "name": "plugins", "state": "skipped", "reason": "not_applicable", "detail": "no plugins configured" }
     ],
     "policy_version": "1.0.0",
     "coverage": {
       "contract_version": 1,
       "strict": false,
-      "configured_complete": false,
-      "gaps": ["semgrep"],
+      "configured_complete": true,
+      "gaps": [],
       "limitations": [],
       "required_analyzers": [],
       "required_gaps": [],
       "retried": []
     }
   },
-  "summary": { "critical": 1, "high": 3, "medium": 5, "low": 2, "info": 4 },
-  "sources": { "blackbox": 10, "whitebox": 5, "correlated": 0 },
-  "total": 15,
+  "summary": { "critical": 0, "high": 0, "medium": 1, "low": 0, "info": 0 },
+  "sources": { "blackbox": 1, "whitebox": 0, "correlated": 0 },
+  "total": 1,
   "findings": [
     {
       "id": "SEC-014",
@@ -316,12 +367,10 @@ Three surfaces, each driven by a flag:
       "references": ["CWE-319"],
       "confidence": "HIGH",
       "line": null,
-      "taint_chain": [{ "file": "app.py", "line": "42", "expr": "..." }],
-      "reachable": true,
-      "source_tier": "native_go",
-      "route": { "method": "POST", "pattern": "/login", "handler": "...", "file": "...", "line": "..." },
-      "route_confirmed": true,
-      "proven_path": true
+      "status": "WARN",
+      "confidence_score": 100,
+      "confidence_band": "HIGH",
+      "decision_policy": "enforced"
     }
   ]
 }
@@ -329,15 +378,13 @@ Three surfaces, each driven by a flag:
 
 Key facts:
 
-- **`metadata.schema_version`** is the contract version, currently `1`, and is present on every report a current build writes. An **absent** key means the report predates the field — treat that as "pre-versioned", not as invalid. An **unrecognised** value means the report is newer than your integration: warn and keep parsing rather than failing, since the versioned keys are additive by policy.
-- **`metadata.mode`** ∈ `blackbox` / `whitebox` / `hybrid`.
+- **`metadata.schema_version`** is the contract version, currently `2`, and is present on every report a current build writes. An **absent** key means the report predates the field — treat that as "pre-versioned", not as invalid. An **unrecognised** value means the report is newer than your integration: warn and keep parsing rather than failing automatically; inspect the migration note because a version bump can represent an incompatible field meaning such as the v1 → v2 fingerprint change.
+- **`metadata.mode`** ∈ `blackbox` / `whitebox` / `hybrid` / `import`.
 - **`scanner_status`** carries one entry per analyzer (`dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `python-engine`, its `python-engine/*` children when reported, `plugins`) with `state` ∈ `ok`/`skipped`/`failed` and a closed `reason` on every non-ok entry. **`metadata.coverage.configured_complete`** answers "did everything this run was configured to execute run?"; **`coverage.required_gaps`** answers "did `--require-analyzers` get what it asked for?". Only `failed` feeds `--fail-on-scanner-error` — that check itself is unchanged, but from v3.4.0 the set of analyzers that can record `failed` grew from six (`govulncheck`/`pip`/`npm`/`secrets`/`semgrep`/`textscan`) to the full registry above, so `dast`, `spec`, `active-probes`, `plugins` and the python-engine (and its checks) can now trip the flag too; `--fail-on-coverage-gap` also trips on `skipped/dependency_missing`.
 - **`findings[].severity`** ∈ `CRITICAL`/`HIGH`/`MEDIUM`/`LOW`/`INFO`. Severity rank used by `--fail-on`: CRITICAL=4, HIGH=3, MEDIUM=2, LOW=1, INFO=0. `rank(finding) >= rank(threshold)` is **necessary but not sufficient** since v2.0 — the gate then reads `findings[].confidence_band` and `findings[].status`. Read `status == "BLOCK"` (or `decisions.blocking`) to know what actually fails the build; `confidence_reasons` names the rule behind any demotion.
-- **`findings[].source`** ∈ `blackbox`/`whitebox`/`correlated`. **`confidence`** ∈ `HIGH`/`MEDIUM`/`LOW`.
+- **`findings[].source`** ∈ `blackbox`/`whitebox`/`correlated`/`imported`. **`confidence`** ∈ `HIGH`/`MEDIUM`/`LOW`. The legacy top-level `sources` counters omit `imported`; use `metadata.imports` for import accounting.
 - **`line`** is a nullable pointer — serialized even when `null` (no omitempty).
 - White-box extras: `taint_chain[]` (AST dataflow source→sink), `reachable`, `source_tier` (`native_go`/`tree_sitter_sidecar`/`semgrep_shim`), `route`, `route_confirmed`, and `proven_path` (set only when `route_confirmed` AND `reachable` — forces CRITICAL).
-
-> The README's "Output Formats" JSON example shows an older illustrative shape; the schema above (from `json.go`) is the actual emitted shape.
 
 ---
 
@@ -348,6 +395,13 @@ Goal: fail the build when a scan finds something at/above a severity threshold, 
 ### 3.1 Option A — The GitHub Action (`uses: Fendix-app/Fendix@v1`)
 
 A **composite** action that installs Fendix, syncs the Python taint engine, runs `fendix scan`, uploads SARIF, then enforces the fail-on gate. It needs `actions/checkout@v4` with `fetch-depth: 0` because diff mode needs git history.
+
+**Known v3.4.1 defect:** the standalone release binary has no embedded Python
+payload, while the Action's default `engine_path: ""` still runs `fendix engine
+sync` as if one existed. A default invocation therefore fails before scanning
+unless the workflow supplies a version-matched `python/` tree. The example
+below assumes one is prepared at `vendor/fendix-python`. The official container
+is the out-of-box path until the Action is corrected.
 
 ```yaml
 name: Fendix Security Scan
@@ -370,16 +424,16 @@ jobs:
       - uses: Fendix-app/Fendix@v1
         with:
           code: "."           # white-box SAST/secrets/SCA (default ".")
+          engine_path: ${{ github.workspace }}/vendor/fendix-python
           url: ""             # optional: black-box DAST target
           spec: ""            # optional: OpenAPI spec to seed discovery
-          fail-on: "HIGH"     # CRITICAL | HIGH | MEDIUM; empty never fails
+          fail-on: "HIGH"     # CRITICAL | HIGH | MEDIUM | LOW; empty never fails
           diff: "auto"        # auto = PR-changed files on pull_request, full scan otherwise
-          format: "sarif"     # sarif (Security tab) | json | html
+          format: "sarif"     # sarif (Security tab) | json | html | pdf
           output: "fendix-results.sarif"
           upload-sarif: "true"
-          version: "latest"   # or v0.19.0
+          version: "v3.4.1"
           extra-args: ""      # raw args appended to `fendix scan`
-          engine_path: ""     # path to Python engine dir; empty = auto
 ```
 
 **Action inputs:**
@@ -389,16 +443,16 @@ jobs:
 | `code` | `.` | White-box source path. Empty to skip. |
 | `url` | `""` | Black-box target. Empty skips DAST. |
 | `spec` | `""` | OpenAPI spec to seed discovery. |
-| `fail-on` | `HIGH` | Fail at/above this severity. Empty never fails. |
+| `fail-on` | `HIGH` | Severity floor considered by release policy; exit 1 only when a finding reaches `BLOCK`. Empty disables blocking. |
 | `diff` | `auto` | `auto` = scope to PR-changed files on `pull_request`; `true` = force diff vs base ref; `false` = always full. |
-| `format` | `sarif` | `sarif` / `json` / `html`. |
+| `format` | `sarif` | `sarif` / `json` / `html` / `pdf`. |
 | `output` | `fendix-results.sarif` | Report path. |
 | `upload-sarif` | `true` | Upload SARIF to code scanning. Only when `format=sarif`. |
 | `version` | `latest` | Fendix version to install. |
 | `extra-args` | `""` | Raw args appended to `fendix scan`. |
-| `engine_path` | `""` | Python engine dir. Empty = auto-resolution. |
+| `engine_path` | `""` | Python engine dir. In v3.4.1, the empty default fails at `engine sync` because the standalone binary has no embedded payload. |
 
-**Outputs:** `report` (path to the generated report), `exit-code` (0 clean / 1 findings at/above fail-on / 2 error).
+**Outputs:** `report` (path to the generated report), `exit-code` (0 no blocking decision / 1 at least one `BLOCK` / 2 error).
 
 What the steps do: install via `curl … get.fendix.dev/install.sh | sh` → `fendix engine sync` (**fails loudly here if the SAST engine can't be resolved**, rather than silently degrading) → `fendix scan` under `set +e` (capturing exit code, deliberately exiting 0 so SARIF upload runs first) → `github/codeql-action/upload-sarif@v3` → a final `if: always()` step that re-raises the failure (`exit 1` on findings, `exit <code>` on error).
 
@@ -466,11 +520,12 @@ The build pass/fail is driven entirely by the exit code:
 
 **Since v2.0, `BLOCK` is not "severity ≥ `--fail-on`".** Meeting the threshold is
 necessary but no longer sufficient: under the default `--enforce-confidence` a
-finding also needs its deterministic band to support the claim — `HIGH` always
-blocks, `MEDIUM` blocks only with at least one corroborating signal (cross-engine
-agreement, live runtime observation, direct observation of a live response,
-deterministic detection in production code, confirmed route, reachable taint
-path, proven path, payload-validated probe), `LOW` never blocks — and a finding
+finding also needs its deterministic band and evidence to support the claim —
+`HIGH` needs an independent or self-evident signal, `MEDIUM` needs an
+independent signal, and `LOW` never blocks. Independent signals include
+cross-engine agreement, confirmed route, reachable taint path, proven path and
+payload-validated probe; self-evident signals include a direct response read or
+deterministic production-code detection. A finding
 the correlator marked unconfirmed-by-live-scan never blocks uncorroborated.
 Separately, `--deescalate-tests` holds an uncorroborated test-code finding at
 `WARN` even when it meets the threshold.
@@ -479,9 +534,11 @@ Separately, `--deescalate-tests` holds an uncorroborated test-code finding at
 > affected class is chainless static findings — a whitebox finding scores
 > `35 base + 10 static = 45` (MEDIUM) and, absent a high-confidence pattern
 > match in production code or a proven taint path, nothing corroborates it, so
-> shape-match SAST (semgrep-shim tier included) no longer gates on its own. Pure
-> DAST findings are unaffected, and a real hardcoded credential in production
-> code still bands `HIGH` and still exits 1. `--enforce-confidence=false` (or
+> shape-match SAST (semgrep-shim tier included) no longer gates on its own.
+> Direct or payload-validated DAST evidence can still block, while a bare
+> status/shape observation without support is held at WARN. A deterministic
+> hardcoded-credential detection in production code still bands `HIGH` and
+> exits 1. `--enforce-confidence=false` (or
 > `scan.enforce_confidence: false`) restores the pre-2.0 mapping byte-for-byte.
 
 In a custom workflow, run the scan under `set +e`, capture `$?`, surface the report, **then** re-raise the exit code in a final `if: always()` step so the report is uploaded/posted even on a failing gate.
@@ -493,14 +550,16 @@ In a custom workflow, run the scan under `set +e`, capture `$?`, surface the rep
 1. **Job summary** — render the HTML report into `$GITHUB_STEP_SUMMARY` (shown above). Always works, no permissions.
 2. **PR comment** — the engine ships a byte-for-byte-identical PR-comment recipe in both the reference workflow (`actions/github-script@v7`) and the GitHub App. The comment has a `## Fendix scan: N finding(s)` header, a Mode/Endpoints/Duration line, a severity×source table, a `_No new findings vs. baseline. ✅_` line when clean, else a "Top findings" list of the top 5. The App version additionally emits a one-click `.fendix-ignore` suppression snippet under each finding. Requires `pull-requests: write`.
 
-The reference workflow scaffolded by `fendix init` uses permissions `contents: read`, `security-events: write`, `pull-requests: write`; it caches a baseline via `actions/cache@v4` (key `fendix-baseline-${{ github.run_id }}`, restore-keys `fendix-baseline-`), runs the JSON scan + `--save-baseline`, re-renders SARIF via `fendix report`, and defers the fail-on gate to a final step.
+The checked-in reference workflow at `examples/github-actions/fendix-scan.yml` uses permissions `contents: read`, `security-events: write`, `pull-requests: write`; it caches a baseline via `actions/cache@v4` (key `fendix-baseline-${{ github.run_id }}`, restore-keys `fendix-baseline-`), runs the JSON scan + `--save-baseline`, re-renders SARIF via `fendix report`, and defers the fail-on gate to a final step. Cache save runs after any successful eligible job, including PR jobs; cache scope determines visibility, and this key does not guarantee that a restored baseline was produced by `main`.
 
 ### 3.6 `.fendix-ignore` — suppressing false positives
 
-Scaffolded by `fendix init`. Top-level `ignore: []`. **Each rule suppresses findings matching ALL specified fields; omitted fields match everything.** `reason` is an optional field (the engine does not enforce it — a reason-less rule still parses and suppresses) but documenting *why* is a strong convention; keep it required by review. Three matchable dimensions, in any combination:
+Scaffolded by `fendix init`. Top-level `ignore: []`. **Each rule suppresses findings matching ALL specified fields; omitted fields match everything.** `reason` is optional to the engine but should be required by review. Matchable dimensions are `fingerprint`, `id`, `endpoint`, and `category`; endpoint globs support `*` only:
 
 ```yaml
 ignore:
+  - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
+    reason: "Accepted risk reviewed in JIRA-1234"
   - endpoint: "GET /health"
     category: headers
     reason: "Health endpoint intentionally header-light"
@@ -512,7 +571,10 @@ ignore:
     reason: "Public API by design"
 ```
 
-> **SEC-NNN IDs are UNSTABLE across scans.** Prefer matching on **`endpoint` + `category`** — that's the actual suppression key the matcher uses, and what the PR-comment one-click suppression always emits (`- {endpoint: ..., category: ...}  # fp-<hash>`). `id:` with `until:` is supported, but don't rely on it long-term.
+> **SEC-NNN IDs are positional and unstable across scans.** Prefer the report's
+> versioned `fingerprint` for one exact durable finding. Use `endpoint` +
+> `category` only for an intentionally broad semantic suppression. `id:` with
+> `until:` is supported for one-run triage but is not a long-lived key.
 
 ### 3.7 `.fendix.yaml` — repo-committed scan policy
 
@@ -540,7 +602,10 @@ auth:
   # profile: my-staging       # points at ~/.fendix/profiles/<name>.yaml (creds out of source control)
 ```
 
-The policy file can set: `fail-on`, `enable-active`, `workers`, `timeout`, `delay`, `format`, `crawl-depth`, `max-endpoints`, `wordlist`, `respect-robots`, `max-requests`, `max-duration`, `ignore-path`, `auth-profile`.
+The policy file can set exactly: `fail_on`, `ignore_path`,
+`scan.{enable_active,workers,timeout,delay_ms,format,deescalate_tests,enforce_confidence}`,
+`crawler.{crawl_depth,max_endpoints,wordlist_path,respect_robots}`,
+`budgets.{max_requests,max_duration}`, and `auth.profile`.
 
 ### 3.8 Pre-commit hook for developers
 
@@ -548,314 +613,75 @@ The policy file can set: `fail-on`, `enable-active`, `workers`, `timeout`, `dela
 fendix hook install --fail-on HIGH
 ```
 
-Runs `fendix scan --code . --staged --fast --fail-on <severity>` on every commit (staged files only, native scanners only — tens of ms). Aborts the commit on a HIGH+ finding; `git commit --no-verify` bypasses once.
+Runs `fendix scan --code . --staged --fast --fail-on <severity>` on every
+commit. `--fast` skips Semgrep and native SCA but currently leaves the Python
+phase auto-enabled; use a manual invocation with `--python-engine=false` when
+native-only latency is required. The generated hook's missing flag is the
+known defect documented above. It aborts only when a finding reaches `BLOCK`;
+`git commit --no-verify` bypasses once.
 
 ---
 
-## 4. Level 3 — SaaS API + dashboard
-
-The Fendix backend is a **Django REST Framework** app mounted under `/api`. All routers use `trailing_slash=False`, so **endpoints have NO trailing slash** (`POST /api/scans`, not `/api/scans/`).
-
-Local dev base: `http://localhost:8000/api`. Swagger UI: `http://localhost:8000/api/docs/`. Health: `http://localhost:8000/health-check/`.
-
-### 4.1 Auth — JWT vs X-API-Key
-
-The DRF auth chain, in order: `APIKeyAuthentication` → `CookieJWTAuthentication` → `CsrfExemptSessionAuthentication`. Default permission `IsAuthenticated`. A request authenticates via **either** an `X-API-Key` header **or** a JWT (Bearer header or cookie). API key is tried first; if its header is absent it abstains and JWT runs.
-
-#### A. JWT (RS256) — primary for humans / SPA
-
-```bash
-# Register (201) or login (200)
-curl -X POST http://localhost:8000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"me@example.com","password":"hunter2"}'
-```
-
-Returns (and also sets httpOnly `access_token` + `refresh_token` cookies, SameSite=Strict):
-
-```json
-{ "token": "<access JWT>", "refresh": "<refresh JWT>", "user": {"id": "...", "name": "...", "email": "..."} }
-```
-
-- **Lifetimes:** access 15 min, refresh 7 days. `ROTATE_REFRESH_TOKENS=True` + `BLACKLIST_AFTER_ROTATION=True` — after a refresh, the submitted refresh token is blacklisted, so **clients MUST persist the newly-returned `refresh`**.
-- **Use the token:** `Authorization: Bearer <access JWT>` (or rely on the `access_token` cookie for browsers).
-- **Refresh:** `POST /api/auth/refresh` with `{"refresh":"<token>"}` (cookie clients send no body) → `{"access": ...}` and (for body clients) the rotated `{"refresh": ...}`.
-- **MFA:** if a confirmed TOTP device exists, login returns `{"mfa_required": true, "mfa_token": "..."}`; complete via `POST /api/auth/mfa/challenge` with `{mfa_token, otp}`.
-- **Other:** `POST /api/auth/logout` (blacklists refresh, clears cookies, `205`), `GET /api/auth/me` (`{id, name, email}`), `POST /api/auth/password-reset` + `/password-reset/confirm`.
-- JWT/cookie sessions are **unscoped** — a human does whatever their plan/role allows.
-
-#### B. X-API-Key (`fx_` prefix) — programmatic, Pro+ gated
-
-```bash
-# Create a key (Pro plan or higher required: api_key_access feature)
-curl -X POST http://localhost:8000/api/auth/api-keys/create \
-  -H "Authorization: Bearer $JWT" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"ci-key","scopes":["scan:write","findings:read"],"expires_at":"2026-12-31T00:00:00Z","allowed_ips":["203.0.113.0/24"]}'
-```
-
-Returns `201` with `{id, name, key_prefix, scopes, expires_at, allowed_ips, created_at, key}` — **`key` is the raw value returned only once at creation** (stored only as a SHA-256 hash; cannot be retrieved again).
-
-```bash
-# Use it
-curl http://localhost:8000/api/scans -H "X-API-Key: fx_..."
-```
-
-- **Format:** `fx_<secret>`. **Gating:** create/list/revoke need the `api_key_access` feature (Pro/Team/Enterprise = yes, Free = no).
-- **List:** `GET /api/auth/api-keys` (paginated; raw key not included). **Revoke:** `DELETE /api/auth/api-keys/{key_id}` → soft-delete, `204`.
-- **Scopes** (least-privilege; `"*"` = full): `scan:read/write`, `findings:read/write`, `reports:read`, `issues:write`, `audit:read`, `integrations:read/write`, `runners:read/write`, `orgs:read/write`. Enforced **only for API-key callers**; a key lacking a scope → `403 API_SCOPE_DENIED`.
-- **Expiry / IP:** expired key → `401`; source IP not in `allowed_ips` (CIDR-matched against `X-Forwarded-For`/`REMOTE_ADDR`) → `403 API_IP_DENIED`. Empty `allowed_ips` = any source.
-
-### 4.2 Launch a scan
-
-```bash
-curl -X POST http://localhost:8000/api/scans \
-  -H "X-API-Key: fx_..." \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "mode": "blackbox",
-        "url": "https://api.example.com",
-        "auth": "Bearer target-token",
-        "auth_type": "bearer",
-        "fail_on": "high"
-      }'
-```
-
-`POST /api/scans` (scope `scan:write`) → `201` with a `ScanMeta` shape. `ScanViewSet` supports only GET/POST/DELETE (scans are immutable). New scans start `queued` (reported as `"running"` in the API).
-
-**Fields** (`LaunchScanSerializer`):
-
-| Field | Type / choices | Notes |
-|---|---|---|
-| `mode` | **required** — `blackbox` / `whitebox` / `hybrid` | blackbox/hybrid require `url`; whitebox/hybrid require `code` or `git_url`. |
-| `url` | str ≤2048 | SSRF-validated unless a runner is set. |
-| `code` | str ≤2048 | host code path; jailed. Mutually exclusive with `git_url`. |
-| `spec` | str ≤2048 | OpenAPI spec (URL SSRF-validated, or jailed file path). |
-| `auth` / `auth_user2` | str ≤4096 | encrypted at rest (Fernet, `fenc:` prefix). |
-| `auth_type` | `bearer`/`apikey`/`basic`/`cookie`/`apikey-query` | |
-| `auth_header` | str ≤128 | |
-| `fail_on` | str ≤64 | severity gate. |
-| `active_probing` | bool default false | requires `active_probes` feature (Pro+). |
-| `organization` | UUID | launch into an org workspace (member+ role; quota/features resolve against the org). |
-| `runner` | UUID | self-hosted runner (org-only; `self_hosted_runners` feature); skips SSRF screen; waits for runner not Celery. |
-| `baseline` / `save_baseline` / `ignore` / `wordlist` | str ≤2048 | host-FS paths jailed to per-tenant artifact dir. |
-| `delay` | int 0–60000 | ms. |
-| `crawl_depth` | int 0–10 | |
-| `max_endpoints` | int 0–100000 | |
-| `max_probes_per_endpoint` | int 1–10000 | |
-| `max_requests` | int 0–10_000_000 | |
-| `max_duration` | Go duration string (`5m`,`90s`,`2m30s`,`1h`) ≤32 | |
-| `respect_robots` | bool default false | |
-| `workers` | int 1–50 | |
-| `http_timeout` | int 1–120 | engine `--timeout`. |
-| `no_native_deps` | bool default false | |
-| `use_pip_audit` | bool default false | |
-| `git_url` | URL ≤2048 | HTTPS GitHub/GitLab only; mutually exclusive with `code`. |
-| `git_branch` | str ≤256 default "" | |
-| `git_token` | str ≤512 | PAT for private repos; encrypted, injected into clone URL. |
-
-Deliberately **NOT exposed**: `--profile`, `--debug-bundle`, `--no-plugins`, `--config`, `--output`, `--verbose`, `--python-engine`, `--lang` (a report concern), `--offline`, `--format` (the backend hardcodes `--format json`).
-
-On create, quota debit + concurrency cap + persist happen atomically; a broker-down dispatch failure refunds quota, marks the scan FAILED, and returns `503 dispatch_failed`.
-
-### 4.3 Poll and retrieve
-
-```bash
-# List (paginated). Scoped to ONE workspace: ?organization=<uuid> OR personal scans.
-curl "http://localhost:8000/api/scans?organization=$ORG" -H "X-API-Key: fx_..."
-
-# Retrieve one — returns a {scan, findings} envelope
-curl "http://localhost:8000/api/scans/$SCAN_ID" -H "X-API-Key: fx_..."
-```
-
-`GET /api/scans/{id}` returns:
-
-```json
-{
-  "scan": {
-    "id": "...", "target": "...", "timestamp": "...", "duration_ms": 4521,
-    "status": "completed", "mode": "blackbox", "total_findings": 15,
-    "by_severity": {"CRITICAL": 1, "HIGH": 3, "MEDIUM": 5, "LOW": 2, "INFO": 4},
-    "by_source": {...}, "endpoints_scanned": 42, "active_probes": false,
-    "checks_run": [...], "error": null
-  },
-  "findings": [
-    {
-      "id": "...", "scan_id": "...", "finding_id": "SEC-014", "title": "...",
-      "severity": "MEDIUM", "source": "blackbox", "category": "headers",
-      "endpoint": "...", "evidence": "...", "fix": "...", "references": [...],
-      "confidence": "HIGH", "line": null, "affected_endpoints": [],
-      "taint_chain": [...], "reachable": true, "route": {...},
-      "route_confirmed": true, "proven_path": true, "compliance": {...}
-    }
-  ]
-}
-```
-
-Detail routes work over the caller's full accessible set (personal + all orgs they belong to), so deep links work without `?organization=`. Build the verify URL `POST /api/scans/{scan_id}/findings/{id}/verify` from these.
-
-Other reads: `GET /api/findings` (flat list, scope `findings:read`), `GET /api/scans/{id}/compliance` (OWASP/ASVS/PCI), `GET /api/scans/{id}/diff?against=<id>` (new/fixed/persisting by fingerprint), `POST /api/scans/{id}/findings/{fid}/verify` (`202` + pollable `GET /api/verifications/{id}`).
-
-### 4.4 Fetch reports
-
-`GET|POST /api/scans/{id}/report` (scope `reports:read`). `format` ∈ `html`/`sarif`/`pdf` (else `400 invalid_format`). Optional `lang` ∈ `{en, ar}` (only HTML honours it; unknown → `400 invalid_lang`).
-
-```bash
-# Synchronous — returns the report bytes inline
-curl "http://localhost:8000/api/scans/$SCAN_ID/report?format=html" \
-  -H "X-API-Key: fx_..." -o report.html
-
-# Async generation — idempotent get_or_create on (scan, format)
-curl -X POST "http://localhost:8000/api/scans/$SCAN_ID/report" \
-  -H "X-API-Key: fx_..." -H 'Content-Type: application/json' \
-  -d '{"format":"pdf"}'
-# → 200 if already READY (cache hit), 202 if queued
-```
-
-- **GET** is synchronous (cache hit if a READY artifact exists, else generated inline). `Content-Type` per format, `Content-Disposition: attachment; filename="fendix-<scanid>.<ext>"` (`html`/`sarif.json`/`pdf`), `Cache-Control: private, no-store`.
-- **POST** queues async generation. Returns `200` (already ready) or `202` (queued). Async only supports default lang (`lang=ar` async → `400 lang_not_supported_async`; use GET instead). Poll `GET /api/reports/{id}` until `status=='ready'`, then the response carries a **5-minute signed `download_url`** (open directly, no auth header) — or `GET /api/reports/{id}/download?token=...`.
-
-### 4.5 The dashboard aggregate
-
-```bash
-curl "http://localhost:8000/api/dashboard?organization=$ORG" -H "X-API-Key: fx_..."
-```
-
-`GET /api/dashboard` (scope `scan:read`). Scoped to ONE workspace via `?organization=<uuid>` (viewer+, member-checked, Http404 for non-members) OR the caller's personal scans when absent.
-
-```json
-{
-  "total_scans": 128,
-  "total_findings": 542,
-  "scans_this_week": 7,
-  "by_severity": { "CRITICAL": 3, "HIGH": 21, "MEDIUM": 88, "LOW": 200, "INFO": 230 },
-  "by_category": { "headers": 120, "auth": 40, "Other": 12 },
-  "recent_scans": [ /* 5 most recent ScanMeta, -timestamp */ ],
-  "trend": [ { "week_start": 1718064000, "findings": 12 } /* 8 weekly buckets, oldest→newest */ ]
-}
-```
-
-`by_category` is server-aggregated (correct past page size; blanks folded into `"Other"`). `trend` is an 8-week weekly finding count, oldest→newest; `week_start` is the Unix timestamp (seconds) of the start of each rolling 7-day window, anchored to the current request time — **not** calendar-Monday aligned (the buckets are computed in Python precisely to avoid `TruncWeek`'s Monday alignment, so each boundary shares the request's weekday/time-of-day).
-
-### 4.6 The runner protocol — push externally-run scans into the dashboard
-
-A **Runner** is a customer-hosted agent that reaches **private targets** inside the customer's network and submits results back to Fendix. It is the canonical path for getting **CI / white-box `--code` reports** into the dashboard. Runners are **org-only** and gated behind the **Enterprise** plan's `self_hosted_runners` feature (live-verified: white-box `--code` ingestion landed a scan with 258 findings on an Enterprise org).
-
-Two separate auth paths:
-
-1. **Management** (JWT, org admin+): register / list / revoke runners (DRF-scoped via `HasScope`).
-2. **Protocol** (`X-Runner-Token` header, deliberately unscoped `AllowAny`): heartbeat / claim / result.
-
-#### Step A — Register a runner (one-time token)
-
-```bash
-# organization MUST be in the BODY, not the query string (see gotcha below)
-curl -X POST http://localhost:8000/api/runners \
-  -H "Authorization: Bearer $JWT_ADMIN" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"ci-runner-1","organization":"<org-uuid>"}'
-```
-
-Gates, in order: `organization` resolved (404 hides existence) → caller must be **ADMIN or OWNER** (members/viewers → `403 ROLE_DENIED`; non-members → `404`) → `require_feature(organization, "self_hosted_runners")` (Enterprise only, else `403 {code: FEATURE_RESTRICTED, plan: <slug>}`).
-
-Response `201` includes `data["token"] = "fxr_..."` — **the only time the token leaves the server** (stored as a SHA-256 hash; subsequent reads expose only `token_prefix`).
-
-```bash
-# List (scope runners:read; ADMIN/OWNER orgs only) — here ?organization is a QUERY param
-curl "http://localhost:8000/api/runners?organization=<org-uuid>" -H "Authorization: Bearer $JWT_ADMIN"
-
-# Revoke (ADMIN; hard-delete)
-curl -X DELETE http://localhost:8000/api/runners/<runner-uuid> -H "Authorization: Bearer $JWT_ADMIN"
-```
-
-#### Step B — Create a runner-bound scan
-
-```bash
-curl -X POST http://localhost:8000/api/scans \
-  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
-  -d '{"mode":"whitebox","code":"/repo","organization":"<org-uuid>","runner":"<runner-uuid>"}'
-```
-
-Validation: `runner` set but `organization` None → `400 "Runner scans require an organization workspace."`; runner must belong to the same org and be active → else `400 "No active runner with that id in this workspace."`; `require_feature(... self_hosted_runners)` again. **Runner scans skip SSRF validation** (private targets are the point). The view returns `201` immediately and **never dispatches to Celery** — the scan stays `QUEUED`, waiting for the agent.
-
-#### Step C — The runner loop (`X-Runner-Token` header)
-
-```bash
-TOKEN="fxr_..."
-
-# Heartbeat → how many jobs are waiting for me
-curl -X POST http://localhost:8000/api/runners/heartbeat \
-  -H "X-Runner-Token: $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"version":"1.0.0"}'
-# → {"pending": 1}
-
-# Claim the next job (atomic; two agents on the same token can't both win) → or 204 No Content
-curl -X POST http://localhost:8000/api/runners/claim -H "X-Runner-Token: $TOKEN"
-# → {"scan_id":"...","mode":"whitebox","target":"...","config":{"code":"/repo", ...decrypted creds...}}
-
-# Run the engine locally, then submit the report
-fendix scan --code /repo --format json --output report.json
-curl -X POST "http://localhost:8000/api/runners/jobs/$SCAN_ID/result" \
-  -H "X-Runner-Token: $TOKEN" -H 'Content-Type: application/json' \
-  --data-binary @report.json
-# → {"scan_id":"...","status":"completed"}
-```
-
-- **heartbeat:** `runner.touch(version)` stamps `last_seen_at`; returns `{pending}`. Silent > 15 min = offline.
-- **claim:** iterates up to 5 oldest QUEUED scans; the conditional `UPDATE ... WHERE status=QUEUED` is the lock. Decrypts `auth`/`auth_user2` for transport (TLS). Returns `200 {scan_id, mode, target, config}` or `204`.
-- **result:** scan must belong to this runner (else `404 not_found`) and be RUNNING/QUEUED (else `409 job_finished`). Body is the **engine's single-document JSON report** (`{findings, metadata}`) or `{"error":"..."}` for a failed run.
-
-#### Step D — Ingest → dashboard
-
-`ingest_runner_report` keys only on generic `report["findings"]` / `report["metadata"]` / `report["error"]`, so it is **format-agnostic** — a white-box `--code` report ingests identically to a DAST one (`source` accepts `whitebox`/`correlated`; `taint_chain`/`reachable`/`route`/`proven_path` all carried through; a code-only scan keys to a `REPO` asset). It runs the same finding sanitizer + fingerprint as the local engine, `bulk_create`s the rows in one transaction, sets status `COMPLETED` (or `FAILED` if error and no findings), clears encrypted creds at rest, and calls `sync_tracked_findings` so **a runner scan is indistinguishable from a locally-run one** in the dashboard, findings/issues/assets, and cross-scan lifecycle.
-
-**Stale-claim recovery:** a RUNNING runner scan whose runner has been silent > 15 min is re-QUEUED **once**; a second failure marks it terminally failed.
-
-#### GOTCHA 1 — Enterprise plan required
-
-`self_hosted_runners` is enabled **only on the Enterprise plan**. Plan matrix:
-
-| Plan | slug | self_hosted_runners | max scans/mo | concurrent |
-|---|---|---|---|---|
-| Free | `free` | ✗ | 5 | 1 |
-| Pro | `pro` | ✗ | 100 | 3 |
-| Team | `team` | ✗ | 500 | 10 |
-| **Enterprise** | `enterprise` | ✓ | 0 (unlimited) | 0 (unlimited) |
-
-`require_feature` raises `403 {code: FEATURE_RESTRICTED, plan: <slug>}` for free/pro/team. (`0` is the unlimited sentinel for scan/concurrency limits.)
-
-#### GOTCHA 2 — `organization` must be in the BODY for mutating actions
-
-For **runner registration** and **upgrade requests**, `organization` is a serializer **body** field — but the two behave **asymmetrically** when you wrongly pass `?organization=<id>` as a query string:
-
-- **Upgrade request** (`POST /api/subscriptions/upgrade-request`): its serializer field is `required=False, default=None`, so a query-string org is silently ignored → `organization` resolves to `None` → the request **silently scopes to your personal subscription** (this is the bug that cost us a round-trip: the approval upgraded the personal sub, not the org). Put `organization` in the **body**.
-- **Runner registration** (`POST /api/runners`): its serializer field is **required with no default**, so a query-string org (omitted from the body) **hard-fails with a 400 `"organization": ["This field is required."]`** before any org resolution — it does *not* silently personal-scope (a personal-scoped runner is impossible anyway: `Runner.organization` is a non-nullable FK).
-
-(Asymmetry on the read side: list endpoints like `GET /api/runners?organization=`, `GET /api/scans?organization=`, `GET /api/subscriptions/current?organization=` *do* read it from the query string — only the two mutating actions above need it in the body.)
-
-#### Upgrading an org to Enterprise (no Stripe wired)
-
-```bash
-# organization in BODY (gotcha above); caller must be OWNER of the org
-curl -X POST http://localhost:8000/api/subscriptions/upgrade-request \
-  -H "Authorization: Bearer $JWT_OWNER" -H 'Content-Type: application/json' \
-  -d '{"plan_slug":"enterprise","organization":"<org-uuid>","company_name":"Acme","contact_email":"ops@acme.com","message":"Need runners"}'
-# → 202 PENDING; a Fendix admin approves it in the Django admin (approve_selected action)
-```
-
-Approval (admin-only) flips the org's plan to the requested plan, sets `status=ACTIVE`, and resets the monthly scan limit, in one transaction. Only PENDING requests may be approved.
-
+## 4. Hosted workspace and customer-runner boundary
+
+The hosted Fendix workspace adds persistent scan history, organization access,
+release decisions, evidence review, and reporting. Its browser application and
+backend services are one product. The backend HTTP routes, authentication
+mechanisms, raw OpenAPI document, and generated Swagger/ReDoc pages are private
+service contracts. They are not a supported public developer API, compatibility
+promise, or client-generation surface.
+
+Supported automation remains explicit and portable:
+
+- run the CLI locally or in CI;
+- configure policy in `.fendix.yaml` and suppressions in `.fendix-ignore`;
+- consume documented exit codes;
+- preserve JSON, HTML, PDF, and SARIF reports;
+- publish SARIF through supported CI-provider integrations; and
+- use supported hosted-workspace integrations exposed in the product and its
+  public documentation.
+
+### 4.1 Customer-hosted runners
+
+An Enterprise customer-hosted runner lets Fendix scan targets that are reachable
+only inside a customer network. Setup is intentionally product-facing:
+
+1. arrange Enterprise runner access through Fendix onboarding;
+2. register the runner from the organization workspace;
+3. store the one-time setup credential in the approved secret store;
+4. deploy the supported runner package inside the permitted network boundary;
+5. verify runner health and launch the scan from the workspace.
+
+The runner connects outward over HTTPS. Fendix does not require an inbound
+connection to the customer network. The raw claim, heartbeat, result, token, and
+job schemas are an internal wire protocol between the supported runner and the
+hosted control plane. They are not a public extension API and must not be copied
+into customer integration code.
+
+Runner jobs use the same engine report model and decision semantics documented
+for local and CI scans. Missing required analyzer coverage still produces
+`INCOMPLETE`; finding severity, disposition, and the release decision remain
+separate facts.
+
+### 4.2 Managed CI and release authorization
+
+Managed CI and hosted release authorization are product capabilities available
+only through explicitly documented Fendix integrations and approved onboarding.
+Teams should not call backend routes directly or generate clients from the
+backend OpenAPI schema. Until Fendix publishes a named, versioned integration,
+the CLI, report artifacts, SARIF, and supported provider setup remain the public
+automation contract.
 ---
 
 ## 5. Security & gotchas (consolidated)
 
-1. **Secret-evidence exfiltration (the cardinal rule).** A `--code` scan over a **working tree** reads gitignored files too. Local secret files (`.env`, `firebase_cred.json`, service-account keys) and their **credential evidence end up in the report**. *Live-verified.* **Never publish a working-tree report to the SaaS or a public artifact.** A CI checkout is a fresh clone of *tracked files only*, so it is inherently safe — this is the right place for white-box scans you intend to upload.
+1. **Working-tree scope and report disclosure.** A `--code` scan over a **working tree** reads gitignored files too. Secret values are redacted at capture time, but the report can still reveal that a credential-shaped value exists along with its safe identifier, file location, and surrounding security structure. Review a report before publishing it. A fresh CI checkout narrows the scan to checked-out content; it is the preferred input for white-box reports you intend to upload.
 
-2. **SSRF egress guard (`netguard`) on private targets.** The engine protects *its own* outbound requests: it blocks loopback, link-local (incl. the cloud-metadata IP `169.254.169.254`), IPv6 ULA, and RFC1918 ranges, re-validating the concrete IP at connect time (DNS-rebinding-resistant) on up to 10 redirect hops. To scan a private/localhost/staging target, pass `--allow-private-targets` (auto-enabled when `--url` already resolves private). The SaaS backend enforces SSRF at scan-create time too — which is exactly why **runner scans skip the SSRF screen** (they run in-network on purpose).
+2. **SSRF egress guard (`netguard`) on private targets.** The engine protects *its own* outbound requests: it blocks loopback, link-local (incl. the cloud-metadata IP `169.254.169.254`), IPv6 ULA, and RFC1918 ranges, re-validating the concrete IP at connect time (DNS-rebinding-resistant) on up to 10 redirect hops. To scan a private/localhost/staging target, pass `--allow-private-targets` (auto-enabled when `--url` already resolves private). Hosted scans also validate targets. Approved customer-hosted runners execute inside the customer's network boundary for private-target coverage.
 
-3. **SEC-NNN finding-ID instability.** `SEC-NNN` IDs reassign across scans. For `.fendix-ignore` suppressions and any persistent mapping, key on **`endpoint` + `category`**, not the ID — that's what the matcher and the PR-comment one-click suppression both use.
+3. **SEC-NNN finding-ID instability.** `SEC-NNN` IDs reassign across scans. Use the report's versioned `fingerprint` for baselines, `fingerprint:` ignore rules, and persistent mappings. Current builds emit `fendix/v2` semantic fingerprints; line/column coordinates and evidence wording do not re-key a finding.
 
-4. **The Python taint engine resolution.** `--python-engine` is off by default. The **released standalone Go binary DOES bundle the embedded Python engine** (`//go:embed all:engine`; every `v*` release runs `make embed-engine` before the build), extracted to `~/.fendix/engine` on first use. White-box secrets + semgrep + textscan + native SCA always run in pure Go regardless. The deeper **AST taint analysis** (Proven-Path route binding, interprocedural taint) needs the `python/` engine, resolved in order: `--dir` → `FENDIX_ENGINE` → `~/.fendix/config` (set by `fendix engine sync`) → **embedded payload** → `./python`. **Coverage note:** the published **Docker/GHCR image ships the engine source tree at `/opt/fendix/python/`** (`FENDIX_PYTHON_ENGINE` set) — but the engine binary inside the image is built **without** the embedded payload, so if that path isn't mounted/synced the implicit `--code` path **degrades to native-Go-only with a WARN** (this is the gap our CI run hit: `python engine not available — whitebox scanning disabled`). A missing engine is **fatal (exit 2) only if `--python-engine` was passed by name**; otherwise it degrades. In the GitHub Action, `fendix engine sync` **fails loudly** if the engine can't be resolved.
+4. **The Python taint engine resolution.** The flag default is false, but `--code` auto-enables the Python engine unless `--python-engine=false` is explicit. Official v3.4.1 standalone binaries **do not bundle** the tree: the release runs `make embed-engine`, whose current target intentionally resets the embedded directory to a placeholder. Resolution order is explicit dir → `FENDIX_ENGINE` → the pin in `~/.fendix/config` → optional legacy/custom embedded payload → `./python`. A missing tree on the implicit `--code` path is recorded as `python-engine: skipped/dependency_missing` and the native analyzers continue; a missing tree after explicitly passing `--python-engine` is fatal (exit 2). The official Docker image ships `/opt/fendix/python/` and sets the engine environment, so hybrid/white-box works there. The v3.4.1 Action's unconditional `engine sync` with an empty `engine_path` is the known defect described in §3.1.
 
 5. **SARIF permissions differ by repository.** The public `Fendix-app/Fendix@v1` Action resolves cross-repository. SARIF upload to the Security tab still needs `security-events: write` and may require GitHub Advanced Security for a private consumer repository; where it is unavailable, publish a `$GITHUB_STEP_SUMMARY` table or a PR comment instead.
 
@@ -863,54 +689,13 @@ Approval (admin-only) flips the org's plan to the requested plan, sets `status=A
 
 7. **`--enable-active` sends real attack payloads.** SQLi/command-injection/CRLF probes only run with this flag, and it prints a legal disclaimer. **Only target systems you own/control.** It is off by default in `.fendix.yaml` too.
 
-8. **API key & runner token are shown once.** `fx_...` API keys and `fxr_...` runner tokens are returned only at creation (stored as SHA-256 hashes). Capture them immediately; they cannot be retrieved again.
-
-9. **Refresh-token rotation.** After `POST /api/auth/refresh`, the old refresh token is blacklisted. Clients must persist the newly-returned `refresh` or the next refresh fails.
-
-10. **No trailing slashes.** Every SaaS API resource uses `trailing_slash=False`. `POST /api/scans` is correct; `POST /api/scans/` is not.
+8. **Runner setup secrets are one-time values.** Store any credential shown during supported runner onboarding in the approved secret store. Rotate or revoke it from the workspace if it may have been exposed.
 
 ---
 
 ## 6. Appendix
 
-### 6.1 Endpoint quick reference (SaaS API, base `/api`, no trailing slash)
-
-| Method | Path | Auth/Scope | Purpose |
-|---|---|---|---|
-| POST | `/api/auth/register` | none | Register → JWT + cookies (201) |
-| POST | `/api/auth/login` | none | Login → JWT + cookies (200) or MFA challenge |
-| POST | `/api/auth/mfa/challenge` | none | Complete MFA with `{mfa_token, otp}` |
-| POST | `/api/auth/refresh` | none | Rotate access token |
-| POST | `/api/auth/logout` | JWT | Blacklist refresh, clear cookies (205) |
-| GET | `/api/auth/me` | JWT | `{id, name, email}` |
-| POST | `/api/auth/password-reset` `/confirm` | none | Reset password |
-| POST | `/api/auth/api-keys/create` | JWT, Pro+ | Create `fx_` key (raw key once, 201) |
-| GET | `/api/auth/api-keys` | JWT, Pro+ | List keys (no raw) |
-| DELETE | `/api/auth/api-keys/{id}` | JWT, Pro+ | Revoke (204) |
-| POST | `/api/scans` | `scan:write` | Launch scan (201, immutable) |
-| GET | `/api/scans` | `scan:read` | List (paginated; `?organization=`) |
-| GET | `/api/scans/{id}` | `scan:read` | `{scan, findings}` envelope |
-| DELETE | `/api/scans/{id}` | `scan:write` | Delete |
-| GET\|POST | `/api/scans/{id}/report` | `reports:read` | Download/queue report (`format=html\|sarif\|pdf`) |
-| GET | `/api/scans/{id}/compliance` | `scan:read` | OWASP/ASVS/PCI coverage |
-| GET | `/api/scans/{id}/diff?against=<id>` | `scan:read` | new/fixed/persisting |
-| POST | `/api/scans/{id}/findings/{fid}/verify` | `scan:write` | Re-test (202, pollable) |
-| GET | `/api/findings` | `findings:read` | Flat finding list |
-| GET | `/api/reports/{id}` | `reports:read` | Poll async report |
-| GET | `/api/reports/{id}/download?token=...` | signed token | Download (no Bearer) |
-| GET | `/api/verifications/{id}` | `findings:read` | Poll a verify job |
-| GET | `/api/dashboard` | `scan:read` | Aggregate overview (`?organization=`) |
-| POST | `/api/runners` | JWT ADMIN+, Enterprise | Register runner — **org in BODY** → `fxr_` token (once) |
-| GET | `/api/runners?organization=<id>` | `runners:read` | List (ADMIN/OWNER) |
-| DELETE | `/api/runners/{id}` | JWT ADMIN | Revoke |
-| POST | `/api/runners/heartbeat` | `X-Runner-Token` | `{pending}` |
-| POST | `/api/runners/claim` | `X-Runner-Token` | `{scan_id, mode, target, config}` or 204 |
-| POST | `/api/runners/jobs/{scan_id}/result` | `X-Runner-Token` | Submit engine JSON report |
-| POST | `/api/subscriptions/upgrade-request` | JWT OWNER (org) | Request plan upgrade — **org in BODY** (202) |
-| GET | `/api/docs/` · `/api/redoc/` · `/api/schema/` | — | Swagger / Redoc / OpenAPI |
-| GET | `/health-check/` · `/health/` | — | Health |
-
-### 6.2 `fendix scan` flag quick reference
+### 6.1 `fendix scan` flag quick reference
 
 | Flag | Default | One-liner |
 |---|---|---|
@@ -919,8 +704,8 @@ Approval (admin-only) flips the org's plan to the requested plan, sets `status=A
 | `--code` | `""` | Source dir (→ whitebox/hybrid; implicitly enables Python engine) |
 | `--diff` | `""` (bare=HEAD) | Scan only files changed vs git ref |
 | `--staged` | `false` | Staged-only diff (implies `--diff`) |
-| `--fast` | `false` | Native scanners only (secrets+textscan); sub-second |
-| `--fail-on` | `""` | Severity floor for the gate: CRITICAL/HIGH/MEDIUM (band must also support it) |
+| `--fast` | `false` | Skips semgrep/native SCA; add `--python-engine=false` for native-only |
+| `--fail-on` | `""` | Severity floor for the gate: CRITICAL/HIGH/MEDIUM/LOW (evidence gate also applies) |
 | `--enforce-confidence` | `true` | v2.0 confidence gate; `false` = pre-2.0 severity-only |
 | `--deescalate-tests` | `true` | Test-code findings demoted; uncorroborated ones held at WARN |
 | `--fail-on-scanner-error` | `false` | Exit 2 if a scanner errored |
@@ -945,28 +730,28 @@ Approval (admin-only) flips the org's plan to the requested plan, sets `status=A
 | `--wordlist` | `""` | Brute-force wordlist |
 | `--respect-robots` | `false` | robots.txt Disallow = hard restriction |
 | `--allow-private-targets` | `false` | Disable SSRF egress guard (auto-on for private `--url`) |
-| `--offline` / `--offline-db` | `false` / `""` (→ `~/.fendix/offline-db.json`) | Air-gapped dep-CVE lookups |
+| `--offline` / `--offline-db` | `false` / `""` (→ `~/.fendix/offline-db.json`) | Native offline SCA; Python deps limitation described in §2.2 |
 | `--no-native-deps` | `false` | Disable in-process Go SCA |
 | `--use-pip-audit` | `false` | Shell out to `pip-audit` for Python |
-| `--python-engine` | `false` | Spawn Python taint engine (explicit → fatal if missing) |
+| `--python-engine` | `false` | Flag default false; `--code` auto-enables it unless explicitly false (explicit true → fatal if missing) |
 | `--no-plugins` / `--allow-repo-local-plugins` | `false` / `false` | Plugin discovery controls |
 | `-v, --verbose` / `--debug-bundle` | `false` / `""` | Verbose output / redacted diagnostic tarball |
 
-### 6.3 GitHub Action input quick reference
+### 6.2 GitHub Action input quick reference
 
 | Input | Default | One-liner |
 |---|---|---|
 | `code` | `.` | White-box source (empty to skip) |
 | `url` | `""` | Black-box target (empty skips DAST) |
 | `spec` | `""` | OpenAPI spec |
-| `fail-on` | `HIGH` | Severity floor: CRITICAL/HIGH/MEDIUM (empty never fails). Confidence-gated since engine v2.0. |
+| `fail-on` | `HIGH` | Severity floor: CRITICAL/HIGH/MEDIUM/LOW (empty never fails). Confidence-gated since engine v2.0. |
 | `diff` | `auto` | auto/true/false |
-| `format` | `sarif` | sarif/json/html |
+| `format` | `sarif` | sarif/json/html/pdf |
 | `output` | `fendix-results.sarif` | Report path |
 | `upload-sarif` | `true` | SARIF → code scanning (needs GHAS on private repos) |
 | `version` | `latest` | Engine version |
 | `extra-args` | `""` | Raw args appended to `fendix scan` |
-| `engine_path` | `""` | Python engine dir (empty = auto) |
+| `engine_path` | `""` | Python engine dir; v3.4.1's empty default fails because the release binary has no embedded tree |
 
 **Pinned image (v3.4.1):** `fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a`
 
@@ -974,4 +759,4 @@ Approval (admin-only) flips the org's plan to the requested plan, sets `status=A
 
 ### Worked-example note (TwiScope)
 
-TwiScope is a Django/DRF backend, so the natural integration is: (1) a developer `fendix hook install --fail-on HIGH` for commit-time secret/IaC gating; (2) a CI job using the **GHCR image directly** (TwiScope's repos are private, so the marketplace action won't resolve), running `fendix scan --code . --fail-on HIGH` against the fresh checkout (safe — tracked files only) and surfacing findings via `$GITHUB_STEP_SUMMARY` (no GHAS); and, if internal/staging API targets must be scanned, (3) an Enterprise-org **runner** inside the network performing `mode=hybrid` scans (`--url` staging + `--code` repo) and POSTing results back so they land in the dashboard with full TrackedFinding lifecycle. **Never** run a working-tree `--code` scan that gets published — TwiScope-style repos carry local `.env`/credential files that would be exfiltrated into the report.
+TwiScope is a Django/DRF backend, so the natural integration is: (1) a developer `fendix hook install --fail-on HIGH` for commit-time secret/IaC gating; (2) a CI job using the public Marketplace Action, which resolves for public and private repositories, or the canonical Docker Hub image, running `fendix scan --code . --fail-on HIGH` against a fresh checkout and surfacing findings through `$GITHUB_STEP_SUMMARY`; and, if internal/staging API targets must be scanned, (3) an Enterprise-org **runner** inside the network performing `mode=hybrid` scans (`--url` staging + `--code` repo) and POSTing results back so they land in the dashboard with full TrackedFinding lifecycle. The v3.4.1 Action requires a version-matched Python engine tree through `engine_path`; use the container when that tree is unavailable. Private repositories need GitHub Advanced Security for SARIF upload, but that does not prevent the Action itself from running. A fresh checkout narrows the scanned files; review the report before publishing it because secret values are redacted at capture time while file locations, safe identifiers, and security structure remain visible.

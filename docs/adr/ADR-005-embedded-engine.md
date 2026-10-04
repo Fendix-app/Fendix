@@ -2,7 +2,21 @@
 
 ## Status
 
-Accepted
+Superseded by TASK-118.
+
+## Superseding implementation
+
+Official source and release builds intentionally embed only the `.gitkeep`
+placeholder required by `//go:embed`. `make embed-engine` resets the directory;
+it does not copy `python/`. The compatibility extraction code remains for
+legacy/custom binaries that contain a payload.
+
+Source builds can resolve a local `./python` tree. Official Docker images copy
+the tree to `/opt/fendix/python/` and set `FENDIX_ENGINE`. A standalone release
+requires an explicit/local tree for the Python checks.
+
+The decision below is historical and must not be used to infer current release
+contents.
 
 ## Context
 

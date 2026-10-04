@@ -2,8 +2,8 @@
 
 **Engine:** Go (black-box)
 **Category:** `rate_limiting`
-**Default severity:** MEDIUM
-**Active probing:** No (passive only)
+**Emitted severity:** MEDIUM for sensitive unthrottled operations; INFO for ordinary or explicitly untested operations
+**Tier:** passive, with write-method bursts gated by `--enable-active`
 
 ## What It Detects
 
@@ -11,13 +11,18 @@ Endpoints that lack rate limiting, making them vulnerable to brute-force attacks
 
 ## How It Works
 
-1. Sends 20 rapid-fire identical requests to the endpoint (no delay between them)
-2. Checks for rate-limiting indicators:
+1. Chooses the operation's own method. GET, HEAD, and OPTIONS can be burst
+   tested in a passive scan; POST, PUT, and PATCH require `--enable-active`;
+   DELETE is never burst tested.
+2. Sends up to 20 rapid requests with that method (no delay between them).
+3. Checks for rate-limiting indicators:
    - HTTP 429 (Too Many Requests) response
    - `X-RateLimit-*` headers
    - `Retry-After` header
    - `X-Rate-Limit-*` headers
-3. If all 20 requests succeed without any throttling response, reports the finding
+4. If at least 10 requests complete without any throttling response, reports
+   the bounded observation. An ineligible write operation gets an INFO
+   `ratelimit.not-tested` coverage finding instead.
 
 The title and evidence deliberately scope the claim to the burst size: a bounded
 burst can only show the ABSENCE of limiting within N requests, never prove that
@@ -36,6 +41,9 @@ same reason.
   "fix": "Implement rate limiting. Return 429 with Retry-After header when threshold exceeded."
 }
 ```
+
+That POST example requires `--enable-active`; without it, Fendix records that
+the write operation was not burst tested.
 
 ## Skipped endpoints
 

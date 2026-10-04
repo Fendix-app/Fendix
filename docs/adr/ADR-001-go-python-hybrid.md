@@ -2,7 +2,21 @@
 
 ## Status
 
-Accepted
+Accepted as the hybrid architecture; amended by the current native-scanner and
+distribution implementation described below.
+
+The original "single binary with embedded Python" consequence was superseded
+when TASK-118 removed the Python payload from official standalone builds. See
+[ADR-005](ADR-005-embedded-engine.md).
+
+## Current implementation addendum
+
+Go now owns DAST, secrets, textscan, Semgrep orchestration and native SCA.
+Python remains the subprocess implementation for AST/spec/dependency checks.
+`--code` auto-enables that subprocess unless `--python-engine=false` is
+explicit, but official standalone binaries do not contain its source tree.
+Source checkouts resolve `./python`; official containers provide
+`/opt/fendix/python/` through `FENDIX_ENGINE`.
 
 ## Context
 
@@ -30,7 +44,7 @@ The user interacts only with the Go binary. Python is an implementation detail.
 
 **Positive:**
 - Best tool for each job — Go for networking, Python for analysis
-- Single binary distribution (Python engine embedded via `go:embed`)
+- A standalone Go CLI plus an optional external Python analysis tree
 - Python engine is independently runnable for debugging
 - Clean separation of concerns between engines
 - Each engine can be tested independently

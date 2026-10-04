@@ -7,26 +7,26 @@
 #
 # What it does on each event:
 #
-#   - pull_request: scans against the baseline saved by the most recent
-#     main run, posts a PR comment summarising findings (top 5 + counts),
+#   - pull_request: scans against the newest baseline visible in the event's
+#     Actions cache scope, posts a PR comment summarising findings (top 5 + counts),
 #     uploads SARIF for inline annotations, and fails the build when
 #     --fail-on triggers.
 #
-#   - push to main: scans, refreshes the baseline cache, uploads SARIF.
-#     PRs that merge after this run will compare against the new baseline
-#     so accepted-on-main findings stop showing up as PR diffs.
+#   - push to main: scans, saves a baseline cache entry, and uploads SARIF.
+#     A later PR can restore that main entry when it is the newest entry
+#     visible in the PR's cache scope.
 #
 # Baseline storage: actions/cache (first-party). The cache is keyed by
-# run_id with a fallback restore-key, so any new run reads the most
-# recently saved baseline. PRs read; main writes (cache writes are
-# automatic on success).
+# run_id with a fallback restore-key. actions/cache saves automatically after
+# every successful job, including eligible PR jobs; cache scope controls which
+# entries a later run can restore. This key does not prove main-only provenance.
 #
 # Required permissions:
 #   contents:        read     — checkout
 #   security-events: write    — SARIF upload via github/codeql-action
 #   pull-requests:   write    — PR comment via actions/github-script
 #
-# Required repository secrets: none for the public-source install path.
+# Required repository secrets: none for the public container path.
 # If your project's spec or staging URL needs auth, plumb a secret
 # through the `--auth` flag (see the Live API Scan section in
 # docs/ci-cd-integration.md).
@@ -36,9 +36,9 @@
 #     floating tag like @v4): a tag can be force-moved by the action
 #     owner to point at new code, a SHA cannot. The trailing comment
 #     records the human-readable version each SHA corresponded to.
-#   - Fendix itself is installed at a pinned release tag, not @latest,
-#     so a CI run is reproducible and a compromised future release
-#     can't silently enter your pipeline. Bump the tag deliberately.
+#   - Fendix itself runs from the immutable v3.4.1 Docker Hub digest,
+#     which includes the version-matched Python engine and Go toolchain.
+#     Review and replace the digest deliberately when upgrading.
 #   - Repo-local plugins (.fendix/plugins/ committed to the repo under
 #     scan) are NOT enabled here. On a pull_request the checked-out tree
 #     is attacker-controlled, so auto-running repo-committed plugins
@@ -63,35 +63,19 @@ permissions:
 jobs:
   fendix:
     runs-on: ubuntu-latest
+    env:
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version: "1.25"
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.11"
-
-      # Install Fendix at a PINNED release tag (not @latest): a CI run
-      # is then reproducible, and a future compromised release can't
-      # silently enter your pipeline. Bump FENDIX_VERSION deliberately
-      # when you've reviewed the release. `go install` verifies the
-      # module against the Go checksum database (GONOSUMCHECK is left
-      # unset) so the downloaded source matches the published hash.
-      # For binary releases, swap this for the install.sh path (see
-      # docs/ci-cd-integration.md).
-      - name: Install Fendix
-        env:
-          FENDIX_VERSION: v0.15.0
+      - name: Pull pinned Fendix image
         run: |
-          go install "github.com/Abdel-RahmanSaied/Fendix/cmd/fendix@${FENDIX_VERSION}"
-          fendix version
+          docker pull "$FENDIX_IMAGE"
+          docker run --rm "$FENDIX_IMAGE" version
 
-      # Restore the most-recent baseline produced by main. On the first
-      # run (no cache yet) the scan runs without a baseline, which is
-      # the correct behaviour — every finding is "new".
+      # Restore the newest baseline visible in this event's cache scope. That
+      # can be a main entry or a prior entry for the same PR scope. On the
+      # first run (no cache yet), every finding is "new".
       - name: Restore Fendix baseline
         id: baseline
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -114,7 +98,12 @@ jobs:
           # job — we still want to upload SARIF + post the PR comment
           # even when --fail-on triggers.
           set +e
-          fendix scan \
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --volume "$PWD:/work" \
+            --workdir /work \
+            "$FENDIX_IMAGE" scan \
             --code ./ \
             --format json \
             --output findings.json \
@@ -130,7 +119,12 @@ jobs:
       - name: Convert findings to SARIF
         if: always() && hashFiles('findings.json') != ''
         run: |
-          fendix report \
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --volume "$PWD:/work" \
+            --workdir /work \
+            "$FENDIX_IMAGE" report \
             --input findings.json \
             --format sarif \
             --output results.sarif

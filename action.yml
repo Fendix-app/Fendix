@@ -5,22 +5,29 @@
 # only surfaces issues the PR actually introduced. Uploads SARIF so findings
 # render inline in the GitHub Security tab and as PR annotations.
 #
-# Usage (minimal — SAST/secrets/SCA on changed code in a PR):
+# Usage (minimal — SAST/secrets/SCA on changed code in a PR). Stable v3.4.1
+# requires a prepared, version-matched Python tree and its requirements; see
+# the GitHub Actions section in README.md. The official container is the
+# ready-to-run alternative:
 #
 #   - uses: actions/checkout@v4
 #     with: { fetch-depth: 0 }          # diff mode needs history
 #   - uses: Fendix-app/Fendix@v1
 #     with:
+#       version: v3.4.1
 #       code: .
+#       engine_path: ${{ github.workspace }}/vendor/fendix-python
 #
 # Usage (full — add a DAST target + fail the build on HIGH):
 #
 #   - uses: Fendix-app/Fendix@v1
 #     with:
+#       version: v3.4.1
 #       url: ${{ secrets.STAGING_API_URL }}
 #       code: .
 #       spec: openapi.yaml
 #       fail-on: HIGH
+#       engine_path: ${{ github.workspace }}/vendor/fendix-python
 name: "Fendix Security Scan"
 description: "Evidence-backed application security decisions for CI/CD."
 author: "Fendix"
@@ -38,11 +45,11 @@ inputs:
     required: false
     default: ""
   spec:
-    description: "Path to an OpenAPI/Swagger spec to seed endpoint discovery."
+    description: "Path or HTTP(S) URL for an OpenAPI/Swagger spec used to seed endpoint discovery."
     required: false
     default: ""
   fail-on:
-    description: "Minimum severity considered by release policy (CRITICAL, HIGH, MEDIUM). Confidence and evidence rules still govern BLOCK; empty disables blocking."
+    description: "Minimum severity considered by release policy (CRITICAL, HIGH, MEDIUM, LOW). Confidence and evidence rules still govern BLOCK; empty disables blocking."
     required: false
     default: "HIGH"
   diff:
@@ -50,7 +57,7 @@ inputs:
     required: false
     default: "auto"
   format:
-    description: "Report format: sarif (default, for the Security tab), json, html."
+    description: "Report format: sarif (default, for the Security tab), json, html, pdf."
     required: false
     default: "sarif"
   output:
@@ -62,19 +69,19 @@ inputs:
     required: false
     default: "true"
   version:
-    description: "Fendix version to install (e.g. v0.15.0). 'latest' installs the newest release."
+    description: "Fendix version to install (e.g. v3.4.1). 'latest' installs the newest release."
     required: false
     default: "latest"
   extra-args:
     description: "Additional raw arguments appended to the fendix scan command."
     required: false
     default: ""
-  # --- Managed mode (ADR-010) -------------------------------------------
+  # --- Managed mode (ADR-010 development preview; absent from v3.4.1) ---
   # Managed mode submits sanitized evidence to the Fendix backend, which
   # DECIDES. The runner never computes, infers or falls back to a local
   # decision, so none of the local gating inputs above apply to it.
   mode:
-    description: "'local' (default) runs entirely on the runner and gates on --fail-on. 'managed' submits evidence to the Fendix backend and gates on the backend's Decision Record."
+    description: "'local' (default) runs entirely on the runner and gates on --fail-on. Development preview: 'managed' submits evidence to the Fendix backend and gates on its Decision Record; managed is absent from v3.4.1."
     required: false
     default: "local"
   token:
@@ -98,7 +105,7 @@ inputs:
     required: false
     default: "https://api.fendix.dev"
   engine_path:
-    description: "Path to the Fendix Python engine directory. Leave empty to use auto-resolution."
+    description: "Path to the Fendix Python engine directory. Known v3.4.1 defect: the empty default cannot resolve from the standalone release binary; provide a version-matched tree or use the official container."
     required: false
     default: ""
 
@@ -190,10 +197,9 @@ runs:
         fendix version
 
     # Pin the Python taint engine before scanning. With engine_path set this
-    # pins that explicit tree; left empty it pins the binary's embedded engine
-    # (and is a no-op resolution for binaries that have one). Either way the
-    # scan step that follows fails loudly here if the SAST engine can't be
-    # resolved, instead of silently degrading to native-Go-only findings.
+    # pins that explicit tree. Known v3.4.1 defect: official standalone
+    # releases have no embedded tree, so the empty default fails here. A
+    # failure is loud rather than silently degrading to native-Go-only output.
     - name: Sync Fendix Python engine
       shell: bash
       run: fendix engine sync

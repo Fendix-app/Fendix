@@ -1,28 +1,36 @@
 # Authentication Check
 
 **Engine:** Go (black-box)
-**Category:** `auth` / `auth_bypass`
-**Default severity:** CRITICAL
-**Active probing:** No (passive only)
+**Registry ID:** `auth`
+**Category:** `auth_bypass`
+**Tier:** authentication (`--auth` required)
+**Emitted severity:** CRITICAL, MEDIUM, or INFO
+**Active payload flag:** not required; this check still sends live
+credential-differential requests
 
 ## What It Detects
 
-Authentication and authorization failures on live API endpoints, including missing authentication, JWT validation bypasses, and IDOR vulnerabilities.
+Authentication failures on live API endpoints, including missing
+authentication and JWT validation bypasses. IDOR is a separate `idor` registry
+check in the multiuser tier and requires both `--auth` and `--auth-user2`.
 
 ## Checks Performed
 
 | Check | Description | Severity |
 |---|---|---|
-| **Unauthenticated access** | Endpoint returns 200 without any auth header | CRITICAL |
+| **Unauthenticated access** | Endpoint returns 2xx without credentials | CRITICAL when the OpenAPI operation requires authentication; MEDIUM when the requirement is unknown; INFO when OpenAPI declares it public |
 | **Malformed JWT accepted** | Server accepts `Authorization: Bearer invalid.jwt.token` | CRITICAL |
 | **Expired JWT accepted** | Server accepts a JWT with `exp` in the past | CRITICAL |
 | **alg:none bypass** | Server accepts a JWT with `"alg": "none"` (no signature) | CRITICAL |
-| **IDOR** | Different user accounts can access each other's resources (requires `--auth-user2`) | HIGH |
+
+JWT probes run only when the supplied credential is a parseable JWT and the
+endpoint first accepts that real token.
 
 ## How It Works
 
 ### Unauthenticated access
-1. Sends request to endpoint without any Authorization header
+1. Sends a request without the configured credential (header, cookie, query,
+   Basic, or bearer auth)
 2. If response is 200 OK, the endpoint lacks authentication
 
 ### JWT bypass
@@ -30,10 +38,10 @@ Authentication and authorization failures on live API endpoints, including missi
 2. Sends the crafted token to the endpoint
 3. If the server responds with 200, JWT validation is broken
 
-### IDOR (two-account check)
-1. Requires `--auth` and `--auth-user2` flags
-2. Accesses a resource as user 1, then tries the same resource as user 2
-3. If both succeed, the endpoint may have an IDOR vulnerability
+### Separate IDOR check
+
+The `idor` check compares two authenticated accounts. It is a distinct
+`TierMultiuser` registry entry, emits HIGH findings, and uses CWE-639.
 
 ## Example Finding
 

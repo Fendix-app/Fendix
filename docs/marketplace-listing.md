@@ -3,6 +3,11 @@
 > This document contains the copy for the GitHub Marketplace listing submission.
 > Once the App is registered and deployed, submit this at:
 > https://github.com/marketplace/manage
+>
+> **Historical submission draft.** Its dated metrics and workflow copy are not
+> the stable v3.4.1 executable contract. Reconcile any future submission with
+> the root README, `action.yml`, the schema reference and the 2026-10-03
+> contract audit first.
 
 ---
 

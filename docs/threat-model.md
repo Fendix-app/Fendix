@@ -126,7 +126,7 @@ privileges on the target.
 **Mitigations.**
 
 - **Credential masking in reports.** All auth values are replaced
-  with `[REDACTED]` in JSON, HTML, and SARIF output. The
+  with `[REDACTED]` in JSON, HTML, SARIF, and PDF output. The
   `--verbose` flag never logs credentials in plaintext.
 - **No credential storage.** The auth context lives in memory for
   the duration of the scan; nothing persists to disk except the

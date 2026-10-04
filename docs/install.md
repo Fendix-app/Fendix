@@ -24,6 +24,22 @@ choose between them or want signature-verification details.
 | Pinned, signature-verified, reproducible install | [Manual binary download](#manual-binary-download) + [cosign verification](#verifying-release-artifacts-cosign) |
 | Building from source | [Build from source](#build-from-source) |
 
+### Python analyzer delivery
+
+| Install path | Python analyzer tree |
+|---|---|
+| Homebrew, `install.sh`, `.deb`, `.rpm`, manual release binary | Not included. These install the standalone Go binary; a Python interpreter alone is insufficient. |
+| Official Docker image | Included at `/opt/fendix/python/` and selected through `FENDIX_ENGINE`. |
+| Source checkout | Available from the checkout's `./python` directory. |
+
+`--code` auto-enables the Python phase unless `--python-engine=false` is
+explicit. On a standalone v3.4.1 install with no version-matched tree supplied
+through `FENDIX_ENGINE` or an engine pin, that phase is recorded
+`skipped/dependency_missing`; native secrets, textscan, Semgrep orchestration,
+and native dependency analyzers continue. Use the official container or a
+source checkout when complete hybrid coverage must work without separate
+engine-tree preparation.
+
 ---
 
 ## Homebrew (macOS / Linux)

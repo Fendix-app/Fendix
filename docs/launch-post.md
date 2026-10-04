@@ -3,6 +3,11 @@
 > Draft for HN / r/devops / r/golang / r/netsec.
 > Adapt tone per platform. HN version first (Show HN format).
 > **Updated for the 90-day cut (2026-06-12): diff-aware scans, pre-commit hook, Proven Path v1, poetry/Pipfile SCA.**
+>
+> **Historical launch draft.** This copy predates stable v3.4.1 and contains
+> period-specific performance, Python opt-in and product-topology statements.
+> Do not use it as the current executable contract; use the root README, the
+> schema reference and the 2026-10-03 contract audit.
 
 ---
 

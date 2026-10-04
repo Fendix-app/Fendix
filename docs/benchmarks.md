@@ -37,7 +37,7 @@ files, 30 secrets findings. Both binaries built
 | Configuration | p50 | p95 | mean | Δ vs v0.9.0 | exit gate |
 |---|---:|---:|---:|---:|---|
 | **v0.18.0 default — full native check suite** | **45 ms** | **51 ms** | **46 ms** | +39 ms | ✅ 11× under 500 ms |
-| v0.18.0 + `--python-engine` (opt-in) | 43 ms | 52 ms | 45 ms | — | ✅ 11× under 500 ms |
+| v0.18.0 + explicit `--python-engine` | 43 ms | 52 ms | 45 ms | — | ✅ 11× under 500 ms |
 | v0.11.0 default — no Python, no opt-ins | 6.1 ms | 7.0 ms | 6.1 ms | +0.5 ms (+9 %) | ✅ 82× under 500 ms |
 | v0.11.0 + `--python-engine` (opt-in) | 40.7 ms | 45.1 ms | 41.3 ms | +16.3 ms (+67 %) | ✅ 12× under 500 ms |
 | v0.9.0 default (TASK-118 baseline) | 5.6 ms | 6.3 ms | 5.6 ms | — | ✅ 89× under 500 ms |
@@ -62,8 +62,11 @@ Reading the table:
     repo size.
   - Because the default already pays the whitebox-phase cost, `--python-engine`
     is now **on par** with default (43 vs 45 ms), where in v0.11 it added +34 ms.
-  - **`--fast` skips this phase** for pre-commit use. Both default and opt-in
-    stay an order of magnitude under the 500 ms CI gate regardless.
+  - The intended pre-commit setting is `--fast`. In the current CLI it skips
+    Semgrep and native SCA but does **not** suppress the Python phase
+    auto-enabled by `--code`; use `--python-engine=false` for a native-only
+    measurement. The generated hook omits that workaround, a tracked product
+    defect. These historical rows remain under the 500 ms CI gate.
 
 
 - **Default v0.11 cold-start: 6.1 ms p50.** The new TASK-133
@@ -93,9 +96,10 @@ Binary size delta:
 | Δ | −99,200 bytes (−0.5 %) |
 
 The size delta is small because Go's binary build compresses embedded
-text aggressively. The real win is the dependency posture — fendix no
-longer carries a Python interpreter requirement at all in the default
-path; users can now run scans on machines without Python installed.
+text aggressively. Official standalone binaries no longer carry the Python
+tree. Native scans can run without Python, while `--code` currently
+auto-enables the external Python phase and records it unavailable when no tree
+or interpreter can be resolved (explicit `--python-engine` fails closed).
 
 Re-run with:
 

@@ -14,21 +14,22 @@ This document covers two things:
 
 ## Supported versions
 
-Current release: **v1.1.0** (2026-07-08 — see [`CHANGELOG.md`](CHANGELOG.md)).
+Current stable release: **v3.4.1** (2026-09-07 — see
+[`CHANGELOG.md`](CHANGELOG.md)).
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.1.x   | ✅ active           |
-| 1.0.x   | ✅ critical only    |
-| < 1.0   | ❌ end of life      |
+| 3.4.x   | ✅ active           |
+| 3.3.x   | ✅ critical only    |
+| < 3.3   | ❌ end of life      |
 
 The post-1.0 policy announced pre-1.0 is now in force: **the latest two minor
 versions are supported — full security fixes on the current minor, critical
-fixes only on the previous one.** Everything below `1.0.0` (the whole `0.x`
-line) is end of life and will not receive backports; upgrade to `1.1.x`.
+fixes only on the previous one.** Everything below `3.3.0` is end of life and
+will not receive backports; upgrade to `3.4.x`.
 
 A patch release on the supported branch is the delivery vehicle for a fix
-(e.g. `1.1.1` for a `1.1.x` issue).
+(e.g. `3.4.2` for a `3.4.x` issue).
 
 ## Reporting a vulnerability
 
