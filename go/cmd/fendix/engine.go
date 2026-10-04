@@ -5,7 +5,8 @@
 //  1. --dir flag (explicit override)
 //  2. FENDIX_ENGINE env var
 //  3. FENDIX_ENGINE pinned in ~/.fendix/config (written by `engine sync`)
-//  4. embedded payload extracted to ~/.fendix/engine
+//  4. optional embedded payload extracted to ~/.fendix/engine (legacy or
+//     custom builds only; official standalone releases do not carry one)
 //  5. ./python relative to CWD (dev mode)
 //
 // Two operations:
@@ -13,7 +14,7 @@
 //     plus the Version stamp on disk. Useful for "why is this scan missing
 //     findings" support questions.
 //   - `fendix engine sync` — resolve the engine (explicit --dir / FENDIX_ENGINE,
-//     else the embedded payload) and pin its location into ~/.fendix/config so
+//     else an optional embedded payload) and pin its location into ~/.fendix/config so
 //     future invocations resolve automatically. Run once per environment; also
 //     recovers from a hand-edited / partially-deleted ~/.fendix/engine.
 package main
@@ -33,9 +34,9 @@ func newEngineCmd() *cobra.Command {
 		Use:   "engine",
 		Short: "Inspect or refresh the Python whitebox engine",
 		Long: `Manage the Python engine that backs the AST analyzer (taint chains for
-SQL injection / SSTI / pickle / yaml.load / path traversal). The engine
-is normally bundled with the binary and extracted on first scan; this
-command lets you check what's installed and force a clean refresh.`,
+SQL injection / SSTI / pickle / yaml.load / path traversal). Official standalone
+release binaries do not bundle this engine; point at a python/ source tree with
+--dir or FENDIX_ENGINE. Docker images provide the tree separately.`,
 	}
 	cmd.AddCommand(newEngineInfoCmd())
 	cmd.AddCommand(newEngineSyncCmd())
@@ -90,7 +91,8 @@ invocations resolve automatically.
 
 Resolution for the pin:
   1. --dir <path> (explicit), else the FENDIX_ENGINE env var if set, else
-  2. the binary's embedded engine, re-extracted to ~/.fendix/engine.
+  2. an optional embedded engine (legacy/custom builds), re-extracted to
+     ~/.fendix/engine.
 
 Use this after manually editing files in ~/.fendix/engine to reset to a
 known-good state, when troubleshooting why scans return fewer findings than
@@ -162,6 +164,6 @@ at sync time rather than silently degrading the SAST scan.`,
 			return nil
 		},
 	}
-	cmd.Flags().String("dir", "", "Explicit python/ engine source tree to pin (overrides embedded extraction)")
+	cmd.Flags().String("dir", "", "Explicit python/ engine source tree to pin (preferred for standalone releases)")
 	return cmd
 }

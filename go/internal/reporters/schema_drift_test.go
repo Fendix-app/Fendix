@@ -2,9 +2,11 @@ package reporters
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -90,36 +92,90 @@ func TestScanMetadataHasNoSchemaDrift(t *testing.T) {
 // The reverse direction: a property documented in the schema that no longer
 // exists on the struct is a promise the engine has stopped keeping.
 func TestSchemaDocumentsNoFieldsTheEngineDroppedFromFinding(t *testing.T) {
+	assertSchemaHasNoDroppedFields(t, "Finding", models.Finding{})
+}
+
+func TestSchemaDocumentsNoFieldsTheEngineDroppedFromMetadata(t *testing.T) {
+	assertSchemaHasNoDroppedFields(t, "ScanMetadata", ScanMetadata{})
+}
+
+func assertSchemaHasNoDroppedFields(t *testing.T, definition string, v any) {
+	t.Helper()
 	live := map[string]bool{}
-	for _, n := range jsonFieldNames(t, models.Finding{}) {
+	for _, n := range jsonFieldNames(t, v) {
 		live[n] = true
 	}
-	for name := range loadSchemaProperties(t, "Finding") {
+	for name := range loadSchemaProperties(t, definition) {
 		if !live[name] {
-			t.Errorf("docs/schema.json documents Finding.%s, which the struct no longer has", name)
+			t.Errorf("docs/schema.json documents %s.%s, which the struct no longer has", definition, name)
 		}
 	}
 }
 
-// The mode enum has to list every mode the orchestrator actually stamps, or an
-// import run's report fails validation.
-func TestSchemaModeEnumCoversEveryScanMode(t *testing.T) {
+func schemaEnum(t *testing.T, definition, property string) []string {
+	t.Helper()
 	props := loadSchemaProperties(t, "ScanMetadata")
-	mode, ok := props["mode"].(map[string]any)
-	if !ok {
-		t.Fatal("schema.json has no ScanMetadata.mode")
+	if definition != "ScanMetadata" {
+		props = loadSchemaProperties(t, definition)
 	}
-	raw, ok := mode["enum"].([]any)
+	prop, ok := props[property].(map[string]any)
 	if !ok {
-		t.Fatal("ScanMetadata.mode has no enum")
+		t.Fatalf("schema.json has no %s.%s object", definition, property)
 	}
-	got := map[string]bool{}
+	raw, ok := prop["enum"].([]any)
+	if !ok {
+		t.Fatalf("%s.%s has no enum", definition, property)
+	}
+	got := make([]string, 0, len(raw))
 	for _, v := range raw {
-		got[v.(string)] = true
-	}
-	for _, want := range []string{"blackbox", "whitebox", "hybrid", "import"} {
-		if !got[want] {
-			t.Errorf("scan mode %q is stamped by the orchestrator but missing from the schema enum", want)
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("%s.%s enum contains %T, want string", definition, property, v)
 		}
+		got = append(got, s)
+	}
+	sort.Strings(got)
+	return got
+}
+
+func assertExactStrings(t *testing.T, label string, got, want []string) {
+	t.Helper()
+	want = append([]string(nil), want...)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %v, want exact closed set %v", label, got, want)
+	}
+}
+
+// These are closed built-in vocabularies. Plugin findings can currently carry
+// another explicit source; that is a documented product defect, not a schema
+// extension point.
+func TestSchemaModeEnumExactlyMatchesScanModes(t *testing.T) {
+	assertExactStrings(t, "ScanMetadata.mode enum",
+		schemaEnum(t, "ScanMetadata", "mode"),
+		[]string{"blackbox", "whitebox", "hybrid", "import"})
+}
+
+func TestSchemaSourceEnumExactlyMatchesBuiltInFindingSources(t *testing.T) {
+	assertExactStrings(t, "Finding.source enum",
+		schemaEnum(t, "Finding", "source"),
+		[]string{
+			string(models.SourceBlackbox),
+			string(models.SourceWhitebox),
+			string(models.SourceCorrelated),
+			string(models.SourceImported),
+		})
+}
+
+func TestPrimarySchemaDocNamesCurrentVersion(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "docs", "schema.md")
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	intro := strings.SplitN(string(blob), "\n## ", 2)[0]
+	want := fmt.Sprintf("today `%d`", SchemaVersion)
+	if !strings.Contains(intro, want) {
+		t.Fatalf("schema.md does not name current schema version %d", SchemaVersion)
 	}
 }

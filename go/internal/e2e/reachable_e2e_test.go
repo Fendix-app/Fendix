@@ -81,9 +81,9 @@ paths:
 	outputPath := filepath.Join(tmpDir, "report.json")
 
 	// AST analyzer (taint chains) + spec parser (no-auth whitebox
-	// finding) both live in python/. Post-TASK-118 the Python engine
-	// is opt-in. Point FENDIX_ENGINE at the repo's python/ tree and
-	// pass --python-engine so both checks run.
+	// finding) both live in python/. --code auto-enables the phase; point
+	// FENDIX_ENGINE at the repo's python/ tree and pass --python-engine
+	// explicitly so a missing tree fails this test instead of degrading.
 	t.Setenv("FENDIX_ENGINE", filepath.Join(repoRoot(t), "python"))
 
 	cmd := exec.Command(bin,

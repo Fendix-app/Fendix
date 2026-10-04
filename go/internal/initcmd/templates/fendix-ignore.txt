@@ -2,7 +2,7 @@
 #
 # Each rule suppresses findings that match ALL specified fields.
 # Omitted fields match everything (e.g. no endpoint = all endpoints).
-# "reason" is required — document why each suppression exists.
+# "reason" is optional to the engine; require it in review for auditability.
 #
 # See `.fendix-ignore.example` in the Fendix repo for a richer reference,
 # or run `fendix scan --help` for the full CLI surface.
@@ -11,6 +11,10 @@ ignore: []
 
 # Examples (uncomment + adapt as needed):
 #
+# - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
+#   reason: "Accepted risk reviewed in JIRA-1234"
+#
+# SEC-NNN ids are positional; use id rules only for short-lived triage.
 # - id: SEC-014
 #   reason: "Rate limiting handled at API gateway level"
 #   until: 2026-12-31     # optional expiry — rule stops applying after this date

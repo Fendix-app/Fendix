@@ -109,14 +109,13 @@ type ScanConfig struct {
 	// Surfaced by Sprint 01 of the enterprise-readiness plan to close
 	// the audit's §15.5 trust gap (pip-audit naming vs. implementation).
 	UsePipAudit bool
-	// PythonEngine opts in to spawning the Python whitebox engine
-	// (TASK-118). Default false — Phase 17b moved the secrets and
-	// semgrep checks to native Go (TASK-115/TASK-116) and dropped the
-	// embedded Python distribution from the binary, so the default
-	// scan path is Python-free. Set true to re-enable the auth /
-	// injection / deps Python checks; requires either a local
+	// PythonEngine controls the Python whitebox engine (TASK-118). Its Cobra
+	// default is false, but the scan command sets it true whenever --code is
+	// present unless the user explicitly passes --python-engine=false. The
+	// binary no longer bundles the Python distribution. Running the auth /
+	// injection / deps Python checks therefore requires either a local
 	// `python/` source tree or an explicit FENDIX_ENGINE env var
-	// pointing at one (the binary no longer carries an embedded copy).
+	// pointing at one; the official container supplies the tree separately.
 	PythonEngine bool
 
 	// PythonEngineExplicit is true only when the user passed --python-engine
@@ -124,9 +123,9 @@ type ScanConfig struct {
 	// missing engine is handled: an EXPLICIT request that can't be resolved is
 	// a hard exit-2 error (the user asked for the AST taint engine and we have
 	// nowhere to run it); an IMPLICIT one (auto-enabled by --code) degrades to
-	// a WARN + native-Go-only scan, because the user didn't opt into SAST by
-	// name and shouldn't have a plugin/native-only --code scan aborted just
-	// because the optional Python tree isn't present. Default false.
+	// a WARN + native-Go-only scan, because the user didn't explicitly require
+	// the Python phase and shouldn't have a plugin/native-only --code scan
+	// aborted just because the external Python tree isn't present. Default false.
 	PythonEngineExplicit bool
 
 	// Lang controls the HTML reporter's language (Sprint 10). Today's
@@ -146,13 +145,12 @@ type ScanConfig struct {
 	// own internal/staging/localhost target must keep working).
 	AllowPrivate bool
 
-	// Offline puts the dep-CVE scanners (govulncheck / pip / npm) into
-	// air-gapped mode (F-M4/F-H4). When true the orchestrator MUST NOT
-	// make any outbound call: pip/npm consult the local offline snapshot
-	// at OfflineDBPath instead of osv.dev, and any scanner that cannot
-	// run hermetically (govulncheck needs vuln.go.dev) is recorded as
-	// SKIPPED in ScanMetadata rather than silently hitting the network.
-	// See internal/offline (the snapshot is produced by `fendix db`).
+	// Offline puts the native dep-CVE scanners (govulncheck / pip / npm) into
+	// air-gapped mode (F-M4/F-H4). The native dependency paths MUST NOT make
+	// an outbound advisory/tool call: pip/npm consult the local snapshot at
+	// OfflineDBPath, and govulncheck is recorded as SKIPPED. This flag does
+	// not suppress target traffic, arbitrary plugins, or the current Python
+	// dependency phase (a documented product defect). See internal/offline.
 	Offline bool
 	// OfflineDBPath is the path to the offline-db snapshot consulted in
 	// --offline mode. Empty falls back to offline.DefaultDBPath()
@@ -210,8 +208,8 @@ type ScanConfig struct {
 	// DeescalateTests drops findings whose sink lives in test / fixture code
 	// from WARN to INFO in the decision layer (v1.1 B3, fp_class
 	// "test-fixture"). Evidence is preserved, never suppressed (Rule 3), and a
-	// finding at or above --fail-on still BLOCKs — the gate a team explicitly
-	// asked for is never silently downgraded.
+	// finding at or above --fail-on is held at WARN unless its evidence support
+	// survives the decision policy's test-code rule.
 	//
 	// Default TRUE (the CLI flag defaults to true; a zero-valued ScanConfig
 	// built directly in a test opts out). Real-world corpora showed 98-100% of
@@ -222,10 +220,8 @@ type ScanConfig struct {
 
 	// EnforceConfidence gates the --fail-on threshold on the deterministic
 	// confidence band: at or above the threshold a finding BLOCKs only when its
-	// band supports the claim (HIGH always; MEDIUM with at least one
-	// corroborating signal — live observation, cross-engine agreement,
-	// deterministic detection in production code, a confirmed route, a
-	// reachable taint path, a payload-validated probe; LOW never), and a
+	// band and evidence support the claim (HIGH needs an independent or
+	// self-evident signal; MEDIUM needs an independent signal; LOW never), and a
 	// finding the correlator marked unconfirmed-by-live-scan never blocks on
 	// its own. Evidence is preserved, never suppressed (Rule 3) — only
 	// enforcement moves. (v1.2.2 FIX-08.)
@@ -245,12 +241,8 @@ type ScanConfig struct {
 	// ships, applicable or not".
 	BlockOnInapplicable bool
 
-	// Fast runs only the instant native scanners (secrets + textscan),
-	// skipping semgrep (whose process startup is ~1.5s) and the dep-CVE
-	// scanners (which make network calls). This is the <1s budget the
-	// pre-commit hook needs: on a real monorepo a staged diff scan in fast
-	// mode completes in tens of milliseconds. Detection logic is unchanged
-	// — fast mode only drops the two slow scanners, so it never alters the
-	// findings the remaining scanners would have produced.
+	// Fast skips semgrep and the native dep-CVE scanners. It does not currently
+	// suppress PythonEngine when --code auto-enabled it; callers that require
+	// the native-only pre-commit path must also set --python-engine=false.
 	Fast bool
 }

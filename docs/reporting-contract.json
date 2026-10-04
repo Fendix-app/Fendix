@@ -1,0 +1,1194 @@
+{
+  "schema_version": 1,
+  "engine_version": "v3.4.1",
+  "formats": [
+    "json",
+    "html",
+    "sarif",
+    "pdf"
+  ],
+  "json_report": {
+    "schema_version": 2,
+    "fingerprint_algorithm": "fendix/v2",
+    "schema": {
+      "$id": "https://github.com/Fendix-app/Fendix/blob/main/docs/schema.json",
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "ConfidenceReason": {
+          "additionalProperties": false,
+          "description": "One scoring rule's contribution to a confidence score. `code` is the stable machine-readable identity a consumer matches on; `text` is human wording and is free to be reworded. The `delta` values of a finding's confidence_breakdown sum to its confidence_score.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "delta": {
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "code",
+            "text"
+          ],
+          "type": "object"
+        },
+        "Coverage": {
+          "additionalProperties": false,
+          "properties": {
+            "configured_complete": {
+              "type": "boolean"
+            },
+            "contract_version": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "gaps": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "limitations": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "required_analyzers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "required_gaps": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "retried": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "strict": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "contract_version",
+            "strict",
+            "configured_complete",
+            "gaps",
+            "limitations",
+            "required_analyzers",
+            "required_gaps",
+            "retried"
+          ],
+          "type": "object"
+        },
+        "DependencyRef": {
+          "additionalProperties": false,
+          "properties": {
+            "ecosystem": {
+              "type": "string"
+            },
+            "manifest": {
+              "type": "string"
+            },
+            "package": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "Finding": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "description": "Severity-confidence consistency: LOW confidence caps severity at MEDIUM.",
+              "if": {
+                "properties": {
+                  "confidence": {
+                    "const": "LOW"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "severity": {
+                    "enum": [
+                      "MEDIUM",
+                      "LOW",
+                      "INFO"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "affected_endpoints": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "applicability": {
+              "enum": [
+                "applicable",
+                "evidence_against"
+              ],
+              "type": "string"
+            },
+            "auth_expectation": {
+              "enum": [
+                "public",
+                "required"
+              ],
+              "type": "string"
+            },
+            "category": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "confidence": {
+              "enum": [
+                "HIGH",
+                "MEDIUM",
+                "LOW"
+              ],
+              "type": "string"
+            },
+            "confidence_band": {
+              "enum": [
+                "HIGH",
+                "MEDIUM",
+                "LOW"
+              ],
+              "type": "string"
+            },
+            "confidence_breakdown": {
+              "items": {
+                "$ref": "#/definitions/ConfidenceReason"
+              },
+              "type": "array"
+            },
+            "confidence_reasons": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "confidence_score": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "corroborating_tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "cross_tool_corroborated": {
+              "type": "boolean"
+            },
+            "decision_policy": {
+              "enum": [
+                "enforced",
+                "relaxed"
+              ],
+              "type": "string"
+            },
+            "decision_reason": {
+              "type": "string"
+            },
+            "dependency": {
+              "$ref": "#/definitions/DependencyRef"
+            },
+            "endpoint": {
+              "type": "string"
+            },
+            "evidence": {
+              "type": "string"
+            },
+            "fingerprint": {
+              "type": "string"
+            },
+            "fingerprint_v1": {
+              "type": "string"
+            },
+            "fix": {
+              "type": "string"
+            },
+            "id": {
+              "pattern": "^SEC-[0-9]+$",
+              "type": "string"
+            },
+            "independent_signals": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "line": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "policy_override": {
+              "type": "boolean"
+            },
+            "proven_path": {
+              "type": "boolean"
+            },
+            "reachable": {
+              "type": "boolean"
+            },
+            "references": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "route": {
+              "$ref": "#/definitions/Route"
+            },
+            "route_confirmed": {
+              "type": "boolean"
+            },
+            "rule_id": {
+              "type": "string"
+            },
+            "secret": {
+              "$ref": "#/definitions/SecretRef"
+            },
+            "self_evident_signals": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "severity": {
+              "enum": [
+                "CRITICAL",
+                "HIGH",
+                "MEDIUM",
+                "LOW",
+                "INFO"
+              ],
+              "type": "string"
+            },
+            "sink": {
+              "type": "string"
+            },
+            "source": {
+              "enum": [
+                "blackbox",
+                "whitebox",
+                "correlated",
+                "imported"
+              ],
+              "type": "string"
+            },
+            "source_tier": {
+              "enum": [
+                "native_go",
+                "tree_sitter_sidecar",
+                "semgrep_shim"
+              ],
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "BLOCK",
+                "WARN",
+                "INFO"
+              ],
+              "type": "string"
+            },
+            "symbol": {
+              "type": "string"
+            },
+            "taint_chain": {
+              "items": {
+                "$ref": "#/definitions/TaintLink"
+              },
+              "type": "array"
+            },
+            "title": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "severity",
+            "source",
+            "category",
+            "endpoint",
+            "evidence",
+            "fix",
+            "references",
+            "confidence",
+            "line"
+          ],
+          "type": "object"
+        },
+        "ImportedTool": {
+          "additionalProperties": false,
+          "properties": {
+            "corroborated": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "no_location": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "results": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "suppressed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool",
+            "results"
+          ],
+          "type": "object"
+        },
+        "Route": {
+          "additionalProperties": false,
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "handler": {
+              "type": "string"
+            },
+            "line": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "method": {
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "ScanMetadata": {
+          "additionalProperties": false,
+          "properties": {
+            "active_probes": {
+              "type": "boolean"
+            },
+            "checks_run": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "coverage": {
+              "$ref": "#/definitions/Coverage"
+            },
+            "coverage_state": {
+              "enum": [
+                "complete",
+                "incomplete",
+                "unknown"
+              ],
+              "type": "string"
+            },
+            "decision_policy_version": {
+              "type": "string"
+            },
+            "decision_rationale": {
+              "type": "object"
+            },
+            "duration": {
+              "type": "string"
+            },
+            "endpoints_discovered": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "endpoints_scanned": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "endpoints_truncated": {
+              "type": "boolean"
+            },
+            "fingerprint_algorithm": {
+              "type": "string"
+            },
+            "imports": {
+              "items": {
+                "$ref": "#/definitions/ImportedTool"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "enum": [
+                "blackbox",
+                "whitebox",
+                "hybrid",
+                "import"
+              ],
+              "type": "string"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "release_decision": {
+              "enum": [
+                "pass",
+                "warn",
+                "block",
+                "incomplete"
+              ],
+              "type": "string"
+            },
+            "scanner_status": {
+              "items": {
+                "$ref": "#/definitions/ScannerStatus"
+              },
+              "type": "array"
+            },
+            "schema_version": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "started_at": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "started_at",
+            "duration",
+            "version",
+            "mode",
+            "endpoints_scanned",
+            "active_probes"
+          ],
+          "type": "object"
+        },
+        "ScannerStatus": {
+          "additionalProperties": false,
+          "properties": {
+            "attempts": {
+              "minimum": 2,
+              "type": "integer"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "not_applicable",
+                "diff_unchanged",
+                "disabled_by_flag",
+                "disabled_offline",
+                "dependency_missing",
+                "unsupported_target",
+                "network_error",
+                "timeout",
+                "execution_error",
+                "malformed_output",
+                "truncated_output",
+                "input_error",
+                "no_endpoints"
+              ],
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "ok",
+                "skipped",
+                "failed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "state"
+          ],
+          "type": "object"
+        },
+        "SecretRef": {
+          "additionalProperties": false,
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "identifier": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "SeverityCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "critical": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "high": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "info": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "low": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "medium": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "critical",
+            "high",
+            "medium",
+            "low",
+            "info"
+          ],
+          "type": "object"
+        },
+        "SourceCounts": {
+          "additionalProperties": false,
+          "properties": {
+            "blackbox": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "correlated": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "whitebox": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "blackbox",
+            "whitebox",
+            "correlated"
+          ],
+          "type": "object"
+        },
+        "StatusCounts": {
+          "additionalProperties": false,
+          "description": "v0.24 decision summary. Additive; not in the root `required` set.",
+          "properties": {
+            "blocking": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "confirmed": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "informational": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "warning": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total",
+            "confirmed",
+            "blocking",
+            "warning",
+            "informational"
+          ],
+          "type": "object"
+        },
+        "TaintLink": {
+          "additionalProperties": false,
+          "properties": {
+            "expr": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "file",
+            "line",
+            "expr"
+          ],
+          "type": "object"
+        }
+      },
+      "description": "Schema for Fendix scan output produced by `fendix scan --format json`. Current reports carry metadata.schema_version 2. Additive fields do not require a version bump; incompatible shape or semantic changes do. Archived pre-versioned and schema-version 1 reports remain readable. See docs/schema.md.",
+      "properties": {
+        "decisions": {
+          "$ref": "#/definitions/StatusCounts"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/definitions/Finding"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "$ref": "#/definitions/ScanMetadata"
+        },
+        "sources": {
+          "$ref": "#/definitions/SourceCounts"
+        },
+        "summary": {
+          "$ref": "#/definitions/SeverityCounts"
+        },
+        "total": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "metadata",
+        "summary",
+        "sources",
+        "total",
+        "findings"
+      ],
+      "title": "FendixJSONReport",
+      "type": "object"
+    }
+  },
+  "fingerprint": {
+    "algorithm": "fendix/v2",
+    "legacy_algorithm": "fendix/v1",
+    "digest": "SHA-256 over NUL-separated labelled components, truncated to 20 bytes and hex encoded",
+    "uses": [
+      "baseline matching",
+      "fingerprint suppressions",
+      "finding diffing",
+      "SARIF partialFingerprints"
+    ],
+    "excluded": [
+      "title",
+      "evidence prose",
+      "fix text",
+      "references",
+      "severity",
+      "confidence",
+      "finding disposition",
+      "line and column",
+      "timestamps",
+      "credential material"
+    ],
+    "examples": [
+      {
+        "name": "code",
+        "components": [
+          "alg=fendix/v2",
+          "cat=injection",
+          "rule=python.sql-injection.taint",
+          "file=src/users.py",
+          "sym=get_user",
+          "op=cursor.execute(query)"
+        ],
+        "fingerprint": "52e177542ce259872875842108edc92099f66fdf"
+      },
+      {
+        "name": "secret",
+        "components": [
+          "alg=fendix/v2",
+          "cat=secrets",
+          "rule=secrets/aws-access-key",
+          "file=config/settings.py",
+          "ident=AWS_ACCESS_KEY_ID"
+        ],
+        "fingerprint": "4a556e471dfc5f23555a1ba02c8b0e9ffc68415b"
+      },
+      {
+        "name": "service",
+        "components": [
+          "alg=fendix/v2",
+          "cat=auth",
+          "rule=dast/auth",
+          "ep=https://staging.example.com/users/42"
+        ],
+        "fingerprint": "3dd2812f69d1fff13b4acaf1a00f729413f174b5"
+      }
+    ]
+  },
+  "sarif": {
+    "version": "2.1.0",
+    "schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+    "automation_id": "fendix/scan",
+    "partial_fingerprint_key": "fendix/v2",
+    "status_levels": {
+      "BLOCK": "error",
+      "INFO": "note",
+      "WARN": "warning"
+    },
+    "severity_fallback": {
+      "CRITICAL": "error",
+      "HIGH": "error",
+      "INFO": "note",
+      "LOW": "note",
+      "MEDIUM": "warning"
+    },
+    "security_severity": {
+      "CRITICAL": "9.5",
+      "HIGH": "8.0",
+      "INFO": "1.0",
+      "LOW": "3.0",
+      "MEDIUM": "5.5"
+    },
+    "result_property_fields": [
+      "affected_endpoint_count",
+      "affected_endpoints",
+      "confidence_band",
+      "confidence_breakdown",
+      "confidence_reasons",
+      "confidence_score",
+      "corroborating_tools",
+      "decision",
+      "effective_risk",
+      "evidence",
+      "intrinsic_severity",
+      "locations_truncated",
+      "reachable",
+      "route_handler",
+      "route_method",
+      "route_pattern",
+      "source_tier",
+      "status"
+    ],
+    "run_property_keys": [
+      "fendix/coverage",
+      "fendix/release"
+    ],
+    "import": {
+      "supported_version": "2.1.0",
+      "level_severity": {
+        "error": "HIGH",
+        "none": "INFO",
+        "note": "INFO",
+        "warning": "MEDIUM"
+      },
+      "precision_confidence": {
+        "high": "HIGH",
+        "low": "LOW",
+        "medium": "MEDIUM",
+        "very-high": "HIGH"
+      },
+      "security_severity_thresholds": [
+        "score \u003e= 9.0: CRITICAL",
+        "score \u003e= 7.0: HIGH",
+        "score \u003e= 4.0: MEDIUM",
+        "score \u003c 4.0: LOW"
+      ],
+      "tool_normalization": "lowercase; collapse spaces to hyphens; retain only a-z, 0-9, dot, underscore, and hyphen; empty becomes unknown-tool",
+      "evidence_limit_bytes": 2000,
+      "title_limit_bytes": 200,
+      "remediation_limit_bytes": 2000,
+      "trust_boundary": [
+        "source is imported",
+        "source tier is unset",
+        "codeFlows do not establish native reachability",
+        "route and taint chain are not trusted from imported SARIF"
+      ]
+    }
+  },
+  "examples": {
+    "minimal_json": {
+      "metadata": {
+        "schema_version": 2,
+        "fingerprint_algorithm": "fendix/v2",
+        "target": "https://staging.example.com",
+        "started_at": "2026-10-03T09:00:00Z",
+        "duration": "1.2s",
+        "version": "v3.4.1",
+        "mode": "blackbox",
+        "endpoints_scanned": 1,
+        "active_probes": false
+      },
+      "summary": {
+        "critical": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "info": 0
+      },
+      "sources": {
+        "blackbox": 0,
+        "whitebox": 0,
+        "correlated": 0
+      },
+      "total": 0,
+      "decisions": {
+        "total": 0,
+        "confirmed": 0,
+        "blocking": 0,
+        "warning": 0,
+        "informational": 0
+      },
+      "findings": []
+    },
+    "decision_json": {
+      "metadata": {
+        "schema_version": 2,
+        "fingerprint_algorithm": "fendix/v2",
+        "target": "https://staging.example.com",
+        "started_at": "2026-10-03T09:00:00Z",
+        "duration": "2.4s",
+        "version": "v3.4.1",
+        "mode": "hybrid",
+        "endpoints_scanned": 12,
+        "active_probes": false,
+        "scanner_status": [
+          {
+            "name": "semgrep",
+            "state": "ok"
+          },
+          {
+            "name": "dast",
+            "state": "ok"
+          },
+          {
+            "name": "pip",
+            "state": "skipped",
+            "reason": "dependency_missing",
+            "detail": "required manifest was not delivered"
+          }
+        ],
+        "coverage": {
+          "contract_version": 1,
+          "strict": true,
+          "configured_complete": false,
+          "gaps": [
+            "pip"
+          ],
+          "limitations": [],
+          "required_analyzers": [
+            "semgrep",
+            "dast",
+            "pip"
+          ],
+          "required_gaps": [
+            "pip"
+          ],
+          "retried": []
+        },
+        "policy_version": "v2",
+        "release_decision": "incomplete",
+        "coverage_state": "incomplete",
+        "decision_policy_version": "v2"
+      },
+      "summary": {
+        "critical": 0,
+        "high": 1,
+        "medium": 0,
+        "low": 0,
+        "info": 0
+      },
+      "sources": {
+        "blackbox": 0,
+        "whitebox": 1,
+        "correlated": 0
+      },
+      "total": 1,
+      "decisions": {
+        "total": 1,
+        "confirmed": 0,
+        "blocking": 0,
+        "warning": 1,
+        "informational": 0
+      },
+      "findings": [
+        {
+          "id": "SEC-001",
+          "fingerprint": "1dcbb4264cbed08eb4a54e6f509a724445801f92",
+          "fingerprint_v1": "faad9eebeafb6050752d685b1670fc5be0266f1b",
+          "rule_id": "python.auth.missing",
+          "sink": "return user_record",
+          "symbol": "users.get",
+          "title": "Missing authentication on user data endpoint",
+          "severity": "HIGH",
+          "source": "whitebox",
+          "category": "auth",
+          "endpoint": "app/users.py:42",
+          "evidence": "GET /api/users/{id} reaches users.get without an authentication guard",
+          "fix": "Require authentication before returning user data.",
+          "references": [
+            "CWE-306"
+          ],
+          "confidence": "MEDIUM",
+          "line": null,
+          "source_tier": "tree_sitter_sidecar",
+          "status": "WARN",
+          "confidence_score": 68,
+          "confidence_band": "MEDIUM",
+          "decision_reason": "Evidence does not meet the enforced blocking requirement.",
+          "decision_policy": "enforced",
+          "auth_expectation": "required"
+        }
+      ]
+    },
+    "sarif_export": {
+      "version": "2.1.0",
+      "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+      "runs": [
+        {
+          "tool": {
+            "driver": {
+              "name": "Fendix",
+              "version": "v3.4.1",
+              "informationUri": "https://github.com/Fendix-app/Fendix",
+              "rules": [
+                {
+                  "id": "fendix.auth.python-auth-missing",
+                  "name": "Missing authentication on user data endpoint",
+                  "shortDescription": {
+                    "text": "Missing authentication on user data endpoint"
+                  },
+                  "help": {
+                    "text": "Require authentication before returning user data."
+                  },
+                  "helpUri": "https://cwe.mitre.org/data/definitions/306.html",
+                  "defaultConfiguration": {
+                    "level": "error"
+                  },
+                  "properties": {
+                    "category": "auth",
+                    "tags": [
+                      "CWE-306"
+                    ],
+                    "confidence": "MEDIUM",
+                    "security-severity": "8.0",
+                    "severity_model": "intrinsic"
+                  }
+                }
+              ]
+            }
+          },
+          "automationDetails": {
+            "id": "fendix/scan/hybrid"
+          },
+          "results": [
+            {
+              "ruleId": "fendix.auth.python-auth-missing",
+              "ruleIndex": 0,
+              "level": "warning",
+              "message": {
+                "text": "Missing authentication on user data endpoint at app/users.py:42 — MEDIUM confidence (68/100): effective risk MEDIUM, below this rule's HIGH severity"
+              },
+              "locations": [
+                {
+                  "logicalLocations": [
+                    {
+                      "name": "app/users.py:42",
+                      "kind": "endpoint"
+                    }
+                  ]
+                }
+              ],
+              "partialFingerprints": {
+                "fendix/v1": "1dcbb4264cbed08eb4a54e6f509a724445801f92"
+              },
+              "rank": 56,
+              "properties": {
+                "source_tier": "tree_sitter_sidecar",
+                "status": "WARN",
+                "confidence_score": 68,
+                "confidence_band": "MEDIUM",
+                "intrinsic_severity": "HIGH",
+                "effective_risk": "MEDIUM",
+                "evidence": "GET /api/users/{id} reaches users.get without an authentication guard",
+                "decision": {
+                  "status": "WARN",
+                  "reason": "Evidence does not meet the enforced blocking requirement.",
+                  "policy": "enforced",
+                  "evidence": {
+                    "auth_expectation": "required"
+                  }
+                }
+              }
+            }
+          ],
+          "invocations": [
+            {
+              "executionSuccessful": false,
+              "toolExecutionNotifications": [
+                {
+                  "level": "warning",
+                  "message": {
+                    "text": "pip: unavailable (dependency_missing): required manifest was not delivered"
+                  }
+                },
+                {
+                  "level": "error",
+                  "message": {
+                    "text": "required analyzer pip not delivered: unavailable (dependency_missing)"
+                  }
+                },
+                {
+                  "level": "warning",
+                  "message": {
+                    "text": "Required coverage incomplete: pip"
+                  }
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "fendix/coverage": {
+              "coverage": {
+                "contract_version": 1,
+                "strict": true,
+                "configured_complete": false,
+                "gaps": [
+                  "pip"
+                ],
+                "limitations": [],
+                "required_analyzers": [
+                  "semgrep",
+                  "dast",
+                  "pip"
+                ],
+                "required_gaps": [
+                  "pip"
+                ],
+                "retried": []
+              },
+              "scanner_status": [
+                {
+                  "name": "semgrep",
+                  "state": "ok"
+                },
+                {
+                  "name": "dast",
+                  "state": "ok"
+                },
+                {
+                  "name": "pip",
+                  "state": "skipped",
+                  "reason": "dependency_missing",
+                  "detail": "required manifest was not delivered"
+                }
+              ]
+            },
+            "fendix/release": {
+              "coverage_state": "incomplete",
+              "decision_policy_version": "v2",
+              "release_decision": "incomplete"
+            }
+          }
+        }
+      ]
+    },
+    "sarif_import": {
+      "version": "2.1.0",
+      "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+      "runs": [
+        {
+          "tool": {
+            "driver": {
+              "name": "ExampleSAST",
+              "semanticVersion": "4.2.0",
+              "rules": [
+                {
+                  "id": "EXT-SQL-001",
+                  "shortDescription": {
+                    "text": "SQL query built from request input"
+                  },
+                  "helpUri": "https://example.invalid/rules/EXT-SQL-001",
+                  "properties": {
+                    "tags": [
+                      "external/cwe/CWE-89"
+                    ],
+                    "precision": "high",
+                    "security-severity": "8.0"
+                  }
+                }
+              ]
+            }
+          },
+          "results": [
+            {
+              "ruleId": "EXT-SQL-001",
+              "level": "error",
+              "message": {
+                "text": "Request parameter reaches a SQL query."
+              },
+              "locations": [
+                {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/users.py"
+                    },
+                    "region": {
+                      "startLine": 42
+                    }
+                  }
+                }
+              ],
+              "partialFingerprints": {
+                "example/v1": "safe-example-identity"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -26,7 +26,7 @@ func validateAgainstSchema(t *testing.T, report map[string]any) {
 	requireString(t, "metadata.started_at", meta["started_at"])
 	requireString(t, "metadata.duration", meta["duration"])
 	requireString(t, "metadata.version", meta["version"])
-	requireEnum(t, "metadata.mode", meta["mode"], []string{"blackbox", "whitebox", "hybrid"})
+	requireEnum(t, "metadata.mode", meta["mode"], []string{"blackbox", "whitebox", "hybrid", "import"})
 	requireInt(t, "metadata.endpoints_scanned", meta["endpoints_scanned"])
 	requireBool(t, "metadata.active_probes", meta["active_probes"])
 	// schema_version is type-checked when present but not required: reports
@@ -111,7 +111,7 @@ func validateAgainstSchema(t *testing.T, report map[string]any) {
 		}
 		requireString(t, path+".title", f["title"])
 		sev := requireEnum(t, path+".severity", f["severity"], []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"})
-		requireEnum(t, path+".source", f["source"], []string{"blackbox", "whitebox", "correlated"})
+		requireEnum(t, path+".source", f["source"], []string{"blackbox", "whitebox", "correlated", "imported"})
 		requireString(t, path+".category", f["category"])
 		requireString(t, path+".endpoint", f["endpoint"])
 		if v, ok := f["affected_endpoints"]; ok {
@@ -269,6 +269,7 @@ func schemaSampleFindings() []models.Finding {
 		{ID: "SEC-003", Title: "Auth bypass", Severity: models.SeverityCritical, Source: models.SourceCorrelated, Category: "auth_bypass", Endpoint: "GET /api/admin", AffectedEndpoints: []string{"GET /api/admin", "GET /api/admin/users"}, Evidence: "200 without auth | Code: no @login_required", Fix: "Add auth", References: []string{"CWE-306"}, Confidence: models.ConfidenceHigh},
 		{ID: "SEC-004", Title: "Server fingerprint", Severity: models.SeverityInfo, Source: models.SourceBlackbox, Category: "info_disclosure", Endpoint: "GET /api/health", Evidence: "Server: nginx/1.18.0", Fix: "Strip Server header", References: []string{"CWE-200"}, Confidence: models.ConfidenceLow},
 		{ID: "SEC-005", Title: "Boolean SQLi candidate", Severity: models.SeverityLow, Source: models.SourceBlackbox, Category: "injection", Endpoint: "GET /api/items", Evidence: "Length-delta on payload", Fix: "Parameterize", References: []string{"CWE-89"}, Confidence: models.ConfidenceMedium},
+		{ID: "SEC-007", Title: "Imported advisory", Severity: models.SeverityMedium, Source: models.SourceImported, Category: "deps", Endpoint: "package-lock.json", Evidence: "Imported SARIF result", Fix: "Upgrade package", References: []string{"CWE-1104"}, Confidence: models.ConfidenceHigh},
 		{
 			ID: "SEC-006", Title: "Reachable SQLi", Severity: models.SeverityCritical, Source: models.SourceCorrelated, Category: "injection",
 			Endpoint: "app/views.py:15", Evidence: "user input flows into cursor.execute", Fix: "Use parameterized queries",

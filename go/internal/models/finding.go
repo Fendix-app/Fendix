@@ -252,12 +252,13 @@ type ConfidenceReason struct {
 // AND we can show the path" case worth a build-failing exit code.
 type Finding struct {
 	ID string `json:"id"`
-	// Fingerprint is a content-derived, run-stable identity for the finding:
-	// sha1(Category|Endpoint|Title), hex. Unlike ID (a positional SEC-NNN
-	// reassigned every run as the finding set changes order) it does not
-	// drift, so .fendix-ignore rules and baselines can pin a finding by
-	// `fingerprint:` and keep matching across scans. Stamped centrally in the
-	// orchestrator before ID assignment.
+	// Fingerprint is the fendix/v2 semantic, run-stable identity for the
+	// finding: SHA-256 over labelled identity components, truncated to 20
+	// bytes. Unlike ID (a positional SEC-NNN reassigned every run) it excludes
+	// line/column coordinates and presentation text, so .fendix-ignore rules and
+	// baselines keep matching across line shifts and rewording. The containing
+	// file/manifest or HTTP method+path remains part of identity. Stamped
+	// centrally in the orchestrator before ID assignment.
 	Fingerprint string `json:"fingerprint,omitempty"`
 	// FingerprintV1 is the RETIRED sha1(Category|Endpoint|Title) identity for
 	// this same finding, published purely as a migration bridge.
@@ -415,7 +416,8 @@ type Finding struct {
 	// engine.CorrelateCrossTool: an INDEPENDENT tool reported the same
 	// normalized weakness at the same normalized location. Both omitempty,
 	// so a report with no corroboration is byte-identical to one produced
-	// before these fields existed and schema_version stays 1.
+	// before these fields existed. Their additive introduction did not require
+	// a schema-version bump.
 	//
 	// STAMPED, NOT PROJECTED. evidence.ToFinding deliberately does NOT carry
 	// them; engine.stampDecisions writes them from the post-Restore evidence

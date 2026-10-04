@@ -76,7 +76,8 @@ type ScanMetadata struct {
 	// (`fendix import` / `scan --import`): every result in the source
 	// document is either imported, skipped as suppressed, or imported with
 	// no usable location — the counts always reconcile. ADDITIVE: absent
-	// (omitempty) for scans with no imports, so schema_version stays 1.
+	// (omitempty) for scans with no imports; adding it did not require a
+	// schema-version bump.
 	Imports []ImportedTool `json:"imports,omitempty"`
 	// Coverage is the engine's configured-completeness statement (coverage
 	// contract v1). Nil on reports that predate the contract; a re-render

@@ -475,16 +475,18 @@ func appendDecisionReason(score *confidence.Result, code, line string) {
 type Options struct {
 	// DeescalateTests drops findings in test / fixture code (evidence
 	// preserved — Rule 3): WARN → INFO, and an UNCORROBORATED BLOCK → WARN.
-	// A corroborated test-code finding — e.g. a provider-validated live
-	// credential committed into a fixture — still BLOCKs. Overridable so a
+	// A test-code finding with an independent signal — for example, a proved
+	// reachable path beyond the original pattern match — still BLOCKs. A
+	// provider-shaped token is not itself live validation. Overridable so a
 	// team that DOES want to gate on every test-code finding can turn it off
 	// with --deescalate-tests=false. (B3 / FIX-09.)
 	DeescalateTests bool
 
 	// EnforceConfidence gates the --fail-on threshold on the deterministic
 	// confidence band: at or above the threshold, a finding BLOCKs only when
-	// its band supports the claim (HIGH always; MEDIUM with at least one
-	// corroborating signal; LOW never), and a finding the correlator marked
+	// its band and evidence support the claim (HIGH needs an independent or
+	// self-evident signal; MEDIUM needs an independent signal; LOW never), and
+	// a finding the correlator marked
 	// unconfirmed-by-live-scan never blocks on its own. Evidence is never
 	// suppressed — only enforcement moves. (FIX-08.)
 	//
@@ -562,8 +564,9 @@ func fixtureCorroborated(ev evidence.Evidence) bool {
 //     positives in tasks/FP_CORPUS.md are test fixtures, and before FIX-09 the
 //     rule only demoted WARN → INFO — so the project's single largest FP class
 //     was structurally exempt from its own mitigation whenever a team set
-//     --fail-on. A CORROBORATED test-code finding still BLOCKs, which is what
-//     keeps this de-escalation rather than path suppression (Rule 3).
+//     --fail-on. A test-code finding with a surviving independent signal still
+//     BLOCKs, which keeps this de-escalation evidence-aware rather than path
+//     suppression (Rule 3).
 //   - WARN + below --fail-on → INFO. The original v1.1 rule, unchanged.
 //
 // The arms are mutually exclusive by construction (a switch on the status
@@ -593,9 +596,9 @@ func DecideWithOptions(ev evidence.Evidence, failOn string, opts Options) Decisi
 	}
 	switch d.Status {
 	case StatusBlock:
-		// A corroborated finding in test code still gates the build: a live
-		// credential that a provider validated is a real leak wherever the
-		// file happens to live.
+		// A finding in test code with an independent signal still gates the
+		// build; the signal must establish something beyond the original
+		// pattern match.
 		//
 		// RC-1: reads the INDEPENDENT class only. Not a behaviour change for
 		// this arm — confidence.HasDeterministicDetection is gated on !InTest,

@@ -81,14 +81,14 @@ func newImportCmd() *cobra.Command {
 	flags := cmd.Flags()
 	flags.StringP("output", "o", "", "Output file path (default: stdout)")
 	flags.StringP("format", "f", "json", "Output format: json, html, sarif, pdf")
-	flags.String("fail-on", "", "Exit 1 if a CORROBORATED finding is at this severity: CRITICAL, HIGH, MEDIUM (confidence gating applies — see --enforce-confidence)")
+	flags.String("fail-on", "", "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence)")
 	flags.String("baseline", "", "Path to previous findings JSON for diff mode")
 	flags.String("save-baseline", "", "Save current findings to this path")
 	flags.String("ignore", "", "Path to .fendix-ignore file")
 	flags.String("target", "", "Optional label stamped into report metadata (an import has no scanned target of its own)")
 	flags.String("lang", "en", "HTML report language: en (default), ar (Arabic, RTL). Other formats stay English.")
 	flags.Bool("deescalate-tests", true, "Report findings in test/fixture code as INFO instead of WARN (evidence is preserved, never suppressed). Pass --deescalate-tests=false to treat test-code findings like production ones.")
-	flags.Bool("enforce-confidence", true, "Only BLOCK a finding at or above --fail-on when the confidence band supports it AND something corroborates the claim. Pass --enforce-confidence=false to restore the legacy severity-only gate — findings that block only because of that relaxation are marked policy_override in the report.")
+	flags.Bool("enforce-confidence", true, "Only BLOCK a finding at or above --fail-on when its confidence band and evidence support it: LOW warns; MEDIUM needs an independent signal; HIGH needs an independent or self-evident signal. Pass --enforce-confidence=false to restore the legacy severity-only gate — findings that block only because of that relaxation are marked policy_override in the report.")
 
 	// Reject an unknown format early with the same wording style as scan.
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {

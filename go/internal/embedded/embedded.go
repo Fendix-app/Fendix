@@ -1,11 +1,11 @@
-// Package embedded provides access to the bundled Python engine files.
-// At build time, the python/ directory is copied into engine/ so that
-// //go:embed can bundle it into the binary. The Makefile target
-// "embed-engine" performs this copy before "go build".
+// Package embedded preserves the optional legacy/custom-build path for a
+// Python engine payload compiled into the Go binary. Official standalone
+// builds intentionally embed only engine/.gitkeep: Makefile's embed-engine
+// target resets the directory instead of copying python/. Docker images ship
+// the Python source tree separately and point FENDIX_ENGINE at it.
 //
-// At runtime, ExtractEngine writes these files to ~/.fendix/engine/
-// on first run, allowing the Go binary to spawn the Python engine
-// without requiring the source tree to be present.
+// When a custom binary does contain a payload, ExtractEngine writes it to
+// ~/.fendix/engine/ on first use.
 package embedded
 
 import (
@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 )
 
-// EngineFS contains the embedded Python engine files.
-// The engine/ directory is populated at build time by copying from python/.
+// EngineFS contains an optional Python engine payload. Official builds contain
+// only the placeholder required by go:embed.
 //
 //go:embed all:engine
 var EngineFS embed.FS

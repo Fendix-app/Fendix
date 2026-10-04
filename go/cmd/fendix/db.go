@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const offlineDBPathHelp = "~/.fendix/offline-db.json"
+
 // newDBCmd wires the Sprint-09 offline-mode CLI surface. Three
 // subcommands matching the brief:
 //
@@ -74,7 +76,7 @@ func newDBListCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("path", "", fmt.Sprintf("Path to the snapshot file (default: %s)", offline.DefaultDBPath()))
+	cmd.Flags().String("path", "", "Path to the snapshot file (default: "+offlineDBPathHelp+")")
 	return cmd
 }
 
@@ -104,7 +106,7 @@ this command.`,
 		},
 	}
 	cmd.Flags().String("source", "", "Path to an OSV-shaped JSON export to ingest")
-	cmd.Flags().String("output", "", fmt.Sprintf("Where to write the snapshot (default: %s)", offline.DefaultDBPath()))
+	cmd.Flags().String("output", "", "Where to write the snapshot (default: "+offlineDBPathHelp+")")
 	return cmd
 }
 
@@ -126,7 +128,7 @@ func newDBVerifyCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("path", "", fmt.Sprintf("Path to the snapshot file (default: %s)", offline.DefaultDBPath()))
+	cmd.Flags().String("path", "", "Path to the snapshot file (default: "+offlineDBPathHelp+")")
 	return cmd
 }
 

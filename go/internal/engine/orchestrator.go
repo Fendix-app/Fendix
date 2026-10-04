@@ -68,8 +68,10 @@ type Orchestrator struct {
 
 // NewOrchestrator creates an orchestrator from scan config.
 //
-// The Python engine directory is resolved lazily: only when --python-engine
-// is set do we call EnsureEngine. Pre-TASK-118 we resolved eagerly and
+// The Python engine directory is resolved lazily: only when cfg.PythonEngine
+// is true do we call EnsureEngine. The CLI sets it for --python-engine and
+// auto-enables it for --code unless --python-engine=false is explicit.
+// Pre-TASK-118 we resolved eagerly and
 // logged a WARN if no engine was found, but with the embedded distribution
 // dropped that WARN now fires on every scan for the default path — exactly
 // the "Python interpreter not required" promise broken at the log level.
@@ -635,12 +637,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	}
 
 	// 4. Python whitebox engine — registry entry python-engine plus the
-	// children the protocol reports (spec §4.4, §5.4). Default off as of
-	// TASK-118 — secrets (TASK-115) + semgrep (TASK-116) now run in
-	// native Go and the embedded Python distribution is no longer
-	// bundled. Set --python-engine to re-enable the Python auth /
-	// injection / deps checks; requires a usable Python source tree
-	// resolvable via EnsureEngine (local python/ or explicit FENDIX_ENGINE).
+	// children the protocol reports (spec §4.4, §5.4). --code auto-enables
+	// the Python auth / injection / deps checks unless --python-engine=false
+	// is explicit. The distribution is no longer embedded, so the tree must
+	// resolve through EnsureEngine (local python/, a pin, or FENDIX_ENGINE).
 	switch {
 	case !o.cfg.PythonEngine && !codeConfigured && o.cfg.SpecPath == "":
 		scanStatus.skip(AnalyzerPythonEngine, reporters.ReasonNotApplicable, "no --code or --spec")
@@ -936,11 +936,11 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 		return findings[i].Title < findings[j].Title
 	})
 
-	// 7. Assign sequential IDs + stamp the run-stable fingerprint. The
-	// fingerprint (content hash of Category|Endpoint|Title) is computed here,
-	// BEFORE the ignore/baseline steps, so a `fingerprint:` ignore rule can
-	// match it. Unlike the positional SEC-NNN ID it does not drift between
-	// runs, so it is the durable key for suppressions.
+	// 7. Assign sequential IDs + stamp the run-stable fendix/v2 semantic
+	// fingerprint. It is computed BEFORE the ignore/baseline steps so a
+	// `fingerprint:` ignore rule can match it. Unlike the positional SEC-NNN ID,
+	// it excludes volatile coordinates and presentation fields, so it is the
+	// durable key for suppressions.
 	for i := range findings {
 		findings[i].ID = fmt.Sprintf("SEC-%03d", i+1)
 		models.StampIdentity(&findings[i])
@@ -1044,7 +1044,7 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 
 	// 12. Render report
 	if err := o.renderReport(findings, meta); err != nil {
-		slog.Error("report rendering failed — check --output path is writable and --format is json/html/sarif", "error", err)
+		slog.Error("report rendering failed — check --output path is writable and --format is json/html/sarif/pdf", "error", err)
 		return nil, nil, 2
 	}
 

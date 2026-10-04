@@ -161,7 +161,7 @@ func newManagedSubmitCmd() *cobra.Command {
 		},
 	}
 	flags := cmd.Flags()
-	flags.String("evidence", "", "Path to the document written by `fendix scan --managed-evidence`")
+	flags.String("evidence", "", "Path to the document written by 'fendix scan --managed-evidence'")
 	flags.String("api-base", "https://api.fendix.dev", "Backend API origin")
 	flags.String("decision-output", "", "Write the authoritative decision to this path")
 	flags.Duration("timeout", managedci.DefaultDecisionTimeout, "Total budget for obtaining a decision")

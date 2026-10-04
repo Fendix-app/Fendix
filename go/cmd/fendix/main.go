@@ -575,16 +575,16 @@ func newScanCmd() *cobra.Command {
 
 	flags := cmd.Flags()
 	flags.String("url", "", "Target API base URL (black-box scanning)")
-	flags.String("spec", "", "Path to OpenAPI/Swagger YAML or JSON spec")
+	flags.String("spec", "", "Path or HTTP(S) URL to an OpenAPI/Swagger YAML or JSON spec")
 	flags.String("code", "", "Path to source code directory (white-box scanning)")
 	flags.String("auth", "", `Auth header value, e.g. "Bearer token123"`)
-	flags.String("auth-type", "", "Auth type: bearer, apikey, basic, cookie (default: auto-detect)")
-	flags.String("auth-header", "Authorization", "Custom auth header name")
+	flags.String("auth-type", "", "Auth type: bearer, apikey, apikey-query, basic, cookie (default: auto-detect)")
+	flags.String("auth-header", "Authorization", "Custom auth header name; with apikey-query this names the query parameter (pass api_key for the conventional name)")
 	flags.String("auth-user2", "", `Second user auth for IDOR checks, e.g. "Bearer token-user2"`)
 	flags.String("profile", "", "Auth profile name from ~/.fendix/profiles/<name>.yaml")
 	flags.StringP("output", "o", "", "Output file path (default: stdout)")
 	flags.StringP("format", "f", "json", "Output format: json, html, sarif, pdf")
-	flags.String("fail-on", "", "Exit 1 if a CORROBORATED finding is at this severity: CRITICAL, HIGH, MEDIUM (confidence gating applies — see --enforce-confidence)")
+	flags.String("fail-on", "", "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence)")
 	flags.String("baseline", "", "Path to previous findings JSON for diff mode")
 	flags.String("save-baseline", "", "Save current findings to this path")
 	flags.Bool("enable-active", false, "Enable active injection probes (default: false)")
@@ -610,18 +610,18 @@ func newScanCmd() *cobra.Command {
 	flags.Bool("allow-repo-local-plugins", false, "Opt in to running repo-local plugins under <scan-dir>/.fendix/plugins/ (UNSAFE on untrusted PRs; ~/.fendix/plugins/ is always trusted)")
 	flags.Bool("no-native-deps", false, "Disable the in-process Go dep-CVE scanner (TASK-119). Defer to the Python deps.py path instead.")
 	flags.Bool("use-pip-audit", false, "Shell out to the pip-audit binary for Python dep-CVE scanning instead of the native OSV.dev client. Falls back to OSV.dev with a warning if pip-audit is not on PATH.")
-	flags.Bool("python-engine", false, "Spawn the Python whitebox engine for auth/injection/deps checks (TASK-118). Default off — secrets and semgrep are now native Go and the embedded Python distribution is no longer bundled. Requires a local python/ source tree or FENDIX_ENGINE pointing at one.")
+	flags.Bool("python-engine", false, "Spawn the Python whitebox engine for auth/injection/deps checks (TASK-118). --code enables it automatically unless --python-engine=false is explicit. Standalone binaries do not bundle the engine; provide a local python/ tree or FENDIX_ENGINE (the official container supplies one).")
 	flags.String("config", "", "Path to .fendix.yaml policy file (default: auto-detect .fendix.yaml in cwd)")
 	flags.String("lang", "en", "HTML report language: en (default), ar (Arabic, RTL). Other formats stay English.")
-	flags.Bool("offline", false, "Air-gapped mode: consult the local offline-db snapshot for dep CVEs instead of osv.dev/vuln.go.dev. The pip and npm scanners run against the snapshot (create it with `fendix db update`); govulncheck needs vuln.go.dev and is recorded SKIPPED. No outbound network call is made.")
+	flags.Bool("offline", false, "Use the local offline-db snapshot for native pip/npm CVEs and skip native govulncheck (create the snapshot with 'fendix db update'). Known limitation: the Python deps check auto-enabled by --code does not receive this flag and may run networked tools; for a hermetic scan add --checks auth,injection or --python-engine=false.")
 	flags.String("offline-db", "", "Path to the offline-db snapshot (default: ~/.fendix/offline-db.json). Only effective with --offline.")
 	flags.Bool("fail-on-scanner-error", false, "Exit non-zero (2) if any recorded analyzer — any entry in metadata.scanner_status, which is the full registry (dast, spec, active-probes, secrets, textscan, semgrep, govulncheck, pip, npm, plugins, the python-engine and its checks) — ran and errored. CI-friendly: turns a silent coverage gap into a build failure. Skipped entries never count.")
 	flags.Bool("fail-on-coverage-gap", false, "Exit 2 when an analyzer this run was configured to execute was unavailable or failed (metadata.coverage.configured_complete=false). Disabled, not-applicable and unsupported analyzers never trip it.")
 	flags.StringSlice("require-analyzers", nil, "Comma-separated analyzer names that must be delivered (recorded ok or not_applicable) for exit 0; anything else exits 2. Stricter than --fail-on-coverage-gap: a required analyzer disabled by another flag is a contradiction and exits 2. Names: "+strings.Join(engine.Registry, ", "))
 	flags.Bool("block-on-inapplicable", false, "Gate the build on a vulnerable dependency even when Fendix found no import of the advisory's affected component. Default false: such a finding is reported in full and held at WARN, because the vulnerable code path is not applicable to this project on the available evidence. Set this when policy is \"no vulnerable version ships, applicable or not\" — e.g. where the SBOM is what gets audited rather than the call graph.")
-	flags.Bool("deescalate-tests", true, "Report findings in test/fixture code as INFO instead of WARN (evidence is preserved, never suppressed). A finding at or above --fail-on still blocks when a corroborating signal backs it (e.g. a provider-validated live credential); an uncorroborated test-code match is held at WARN. Pass --deescalate-tests=false to treat test-code findings like production ones.")
+	flags.Bool("deescalate-tests", true, "Report findings in test/fixture code as INFO instead of WARN (evidence is preserved, never suppressed). A finding at or above --fail-on can still block when independent corroboration supports it; an unsupported test-code match is held at WARN. Pass --deescalate-tests=false to treat test-code findings like production ones.")
 	flags.Bool("enforce-confidence", true, "Only BLOCK a finding at or above --fail-on when the confidence band supports it AND something corroborates the claim: LOW band warns; a finding with no corroborating signal at all warns; MEDIUM band blocks only with an INDEPENDENT signal (cross-engine agreement, confirmed route, reachable taint path, proven path, payload-validated probe, cross-tool corroboration, contradicted authentication requirement); self-evident signals (direct response read, deterministic detection in production source, imported high-precision rule) gate at HIGH. Evidence is never suppressed. Pass --enforce-confidence=false to restore the legacy severity-only gate — findings that block only because of that relaxation are marked policy_override in the report.")
-	flags.StringSlice("checks", nil, "Override which checks the Python whitebox engine runs (default: auth,injection,deps). Only effective with --python-engine; the native Go scanners (secrets/semgrep/textscan/deps) always run when --code is set.")
+	flags.StringSlice("checks", nil, "Override checks when the Python whitebox engine runs (default: auth,injection,deps). --code auto-enables that phase unless --python-engine=false is explicit; the native Go scanners run independently.")
 	// Diff-aware scanning (90-day cut, item 1). `--diff` alone diffs the
 	// working tree against HEAD; `--diff=origin/main` against that ref;
 	// `--staged` scopes to the index (what a pre-commit hook scans) and
@@ -630,7 +630,7 @@ func newScanCmd() *cobra.Command {
 	flags.String("diff", "", "Diff-aware scan: only scan files changed vs a git ref (bare --diff = vs HEAD, --diff=origin/main = vs that ref). Whitebox scanners are scoped to the changed files; dep-CVE scanners run only when a manifest changed.")
 	flags.Lookup("diff").NoOptDefVal = "HEAD"
 	flags.Bool("staged", false, "Diff-aware scan over staged changes only (git diff --cached). Implies --diff. This is what the pre-commit hook runs.")
-	flags.Bool("fast", false, "Fast mode: run only the instant native scanners (secrets + textscan), skipping semgrep (~1.5s startup) and the network dep-CVE scanners. Sub-second on a real monorepo; pairs with --staged for the pre-commit hook.")
+	flags.Bool("fast", false, "Skip semgrep and the native dependency scanners. Known limitation: --fast does not disable the Python engine auto-enabled by --code; add --python-engine=false when a native-only pre-commit scan is required.")
 	flags.StringSlice("import", nil, "Merge findings from another scanner's SARIF 2.1.0 file into this scan (repeatable). Imported findings go through the standard pipeline; a native fendix finding at the same weakness+location becomes strong cross-tool corroboration. See also the standalone 'fendix import' command.")
 
 	return cmd
@@ -666,7 +666,7 @@ func newReportCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "report",
 		Short: "Re-render a saved findings file",
-		Long:  "Convert a previously saved JSON findings file to HTML or SARIF format.",
+		Long:  "Convert a previously saved JSON findings file to JSON, HTML, SARIF, or PDF format.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := cmd.Flags()
 			inputPath, _ := flags.GetString("input")

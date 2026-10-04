@@ -13,9 +13,9 @@ import (
 
 // ── Cross-tool correlation (SARIF import) ───────────────────────────────────
 //
-// Finding identity ≠ cross-tool correlation identity. The fendix fingerprint
-// (sha1(Category|Endpoint|Title)) answers "is this the same logical finding
-// across scans?" and stays the key for baselines and .fendix-ignore. It is
+// Finding identity ≠ cross-tool correlation identity. The fendix/v2 semantic
+// fingerprint answers "is this the same logical finding across scans?" and
+// stays the key for baselines and .fendix-ignore. It is
 // NOT the mechanism that decides whether two independent engines confirmed
 // the same vulnerability — this file is.
 //

@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "current_version": 1,
+  "source": "go/internal/policy.Policy strict YAML schema",
+  "unknown_fields": "rejected",
+  "future_versions": "rejected",
+  "precedence": [
+    "defaults",
+    "configuration_file",
+    "explicit_cli_flags"
+  ],
+  "fields": [
+    {
+      "path": "auth.profile",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "cli_equivalent": "--profile"
+    },
+    {
+      "path": "budgets.max_duration",
+      "type": "duration",
+      "default": "0s",
+      "required": false,
+      "cli_equivalent": "--max-duration"
+    },
+    {
+      "path": "budgets.max_requests",
+      "type": "integer",
+      "default": "0",
+      "required": false,
+      "cli_equivalent": "--max-requests"
+    },
+    {
+      "path": "crawler.crawl_depth",
+      "type": "integer",
+      "default": "1",
+      "required": false,
+      "cli_equivalent": "--crawl-depth"
+    },
+    {
+      "path": "crawler.max_endpoints",
+      "type": "integer",
+      "default": "500",
+      "required": false,
+      "cli_equivalent": "--max-endpoints"
+    },
+    {
+      "path": "crawler.respect_robots",
+      "type": "boolean",
+      "default": "false",
+      "required": false,
+      "cli_equivalent": "--respect-robots"
+    },
+    {
+      "path": "crawler.wordlist_path",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "cli_equivalent": "--wordlist"
+    },
+    {
+      "path": "fail_on",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "allowed_values": [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        ""
+      ],
+      "cli_equivalent": "--fail-on"
+    },
+    {
+      "path": "ignore_path",
+      "type": "string",
+      "default": "",
+      "required": false,
+      "cli_equivalent": "--ignore"
+    },
+    {
+      "path": "scan.deescalate_tests",
+      "type": "boolean",
+      "default": "true",
+      "required": false,
+      "cli_equivalent": "--deescalate-tests"
+    },
+    {
+      "path": "scan.delay_ms",
+      "type": "integer",
+      "default": "100",
+      "required": false,
+      "cli_equivalent": "--delay"
+    },
+    {
+      "path": "scan.enable_active",
+      "type": "boolean",
+      "default": "false",
+      "required": false,
+      "cli_equivalent": "--enable-active"
+    },
+    {
+      "path": "scan.enforce_confidence",
+      "type": "boolean",
+      "default": "true",
+      "required": false,
+      "cli_equivalent": "--enforce-confidence"
+    },
+    {
+      "path": "scan.format",
+      "type": "string",
+      "default": "json",
+      "required": false,
+      "allowed_values": [
+        "json",
+        "html",
+        "sarif",
+        "pdf"
+      ],
+      "cli_equivalent": "--format"
+    },
+    {
+      "path": "scan.timeout",
+      "type": "integer",
+      "default": "10",
+      "required": false,
+      "cli_equivalent": "--timeout"
+    },
+    {
+      "path": "scan.workers",
+      "type": "integer",
+      "default": "10",
+      "required": false,
+      "cli_equivalent": "--workers"
+    },
+    {
+      "path": "version",
+      "type": "integer",
+      "default": "1",
+      "required": true,
+      "allowed_values": [
+        "1"
+      ]
+    }
+  ]
+}

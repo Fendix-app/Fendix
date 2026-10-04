@@ -243,6 +243,7 @@ func TestGlobMatch(t *testing.T) {
 		{"trailing wildcard root", "/api/public", "/api/public/*", true},
 		{"no match", "/api/private/users", "/api/public/*", false},
 		{"prefix match", "/api/v1/users", "/api/v1*", true},
+		{"question mark is literal", "/api/user1", "/api/user?", false},
 		{"no wildcard no match", "/api/users", "/api/admin", false},
 	}
 

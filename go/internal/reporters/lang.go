@@ -8,10 +8,9 @@ import (
 	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters/i18n"
 )
 
-// ExperimentalLangEnv is the environment variable that opts in to beta
-// (machine-translated, unreviewed) report languages without the per-scan
-// stderr notice. Set FENDIX_EXPERIMENTAL_LANG=1 to silence the warning once
-// you've acknowledged the translation is unreviewed (F-I3).
+// ExperimentalLangEnv is intended to acknowledge beta report languages for
+// callers of ResolveLang. Production CLI paths currently use a separate
+// resolver, so this variable has no scan/report/import effect (F-I3).
 const ExperimentalLangEnv = "FENDIX_EXPERIMENTAL_LANG"
 
 // IsSupportedLang is a thin re-export of i18n.IsSupported, so the CLI
@@ -33,8 +32,8 @@ func IsSupportedLang(lang string) bool {
 //     localisation has not had native-speaker security review yet. English
 //     stays the default and is never gated.
 //
-// The notice is emitted once per call. ResolveLang is the single source of
-// truth for the gate; the CLI's resolveLang helper delegates to it.
+// The notice is emitted once per call. Production CLI paths do not currently
+// call this helper; that wiring gap is tracked as a product defect.
 func ResolveLang(lang string, stderr io.Writer) string {
 	if lang == "" {
 		return "en"

@@ -273,7 +273,7 @@ func TestRenderJSON_StampsSchemaVersion(t *testing.T) {
 		t.Fatalf("metadata.schema_version missing from rendered report: %v", rawMeta)
 	}
 	if got != float64(2) {
-		t.Errorf("metadata.schema_version = %v, want 1", got)
+		t.Errorf("metadata.schema_version = %v, want 2", got)
 	}
 
 	report, err := ParseJSONReport(buf.Bytes())
@@ -281,7 +281,7 @@ func TestRenderJSON_StampsSchemaVersion(t *testing.T) {
 		t.Fatalf("a freshly written report must parse: %v", err)
 	}
 	if report.Metadata.SchemaVersion != 2 {
-		t.Errorf("round-tripped Metadata.SchemaVersion = %d, want 1", report.Metadata.SchemaVersion)
+		t.Errorf("round-tripped Metadata.SchemaVersion = %d, want 2", report.Metadata.SchemaVersion)
 	}
 }
 

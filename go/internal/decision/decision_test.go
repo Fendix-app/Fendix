@@ -182,8 +182,8 @@ func TestDecideDeescalatesTestFixtureToInfo(t *testing.T) {
 		t.Errorf("reason should name both the test-fixture rule and the missing corroboration: %q", held.Reason)
 	}
 	// ...while a CORROBORATED one still gates the build. That is what keeps
-	// this a de-escalation rather than path suppression (Rule 3): a live
-	// credential a provider validated is a real leak wherever it lives.
+	// this a de-escalation rather than path suppression (Rule 3): an
+	// independent signal beyond the pattern match can establish a real leak.
 	corroborated := ev
 	corroborated.Reachable = true
 	if got := DecideWithOptions(corroborated, "HIGH", Options{DeescalateTests: true}); got.Status != StatusBlock {
