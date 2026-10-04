@@ -5,7 +5,12 @@
 # Omitted fields match everything (e.g. no endpoint = all endpoints).
 
 ignore:
+  # ── Suppress one durable semantic finding ───────────────────
+  - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
+    reason: "Accepted risk reviewed in JIRA-1234"
+
   # ── Suppress by finding ID ──────────────────────────────────
+  # SEC-NNN is positional across scans; use only for short-lived triage.
   - id: SEC-014
     reason: "Rate limiting handled at API gateway level"
     until: 2026-12-01  # optional expiry — rule stops applying after this date
@@ -32,5 +37,5 @@ ignore:
 # Notes:
 # - "until" uses YYYY-MM-DD format. Expired rules are automatically skipped.
 # - "endpoint" supports glob patterns (e.g. /api/v1/*)
-# - "reason" is required — document why the suppression exists.
+# - "reason" is optional to the engine; require it in review for auditability.
 # - Rules match ALL specified fields (AND logic, not OR).

@@ -48,11 +48,9 @@ without ceremony.
 ```yaml
 # .fendix.yaml — Fendix policy file
 
-# Required. The policy schema version. Currently only `1` is valid;
-# future versions will be backward-compatible at the field level
-# and forward-rejected at the version level (older fendix builds
-# refuse to parse newer files rather than silently dropping fields
-# they don't understand).
+# Required. The policy schema version. Currently only `1` is valid.
+# Older fendix builds reject newer version numbers rather than
+# silently accepting a schema they do not understand.
 version: 1
 
 # Severity threshold for the scan to fail. Matches the --fail-on flag.
@@ -80,9 +78,10 @@ scan:
                          #   always preserved)
   enforce_confidence: true # --enforce-confidence (a finding at or above
                          #   `fail_on` blocks only when its deterministic
-                         #   confidence band supports the claim: HIGH always,
-                         #   MEDIUM only with a corroborating signal, LOW
-                         #   never. Set false to restore the legacy
+                         #   confidence band and evidence support the claim:
+                         #   HIGH needs an independent or self-evident signal,
+                         #   MEDIUM needs an independent signal, LOW never
+                         #   blocks. Set false to restore the legacy
                          #   severity-only gate.)
 
 # Crawler discovery knobs.
@@ -106,18 +105,27 @@ auth:
 
 ## What's intentionally NOT in the schema
 
-These are per-invocation runtime concerns, not committable policy:
+These are per-invocation runtime concerns, not committable policy. The list is
+exhaustive for the stable v3.4.1 `scan` surface:
 
-- `--baseline` / `--save-baseline` — baseline path is operator-specific
-  (CI cache key, dev laptop temp dir, etc.).
-- `--debug-bundle` — bug-report-only flag.
-- `--auth` / `--auth-type` / `--auth-header` — credential values must
-  not be committed. Use `auth.profile` instead and put the secret in
+- Targets, history and output: `--url`, `--spec`, `--code`, `--import`,
+  `--diff`, `--staged`, `--fast`, `--baseline`, `--save-baseline`, `--output`,
+  `--lang`, `--verbose`, `--debug-bundle`, and `--config` (the policy-file
+  locator itself).
+- Credentials: `--auth`, `--auth-type`, `--auth-header`, and `--auth-user2`.
+  Use `auth.profile` for a committable reference and keep the credential in
   `~/.fendix/profiles/`.
-- `--url` / `--spec` / `--code` — the scan target is per-invocation;
-  CI workflows pick the right target per branch / PR / event.
-- `--output` — output path is per-invocation.
-- `--save-baseline` — see baseline above.
+- Probe and network safety: `--max-probes-per-endpoint` and
+  `--allow-private-targets`.
+- Analyzer selection and dependencies: `--python-engine`, `--checks`,
+  `--no-native-deps`, `--use-pip-audit`, `--offline`, `--offline-db`,
+  `--no-plugins`, and `--allow-repo-local-plugins`.
+- Strict coverage and dependency policy: `--fail-on-scanner-error`,
+  `--fail-on-coverage-gap`, `--require-analyzers`, and
+  `--block-on-inapplicable`.
+
+The development branch also has managed-CI producer flags. They are not part of
+the v3.4.1 stable CLI or `.fendix.yaml` schema.
 
 ## Worked example
 
@@ -182,14 +190,10 @@ supported version range.
 
 ## Versioning
 
-The schema follows a forward-rejected, backward-compatible model:
-
-- **`version: 1`** is what this fendix release supports.
-- A future fendix release that adds `version: 2` features still
-  reads `version: 1` files unchanged.
-- An older fendix release that sees `version: 2` rejects the file
-  with a clear error (`policy file declares version 2 but this
-  fendix build supports up to version 1`).
+This build supports exactly **`version: 1`**. It rejects a file declaring a
+newer version with a clear error (`policy file declares version 2 but this
+fendix build supports up to version 1`). Compatibility behavior for a future
+schema version is not part of the current executable contract.
 
 This is the opposite of YAML's default "ignore unknown fields"
 behavior — we want surprises to be loud.

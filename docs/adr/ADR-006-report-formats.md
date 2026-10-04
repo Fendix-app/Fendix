@@ -2,7 +2,20 @@
 
 ## Status
 
-Accepted
+Accepted; amended for PDF and decision-aware SARIF.
+
+## Current implementation addendum
+
+The engine supports four formats: JSON, HTML, SARIF 2.1.0 and PDF. PDF is a
+first-class renderer with an optional classification banner, rather than a
+browser-print instruction.
+
+SARIF rule metadata still maps intrinsic severity to
+`defaultConfiguration.level` and `security-severity`. Each result's `level`
+maps the finding decision (`BLOCK` → `error`, `WARN` → `warning`, `INFO` →
+`note`), falling back to intrinsic severity only for archived/unstamped input.
+Its partial-fingerprint key is the report's declared algorithm (`fendix/v2`
+for current output), and `automationDetails.id` is mode-qualified.
 
 ## Context
 

@@ -63,7 +63,7 @@ story to know "this scan is the latest", which depends on Sprint 07.5
 			return runJira(cmd.Context(), cmd.OutOrStdout(), path, timeout, strict)
 		},
 	}
-	cmd.Flags().String("findings", "", "Path to a findings JSON file produced by `fendix scan --format json`")
+	cmd.Flags().String("findings", "", "Path to a findings JSON file produced by 'fendix scan --format json'")
 	cmd.Flags().Duration("timeout", 5*time.Minute, "Overall timeout for the Jira sync")
 	cmd.Flags().Bool("strict", false, "Exit non-zero if ANY finding fails to sync (default: exit non-zero only when every finding fails)")
 	return cmd

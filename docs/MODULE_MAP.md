@@ -36,9 +36,9 @@ subcommand; each subcommand package implements one verb.
 
 | Path | Purpose | Key Types | Key Responsibilities |
 |---|---|---|---|
-| `go/cmd/fendix/main.go` | Cobra root command + CLI entry point | `cobra.Command` (root) | Init slog (TextHandler, no recursion); register all subcommands (scan, report, verify, init, demo, notify, jira, db, engine, plugins, ignore, hook, version); map `ExitError` → CI exit codes |
+| `go/cmd/fendix/main.go` | Cobra root command + CLI entry point | `cobra.Command` (root) | Init slog (TextHandler, no recursion); register stable subcommands (scan, report, import, verify, init, demo, notify, jira, db, engine, plugins, ignore, hook, benchmark, metrics, version) plus the development-only managed-CI command; map `ExitError` → CI exit codes |
 | `go/cmd/fendix/db.go` | Offline CVE-snapshot management (air-gapped) | `cobra.Command` (db tree) | `db list/update/verify`: ingest OSV exports (array or `{advisories}` wrapper), SHA-256 integrity check |
-| `go/cmd/fendix/engine.go` | Python whitebox-engine lifecycle | `cobra.Command` (engine tree) | `engine info` (resolve path: `--dir`→`FENDIX_ENGINE`→pinned→embedded→`./python`), `engine sync` (pin to `~/.fendix/config`), re-extract embedded engine |
+| `go/cmd/fendix/engine.go` | Python whitebox-engine lifecycle | `cobra.Command` (engine tree) | `engine info` (resolve path: `--dir`→`FENDIX_ENGINE`→pinned→optional custom embed→`./python`), `engine sync` (pin to `~/.fendix/config`); official standalone releases carry no embedded tree |
 | `go/cmd/fendix/jira.go` | Idempotent findings → Jira sync (CI step) | `cobra.Command` (jira) | Read findings JSON, create Bug issues above severity floor, `fendix-id:<id>` idempotency labels, strict/lenient modes |
 | `go/cmd/fendix/notify.go` | Slack/Teams webhook alerts (CI step) | `cobra.Command` (notify) | Post Block Kit / Adaptive Card alerts above floor, per-finding dedup window, tolerate per-sink failures |
 | `go/internal/cli/exit.go` | CI-friendly custom exit codes | `ExitError` | Let Cobra `RunE` return non-1 codes (0=resolved, 1=still-present, 2=unknown) for build scripting |
@@ -81,7 +81,7 @@ they are why Fendix can defend a confidence claim rather than merely print one.
 |---|---|---|---|
 | `go/internal/evidence` | Domain object + provenance carrier | `Evidence`, `ScoringProvenance`, `ProvenanceIndex` | `Evidence` is a SUPERSET of `models.Finding`: a "render block" that projects 1:1 onto the public Finding, plus internal-only provenance (`RuleID`, `Payload`, `Response`, `DetectedAt`, `Lineage`, `ResponseContext`, `InTest`, `DirectObservation`, `UnconfirmedByLiveScan`, `Placeholder`, `ComponentNotImported`) that is never serialized. Only `InTest` has an endpoint-derived fallback (`models.IsTestPath`); the other four are producer-set, so a dropped hop is permanent and silent. `ProvenanceIndex` captures that internal half keyed on the render-stable `(Category, Endpoint, Title)` identity **before** the projection and re-attaches it **before** scoring, so scoring rules that read internal fields are not silently dead. Merges across a dedup group with an "agree or drop" meet (`agreementOr` / `agreementOrBool`) — commutative, associative, idempotent, hence order-independent (F-L6) and conservative |
 | `go/internal/confidence` | Deterministic 0–100 confidence scorer | `Result` | Fixed, documented rule deltas (base 35, cross-engine agreement +25, reachable taint +10, payload validated +10, direct observation +30, deterministic detection +30, tier bump/penalty ±5, HTTP/static context −15, placeholder credential −20, advisory component not imported −10); bands at 70/40; one plain-text reason line per rule that fired, and an explicit cap line when corroboration exceeds 100 so the reasons always reconcile with the value. **No AI in this path** (Constitution Rule 8) |
-| `go/internal/decision` | BLOCK / WARN / INFO verdict | `Decision`, `Status`, `Options`, `corroborations` | `Decide` is the frozen LEGACY mapping (severity + `--fail-on` only), byte-compatible with `checkFailOn` and kept as the `--enforce-confidence=false` lock. `DecideWithOptions` is the production path: `Options.EnforceConfidence` gates BLOCK on the confidence band (HIGH always; MEDIUM only with a signal from `corroborations`; LOW never; a correlator-marked `UnconfirmedByLiveScan` finding never blocks uncorroborated), and `Options.DeescalateTests` demotes `Evidence.InTest` findings — WARN→INFO, and an uncorroborated BLOCK→WARN. Every demotion appends a 0-delta reason line so it is explainable, and a finding that crossed `--fail-on` never sinks below WARN. `ExitCode` derives the process exit code from the same objects the report is stamped from |
+| `go/internal/decision` | BLOCK / WARN / INFO verdict | `Decision`, `Status`, `Options`, `corroborations` | `Decide` is the frozen LEGACY mapping (severity + `--fail-on` only), byte-compatible with `checkFailOn` and kept as the `--enforce-confidence=false` lock. `DecideWithOptions` is the production path: `Options.EnforceConfidence` gates BLOCK on band plus evidence (HIGH needs an independent or self-evident signal; MEDIUM needs an independent signal; LOW never; a correlator-marked `UnconfirmedByLiveScan` finding never blocks without independent support), and `Options.DeescalateTests` demotes `Evidence.InTest` findings — WARN→INFO, and an uncorroborated BLOCK→WARN. Every demotion appends a 0-delta reason line so it is explainable, and a finding that crossed `--fail-on` never sinks below WARN. `ExitCode` derives the process exit code from the same objects the report is stamped from |
 
 Orchestrator wiring: `stampDecisions` (orchestrator.go) is the single junction — it restores
 provenance onto the projected findings, decides, and stamps `status` / `confidence_score` /
@@ -103,11 +103,14 @@ live target.
 
 | Path | Purpose | Key Types | Key Responsibilities |
 |---|---|---|---|
-| `go/internal/scanner` | Black-box web vuln scanning: discovery + 8 check functions | `Endpoint`, `CheckFn`, `Crawler`, `ProbeAuditLog`, `ProbeRecord`, `AuthContext`, `ScanConfig`, `Finding` | **Discovery** (6 layered strategies: OpenAPI spec → robots → sitemap → JS → HTML crawl → wordlist brute-force, with dedup/cap/path-template substitution); **8 checks**: `CheckAuth` (unauth/malformed/expired/alg:none JWT with FP-dedup), `CheckHeaders` (HSTS/XCTO/XFO/CSP/XXSS/server-version), `CheckCORS` (wildcard+creds, reflected origin), `CheckInjection` (time/error/boolean SQLi across 6 engines + CMDi canary + CRLF, per-endpoint probe budget), `CheckIDOR` (two-user response compare), `CheckExposure` (regex secret/PII/stack-trace), `CheckConfigLeak` (.env/.git/.aws/… with redacted evidence), `CheckRateLimit` (rapid-request 429 probe); uniform SSRF + budget via `guardedClient`; scan-wide probe audit log |
+| `go/internal/scanner` | Black-box web discovery + ordered 15-check registry | `Check`, `Tier`, `Endpoint`, `Crawler`, `ProbeAuditLog`, `ProbeRecord`, `CheckContext` | **Discovery** (6 layered strategies: OpenAPI spec → robots → sitemap → JS → HTML crawl → wordlist brute-force, with dedup/cap/path-template substitution); `DefaultChecks()` registers `configleak`, `headers`, `cors`, `exposure`, `ratelimit`, `cookie-flags`, `auth`, `idor`, `injection`, `open-redirect`, `xss`, `ssrf`, `host-header`, `graphql`, `method-tamper`, classified as passive/active/auth/multiuser; uniform SSRF + budget via `guardedClient`; scan-wide probe audit log |
 
-**Notable:** all outbound requests go through a `guardedClient` (netguard SSRF policy +
-budget counter); `MaxIdleConnsPerHost=32` avoids port exhaustion on brute-force;
-`TargetIsPrivate` auto-allows localhost/staging targets.
+**Notable:** built-in Go DAST discovery and check requests go through a
+`guardedClient` (netguard SSRF policy + budget counter);
+`MaxIdleConnsPerHost=32` avoids port exhaustion on brute-force; and
+`TargetIsPrivate` auto-allows localhost/staging targets. Python remote-spec
+fetching, dependency-tool traffic, and out-of-tree plugins are separate paths
+and do not inherit this client.
 
 **FP context vs. skip (`responsecontext.go`).** The checks draw a deliberate line between
 "there is no security signal here" and "the signal is real but the context lowers trust":
@@ -146,8 +149,8 @@ textscan rules, and an optional semgrep shim.
 
 | Path | Purpose | Key Types | Key Responsibilities |
 |---|---|---|---|
-| `go/internal/scanner/secrets` | Hardcoded-secret detection (15+ patterns, Python parity) | `pattern` (private), `models.Finding` | Walk codePath (skip vendor/build dirs + non-scanned exts), apply 15 provider patterns + `ENV_SECRET`, 1MB cap, skip >500-char minified lines, redact credential material at CAPTURE time (`[REDACTED len=N sha256:…]`) over the union of every pattern's value spans on the line, classify fixture-shaped values onto `Evidence.Placeholder`, manual boundary validation (RE2 lacks lookarounds), diff-aware via `gitdiff.Allowlist` |
-| `go/internal/scanner/textscan` | Unified regex SAST: Go + JS/TS + Docker/K8s IaC | `Rule` (ID/Severity/Confidence/CWE/Pattern/NegPattern/Applies) | `AllRules`/`GoRules`(4)/`JSRules`(6)/`IaCRules`(8); line-by-line walk with `Applies()` routing; skip 1MB+/symlinks/build dirs; binary sniff (NUL byte); NegPattern exclusions; whole-file pre-passes for `IAC_DOCKER_RUNS_AS_ROOT` (any USER directive, whole-file channel) and Dockerfile stage aliases (per-LINE channel, feeding `IAC_DOCKER_LATEST_TAG` suppression + `IAC_DOCKER_FLOATING_TAG`'s digest-pin judgement); truncate evidence to 200 runes; diff-aware; `SourceTier=TierNativeGo` |
+| `go/internal/scanner/secrets` | Hardcoded-secret detection (17 general patterns + `ENV_SECRET`) | `pattern` (private), `models.Finding` | Walk codePath (skip vendor/build dirs + non-scanned exts), apply 18 detectors, 1MB cap, skip >500-char minified lines, redact credential material at CAPTURE time (`[REDACTED len=N sha256:…]`) over the union of every pattern's value spans on the line, classify fixture-shaped values onto `Evidence.Placeholder`, manual boundary validation (RE2 lacks lookarounds), diff-aware via `gitdiff.Allowlist` |
+| `go/internal/scanner/textscan` | Unified regex SAST: Go + JS/TS + Java + Docker/K8s IaC | `Rule` (ID/Severity/Confidence/CWE/Pattern/NegPattern/Applies) | `AllRules`/`GoRules`(4)/`JSRules`(6)/`JavaRules`(11)/`IaCRules`(8), 29 total; line-by-line walk with `Applies()` routing; skip 1MB+/symlinks/build dirs; binary sniff (NUL byte); NegPattern exclusions; whole-file pre-passes for `IAC_DOCKER_RUNS_AS_ROOT` (any USER directive, whole-file channel) and Dockerfile stage aliases (per-LINE channel, feeding `IAC_DOCKER_LATEST_TAG` suppression + `IAC_DOCKER_FLOATING_TAG`'s digest-pin judgement); truncate evidence to 200 runes; diff-aware; `SourceTier=TierNativeGo` |
 | `go/internal/scanner/semgrep` | Shim to host semgrep binary + bundled YAML rule pack | `semgrepResult`, `semgrepExtra`, `semgrepOutput` | `go:embed` 4 YAML rules → temp dir; invoke semgrep `--config --json --no-git-ignore`; map `check_id`→`SEC-*`, `fendix_severity` high-trust override else ERROR/WARNING/INFO mapping; resolve confidence/category/CWE; 120s timeout; gracefully absent (`ErrSemgrepUnavailable`); `SourceTier=TierSemgrepShim` (lowest trust until F1≥0.95 gate) |
 
 ---
@@ -215,7 +218,7 @@ Both note: persistent dedup / auto-resolution deferred pending SQLite (Sprint 14
 
 ## 10. Plugin System
 
-Out-of-tree extension via the same NDJSON IPC contract as the embedded Python engine
+Out-of-tree extension via the same NDJSON IPC contract as the Python engine
 (ADR-002).
 
 | Path | Purpose | Key Types | Key Responsibilities |
@@ -236,7 +239,7 @@ imports.
 
 | Path | Purpose | Key Types | Key Responsibilities |
 |---|---|---|---|
-| `go/internal/models` | Core domain types + scoring shared across Go/Python | `Finding`, `Severity`, `Confidence`, `Source`, `SourceTier`, `Route`, `TaintLink`, `ScanConfig` (50+ fields), `AuthContext` | Define `Finding` with full metadata + Proven-Path proof (Route, TaintChain, Reachable, ProvenPath); dedup metadata (`AffectedEndpoints`); composite scoring (base impact × confidence × source × 1.5 reachability → banded severity); `EnforceSeverityConsistency` (LOW caps at MEDIUM, MEDIUM at HIGH, only HIGH→CRITICAL); auth resolution (CLI→env→profile) + `Redacted()` masking; `SourceTier` provenance enforcement (TASK-125 blocks escalation via low-trust whitebox) |
+| `go/internal/models` | Core domain types shared across Go/Python | `Finding`, `Severity`, `Confidence`, `Source`, `SourceTier`, `Route`, `TaintLink`, `ScanConfig` (50+ fields), `AuthContext` | Define `Finding` with full metadata + Proven-Path proof (Route, TaintChain, Reachable, ProvenPath); dedup metadata (`AffectedEndpoints`); retain the legacy/reference `CalculateSeverity` helper (not the live scanner decision path); enforce severity/confidence consistency; auth resolution (CLI→env→profile) + `Redacted()` masking; `SourceTier` provenance enforcement |
 | `go/internal/policy` *(see CLI table)* | `.fendix.yaml` committable scan config | `Policy`, `CLISet`, `ApplyTo` | Cross-listed under Entrypoints & CLI |
 
 `models.Finding` is the IPC contract — every field must round-trip through JSON/NDJSON
@@ -247,7 +250,8 @@ between the Go black-box and Python whitebox engines.
 ## 12. Supporting / Infra
 
 Cross-cutting utilities consumed by the scanner and orchestrator: SSRF egress guarding,
-request budgeting, diff scoping, offline DB, embedded engine, log capping, diagnostics.
+request budgeting, diff scoping, offline DB, optional legacy/custom embedded-engine
+compatibility, log capping, diagnostics.
 
 | Path | Purpose | Key Types | Key Responsibilities |
 |---|---|---|---|
@@ -255,7 +259,7 @@ request budgeting, diff scoping, offline DB, embedded engine, log capping, diagn
 | `go/internal/budget` | Global `--max-requests` / `--max-duration` enforcement | `budgetTransport`, atomic sent/rejected counters | Soft-cap request counter (count every attempt once, refuse over-cap), fire cancel-on-cap exactly once, `Stats()` for budget summary, nil-safe `WrapTransport`, compose with netguard (`WrapTransportGuarded`: budget OUTER, guard INNER DialContext); duration timeout lives in orchestrator context |
 | `go/internal/gitdiff` | Changed-file resolution + path Allowlist for diff-aware scanning | `Options`, `Allowlist`, `execCommand` seam | Shell `git diff --name-only -z` (avoids go-git); scopes: full/staged/vs-ref; exclude deletions; sorted repo-relative paths; nil-safe absolute-path `Allowlist` (nil=full scan, empty=matched nothing); `ContainsBase` SCA gate (did go.mod/lockfile change?) |
 | `go/internal/offline` | Air-gapped CVE snapshot format + loader | `Snapshot`, `Advisory`, `PackageRef`, `Range` | Read/Decode/Write/Verify snapshot JSON (200MiB + 5M-advisory caps, schema-version check, SHA-256 integrity, atomic temp-then-rename); OSV.dev wire-format subset; `LookupByPackage`/`LookupVulnerable` with best-effort SemVer; `DefaultDBPath` (`~/.fendix/offline-db.json`) |
-| `go/internal/embedded` | Bundle Python engine into Go binary via `go:embed` | `embed.FS EngineFS` | `HasEngine()`, `ExtractEngine(dest)` (preserve modes, strip `engine/` prefix), `EngineDir()` (`~/.fendix/engine/`); Makefile `embed-engine` target copies `python/`→`engine/`; binary built without step returns `HasEngine()=false` |
+| `go/internal/embedded` | Optional legacy/custom Python payload compatibility | `embed.FS EngineFS` | `HasEngine()`, `ExtractEngine(dest)` (preserve modes, strip `engine/` prefix), `EngineDir()` (`~/.fendix/engine/`); official Makefile `embed-engine` resets to a placeholder, so official standalone binaries return `HasEngine()=false` |
 | `go/internal/logagg` | Cap per-check WARN volume during scans | `entry` (warned/suppressed) | Per-key cap (default 3): first N at Warn, rest at Debug; `SetCap`/`Reset`/`Warn`/`Summary`/`Stats`; goroutine-safe mutex (worker pool concurrency); sorted slog-friendly summary |
 | `go/internal/diagnostic` | Redacted bug-report tarball of a single scan | `Bundle`, `redactedConfig`, `redactedAuth`, `fanoutHandler`, `lockedWriter` | Nil-receiver-safe (disabled when path empty); collect config/env/metadata/findings/probes/DEBUG slog; redact all credential surfaces (`[REDACTED]`), preserve header names + URLs; fanout slog handler tees to user + buffer; write tar.gz (README + JSONs + probes.jsonl + debug.log), atomic temp-then-rename, PAX format for reproducibility |
 
@@ -276,23 +280,29 @@ A single `fendix scan` traced end-to-end:
 3. **Discovery** — `scanner.NewCrawler` + `Crawler.CrawlEndpoints` run the 6-strategy
    pipeline (spec → robots → sitemap → JS → HTML → wordlist), producing deduped
    `[]Endpoint`. Every request rides `budget.TransportGuarded` (→ `netguard` SSRF policy).
-4. **Black-box checks** — the orchestrator builds the check list (`CheckConfigLeak` first
-   for noise ordering) and `WorkerPool.Run(ctx, cfg, endpoints)` fans the 8 `CheckFn`s
-   across endpoints as bounded `scanJob`s; workers recover panics and continue. Probes
-   accumulate in `scanner.ProbeAuditLog`.
+4. **Black-box checks** — the orchestrator filters the ordered 15-entry
+   `DefaultChecks()` registry (`configleak` first for noise ordering) and fans
+   enabled checks across endpoints as bounded `scanJob`s; workers recover
+   panics and continue. Probes accumulate in `scanner.ProbeAuditLog`.
 5. **Native Go scanners (sequential, post-pool)** — `deps/govulncheck`, `deps/npm`,
    `deps/pip` (SCA), `secrets`, `textscan`, and `semgrep` each run, scoped by
    `gitdiff.Allowlist` when diff-aware. Each records `ScannerStatus` (ok/skip/fail)
-   independently — failures surface at the end, they don't abort. Offline mode routes SCA
-   through `offline.Snapshot` via each scanner's `ScanOffline`.
-6. **Python whitebox bridge** — only if `--python-engine` is set and a CodePath/SpecPath
-   exists: `PythonSpawner.Run` resolves the engine dir (explicit → env → pinned →
-   `embedded.ExtractEngine` → `./python`), spawns the subprocess, writes a `ScanRequest`
+   independently — failures surface at the end, they don't abort. Offline mode routes the
+   native pip/npm SCA through `offline.Snapshot` and skips native govulncheck.
+6. **Python whitebox bridge** — when `cfg.PythonEngine` is true and a CodePath/SpecPath
+   exists. The CLI auto-enables it for `--code` unless `--python-engine=false` is
+   explicit. `PythonSpawner.Run` resolves the engine dir (explicit → env → pinned →
+   optional custom `embedded.ExtractEngine` → `./python`), spawns the subprocess, writes a `ScanRequest`
    JSON to stdin, and streams NDJSON Findings + a DoneMessage from stdout. Inside Python,
    `route_extractor` pre-passes to build the route index, then `ast_analyzer`,
    `spec_parser`, and `deps.py` emit findings; cancellation kills the process.
-7. **Plugins (optional)** — `plugin.Discover`/`Run` invoke any installed plugins over the
-   same NDJSON contract, tagging findings with plugin source.
+   Current product defect: offline state is absent from `ScanRequest`, so the
+   Python deps check may invoke networked tools even when the CLI has
+   `--offline`.
+7. **Plugins (optional)** — `plugin.Discover`/`Run` invoke installed plugins over the
+   same NDJSON contract. An empty source is defaulted, but an explicit unknown
+   source is currently retained; that can violate the closed report enum and
+   source counters and is tracked as a product defect.
 8. **Correlation** — `Correlate(findings)` (correlator.go) merges black-box + white-box via
    4-tier matching (route-pattern Proven-Path → exact endpoint+category → path suffix →
    fuzzy segment); escalates severity/confidence (`enforceConsistency`), and forces
@@ -312,8 +322,9 @@ A single `fendix scan` traced end-to-end:
 12. **Output & integrations** — JSON output feeds downstream CI steps: `fendix jira`
     (`integrations/jira.SyncFindings`) and `fendix notify`
     (`integrations/notify.NotifyAll`) re-ingest the report and push to Jira/Slack/Teams.
-    `--fail-on-scanner-error` / `fail_on` severity drive the process exit code (via
-    `cli.ExitError`).
+    Finding-level `Decision` objects drive exit 1. Scanner-error, coverage-gap
+    and required-analyzer policies can instead produce exit 2; Cobra carries
+    the selected code through `cli.ExitError`.
 
 **GitHub App variant**: `fendix-app` receives a webhook → `ghapp.Handler.HandlePullRequest`
 verifies the signature, mints an installation token, clones the head SHA into a `Sandbox`,
@@ -443,15 +454,19 @@ wrapper / namespace / docstring).
 - **Trojan-Source defense in reporting**: `NeutralizeText` strips bidi-reordering,
   zero-width, and control characters from all human-facing fields *before* html/template
   auto-escaping or fpdf rendering, across every output format.
-- **Diff-aware scanning** (`gitdiff.Allowlist` + `ContainsBase` SCA gate) powers the
-  sub-second pre-commit hook — whitebox scans run only on changed files, and expensive
-  dep-CVE scans are skipped unless a manifest basename actually changed.
-- **Air-gapped offline mode**: `deps/*` scanners share a `ScanOffline` path against an
-  `offline.Snapshot` (OSV.dev wire-format subset, SHA-256 verified for sneakernet),
-  producing findings indistinguishable from the online path.
-- **Embedded Python engine** via `go:embed` extracted to `~/.fendix/engine/` lets the
-  standalone binary spawn the whitebox engine with no separate Python install or source tree
-  (opt-in after v0.16.0).
+- **Diff-aware scanning** (`gitdiff.Allowlist` + `ContainsBase` SCA gate) scopes
+  native white-box analyzers to changed files and skips native dep-CVE scans
+  unless a manifest basename changed. The generated hook also passes `--fast`,
+  but `--code` currently auto-enables Python unless explicitly disabled, so the
+  native-only latency claim requires `--python-engine=false`; the missing
+  implication is tracked as a product defect.
+- **Native offline mode**: native pip/npm scanners share a `ScanOffline` path
+  against an `offline.Snapshot` (OSV.dev wire-format subset, SHA-256 verified
+  for sneakernet), while native govulncheck is skipped. The Python deps check
+  does not yet receive offline state; see the product defect in step 6.
+- **Optional embedded-engine compatibility** remains for custom/legacy builds.
+  Official standalone releases embed only a placeholder; Docker supplies the
+  Python tree at `/opt/fendix/python/`, and source builds can resolve `./python`.
 - **Hand-written `poetry.lock` TOML parser** (no external TOML library) keeps the scanner's
   footprint minimal while still exposing the full transitive dependency closure — CVEs three
   levels deep that `requirements.txt` can't see.

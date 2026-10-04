@@ -1,8 +1,10 @@
 # Dependency CVE Check
 
-**Engine:** Go (white-box) — `go/internal/scanner/deps/{govulncheck,npm,pip}`, native since TASK-119 (orchestrator step 3.5, disable with `--no-native-deps`). The Python `analyzers/deps.py` path still exists but only runs under the opt-in `--python-engine`; its findings collapse into the native output via dedup.
+**Engine:** Go (white-box) — `go/internal/scanner/deps/{govulncheck,npm,pip}`, native since TASK-119 (orchestrator step 3.5, disable with `--no-native-deps`). The Python `analyzers/deps.py` path also runs when the Python phase is enabled; `--code` auto-enables that phase unless `--python-engine=false` is explicit. Its findings collapse into native output through dedup.
 **Category:** `deps`
-**Severity as emitted:** HIGH (correlation and the severity/confidence consistency pass can move it afterwards)
+**Severity as emitted:** vulnerability advisories are HIGH; coverage/config
+observations such as native npm lockfile-missing and Python unpinned-range
+findings are INFO. Correlation and consistency policy may adjust later.
 **Active probing:** No (static analysis)
 
 ## What It Detects
@@ -49,7 +51,7 @@ record exactly which versions are installed.
 | Flag | Behaviour |
 |---|---|
 | `--use-pip-audit` | Shells out to `pip-audit --format json` instead of querying OSV directly. If `pip-audit` is not on `PATH`, a warning is emitted and the OSV path is used — never a silent fail-closed. |
-| `--offline` | Reads the local snapshot at `--offline-db` (default `~/.fendix/offline-db.json`, built with `fendix db update`). **Zero** outbound calls. Findings are shape-identical to the online path. The Go scanner needs `vuln.go.dev` and is recorded `SKIPPED` rather than silently reaching the network. |
+| `--offline` | Native pip/npm read the local snapshot at `--offline-db` (default `~/.fendix/offline-db.json`, built with `fendix db update`), and native govulncheck is recorded `SKIPPED`. A current product defect leaves the auto-enabled Python deps check outside this flag, so `--offline` alone does not guarantee zero outbound calls. Use `--offline --checks auth,injection --no-plugins` or `--offline --python-engine=false --no-plugins` for the documented hermetic built-in paths. |
 | `--no-native-deps` | Disables the in-process Go SCA entirely. |
 
 ## Finding identity
@@ -71,14 +73,14 @@ alias-linked records whose affected version ranges are provably disjoint are
 **not** merged — alias data is not verified upstream — and the refusal is logged
 to stderr.
 
-> **This invalidates saved baselines and pinned ignore rules.**
-> `models.Fingerprint` hashes `(category, endpoint, title)` and the title now
-> carries the canonical id, so every `--baseline` entry and every
-> `.fendix-ignore` `fingerprint:` rule pinned to a dependency finding **stops
-> matching**, and a `--diff` scan reports the renamed finding as new. Regenerate
-> them. `fendix verify` is already handled — it matches on the whole preserved
-> id set, so a finding recorded under the old id resolves to its renamed twin
-> instead of being reported as fixed.
+> **Historical v2 migration:** under the then-current `fendix/v1` identity,
+> this title change invalidated dependency baselines and fingerprint rules.
+> Current v3+ builds use the semantic `fendix/v2` algorithm, which excludes
+> title and package version. Any artifact created before v3.0.0 must still be
+> regenerated once because the algorithm itself changed; see
+> [`schema.md`](../schema.md). `fendix
+> verify` matches the preserved id set, so a finding recorded under the old id
+> resolves to its renamed twin instead of being reported as fixed.
 
 `govulncheck` is deliberately untouched: `vuln.go.dev` emits one `GO-*` record
 per vulnerability with aliases pointing outward, so the duplicate-record problem
@@ -128,8 +130,8 @@ imported" quietly discounts a real risk. Fully dynamic imports
 (`importlib.import_module(name)`) are a known blind spot, which is why the
 penalty is a modest −10 rather than something that could move a band alone.
 
-Because a MEDIUM band blocks only with a corroborating signal, this delta can
-change an exit code — see [`--enforce-confidence`](../../README.md#scan-flags).
+Because a MEDIUM band blocks only with an independent signal, this delta can
+change an exit code — see [`--enforce-confidence`](../../README.md#common-scan-flags).
 
 ## Example Finding
 

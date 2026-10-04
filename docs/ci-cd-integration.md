@@ -4,7 +4,7 @@ Fendix produces SARIF 2.1.0 output that integrates directly with GitHub Advanced
 
 ## Quick start — copy this workflow
 
-A complete, ready-to-use reference workflow lives at
+A complete, ready-to-use, digest-pinned v3.4.1 container workflow lives at
 [`examples/github-actions/fendix-scan.yml`](../examples/github-actions/fendix-scan.yml).
 Drop it into `.github/workflows/fendix-scan.yml` of your project and it
 will:
@@ -20,6 +20,12 @@ will:
 
 The sections below show the individual building blocks if you'd rather
 assemble your own workflow.
+
+Commands shown with a bare `fendix` binary assume a version-matched Python
+engine tree is configured when `--code` coverage is expected. Official v3.4.1
+standalone binaries do not include that tree; without it, the native analyzers
+continue and `python-engine` is recorded `skipped/dependency_missing`. The
+reference workflow avoids that degradation by using the official container.
 
 ## GitHub Actions — SARIF Upload
 
@@ -37,6 +43,8 @@ on:
 jobs:
   security-scan:
     runs-on: ubuntu-latest
+    env:
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a
     permissions:
       security-events: write  # Required for SARIF upload
       contents: read
@@ -44,15 +52,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Fendix
+      - name: Pull pinned Fendix image
         run: |
-          curl -fsSL https://get.fendix.dev/install.sh | sh
-          # Or build from source:
-          # go build -o fendix ./go/cmd/fendix/
+          docker pull "$FENDIX_IMAGE"
+          docker run --rm "$FENDIX_IMAGE" version
 
       - name: Run security scan
         run: |
-          fendix scan \
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --volume "$PWD:/work" \
+            --workdir /work \
+            "$FENDIX_IMAGE" scan \
             --spec openapi.yaml \
             --code ./src \
             --format sarif \
@@ -68,7 +80,12 @@ jobs:
 
       - name: Fail on findings
         run: |
-          fendix scan \
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --volume "$PWD:/work" \
+            --workdir /work \
+            "$FENDIX_IMAGE" scan \
             --spec openapi.yaml \
             --code ./src \
             --format json \
@@ -139,7 +156,8 @@ Enable injection detection for pre-production environments:
 
 ## Re-rendering Reports
 
-Convert a saved JSON findings file to HTML for human review or SARIF for CI upload:
+Re-render a saved JSON findings file as JSON, HTML, SARIF, or PDF. Common human
+and CI conversions are:
 
 ```bash
 # JSON -> HTML
@@ -147,6 +165,9 @@ fendix report --input findings.json --format html --output report.html
 
 # JSON -> SARIF
 fendix report --input findings.json --format sarif --output results.sarif
+
+# JSON -> PDF
+fendix report --input findings.json --format pdf --output report.pdf
 ```
 
 ## Exit Codes
@@ -161,6 +182,8 @@ Use `--fail-on` to set the severity floor for the gate:
 - `--fail-on CRITICAL` — only critical findings can block
 - `--fail-on HIGH` — high or critical
 - `--fail-on MEDIUM` — medium, high, or critical
+- `--fail-on LOW` — low, medium, high, or critical can be considered; the
+  evidence policy still prevents LOW-confidence findings from blocking
 
 ### Meeting the threshold is necessary, not sufficient (v2.0)
 
@@ -168,19 +191,23 @@ Since **v2.0**, `--fail-on` consults the deterministic confidence band as well
 as severity. A finding at or above the threshold reaches `BLOCK` only when the
 band supports the claim:
 
-| Confidence band | Corroborating signal | Status |
+| Confidence band | Required evidence | Status |
 |---|---|---|
-| `HIGH` | any | **BLOCK** |
-| `MEDIUM` | ≥ 1 | **BLOCK** |
-| `MEDIUM` | none | WARN |
-| `LOW` | any | WARN |
-| any | marked unconfirmed-by-live-scan, uncorroborated | WARN |
+| `HIGH` | independent or self-evident signal | **BLOCK** |
+| `HIGH` | no signal | WARN |
+| `MEDIUM` | at least one independent signal | **BLOCK** |
+| `MEDIUM` | no independent signal | WARN |
+| `LOW` | any evidence | WARN |
+| any | marked unconfirmed-by-live-scan without an independent signal | WARN |
 
-The corroborating signals are cross-engine agreement, live runtime observation,
-direct observation of a live response, deterministic detection in production
-code, confirmed route, reachable taint path, proven path, and payload-validated
-probe. Every demotion is named in the finding's `confidence_reasons`, so a WARN
-that used to be a BLOCK is always attributable from the report alone.
+Independent signals include cross-engine agreement, a confirmed route,
+reachable/proven taint path, a payload-validated probe, cross-tool agreement,
+or a contradicted declared authentication requirement. Self-evident signals
+include a deterministic response read, deterministic detection in production
+source, or an imported high-precision rule. A provider-shaped token is not a
+live credential validation. Every demotion is named in
+`confidence_reasons`, so a WARN that used to be a BLOCK is attributable from
+the report alone.
 
 > **This changes the exit code of an existing pipeline.** A job that gated on
 > `--fail-on` can now exit 0 where it exited 1 — most often on shape-match SAST
@@ -190,11 +217,11 @@ that used to be a BLOCK is always attributable from the report alone.
 > `scan.enforce_confidence: false` in `.fendix.yaml`) to restore the pre-2.0
 > severity-only mapping byte-for-byte.
 
-A second, independent rule: `--deescalate-tests` (on by default) now holds an
-**uncorroborated** finding in test/fixture code at `WARN` even when it meets
-`--fail-on`. A corroborated one — a proven taint path, a provider-validated live
-credential — still blocks. `--deescalate-tests=false` turns that off; neither
-flag implies the other.
+A second, independent rule: `--deescalate-tests` (on by default) holds an
+unsupported finding in test/fixture code at `WARN` even when it meets
+`--fail-on`. Independent corroboration can still support a block.
+`--deescalate-tests=false` turns that rule off; neither flag implies
+the other.
 
 ## Suppressing Known Issues
 

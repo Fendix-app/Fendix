@@ -39,12 +39,13 @@ benchmark are all public and you can verify each item above yourself.
 | Topic | Where |
 |-------|-------|
 | Network egress contract (what leaves your machine, when) | [Privacy](privacy.md) · README "What Fendix sends to the network" |
-| Air-gapped / hermetic scanning (`--offline`) | [Privacy](privacy.md#air-gapped-mode) |
+| Native offline scanning and the current Python-deps limitation | [Privacy](privacy.md#air-gapped-mode) |
 | Opt-in local product metrics (`FENDIX_METRICS`, never transmitted) | [Privacy](privacy.md#product-metrics) |
 
-Short version: Fendix has **no telemetry**. The only non-target traffic is
-dependency-CVE lookups during a `--code`/`--spec` scan, and `--offline` turns
-those off. See [Privacy](privacy.md) for the full contract.
+Short version: the CLI has **no telemetry**. Built-in non-target traffic comes
+from dependency-CVE tools during a `--code` scan. `--offline` stops the native
+lookups, but a current product defect leaves the auto-enabled Python deps check
+outside that flag. See [Privacy](privacy.md) for the exact hermetic commands.
 
 ## 3. Integrity of what you install
 
@@ -71,8 +72,8 @@ found and disclosed a false-positive class in our own scanner before fixing it.
 # No telemetry — watch the wire during a scan:
 sudo tcpdump -n host not <your-target> &   # then run a --code scan
 
-# Hermetic scan — zero outbound:
-fendix scan --code . --offline
+# Native-only hermetic scan; disable out-of-tree executable plugins too:
+fendix scan --code . --offline --python-engine=false --no-plugins
 
 # Reproduce the benchmark baseline:
 fendix benchmark run --target all

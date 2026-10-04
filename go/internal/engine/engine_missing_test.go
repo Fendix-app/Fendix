@@ -46,7 +46,7 @@ func TestRun_PythonEngineMissing_IsFatal(t *testing.T) {
 
 	cfg := &models.ScanConfig{
 		// 2. --code on the vuln.py fixture, SAST requested EXPLICITLY
-		// (--python-engine by name). Only the explicit opt-in is fatal on a
+		// (--python-engine by name). Only the explicit request is fatal on a
 		// missing engine; the implicit --code auto-enable degrades (see
 		// TestRun_PythonEngineMissing_ImplicitCode_IsNotFatal).
 		CodePath:             dir,
@@ -142,7 +142,7 @@ func TestRun_PythonEngineMissing_ImplicitCode_IsNotFatal(t *testing.T) {
 		CodePath:             dir,
 		PythonEngine:         true,
 		PythonEngineExplicit: false,
-		Fast:                 true, // keep it quick: native scanners only
+		Fast:                 true, // keep it quick: skip semgrep/native SCA
 		Workers:              2,
 		Timeout:              10,
 		Format:               "json",

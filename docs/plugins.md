@@ -107,7 +107,7 @@ fendix scan --code ./repo
    ├─ 1. discover endpoints (crawler)
    ├─ 2. blackbox checks (headers, CORS, exposure, rate-limit, [injection])
    ├─ 3. native scanners (deps, secrets, semgrep)
-   ├─ 4. python whitebox engine (only if --python-engine set)
+   ├─ 4. python whitebox engine (--code auto-enables it unless explicitly false)
    ├─ 4.5. PLUGINS  ← every discovered plugin runs here in sequence
    ├─ 5. correlate blackbox + whitebox findings
    ├─ 5.4. escalate non-correlated reachable findings

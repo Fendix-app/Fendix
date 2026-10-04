@@ -6,17 +6,16 @@ A machine-readable JSON Schema (draft-07) lives alongside this file at
 validate every report produced.
 
 The report contract carries its **own** version — `metadata.schema_version`,
-today `1` — which is independent of the engine's release version. Additive
+today `2` — which is independent of the engine's release version. Additive
 changes (new optional fields) are allowed in any engine release and do not bump
 it; it is bumped only for a change a consumer must react to, such as a removal
 or a type change.
 
-**Engine v2.0.0 was a major bump for CLI behaviour, not for this contract.** It
-gated `--fail-on` on the confidence band (see below) and added
-`metadata.schema_version`; it removed and retyped nothing. Reports written by
-`1.x` and `0.x` builds still validate against this schema, and a consumer
-written against `1.x` still parses a `2.x` report. What did change is the
-**content** of several fields — see
+Engine v2.0.0 was a major bump for CLI behaviour and introduced the version
+field with value `1`. Engine v3.0.0 advanced the report contract to `2` because
+the existing `fingerprint` field changed identity semantics from `fendix/v1`
+to `fendix/v2`; the surrounding JSON shape remained additive. Archived v1 and
+pre-versioned reports remain readable. See
 [What v2.0 changed in the values](#what-v20-changed-in-the-values).
 
 Reports produced by `0.x` builds validate against this schema too — every
@@ -43,7 +42,7 @@ etc.) record when a field first appeared, not a support commitment.
 |---|---|---|---|
 | `metadata` | object | yes | Scan-level metadata (target, timing, mode). |
 | `summary` | object | yes | Severity counts. Sums to `total`. |
-| `sources` | object | yes | Source counts (blackbox / whitebox / correlated). Sums to `total`. |
+| `sources` | object | yes | Native source counts (blackbox / whitebox / correlated). On `import` and mixed-import runs, imported findings are not represented in this legacy summary; use `metadata.imports` for per-tool accounting. |
 | `total` | integer | yes | Total findings in `findings`. |
 | `decisions` | object | effectively yes | **v0.24+** decision summary (`StatusCounts`): `total`, `confirmed` (HIGH-confidence), `blocking` (status BLOCK), `warning` (WARN), `informational` (INFO). The reporter serialises it **unconditionally** (`JSONReport.Decisions` has no `omitempty`), so every report a current build produces carries it. It stays out of `schema.json`'s root `required` set purely so pre-v0.24 archived reports still validate — a consumer reading current output can rely on it being present. |
 | `findings` | array of `Finding` | yes | Each finding produced by the scan, sorted deterministically. May be empty. |
@@ -54,7 +53,7 @@ etc.) record when a field first appeared, not a support commitment.
 
 ```json
 {
-  "schema_version":    1,
+  "schema_version":    2,
   "target":            "https://api.example.com",
   "started_at":        "2026-04-29T10:00:00Z",
   "duration":          "12.5s",
@@ -68,7 +67,7 @@ etc.) record when a field first appeared, not a support commitment.
   "scanner_status": [
     {"name": "secrets",  "state": "ok"},
     {"name": "semgrep",  "state": "skipped", "reason": "dependency_missing", "detail": "semgrep binary not installed"},
-    {"name": "npm",      "state": "failed",  "reason": "execution_error",    "detail": "npm audit: exit status 1"}
+    {"name": "npm",      "state": "failed",  "reason": "execution_error",    "detail": "npm audit: exit status 2"}
   ],
   "policy_version": "1.0.0",
   "coverage": {
@@ -91,7 +90,7 @@ etc.) record when a field first appeared, not a support commitment.
 | `started_at` | string (RFC 3339 timestamp) | yes | When the scan started. |
 | `duration` | string (Go-formatted duration, e.g. `"12.5s"`) | yes | Wall-clock duration of the scan. |
 | `version` | string | yes | Fendix version, e.g. `"2.0.1"` or `"dev"`. **Docker images published before v2.0.1 report the literal `"docker"` here** — the image build hardcoded it — so a report from one of those cannot say which engine produced it. Images from v2.0.1 onward carry the git tag. |
-| `mode` | string enum | yes | One of `blackbox`, `whitebox`, `hybrid`. |
+| `mode` | string enum | yes | One of `blackbox`, `whitebox`, `hybrid`, `import`. |
 | `endpoints_scanned` | integer | yes | Number of endpoints actually scanned — i.e. *after* the `--max-endpoints` cap was applied. May be 0 for `--code`-only. |
 | `endpoints_discovered` | integer | no | Number of endpoints found **before** `--max-endpoints` truncated the list. Omitted when zero. Without it, `endpoints_scanned: 500` cannot be distinguished from "found exactly 500" vs "found 801, capped to 500". When no cap fires, this equals `endpoints_scanned`. |
 | `endpoints_truncated` | boolean | no | `true` when the `--max-endpoints` cap actually dropped endpoints. Omitted when false. Pair with `endpoints_discovered` to detect a silent coverage gap from a CI gate. |
@@ -170,7 +169,7 @@ A consumer that wants "was this scan complete?" should read `coverage.configured
 | `id` | string (`SEC-NNN`) | yes | Sequential ID assigned by the orchestrator. Stable for a single scan only. |
 | `title` | string | yes | Human-readable finding title. |
 | `severity` | string enum | yes | One of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`. |
-| `source` | string enum | yes | One of `blackbox`, `whitebox`, `correlated`. |
+| `source` | string enum | yes | One of `blackbox`, `whitebox`, `correlated`, `imported`. |
 | `category` | string | yes | Taxonomy category (`auth_bypass`, `injection`, `secrets`, `idor`, `data_exposure`, `cors`, `headers`, `info_disclosure`, `auth`, ...). |
 | `endpoint` | string | yes | URL path or `file:line`. Primary endpoint for this finding. |
 | `affected_endpoints` | array of string | no | Populated only when dedup collapsed `N≥2` occurrences into one finding. Includes the primary `endpoint`. |
@@ -208,8 +207,9 @@ v0.24 fields are additive/optional — existing consumers are unaffected
 
 **`BLOCK` is not "severity ≥ `--fail-on`" as of v2.0.0.** Meeting the threshold
 is necessary but no longer sufficient: under the default `--enforce-confidence`
-a finding also needs its band to support the claim — HIGH always blocks, MEDIUM
-blocks only with at least one corroborating signal, LOW never blocks — and a
+a finding also needs its band and evidence to support the claim — HIGH needs an
+independent or self-evident signal, MEDIUM needs an independent signal, LOW
+never blocks — and a
 finding the correlator marked unconfirmed-by-live-scan never blocks
 uncorroborated. `--enforce-confidence=false` restores the severity-only mapping.
 `confidence_reasons` carries a `+0` line naming the reason whenever a
@@ -280,8 +280,14 @@ enforcement gates on structure instead of on a published string.
 | Value | Meaning |
 |---|---|
 | `blackbox` | Produced by the Go HTTP scanner against a live target. |
-| `whitebox` | Produced by a static analyser against source / spec. Since TASK-115/116 this covers the native-Go secrets scanner and the Go Semgrep shell-out as well as the (opt-in `--python-engine`) Python AST and spec analysers — `source` does not distinguish which; use `source_tier` for that. |
-| `correlated` | Produced by the correlator when both engines agree on the same endpoint + related category. Severity is escalated by one level; confidence is `HIGH`. |
+| `whitebox` | Produced by a static analyser against source / spec. Since TASK-115/116 this covers the native-Go secrets scanner and the Go Semgrep shell-out as well as the Python AST and spec analysers. The CLI auto-enables Python for `--code` unless explicitly disabled; `source` does not distinguish the producer, so use `source_tier`. |
+| `correlated` | Produced by the native DAST/SAST correlator when evidence agrees on the same endpoint and related category. Confidence becomes `HIGH`; severity escalation depends on the evidence path: ordinary correlation moves one level, reachable tree-sitter evidence can move two, and Proven Path forces `CRITICAL`. |
+| `imported` | Produced by SARIF import. Cross-tool corroboration stamps independent-support metadata without changing this source value: imported evidence that matches a native finding collapses into the native representative, while import-to-import matches remain `imported`. |
+
+These four values are the built-in report contract. A plugin can currently
+return another non-empty source string without validation; that output violates
+the published JSON Schema and is omitted from the fixed `sources` counters.
+This is a product defect, not an extension mechanism.
 
 ---
 
@@ -313,7 +319,7 @@ whether their identities are comparable at all.
 
 | Field | What moved | What it breaks |
 |---|---|---|
-| `fingerprint` on **every** finding | Identity is computed from semantics rather than from `sha1(category\|endpoint\|title)`. v1 and v2 share no hash. | **Every saved `--baseline` file must be regenerated and every `.fendix-ignore` `fingerprint:` rule rewritten.** Measured on a 30-finding fixture: a genuine pre-upgrade baseline matched **0 of 30**; a regenerated one matched 30 of 30. Rules matching by path, category or rule id are unaffected. Baseline matching recomputes the key from each finding's fields, but a pre-v3 baseline carries none of the fields v2 identity reads, so recomputation does not rescue the upgrade. |
+| `fingerprint` on **every** finding | Identity is computed from semantics rather than from `sha1(category\|endpoint\|title)`. v1 and v2 share no hash. | **Every saved `--baseline` file must be regenerated and every `.fendix-ignore` `fingerprint:` rule rewritten.** Measured on a 30-finding fixture: a genuine pre-upgrade baseline matched **0 of 30**; a regenerated one matched 30 of 30. Ignore rules matching by `id`, `endpoint`, or `category` are unaffected by the fingerprint change, although positional `SEC-NNN` ids are not durable across scans. Baseline matching recomputes the key from each finding's fields, but a pre-v3 baseline carries none of the fields v2 identity reads, so recomputation does not rescue the upgrade. |
 | `fingerprint` on **dependency** findings | The installed version is no longer an identity input. | One advisory affecting several installed copies of one package in one lockfile is now ONE identity rather than several. A `fingerprint:` suppression covers all copies of that advisory for that package. In exchange, a package bumped from one vulnerable version to another keeps its record instead of reporting "1 fixed, 1 new". |
 | `title` on **path-traversal**, **open-redirect** and **SSRF** findings | Wording now follows the evidence the finding holds: `Potential X — dynamic …` when only the sink was observed, `X — user-controlled …` when the source→sink path was proven. | Nothing structurally — titles are not identity inputs as of v3.0.0. A snapshot pinning the old strings needs regenerating. |
 | SARIF `partialFingerprints` key | `fendix/v1` → `fendix/v2`, bound to the algorithm constant so the key can never name one scheme while carrying another. | A consumer keyed on `fendix/v1` stops matching — deliberately, so v1 and v2 identities are never confused. |
@@ -339,8 +345,11 @@ component cannot impersonate a present one.
 Excluded on purpose: title, evidence prose, fix and reference text
 (presentation); severity, confidence, score, band, status, decision reason,
 policy and applicability (evolving judgements *about* a finding); line and
-column numbers, absolute paths, worktree and temp prefixes, timestamps and run
-ids (the machine and the moment); and credential material, raw or digested.
+column numbers, timestamps and run ids; and credential material, raw or
+digested. File and manifest paths are identity inputs. Emitters must make them
+repository-relative: the fingerprint normalizer standardizes separators and a
+leading `./`, but an absolute input remains machine-dependent because the
+fingerprint layer does not know the scan root.
 
 ---
 

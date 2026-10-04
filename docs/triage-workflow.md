@@ -31,9 +31,10 @@ Why this order:
   deterministic `confidence_band` supports the claim. Everything held at `WARN`
   is still real output worth reading — it just did not clear the evidence bar,
   and `confidence_reasons` says which signal was missing.
-- **Correlated findings have the lowest false-positive rate.** Both
-  engines independently agreed on the same endpoint and category. Cross-engine
-  agreement is one of the eight corroborating signals the gate reads.
+- **Correlation adds independent support.** When separate analyzers agree on
+  the same issue, the confidence model records that evidence. No repository
+  benchmark currently isolates correlation's false-positive rate, so treat the
+  confidence reasons on the finding as the precise explanation for its band.
 - **Critical severity = direct exploitation.** Hardcoded production keys.
   Auth disabled. Don't let those age in a backlog.
 - **Lows and INFOs are best-read in aggregate.** A 30-finding INFO list
@@ -75,16 +76,18 @@ fendix scan --code ./src --url https://staging.example.com \
   --save-baseline .fendix/baseline.json
 ```
 
-> **Regenerate baselines saved before v2.0.** A baseline entry matches on
-> `sha1(category|endpoint|title)`. v2.0 renamed two classes of finding, so those
-> entries silently stop matching and a `--diff` scan reports them as new:
-> dependency findings now carry the **canonical CVE id** in their title
-> (`SEC-DEPS-PYSEC_2026_3552` → `SEC-DEPS-CVE_2026_69247`), and a
-> `csrftoken` / `XSRF-TOKEN` / `_csrf` cookie without `HttpOnly` is no longer
-> titled "Session cookie missing HttpOnly flag". The same applies to
-> `.fendix-ignore` `fingerprint:` rules pinned to either. Re-save the baseline
-> once against a 2.x binary. (`fendix verify` needs no action — it matches on
-> the preserved `references` id set as well as the id.)
+> **Regenerate every baseline and fingerprint suppression saved before
+> v3.0.0.** v3.0.0 replaced `fendix/v1`
+> (`sha1(category|endpoint|title)`) with the semantic `fendix/v2` identity.
+> The two schemes intentionally share no hashes, so every old baseline entry
+> and every `.fendix-ignore` `fingerprint:` rule stops matching. Re-save the
+> baseline and rewrite fingerprint suppressions from a current report.
+> Endpoint/category suppressions are unaffected; positional `SEC-NNN` ids are
+> not durable migration keys. `fingerprint_v1` remains
+> in current JSON as a migration bridge for downstream issue matching, but the
+> engine does not use it as current identity. Users upgrading from pre-v2 also
+> cross the historical dependency-title and CSRF-cookie renames; the v3
+> regeneration covers those changes as well.
 
 Subsequent runs comparing against this baseline only show *new* findings
 introduced by recent changes:
@@ -123,8 +126,9 @@ findings are still in the report, they just stop gating:
   landing in the `LOW` band.
 - A finding in **test/fixture code** with no corroborating signal is held at
   `WARN` even when it meets `--fail-on` (`--deescalate-tests`, on by default). A
-  corroborated one — a proven taint path, a provider-validated live credential —
-  still blocks.
+  finding with an independent signal, such as a proven taint path, can still
+  block. A token that merely matches a provider-specific format is not live
+  validation.
 
 Suppress only what survives both.
 
@@ -133,13 +137,18 @@ Suppress only what survives both.
 ## Suppressing findings
 
 Suppression lives in `.fendix-ignore` at your project root (or use
-`--ignore <path>`). Suppressions are diffable, reviewable, and require
-a `reason` field.
+`--ignore <path>`). Suppressions are diffable and reviewable. The engine
+accepts an omitted `reason`; require one in code review so accepted risk stays
+auditable.
 
 ### Suppression options
 
 ```yaml
 ignore:
+  # By stable semantic fingerprint — preferred for one exact finding
+  - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
+    reason: "Accepted risk reviewed in JIRA-1234"
+
   # By finding ID — useful for one-off accepted risks
   - id: SEC-014
     reason: "Rate limiting handled at API gateway"
@@ -169,10 +178,10 @@ ignore:
 
 - A rule matches when **all** specified fields match the finding (AND
   logic). Omitted fields match everything.
-- `endpoint` supports glob patterns (`*` and `?`).
+- `endpoint` supports `*` glob patterns. `?` is treated literally.
 - `until` uses `YYYY-MM-DD`. Expired rules stop applying — you'll see
   the finding again on the next scan.
-- `reason` is required. Without it, the rule is rejected.
+- `reason` is optional to the parser but should be required by review policy.
 
 ### When NOT to suppress
 
@@ -224,8 +233,9 @@ jq -r '.findings[] | select(.category == "headers") | .id' findings.json
 ```
 
 The report contract carries its own version, `metadata.schema_version`
-(today `1`), independent of the engine's release version — engine v2.0.0 left it
-at `1`. See [`docs/schema.md`](./schema.md) for the contract and for the field
+(today `2`), independent of the engine's release version. Engine v3.0.0 moved
+it from `1` to `2` when the fingerprint meaning changed. See
+[`docs/schema.md`](./schema.md) for the contract and for the field
 *values* v2.0 moved.
 
 ---

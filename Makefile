@@ -10,8 +10,9 @@ EMBED_DIR := $(GO_DIR)/internal/embedded/engine
 # embed-engine resets the embed directory to a placeholder. As of
 # TASK-118 the Go binary no longer bundles the Python engine — secrets
 # (TASK-115) and semgrep (TASK-116) are native Go, and the auth /
-# injection / deps Python checks are opt-in via `--python-engine`,
-# requiring the user to provide a local python/ tree separately. The
+# injection / deps Python checks are auto-enabled by `--code` unless
+# `--python-engine=false` is explicit. They require the user to provide a
+# local python/ tree separately. The
 # target stays in `make build`'s prereq chain so a clean repo always
 # yields a buildable embed/ tree (the //go:embed directive needs the
 # directory to exist with at least one entry).
@@ -24,7 +25,7 @@ embed-engine:
 	@rm -rf $(EMBED_DIR)
 	@mkdir -p $(EMBED_DIR)
 	@echo "# Fendix Python Engine (no longer bundled — TASK-118)" > $(EMBED_DIR)/.gitkeep
-	@echo "✓ Embed dir reset; --python-engine opts in to local python/ tree"
+	@echo "✓ Embed dir reset; --code resolves Python from a local tree or FENDIX_ENGINE"
 
 build: embed-engine
 	@echo "→ Building Go binary..."

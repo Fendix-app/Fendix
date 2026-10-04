@@ -321,8 +321,9 @@ func TestPipelineDemotesAnUncorroboratedBlockingTestFinding(t *testing.T) {
 
 // TestPipelineKeepsACorroboratedBlockingTestFinding is the other half, and the
 // reason FIX-09 is a de-escalation rather than path suppression: a credential
-// with a signal behind it — a proven taint path here, a provider-validated live
-// key in the field — is a real leak wherever the file lives, and still exits 1.
+// with an independent signal behind it — a proven taint path here — can still
+// be a real leak wherever the file lives, and still exits 1. Provider-shaped
+// syntax alone is not live validation.
 func TestPipelineKeepsACorroboratedBlockingTestFinding(t *testing.T) {
 	ev := secretEvidence("app/tests/test_client.py:12")
 	ev.Reachable = true

@@ -1,0 +1,1710 @@
+{
+  "schema_version": 1,
+  "engine_version": "v3.4.1",
+  "checks": [
+    {
+      "id": "configleak",
+      "analyzer": "dast",
+      "category": "data_exposure",
+      "cwes": [],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "headers",
+      "analyzer": "dast",
+      "category": "headers",
+      "cwes": [],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "cors",
+      "analyzer": "dast",
+      "category": "cors",
+      "cwes": [],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "exposure",
+      "analyzer": "dast",
+      "category": "data_exposure",
+      "cwes": [],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "ratelimit",
+      "analyzer": "dast",
+      "category": "rate_limiting",
+      "cwes": [],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "cookie-flags",
+      "analyzer": "dast",
+      "category": "cookie",
+      "cwes": [],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "auth",
+      "analyzer": "dast",
+      "category": "auth_bypass",
+      "cwes": [],
+      "execution_mode": "auth",
+      "auth_requirement": "single-credential",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "idor",
+      "analyzer": "dast",
+      "category": "idor",
+      "cwes": [],
+      "execution_mode": "multiuser",
+      "auth_requirement": "two-user",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "injection",
+      "analyzer": "dast",
+      "category": "injection",
+      "cwes": [],
+      "execution_mode": "active",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "open-redirect",
+      "analyzer": "dast",
+      "category": "redirect",
+      "cwes": [],
+      "execution_mode": "active",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "xss",
+      "analyzer": "dast",
+      "category": "injection",
+      "cwes": [],
+      "execution_mode": "active",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "ssrf",
+      "analyzer": "dast",
+      "category": "ssrf",
+      "cwes": [],
+      "execution_mode": "active",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "host-header",
+      "analyzer": "dast",
+      "category": "host_header",
+      "cwes": [],
+      "execution_mode": "active",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "graphql",
+      "analyzer": "dast",
+      "category": "graphql",
+      "cwes": [],
+      "execution_mode": "active",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "method-tamper",
+      "analyzer": "dast",
+      "category": "method_tamper",
+      "cwes": [],
+      "execution_mode": "active",
+      "auth_requirement": "none",
+      "applicability": [
+        "url"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/AWS_ACCESS_KEY",
+      "finding_id": "SEC-AWS_ACCESS_KEY",
+      "title": "AWS Access Key ID hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/AWS_SECRET_KEY",
+      "finding_id": "SEC-AWS_SECRET_KEY",
+      "title": "AWS Secret Access Key hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/PRIVATE_KEY",
+      "finding_id": "SEC-PRIVATE_KEY",
+      "title": "Private key material hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-321"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/GENERIC_API_KEY",
+      "finding_id": "SEC-GENERIC_API_KEY",
+      "title": "Hardcoded API key or token",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/HARDCODED_PASSWORD",
+      "finding_id": "SEC-HARDCODED_PASSWORD",
+      "title": "Hardcoded password in source code",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-259"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/HARDCODED_SECRET_CONFIG",
+      "finding_id": "SEC-HARDCODED_SECRET_CONFIG",
+      "title": "Hardcoded secret value in config-style assignment",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/JWT_TOKEN",
+      "finding_id": "SEC-JWT_TOKEN",
+      "title": "Hardcoded JWT token",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/JWT_TOKEN_HEADER",
+      "finding_id": "SEC-JWT_TOKEN_HEADER",
+      "title": "Hardcoded JWT token",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/DB_CONNECTION_STRING",
+      "finding_id": "SEC-DB_CONNECTION_STRING",
+      "title": "Database connection string with credentials",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-214"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/GITHUB_TOKEN",
+      "finding_id": "SEC-GITHUB_TOKEN",
+      "title": "GitHub token hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/STRIPE_LIVE_KEY",
+      "finding_id": "SEC-STRIPE_LIVE_KEY",
+      "title": "Stripe live secret key hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/SLACK_TOKEN",
+      "finding_id": "SEC-SLACK_TOKEN",
+      "title": "Slack token hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/GOOGLE_API_KEY",
+      "finding_id": "SEC-GOOGLE_API_KEY",
+      "title": "Google API key hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/ANTHROPIC_API_KEY",
+      "finding_id": "SEC-ANTHROPIC_API_KEY",
+      "title": "Anthropic API key hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/OPENAI_API_KEY",
+      "finding_id": "SEC-OPENAI_API_KEY",
+      "title": "OpenAI API key hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/NPM_TOKEN",
+      "finding_id": "SEC-NPM_TOKEN",
+      "title": "npm registry token hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/GCP_SERVICE_ACCOUNT",
+      "finding_id": "SEC-GCP_SERVICE_ACCOUNT",
+      "title": "GCP service-account JSON key hardcoded",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "secrets/ENV_SECRET",
+      "finding_id": "SEC-ENV_SECRET",
+      "title": "Hardcoded credential in .env file",
+      "analyzer": "secrets",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "code"
+      ],
+      "remediation": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "GO_SQL_INJECTION",
+      "finding_id": "SEC-GO_SQL_INJECTION",
+      "title": "SQL injection: query built via string formatting",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Use parameterised queries: db.Query(\"SELECT … WHERE x = ?\", value). Never concatenate or fmt.Sprintf user-controlled values into SQL.",
+      "availability": "stable"
+    },
+    {
+      "id": "GO_EXEC_COMMAND_INJECTION",
+      "finding_id": "SEC-GO_EXEC_COMMAND_INJECTION",
+      "title": "Command injection: exec.Command with shell wrapper or concatenated argv",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Pass argv as a list rather than going through `sh -c`. If shell semantics are required, sanitise inputs with shellescape or use os/exec with explicit env+argv.",
+      "availability": "stable"
+    },
+    {
+      "id": "GO_WEAK_HASH_PASSWORD",
+      "finding_id": "SEC-GO_WEAK_HASH_PASSWORD",
+      "title": "Weak hash used for password storage",
+      "analyzer": "textscan",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-327"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Use bcrypt, scrypt, argon2, or PBKDF2 for password hashing. Raw MD5/SHA1 is unsuitable — they're fast hashes with no work factor and no per-record salt.",
+      "availability": "stable"
+    },
+    {
+      "id": "GO_HARDCODED_AWS_KEY",
+      "finding_id": "SEC-GO_HARDCODED_AWS_KEY",
+      "title": "AWS access-key ID literal embedded in source",
+      "analyzer": "textscan",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Load AWS credentials from the SDK's default chain (env, ~/.aws/credentials, instance role). If this is a real key, rotate it now.",
+      "availability": "stable"
+    },
+    {
+      "id": "JS_EVAL_LITERAL",
+      "finding_id": "SEC-JS_EVAL_LITERAL",
+      "title": "eval() with non-literal argument",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-95"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Replace eval() with explicit parsing (JSON.parse for JSON, Function constructor with allowlist for templated logic). Eval of user-controlled input is direct RCE.",
+      "availability": "stable"
+    },
+    {
+      "id": "JS_INNER_HTML_USER_INPUT",
+      "finding_id": "SEC-JS_INNER_HTML_USER_INPUT",
+      "title": "innerHTML assigned from a non-literal expression",
+      "analyzer": "textscan",
+      "category": "xss",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Use textContent (sanitises automatically) or sanitise input through DOMPurify before assignment.",
+      "availability": "stable"
+    },
+    {
+      "id": "JS_CHILD_PROCESS_SHELL",
+      "finding_id": "SEC-JS_CHILD_PROCESS_SHELL",
+      "title": "child_process.exec with shell semantics",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Prefer child_process.execFile or spawn with argv as an array. exec passes its first argument to a shell.",
+      "availability": "stable"
+    },
+    {
+      "id": "JS_DOCUMENT_WRITE",
+      "finding_id": "SEC-JS_DOCUMENT_WRITE",
+      "title": "document.write — DOM-based XSS surface",
+      "analyzer": "textscan",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "document.write() is XSS-prone and blocks the parser. Build DOM nodes via createElement/textContent, or use template literals + a sanitiser.",
+      "availability": "stable"
+    },
+    {
+      "id": "JS_REQUIRE_INTERPOLATION",
+      "finding_id": "SEC-JS_REQUIRE_INTERPOLATION",
+      "title": "require() called with a non-literal path",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-95"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Pass a string literal to require(). Dynamic require paths let an attacker load arbitrary modules.",
+      "availability": "stable"
+    },
+    {
+      "id": "JS_HARDCODED_AWS_KEY",
+      "finding_id": "SEC-JS_HARDCODED_AWS_KEY",
+      "title": "AWS access-key ID literal embedded in JavaScript source",
+      "analyzer": "textscan",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Load credentials from process.env or the AWS SDK's default chain. Rotate the exposed key.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_EXEC_COMMAND_INJECTION",
+      "finding_id": "SEC-JAVA_EXEC_COMMAND_INJECTION",
+      "title": "Command injection: Runtime.exec / ProcessBuilder with a concatenated argument",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Pass the command + args as a String[] / List\u003cString\u003e of literals; never build a shell string from user input. If a shell is unavoidable, validate against an allowlist.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_SQL_INJECTION",
+      "finding_id": "SEC-JAVA_SQL_INJECTION",
+      "title": "SQL injection: query built by string concatenation",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Use a PreparedStatement with bound `?` parameters: conn.prepareStatement(\"… WHERE x = ?\"). Never concatenate user input into SQL.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_WEAK_CRYPTO",
+      "finding_id": "SEC-JAVA_WEAK_CRYPTO",
+      "title": "Weak cryptography: MD5/SHA-1 digest or DES/ECB/RC4 cipher",
+      "analyzer": "textscan",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-327"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Use SHA-256+ for digests and AES-GCM (never ECB/DES/RC4) for encryption. For passwords use bcrypt/scrypt/argon2/PBKDF2.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_INSECURE_DESERIALIZATION",
+      "finding_id": "SEC-JAVA_INSECURE_DESERIALIZATION",
+      "title": "Insecure deserialization: Java ObjectInputStream",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-502"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Avoid Java native serialization on untrusted input. Prefer a data format (JSON) with a safe parser, or install an ObjectInputFilter allowlist (JEP 290).",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_XXE",
+      "finding_id": "SEC-JAVA_XXE",
+      "title": "XML external entity (XXE): XML parser factory created without hardening",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-611"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Disable DOCTYPE/external entities: factory.setFeature(\"http://apache.org/xml/features/disallow-doctype-decl\", true) (or XMLConstants.FEATURE_SECURE_PROCESSING). Prefer a parser that rejects external entities by default.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_INSECURE_COOKIE",
+      "finding_id": "SEC-JAVA_INSECURE_COOKIE",
+      "title": "Insecure cookie: Secure/HttpOnly explicitly disabled",
+      "analyzer": "textscan",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-614"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Set cookies Secure + HttpOnly (cookie.setSecure(true); cookie.setHttpOnly(true)). Disable only with a documented reason.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_WEAK_RANDOM",
+      "finding_id": "SEC-JAVA_WEAK_RANDOM",
+      "title": "Insecure randomness: java.util.Random / Math.random in a security context",
+      "analyzer": "textscan",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-330"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Use java.security.SecureRandom for tokens, salts, session IDs, and keys. java.util.Random / Math.random are statistically predictable.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_LDAP_INJECTION",
+      "finding_id": "SEC-JAVA_LDAP_INJECTION",
+      "title": "LDAP injection: search filter built by string concatenation",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-90"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Escape LDAP filter metacharacters (encodeForLDAP) or use parameterised search; never concatenate user input into a filter.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_SSRF",
+      "finding_id": "SEC-JAVA_SSRF",
+      "title": "SSRF: outbound request built directly from a request parameter",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Validate the URL against an allowlist of permitted hosts/schemes before the request; never pass a raw request parameter to an HTTP client.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_XSS_REFLECTED",
+      "finding_id": "SEC-JAVA_XSS_REFLECTED",
+      "title": "Reflected XSS: request value written straight to the servlet response",
+      "analyzer": "textscan",
+      "category": "xss",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "HTML-encode untrusted output (OWASP Encoder: Encode.forHtml(...)) or use a context-aware templating engine; never write a raw request parameter to the response.",
+      "availability": "stable"
+    },
+    {
+      "id": "JAVA_PATH_TRAVERSAL",
+      "finding_id": "SEC-JAVA_PATH_TRAVERSAL",
+      "title": "Path traversal: filesystem path built from a request parameter",
+      "analyzer": "textscan",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Resolve the path against a fixed base directory and verify it stays within it (canonical path + prefix check), or map the request value to an allowlisted file; never pass it straight to a file API.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_DOCKER_RUNS_AS_ROOT",
+      "finding_id": "SEC-IAC_DOCKER_RUNS_AS_ROOT",
+      "title": "Dockerfile doesn't drop privileges (no USER directive in file)",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "MEDIUM",
+      "confidence": "LOW",
+      "cwes": [
+        "CWE-250"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "dockerfile"
+      ],
+      "remediation": "Add `USER \u003cnon-root\u003e` after package installs. Containers running as UID 0 escalate easily into the host on misconfigured runtimes.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_DOCKER_ADD_INSTEAD_OF_COPY",
+      "finding_id": "SEC-IAC_DOCKER_ADD_INSTEAD_OF_COPY",
+      "title": "Dockerfile uses ADD when COPY would suffice",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "LOW",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-829"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "dockerfile"
+      ],
+      "remediation": "Use COPY for local files. If you need a URL, prefer curl + verified checksum in a RUN step.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_DOCKER_LATEST_TAG",
+      "finding_id": "SEC-IAC_DOCKER_LATEST_TAG",
+      "title": "Dockerfile pins to :latest (or no tag at all)",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-829"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "dockerfile"
+      ],
+      "remediation": "Pin to a specific tag or digest (e.g. `python:3.11.7-slim` or `python@sha256:…`). `:latest` makes builds unreproducible AND ships unreviewed upstream changes.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_DOCKER_FLOATING_TAG",
+      "finding_id": "SEC-IAC_DOCKER_FLOATING_TAG",
+      "title": "Dockerfile base image is not pinned to a digest",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "INFO",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-829"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "dockerfile"
+      ],
+      "remediation": "Pin the base image by digest: `FROM python:3.14-slim@sha256:…`. Keep the tag alongside it for readability — the digest is what makes the build reproducible, and a tool like Renovate or Dependabot can bump both together.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_K8S_PRIVILEGED_CONTAINER",
+      "finding_id": "SEC-IAC_K8S_PRIVILEGED_CONTAINER",
+      "title": "Kubernetes pod runs with privileged: true",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-250"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "yaml"
+      ],
+      "remediation": "Drop `privileged: true`. If a workload genuinely needs host capabilities, use `securityContext.capabilities.add` with the minimum set.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_K8S_HOST_NETWORK",
+      "finding_id": "SEC-IAC_K8S_HOST_NETWORK",
+      "title": "Kubernetes pod uses hostNetwork: true",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-250"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "yaml"
+      ],
+      "remediation": "hostNetwork: true binds pod ports to the node's network namespace and shares its interfaces. Justify per-workload; default should be false.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_K8S_ALLOW_PRIVILEGE_ESCALATION",
+      "finding_id": "SEC-IAC_K8S_ALLOW_PRIVILEGE_ESCALATION",
+      "title": "Kubernetes container allowPrivilegeEscalation: true",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "MEDIUM",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-250"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "yaml"
+      ],
+      "remediation": "Set `allowPrivilegeEscalation: false`. Required for compliance with most pod-security policies.",
+      "availability": "stable"
+    },
+    {
+      "id": "IAC_K8S_RUNS_AS_ROOT",
+      "finding_id": "SEC-IAC_K8S_RUNS_AS_ROOT",
+      "title": "Kubernetes container runAsUser: 0 (root)",
+      "analyzer": "textscan",
+      "category": "iac",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-250"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "yaml"
+      ],
+      "remediation": "Set runAsUser to a non-zero UID, or runAsNonRoot: true to refuse to start if the image's USER is root.",
+      "availability": "stable"
+    },
+    {
+      "id": "django-view-missing-login-required",
+      "title": "Django view '$VIEW' does not use LoginRequiredMixin.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "LOW",
+      "cwes": [
+        "CWE-306"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Django view '$VIEW' does not use LoginRequiredMixin. Add LoginRequiredMixin or @login_required to protect this view.",
+      "availability": "stable"
+    },
+    {
+      "id": "fastapi-route-missing-auth-dependency",
+      "title": "FastAPI route '$FUNC' has no authentication dependency (Depends(...)).",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "LOW",
+      "cwes": [
+        "CWE-306"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "FastAPI route '$FUNC' has no authentication dependency (Depends(...)). Inject a dependency such as Depends(get_current_user) to enforce auth.",
+      "availability": "stable"
+    },
+    {
+      "id": "flask-missing-login-required",
+      "title": "Flask route '$FUNC' is missing @login_required decorator.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-306"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Flask route '$FUNC' is missing @login_required decorator. Any user can access this endpoint without authentication.",
+      "availability": "stable"
+    },
+    {
+      "id": "flask-route-no-auth-decorator",
+      "title": "Flask route '$FUNC' has no auth-style decorator (@login_required, @requires_auth, @jwt_required, or @auth.login_required) directly above the @app.route(...) line.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "LOW",
+      "cwes": [
+        "CWE-306"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Flask route '$FUNC' has no auth-style decorator (@login_required, @requires_auth, @jwt_required, or @auth.login_required) directly above the @app.route(...) line. Confirm authentication is enforced.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-jwt-decode-no-verification",
+      "title": "JWT decoded with signature verification disabled.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "JWT decoded with signature verification disabled. This allows an attacker to forge tokens. Remove options={\"verify_signature\": False} and specify a strong algorithm.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-legacy-cipher-import",
+      "title": "Legacy / broken symmetric cipher imported (DES, 3DES, RC4, ARC2, Blowfish).",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-327"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Legacy / broken symmetric cipher imported (DES, 3DES, RC4, ARC2, Blowfish). These are no longer considered secure. Use AES-GCM, AES-CCM, or ChaCha20-Poly1305 instead.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-md5-used-for-password",
+      "title": "hashlib.md5() used on a password-shaped variable.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-327"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "hashlib.md5() used on a password-shaped variable. MD5 is broken for cryptographic use. Use a password-hashing function — bcrypt, scrypt, argon2, or PBKDF2 — never a raw hash.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-random-for-token-generation",
+      "title": "random module used inside a function whose name suggests a security-sensitive value ('$FN').",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-338"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "random module used inside a function whose name suggests a security-sensitive value ('$FN'). The `random` module is NOT cryptographically secure. Use `secrets.token_urlsafe()`, `secrets.token_bytes()`, or `secrets.choice()` instead.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-sha1-used-for-password",
+      "title": "hashlib.sha1() used on a password-shaped variable.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-327"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "hashlib.sha1() used on a password-shaped variable. SHA1 is unsuitable for password hashing (fast hash, no work factor). Use bcrypt, scrypt, argon2, or PBKDF2 instead.",
+      "availability": "stable"
+    },
+    {
+      "id": "django-orm-raw-sql",
+      "title": "Django ORM raw SQL with a non-literal argument — SQL injection risk.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Django ORM raw SQL with a non-literal argument — SQL injection risk. Pass user input as params, never interpolate into the query string. Prefer Django's ORM filter() expressions when possible.",
+      "availability": "stable"
+    },
+    {
+      "id": "flask-render-template-string-injection",
+      "title": "render_template_string() called with a non-literal template — server-side template injection (SSTI) risk.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "render_template_string() called with a non-literal template — server-side template injection (SSTI) risk. Use render_template() with a static .html file; never compose Jinja source from user input.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-command-injection-shell-true",
+      "title": "Command execution with user-controlled input — command injection risk.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Command execution with user-controlled input — command injection risk. Use subprocess.run() with a list of arguments and shell=False. Never pass user input directly to shell commands.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-eval-injection",
+      "title": "eval()/exec() with dynamic argument — code injection risk.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-95"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "eval()/exec() with dynamic argument — code injection risk. Avoid eval/exec entirely. If required, validate input strictly against an allowlist before execution.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-pickle-loads-untrusted",
+      "title": "pickle.loads() on a non-literal byte string — arbitrary code execution on deserialization.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-502"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "pickle.loads() on a non-literal byte string — arbitrary code execution on deserialization. Replace with json.loads() for untrusted input. If pickle is strictly required, sign the payload (hmac) and verify before unpickling.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-sql-injection-string-format",
+      "title": "SQL query built via string formatting — SQL injection risk.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "SQL query built via string formatting — SQL injection risk. Use parameterized queries: cursor.execute(\"SELECT ... WHERE x = %s\", (value,))",
+      "availability": "stable"
+    },
+    {
+      "id": "python-subprocess-shell-true-with-variable",
+      "title": "subprocess with shell=True and a non-literal command — command injection risk.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "subprocess with shell=True and a non-literal command — command injection risk. Drop shell=True and pass argv as a list, OR shlex.quote() each interpolated argument if shell semantics are truly required.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-yaml-load-unsafe",
+      "title": "yaml.load() without yaml.SafeLoader can execute arbitrary Python code via the !!python/object tag.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-502"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "yaml.load() without yaml.SafeLoader can execute arbitrary Python code via the !!python/object tag. Use yaml.safe_load() or pass Loader=yaml.SafeLoader explicitly.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-aws-access-key-id-literal",
+      "title": "AWS access-key ID literal detected in assignment to '$VAR'.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "AWS access-key ID literal detected in assignment to '$VAR'. Use the AWS SDK's credential provider chain (env vars, ~/.aws/credentials, instance role) instead of hardcoding. If the key is real, revoke it now.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-gcp-service-account-inline",
+      "title": "Inline GCP service-account JSON detected in assignment to '$VAR'.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Inline GCP service-account JSON detected in assignment to '$VAR'. Load the credential from an external file via GOOGLE_APPLICATION_CREDENTIALS or a secrets manager. Rotate the key in Google Cloud IAM immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-hardcoded-db-url",
+      "title": "Hardcoded database connection string with embedded credentials found in '$VAR'.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-214"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Hardcoded database connection string with embedded credentials found in '$VAR'. Store connection strings in environment variables (e.g., DATABASE_URL). Rotate the database password immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-hardcoded-secret-assignment",
+      "title": "Hardcoded secret found in assignment to '$KEY'.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Hardcoded secret found in assignment to '$KEY'. Move secrets to environment variables or a secrets manager. Rotate the exposed credential immediately.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-pem-private-key-literal",
+      "title": "PEM-encoded private key literal detected in assignment to '$VAR'.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "PEM-encoded private key literal detected in assignment to '$VAR'. Move the key out of source control immediately, rotate it on the server, and reload from disk or a secrets manager at runtime.",
+      "availability": "stable"
+    },
+    {
+      "id": "python-slack-webhook-url-literal",
+      "title": "Slack incoming-webhook URL hardcoded in '$VAR'.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-798"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "Slack incoming-webhook URL hardcoded in '$VAR'. Anyone with this URL can post into the bound channel. Rotate the webhook in Slack's app config and store the new URL in an env var (e.g. SLACK_WEBHOOK_URL).",
+      "availability": "stable"
+    }
+  ],
+  "analyzers": [
+    {
+      "id": "dast",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "spec",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "active-probes",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "secrets",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "textscan",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "semgrep",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "govulncheck",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "pip",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "npm",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "python-engine",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    },
+    {
+      "id": "python-engine/auth",
+      "base_status": false,
+      "protocol_dependent": true,
+      "availability": "stable"
+    },
+    {
+      "id": "python-engine/injection",
+      "base_status": false,
+      "protocol_dependent": true,
+      "availability": "stable"
+    },
+    {
+      "id": "python-engine/deps",
+      "base_status": false,
+      "protocol_dependent": true,
+      "availability": "stable"
+    },
+    {
+      "id": "plugins",
+      "base_status": true,
+      "protocol_dependent": false,
+      "availability": "stable"
+    }
+  ],
+  "coverage": {
+    "contract_version": 1,
+    "raw_states": [
+      "ok",
+      "skipped",
+      "failed"
+    ],
+    "classes": [
+      {
+        "id": "ok",
+        "engine_gap": false,
+        "satisfies_required": true
+      },
+      {
+        "id": "not_applicable",
+        "engine_gap": false,
+        "satisfies_required": true
+      },
+      {
+        "id": "disabled",
+        "engine_gap": false,
+        "satisfies_required": false
+      },
+      {
+        "id": "unavailable",
+        "engine_gap": true,
+        "satisfies_required": false
+      },
+      {
+        "id": "unsupported",
+        "engine_gap": false,
+        "satisfies_required": false
+      },
+      {
+        "id": "failed",
+        "engine_gap": true,
+        "satisfies_required": false
+      },
+      {
+        "id": "unknown",
+        "engine_gap": false,
+        "satisfies_required": false
+      }
+    ],
+    "reasons": [
+      {
+        "id": "not_applicable",
+        "state": "skipped",
+        "class": "not_applicable",
+        "engine_gap": false
+      },
+      {
+        "id": "diff_unchanged",
+        "state": "skipped",
+        "class": "not_applicable",
+        "engine_gap": false
+      },
+      {
+        "id": "disabled_by_flag",
+        "state": "skipped",
+        "class": "disabled",
+        "engine_gap": false
+      },
+      {
+        "id": "disabled_offline",
+        "state": "skipped",
+        "class": "disabled",
+        "engine_gap": false
+      },
+      {
+        "id": "dependency_missing",
+        "state": "skipped",
+        "class": "unavailable",
+        "engine_gap": true
+      },
+      {
+        "id": "unsupported_target",
+        "state": "skipped",
+        "class": "unsupported",
+        "engine_gap": false
+      },
+      {
+        "id": "network_error",
+        "state": "failed",
+        "class": "failed",
+        "engine_gap": true
+      },
+      {
+        "id": "timeout",
+        "state": "failed",
+        "class": "failed",
+        "engine_gap": true
+      },
+      {
+        "id": "execution_error",
+        "state": "failed",
+        "class": "failed",
+        "engine_gap": true
+      },
+      {
+        "id": "malformed_output",
+        "state": "failed",
+        "class": "failed",
+        "engine_gap": true
+      },
+      {
+        "id": "truncated_output",
+        "state": "failed",
+        "class": "failed",
+        "engine_gap": true
+      },
+      {
+        "id": "input_error",
+        "state": "failed",
+        "class": "failed",
+        "engine_gap": true
+      },
+      {
+        "id": "no_endpoints",
+        "state": "failed",
+        "class": "failed",
+        "engine_gap": true
+      }
+    ]
+  }
+}

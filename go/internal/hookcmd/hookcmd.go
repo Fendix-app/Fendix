@@ -12,11 +12,12 @@
 //
 //	fendix scan --code . --staged --fast --fail-on <severity>
 //
-// --staged scopes the scan to the index, --fast runs only the instant
-// native scanners (secrets + textscan, no semgrep / no network dep calls),
-// so the commit-time budget is tens of milliseconds on a real monorepo.
-// A finding at or above --fail-on returns exit 1, which aborts the commit;
-// the developer fixes it (or bypasses with `git commit --no-verify`).
+// --staged scopes the scan to the index and --fast skips Semgrep and native
+// dependency scanners. Known product defect: because --code auto-enables the
+// Python phase, the generated command is not currently native-only and can run
+// the Python deps check. A finding at or above --fail-on aborts the commit only
+// when the decision policy stamps it BLOCK; the developer fixes it (or bypasses
+// with `git commit --no-verify`).
 //
 // Safety: install refuses to clobber a pre-existing non-fendix pre-commit
 // hook unless --force is passed, and never silently overwrites the user's
@@ -53,7 +54,8 @@ func NewCmd() *cobra.Command {
 		Short: "Manage the git pre-commit hook that runs a fast diff scan",
 		Long: "Install or remove a git pre-commit hook that runs " +
 			"`fendix scan --staged --fast` on every commit, aborting the " +
-			"commit if a finding at or above the chosen severity is found.",
+			"commit if a finding at or above the chosen severity reaches BLOCK. " +
+			"Known limitation: --fast does not disable the Python phase auto-enabled by --code.",
 	}
 	cmd.AddCommand(newInstallCmd())
 	cmd.AddCommand(newUninstallCmd())
@@ -72,7 +74,7 @@ func newInstallCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("force", false, "Overwrite an existing non-fendix pre-commit hook")
-	cmd.Flags().String("fail-on", defaultFailOn, "Severity that aborts the commit: CRITICAL, HIGH, MEDIUM")
+	cmd.Flags().String("fail-on", defaultFailOn, "Decision threshold: CRITICAL, HIGH, MEDIUM, LOW; the hook aborts only when a finding reaches BLOCK")
 	return cmd
 }
 

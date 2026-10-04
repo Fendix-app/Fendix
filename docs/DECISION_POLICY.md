@@ -11,20 +11,24 @@ the code is right and this file is a bug.
 
 ---
 
-## The four states
+## Four distinct concepts
 
-Fendix keeps these distinct and never silently promotes one to the next:
+These are separate axes and labels, not a mandatory progression. A blocking
+decision can be supported by independent confirmation or, at HIGH confidence,
+by evidence where the observation itself establishes the claim.
 
 | State | Meaning |
 |---|---|
 | **Observed condition** | a scanner observed something potentially relevant |
 | **Security evidence** | the observation supports a security claim |
-| **Confirmed vulnerability** | sufficient independent/correlated evidence exists |
-| **Blocking decision** | evidence meets the explicit policy required to fail CI |
+| **Independent confirmation** | a separate observation supports the security claim |
+| **Blocking decision** | severity, confidence, evidence signals, and policy together require CI to fail |
 
-**A finding never becomes `BLOCK` because its rule carries a high static
-severity.** Severity is a constant chosen by the scanner that emitted the
-finding; on its own it says nothing about whether the claim was established.
+**A finding never becomes `BLOCK` from severity alone.** A check assigns the
+initial severity; correlation, Proven Path, pure-SAST reachability, and the
+confidence cap can change it before decision. The finalized severity expresses
+impact and meets or misses the configured floor, but does not by itself
+establish the claim.
 
 ---
 
@@ -32,9 +36,11 @@ finding; on its own it says nothing about whether the claim was established.
 
 Three independent axes feed a decision. They are deliberately not collapsed.
 
-**Severity** — the scanner's static impact estimate, capped by
+**Severity** — the finalized impact rating entering decision. It starts with
+the check's discrete assignment, receives evidence-based escalation where the
+correlator/finalizer warrants it, and is capped by
 `models.MaxSeverityForConfidence` against the producer's `Confidence` enum.
-Decides only whether the finding meets `--fail-on`.
+It decides only whether the finding meets `--fail-on`.
 
 **Confidence band** — `confidence.Score` produces a deterministic 0–100 score
 and buckets it: `HIGH ≥ 70`, `MEDIUM ≥ 40`, `LOW` below. Every point comes from

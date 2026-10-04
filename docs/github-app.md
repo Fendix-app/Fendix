@@ -60,7 +60,7 @@ You can also distribute an install URL like
 ### 3. Configure the webhook server
 
 `fendix-app` is the webhook handler binary, separate from the
-`fendix` CLI. It expects four environment variables:
+`fendix` CLI. It is configured through these environment variables:
 
 | Variable | Purpose |
 |---|---|
@@ -69,6 +69,7 @@ You can also distribute an install URL like
 | `FENDIX_WEBHOOK_SECRET` | The webhook shared secret you configured during App creation. Used to verify `X-Hub-Signature-256` on every incoming request. |
 | `FENDIX_LISTEN_ADDR` | Optional. HTTP listen address. Default `:8080`. |
 | `FENDIX_GITHUB_API_URL` | Optional. Override for GitHub Enterprise Server. Default `https://api.github.com`. |
+| `FENDIX_MAX_CONCURRENT_SCANS` | Optional. Positive worker-pool size for concurrent clone-and-scan jobs. Default `2`. |
 
 A minimal local run for end-to-end smoke testing:
 
@@ -161,8 +162,8 @@ the server logs `webhook ping ack` on success.
 ### Docker
 
 A multi-stage [`Dockerfile.app`](../Dockerfile.app) lives at the repo root. The
-official public image bundles `fendix-app`, the `fendix` CLI, the embedded
-Python engine, and `git` (required for the clone step). Pull the verified
+official public image bundles `fendix-app`, the `fendix` CLI, the Python
+engine tree, and `git` (required for the clone step). Pull the verified
 multi-platform manifest by digest:
 
 ```bash

@@ -41,13 +41,12 @@ go/                          # Go layer — CLI, HTTP scanner, orchestrator
     scanner/                  # Black-box check implementations
     engine/                   # Orchestrator, correlator, Python spawner
     models/                   # Finding, ScanConfig, severity scoring
-    reporters/                # JSON, HTML, SARIF renderers
-    embedded/                 # Embedded Python engine (//go:embed)
+    reporters/                # JSON, HTML, SARIF, PDF renderers
+    embedded/                 # Optional legacy/custom embedded-engine compatibility
 
 python/                      # Python layer — static analysis engine
   engine.py                  # Entrypoint: reads stdin, streams findings
-  analyzers/                  # Secrets, Semgrep, spec parser, AST, deps
-  rules/                      # Custom Semgrep YAML rules
+  analyzers/                  # Spec parser, AST/route analysis, deps
   tests/                      # pytest test suite
 ```
 
@@ -164,7 +163,9 @@ func TestCheckMyThing(t *testing.T) {
 }
 ```
 
-3. **Register in orchestrator** — add your check to the check list in `go/internal/engine/orchestrator.go`
+3. **Register in the check registry** — add your adapter to
+   `scanner.DefaultChecks()` in `go/internal/scanner/check.go`. The orchestrator
+   consumes this registry and must not maintain a second list.
 
 4. **Document** — create `docs/checks/mycheck.md`
 
@@ -174,9 +175,10 @@ func TestCheckMyThing(t *testing.T) {
 > in `go/internal/scanner/secrets/` (TASK-115), Semgrep in
 > `go/internal/scanner/semgrep/` (TASK-116), and dependency-CVE scanning in
 > `go/internal/scanner/deps/`. The Python wrappers for secrets and semgrep were
-> deleted in TASK-118. Python (`--python-engine`, opt-in) now carries only the
-> AST taint analyzer, the route extractor, the OpenAPI spec parser, and its own
-> deps analyzer.
+> deleted in TASK-118. Python now carries only the AST taint analyzer, route
+> extractor, OpenAPI spec parser, and its own deps analyzer. The CLI
+> auto-enables this phase for `--code` unless `--python-engine=false` is
+> explicit; standalone releases require a separate engine tree.
 
 1. **Create the analyzer** in `python/analyzers/`:
 

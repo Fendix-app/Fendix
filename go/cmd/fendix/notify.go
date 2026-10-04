@@ -60,7 +60,7 @@ webhook doesn't suppress the Teams alert.`,
 			return runNotify(cmd.Context(), cmd.OutOrStdout(), path, timeout)
 		},
 	}
-	cmd.Flags().String("findings", "", "Path to a findings JSON file produced by `fendix scan --format json`")
+	cmd.Flags().String("findings", "", "Path to a findings JSON file produced by 'fendix scan --format json'")
 	cmd.Flags().Duration("timeout", 30*time.Second, "Overall timeout for posting all webhooks")
 	return cmd
 }

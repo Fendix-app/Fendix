@@ -2,10 +2,10 @@
 
 **DAST + SAST in one PR check. Fails only when the evidence backs the finding.**
 
-Fendix runs a runtime probe and a static analyzer on every scan. When both engines independently flag the same vulnerability at the same endpoint the finding becomes `correlated` — the strongest signal Fendix produces. As of **v2.0** cross-engine agreement is no longer the only thing that can fail a build, and severity on its own is no longer enough: a finding at or above `--fail-on` blocks only when a deterministic confidence band supports the claim. Everything else is still reported, just downgraded, so your triage queue stays small and every build failure means something.
+Fendix can combine runtime probes and static analyzers in one scan. When both engines independently flag the same vulnerability at the same endpoint the finding becomes `correlated` — the strongest signal Fendix produces. As of **v2.0** cross-engine agreement is no longer the only thing that can fail a build, and severity on its own is no longer enough: a finding at or above `--fail-on` blocks only when its deterministic confidence band and evidence support the claim. Everything else is still reported with a non-blocking decision.
 
-- **Confidence-gated builds.** A finding blocks only when its deterministic band supports it — `HIGH` always, `MEDIUM` with a corroborating signal, `LOW` never. See [`--enforce-confidence`](#scan-flags).
-- **Single binary.** Drop into CI in 30 seconds. Active probes off by default; opt in with `--enable-active`.
+- **Confidence-gated builds.** A finding blocks only when its deterministic band and evidence support it — `HIGH` needs an independent or self-evident signal, `MEDIUM` needs an independent signal, and `LOW` never blocks. See [`--enforce-confidence`](#common-scan-flags).
+- **Standalone Go CLI.** The core scanner is one binary; deeper Python analysis needs a source tree or the official container. Active probes are off by default; opt in with `--enable-active`.
 - **Signed and silent.** Releases signed via [cosign keyless](#verifying-signed-releases) (Sigstore Fulcio). [No telemetry](#what-fendix-sends-to-the-network) — verify with `tcpdump`.
 - **Open source under MIT.** Read the source, audit the wedge, fork it, ship plugins. See [ADR-007](docs/adr/ADR-007-open-source.md) for the strategic posture.
 
@@ -13,7 +13,9 @@ Fendix runs a runtime probe and a static analyzer on every scan. When both engin
 
 ## Accuracy
 
-Reproducible numbers, re-run on the current binary (`v2.0.1`, 2026-08-24):
+Reproducible numbers from the last published capture (`v2.0.1`, 2026-08-24).
+They remain historical measurement evidence and are not relabeled as a
+v3.4.1 run:
 
 | Track | P / R / F1 | Reproduce |
 |---|---|---|
@@ -21,9 +23,9 @@ Reproducible numbers, re-run on the current binary (`v2.0.1`, 2026-08-24):
 | SAST synthetic corpus (full binary, 38 TP / 0 FP / 0 FN / 18 TN) | 1.000 / 1.000 / **1.000** | `python3 scripts/accuracy/run.py --python-engine bin/fendix` |
 | DAST DVWA / Juice Shop (regression coverage) | 13 found · 0 FP / 12 found · 0 FP | `fendix benchmark run --target all` |
 
-The synthetic-corpus F1 is **1.000 — reproduced on the current binary and
-CI-gated** (the one multi-hop SSRF case v0.26 disclosed as a false negative was
-fixed in v0.27), not the stale v0.11.0 claim. Full methodology, caveats, and the
+The synthetic-corpus F1 was **1.000 in that capture and is CI-gated** (the one
+multi-hop SSRF case v0.26 disclosed as a false negative was fixed in v0.27),
+not the stale v0.11.0 claim. Full methodology, caveats, and the
 OWASP/Java omission are in **[BENCHMARKS.md](BENCHMARKS.md)**. Every number there
 is re-runnable; a non-reproducing number is a bug.
 
@@ -47,14 +49,22 @@ The trust statement, before anything else.
 
 | When | Outbound traffic |
 |---|---|
-| **Default scan** (`fendix scan --url ...`) | Only HTTP requests to the URL you passed. Nothing to `fendix.dev`, nothing to a vendor. |
+| **Default built-in DAST** (`fendix scan --url ...`) | Go discovery/check requests go to the URL you passed. Nothing is sent to `fendix.dev`. An enabled out-of-tree plugin can add its own traffic. |
 | **Active probing** (`--enable-active`) | Probe payloads to the same target, only. Audit-logged. Off by default. |
-| **`fendix scan --code ...` (white-box only)** | Reads source from disk. For dependency-CVE detection it queries **`api.osv.dev`** (Python/`requirements.txt` and npm/`package-lock.json`) and **`vuln.go.dev`** (Go modules, via govulncheck) by default. Everything else (secrets, semgrep, textscan) is local. Pass `--no-native-deps` to skip the Go dep scanner, or `--offline` to consult a local snapshot and make **zero** outbound calls. |
-| **Air-gapped scan** (`--offline`) | Zero outbound. The pip and npm dep-CVE scanners read the local snapshot at `--offline-db` (default `~/.fendix/offline-db.json`, built with `fendix db update`); the Go dep scanner needs `vuln.go.dev` and is recorded as `SKIPPED` rather than silently reaching the network. |
+| **Remote OpenAPI spec** (`--spec https://...`) | The Go crawler fetches the supplied URL through its network guard. If the Python phase runs, it currently refetches HTTPS through `urllib` without inheriting that guard; plaintext HTTP is rejected by Python. This divergence is a product defect. |
+| **`fendix scan --code ...` (white-box only)** | Reads source from disk. Native dependency-CVE detection queries **`api.osv.dev`** (Python/`requirements.txt` and npm/`package-lock.json`) and **`vuln.go.dev`** (Go modules, via govulncheck) by default. The Python deps check auto-enabled by `--code` may also invoke `pip-audit`, `npm audit`, and `govulncheck`. Secrets, Semgrep and textscan are local. |
+| **Native offline mode** (`--offline`) | Native pip/npm scanners read the snapshot at `--offline-db` (default `~/.fendix/offline-db.json`, built with `fendix db update`); native govulncheck is recorded `SKIPPED`. **Known product defect:** the flag is not passed into the Python deps check auto-enabled by `--code`, so `--offline` alone is not a hermetic guarantee. |
 | **`fendix scan` with no flags** | Errors out — there's no work to do. Zero outbound. |
 | **Telemetry / phone-home / usage stats** | None. There is no telemetry code. Verify with `tcpdump`, or read [`go/internal/`](go/internal/) — there's nothing to find. |
 
-Dependency-CVE lookups are the only non-target traffic Fendix makes, they only happen when you pass `--code` (or `--spec`), and `--offline` turns them off entirely. If a future release adds anything else that talks to a non-target host, it'll be opt-in, documented in this section, and named in the CHANGELOG. That's the contract.
+Built-in non-target traffic comes from dependency-CVE tools during `--code`
+scans. Until the Python offline propagation defect is fixed, use
+`--offline --checks auth,injection --no-plugins` to retain Python AST checks
+while skipping its deps check, or use
+`--offline --python-engine=false --no-plugins` for a native-only hermetic scan.
+Out-of-tree plugins are executable code and have their own egress behavior.
+For remote specs, use a reviewed public HTTPS URL or download the spec first
+and pass a local file until the Go/Python fetch paths are unified.
 
 ---
 
@@ -71,26 +81,31 @@ fendix scan --url https://api.example.com --format html --output report.html
 open report.html
 ```
 
-That's it. Fendix scans the API for missing security headers, CORS misconfigurations, authentication bypasses, sensitive data exposure, and rate limiting issues — all without sending any destructive payloads.
+That's it. Fendix scans the API for missing security headers, CORS
+misconfigurations, sensitive data exposure, and rate limiting issues — all
+without sending destructive payloads. Add `--auth` to run the authentication
+bypass tier against endpoints your credential can reach.
 
 ---
 
 ## Runs on every commit
 
-Fendix is fast enough to run on the diff, not the repo. Scope a scan to just the files you changed and it finishes in milliseconds — fast enough for a pre-commit hook.
+The native fast path is small enough for a pre-commit hook. Scope it to the
+files you changed and explicitly disable the auto-enabled Python phase when
+you need the milliseconds-scale path:
 
 ```bash
 # Scan only what changed vs HEAD (working tree)
 fendix scan --code . --diff
 
 # Scan only what's staged — what a commit is about to introduce
-fendix scan --code . --staged --fast      # secrets + textscan, sub-second
+fendix scan --code . --staged --fast --python-engine=false  # native secrets + textscan
 
 # Scan what changed in a PR vs the base branch
 fendix scan --code . --diff=origin/main
 ```
 
-`--diff` scopes the white-box scanners (secrets, textscan, semgrep) to the changed files and runs the dependency-CVE scanners only when a manifest changed. `--fast` drops semgrep (≈1.5 s startup) and the network dep lookups, leaving the instant native scanners — a staged scan of a 200-file monorepo completes in tens of milliseconds.
+`--diff` scopes the white-box scanners (secrets, textscan, semgrep) to the changed files and runs the dependency-CVE scanners only when a manifest changed. `--fast` drops semgrep and the native dependency passes. Because `--code` currently auto-enables the Python engine, add `--python-engine=false` when you require the native-only pre-commit path. The missing implication (`--fast` should suppress Python itself) is a known product defect; the explicit false flag is the current workaround.
 
 ### Pre-commit hook
 
@@ -100,7 +115,7 @@ fendix hook status
 fendix hook uninstall
 ```
 
-The hook runs `fendix scan --code . --staged --fast --fail-on HIGH` on every commit and aborts the commit if a HIGH-or-worse finding (e.g. a hardcoded secret) is staged. Bypass a single commit with `git commit --no-verify`. It honours `core.hooksPath` and refuses to clobber a pre-existing non-Fendix hook (pass `--force` to replace it).
+The generated hook runs `fendix scan --code . --staged --fast --fail-on HIGH` on every commit and aborts the commit if a HIGH-or-worse finding reaches `BLOCK`. It does not yet add `--python-engine=false`, so a resolvable Python tree can make the hook run that phase despite `--fast`; this is the same known limitation above. Bypass a single commit with `git commit --no-verify`. It honours `core.hooksPath` and refuses to clobber a pre-existing non-Fendix hook (pass `--force` to replace it).
 
 ---
 
@@ -242,17 +257,24 @@ Point Fendix at a live API. No source code needed.
 fendix scan --url https://api.example.com
 ```
 
-This runs all passive checks: security headers, CORS, authentication bypass, sensitive data exposure, and rate limiting.
+This runs the passive tier: exposed configuration, security headers, CORS,
+sensitive data exposure, cookie flags, and rate limiting. Add `--auth` to run
+the separate authentication tier.
 
-### White-box scan (static analysis only)
+### White-box scan
 
-Analyze source code without making any network requests.
+Analyze source locally. Dependency-CVE analyzers may query advisory services or
+invoke external tools; see [What Fendix sends to the network](#what-fendix-sends-to-the-network)
+for the current offline limitation and hermetic commands.
 
 ```bash
 fendix scan --code ./src --spec openapi.yaml
 ```
 
-This runs secrets detection, Semgrep rules, AST analysis, OpenAPI spec checks, and dependency CVE scanning.
+This requests native secrets/textscan, Semgrep and SCA coverage, and `--code`
+auto-enables the Python AST/spec/deps phase. A standalone release without a
+resolvable Python tree records that phase as skipped; the official container
+supplies the version-matched tree.
 
 ### Hybrid scan (maximum coverage)
 
@@ -364,10 +386,12 @@ fendix scan --url https://api.example.com --baseline baseline.json
 
 ### Re-render a report
 
-Convert a saved JSON findings file to HTML or SARIF without re-scanning.
+Re-render a saved JSON findings file as JSON, HTML, SARIF, or PDF without
+re-scanning. The `--format` value selects the renderer.
 
 ```bash
 fendix report --input findings.json --format html --output report.html
+# or: --format json | sarif | pdf
 ```
 
 ---
@@ -387,46 +411,56 @@ fendix report --input findings.json --format html --output report.html
 | `fendix hook` | Manage the git pre-commit hook (`install` / `status` / `uninstall`) |
 | `fendix ignore` | Inspect and maintain `.fendix-ignore` (`list` / `validate` / `prune`) |
 | `fendix plugins` | List and install out-of-tree plugins (`list` / `install <git-url>`) |
-| `fendix db` | Manage the offline CVE snapshot for air-gapped scans (`update` / `list` / `verify`) |
+| `fendix db` | Manage the native dependency-advisory snapshot (`update` / `list` / `verify`) |
 | `fendix engine` | Inspect or pin the Python whitebox engine (`info` / `sync`) |
 | `fendix benchmark` | Run the vulnerable-app benchmark targets and score against baselines |
 | `fendix notify` | Post findings above a severity floor to Slack / Teams (CI step) |
 | `fendix jira` | Idempotently sync findings to Jira issues (CI step) |
 | `fendix metrics` | Show locally-recorded scan metrics (opt-in via `FENDIX_METRICS`) |
+| `fendix completion` | Generate shell completion scripts (Cobra built-in) |
 | `fendix version` | Print version, OS, and architecture information |
+| `fendix managed` | **Development preview, absent from v3.4.1:** create context and submit evidence under the ADR-010 managed-CI contract |
 
-Run `fendix <command> --help` for the flags of any subcommand.
+The published stable release is v3.4.1. `managed` and its two hidden producer
+flags are present only on the development/RC line and are not a stable product
+availability claim. No command defines a Cobra alias. Run
+`fendix <command> --help` for the executable flag contract.
 
-### Scan Flags
+### Common Scan Flags
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--url` | string | | Target API base URL (black-box scanning) |
-| `--spec` | string | | Path to OpenAPI/Swagger YAML or JSON spec |
+| `--spec` | string | | Path or HTTP(S) URL to an OpenAPI/Swagger YAML or JSON spec |
 | `--code` | string | | Path to source code directory (white-box scanning) |
 | `--import` | list | | Merge a third-party SARIF 2.1.0 report into this scan (repeatable) |
 | `--auth` | string | | Auth header value, e.g. `"Bearer token123"` |
-| `--auth-type` | string | auto-detect | Auth type: `bearer`, `apikey`, `basic`, `cookie` |
-| `--auth-header` | string | `Authorization` | Custom auth header name |
+| `--auth-type` | string | auto-detect | Auth type: `bearer`, `apikey`, `apikey-query`, `basic`, `cookie` |
+| `--auth-header` | string | `Authorization` | Header name; for `apikey-query`, this names the query parameter. Pass `api_key` explicitly on the CLI for the conventional parameter name. |
 | `-o, --output` | string | stdout | Output file path |
 | `-f, --format` | string | `json` | Output format: `json`, `html`, `sarif`, `pdf` |
-| `--fail-on` | string | | Exit 1 if a **corroborated** finding is at this severity: `CRITICAL`, `HIGH`, `MEDIUM`. Confidence gating applies — see `--enforce-confidence`. |
+| `--fail-on` | string | | Exit 1 if a finding at this severity reaches `BLOCK`: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`. Confidence gating applies — see `--enforce-confidence`. |
 | `--fail-on-scanner-error` | bool | `false` | Exit 2 if any recorded analyzer — any entry in `metadata.scanner_status`, the full registry (`dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `plugins`, the python-engine and its checks) — ran and errored. CI-friendly: turns a silent coverage gap into a build failure. Skipped entries don't count. |
 | `--fail-on-coverage-gap` | bool | `false` | Exit 2 when an analyzer this run was configured to execute was unavailable or failed (`metadata.coverage.configured_complete=false`). Disabled, not-applicable and unsupported analyzers never trip it. |
 | `--require-analyzers` | list | | Analyzers that must be delivered (recorded `ok` or `not_applicable`) for exit 0; anything else exits 2. Stricter than `--fail-on-coverage-gap`: `--fast --require-analyzers semgrep` is a contradiction and exits 2. |
-| `--deescalate-tests` | bool | `true` | Report findings in test/fixture code (`tests/`, `test_*.py`, `*_test.py`, `conftest`, `fixtures/`) as `INFO` instead of `WARN`. The finding and its evidence are still emitted — this changes triage status, not visibility. A finding at or above `--fail-on` still blocks **when a corroborating signal backs it** (e.g. a proven taint path or a provider-validated live credential); an uncorroborated test-code match is held at `WARN`. Pass `--deescalate-tests=false` to treat test-code findings like production ones. |
-| `--enforce-confidence` | bool | `true` | Only `BLOCK` a finding at or above `--fail-on` when the deterministic confidence band supports it: `LOW` band warns instead of blocking, `MEDIUM` blocks only with a corroborating signal (live observation, cross-engine agreement, deterministic detection in production code, confirmed route, reachable taint path, payload-validated probe), `HIGH` always blocks. Evidence is never suppressed, and every demotion is named in `confidence_reasons`. Pass `--enforce-confidence=false` to restore the legacy severity-only gate. |
+| `--deescalate-tests` | bool | `true` | Report findings in test/fixture code (`tests/`, `test_*.py`, `*_test.py`, `conftest`, `fixtures/`) as `INFO` instead of `WARN`. The finding and its evidence are still emitted — this changes triage status, not visibility. A finding at or above `--fail-on` can still block when independent corroboration supports it; an unsupported test-code match is held at `WARN`. Pass `--deescalate-tests=false` to treat test-code findings like production ones. |
+| `--enforce-confidence` | bool | `true` | Only `BLOCK` a finding at or above `--fail-on` when the deterministic confidence band and evidence support it: `LOW` never blocks; `MEDIUM` needs an independent signal; `HIGH` needs an independent or self-evident signal. A high band with no signal remains `WARN`. Evidence is never suppressed, and every demotion is named in `confidence_reasons`. Pass `--enforce-confidence=false` to restore the legacy severity-only gate. |
 | `--baseline` | string | | Path to previous findings JSON for diff mode |
 | `--save-baseline` | string | | Save current findings to this path |
 | `--enable-active` | bool | `false` | Enable active injection probes |
-| `--checks` | list | `auth,injection,deps` | Override which checks the Python whitebox engine runs. Only effective with `--python-engine`; the native Go scanners always run when `--code` is set. |
-| `--offline` | bool | `false` | Air-gapped mode: read dep CVEs from a local snapshot instead of `api.osv.dev`/`vuln.go.dev`. Makes zero outbound calls; the Go dep scanner is recorded `SKIPPED`. |
+| `--checks` | list | `auth,injection,deps` | Override checks when the Python whitebox engine runs (`--code` auto-enables it unless explicitly disabled). Native Go analyzers run independently when `--code` is set. |
+| `--offline` | bool | `false` | Use a local snapshot for native pip/npm CVEs and skip native govulncheck. Known limitation: the Python deps check does not receive this flag and may invoke networked tools; use `--checks auth,injection` or `--python-engine=false`, plus `--no-plugins`, when hermetic execution is required. |
 | `--offline-db` | string | `~/.fendix/offline-db.json` | Path to the offline-db snapshot (build it with `fendix db update`). Only effective with `--offline`. |
 | `-w, --workers` | int | `10` | Concurrent HTTP workers |
 | `--timeout` | int | `10` | HTTP timeout in seconds |
 | `--delay` | int | `100` | Milliseconds between HTTP requests |
 | `--ignore` | string | | Path to `.fendix-ignore` suppression file (an unparseable file is a hard error: exit 2) |
 | `-v, --verbose` | bool | `false` | Print all requests and raw findings |
+
+This table highlights the flags most often used in stable integrations; it is
+not an exhaustive inventory. `fendix scan --help` is generated from the running
+binary and is authoritative. The exact v3.4.1/development delta is recorded in
+[`audits/engine-contract-reconciliation-2026-10-03.md`](audits/engine-contract-reconciliation-2026-10-03.md).
 
 ### Exit Codes
 
@@ -450,19 +484,22 @@ Machine-readable findings with scan metadata.
 
 ```json
 {
-  "scan": {
+  "metadata": {
+    "schema_version": 2,
+    "fingerprint_algorithm": "fendix/v2",
     "target": "https://api.example.com",
-    "timestamp": "2026-03-14T10:30:00Z",
-    "duration_ms": 4521,
-    "total_findings": 3,
-    "by_severity": {
-      "CRITICAL": 1,
-      "HIGH": 1,
-      "MEDIUM": 1,
-      "LOW": 0,
-      "INFO": 0
-    }
+    "started_at": "2026-09-07T10:30:00Z",
+    "duration": "4.521s",
+    "version": "3.4.1",
+    "mode": "hybrid",
+    "endpoints_scanned": 1,
+    "active_probes": false,
+    "policy_version": "1.0.0"
   },
+  "summary": {"critical": 1, "high": 0, "medium": 0, "low": 0, "info": 0},
+  "sources": {"blackbox": 0, "whitebox": 0, "correlated": 1},
+  "total": 1,
+  "decisions": {"total": 1, "confirmed": 1, "blocking": 1, "warning": 0, "informational": 0},
   "findings": [
     {
       "id": "SEC-001",
@@ -475,7 +512,13 @@ Machine-readable findings with scan metadata.
       "fix": "Require Bearer token. Return 401 for unauthenticated requests.",
       "references": ["CWE-306", "OWASP-A01"],
       "confidence": "HIGH",
-      "line": "src/routes/users.py:42"
+      "line": "42",
+      "fingerprint": "a53e0be81c80617f5a6aa84cc8dd78954f78a7c2",
+      "status": "BLOCK",
+      "confidence_score": 100,
+      "confidence_band": "HIGH",
+      "decision_policy": "enforced",
+      "auth_expectation": "required"
     }
   ]
 }
@@ -504,9 +547,10 @@ fendix scan --code ./src --format sarif --output results.sarif
 
 **Result `level` follows the decision verdict, not raw severity** — `BLOCK` →
 `error`, `WARN` → `warning`, `INFO` → `note` — so an annotation's colour
-reflects what actually gates the build. A finding with no verdict stamped (a
-scan with no `--fail-on`) falls back to the severity mapping below, which is
-also what a *rule*'s `defaultConfiguration.level` uses:
+reflects what actually gates the build. Current scans stamp decisions even
+when `--fail-on` is empty. Severity fallback applies only when re-rendering
+archived input with no verdict; severity also determines a *rule*'s
+`defaultConfiguration.level`:
 
 | Fendix Severity | SARIF Level | `security-severity` |
 |---|---|---|
@@ -519,16 +563,21 @@ also what a *rule*'s `defaultConfiguration.level` uses:
 Since v2.0 the SARIF output also carries three things GitHub Code Scanning
 needs:
 
-- `result.partialFingerprints["fendix/v1"]` — the same `sha1(Category|Endpoint|Title)`
-  token `.fendix-ignore` fingerprint rules pin to, so a re-ordered scan updates
-  alerts instead of closing and reopening them. Emitted only when the finding
-  carries a real engine fingerprint.
+- `result.partialFingerprints["fendix/v2"]` — the same semantic identity token
+  `.fendix-ignore` fingerprint rules pin to. It is SHA-256 over labelled
+  semantic components, truncated to 20 bytes (40 hex characters). Line/column
+  shifts, formatting and wording changes do not re-file the vulnerability;
+  moving it to another file/manifest or changing its HTTP method/path can.
+  A re-rendered archived report with no `fingerprint_algorithm` uses its
+  historical `fendix/v1` key.
 - `rule.properties["security-severity"]` — the CVSS-style score GitHub ranks by
   (table above). Without it GitHub files every alert as "medium". It is a pure
   function of severity and never of confidence.
-- `run.automationDetails.id` = `"fendix/scan"` — the analysis category, so two
-  tools uploading SARIF for the same commit don't overwrite each other's alerts.
-  Treat the value as a one-way door: changing it re-partitions existing alerts.
+- `run.automationDetails.id` = `"fendix/scan/<mode>"` (for example,
+  `fendix/scan/whitebox`) — the analysis category, so black-box, white-box,
+  hybrid and import uploads do not clear one another's alerts. Archived input
+  with no recognized mode retains the legacy `fendix/scan` value. Treat the
+  value as a one-way door: changing it re-partitions existing alerts.
 
 A rule shared by findings at several severities takes the **maximum** of them
 for `defaultConfiguration.level` (v2.0; it was first-seen before). A result's
@@ -540,8 +589,7 @@ verbatim in `result.properties.evidence`.
 
 ## CI/CD Integration
 
-Fendix's `init` command generates drop-in templates for three CI
-systems:
+Fendix's `init` command generates starter files for three CI systems:
 
 ```bash
 fendix init                 # auto-detect (looks for .github/, .gitlab-ci.yml, .circleci/)
@@ -554,9 +602,23 @@ For gitlab/circleci, the NEXT-STEPS file explains how to wire the
 snippet into your main CI config (GitLab via `include:`, CircleCI by
 merging into your single `config.yml`).
 
+> **Known product defect:** the emitted CI workflows predate the current
+> distribution contract and are not reliable drop-ins. The GitHub starter uses
+> a mutable source install and supplies no Python analyzer tree; the GitLab and
+> CircleCI starters pin obsolete v0.13.0 personal-namespace release assets and
+> placeholder checksums, while their next-step files disagree about the
+> version. The GitLab starter also labels SARIF as GitLab's different SAST JSON
+> schema. Use the checked-in reference GitHub container workflow, or author a
+> current pinned container job, until the generated workflows are replaced.
+
 ### GitHub Actions
 
-The fastest path is the [Fendix Action](action.yml) from the Marketplace. On pull requests it runs a **diff-aware** scan (only PR-changed files) and uploads SARIF so findings land in the Security tab and as PR annotations:
+The [Fendix Action](action.yml) runs a **diff-aware** scan on pull requests and
+uploads SARIF. The v3.4.1 Action has a known engine-resolution defect: its
+default `engine_path` is empty, but it runs `fendix engine sync` against a
+standalone binary that has no embedded Python payload. Until that is fixed,
+set `engine_path` to a checked-out `python/` tree or use the official container,
+which ships the engine and its dependencies:
 
 ```yaml
 name: Security Scan
@@ -577,6 +639,8 @@ jobs:
       - uses: Fendix-app/Fendix@v1
         with:
           code: .
+          # Required by v3.4.1: prepare a version-matched tree here first.
+          engine_path: ${{ github.workspace }}/vendor/fendix-python
           url: ${{ secrets.STAGING_API_URL }}   # optional — adds DAST
           spec: openapi.yaml                     # optional
           fail-on: HIGH
@@ -631,9 +695,17 @@ Run baseline diffs to only flag **new** vulnerabilities introduced in a PR:
 
 Suppress known findings or exempt endpoints from scanning. Place as `.fendix-ignore` in your project root or pass via `--ignore`.
 
+Use the report's versioned `fingerprint` for one durable finding. `SEC-NNN` ids
+are positional across scans; endpoint/category rules intentionally suppress a
+broader surface. The engine accepts a missing `reason`, but review policy
+should require one.
+
 ```yaml
 # Suppress by finding ID
 ignore:
+  - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
+    reason: "Accepted risk reviewed in JIRA-1234"
+
   - id: SEC-014
     reason: "Rate limiting handled at API gateway level"
     until: 2026-12-01  # optional expiry date
@@ -672,7 +744,7 @@ User CLI Command
 |  - Reporters     |
 +--------+---------+
          |
-         | JSON over stdin/stdout (opt-in: --python-engine)
+         | JSON over stdin/stdout (--code auto-enables; explicit false disables)
          |
 +--------+---------+
 |  Python Engine   |
@@ -687,15 +759,18 @@ Python wrappers were deleted in TASK-118. They now run from the Go binary
 whenever `--code` is set — secrets fully in-process, Semgrep by shelling out to
 the host's `semgrep` binary with a rule pack embedded via `//go:embed` (skipped
 with an install hint if `semgrep` isn't on `$PATH`). Neither goes through the
-Fendix Python engine, which is opt-in behind `--python-engine` and carries only
-the spec parser, the AST taint analyzer, and its dependency checker.
+Fendix Python engine, which `--code` auto-enables unless the invocation passes
+`--python-engine=false`. It carries only the spec parser, the AST taint analyzer,
+and its dependency checker. Official standalone binaries do not embed that
+tree; a local checkout or `FENDIX_ENGINE` supplies it. The official container
+ships it at `/opt/fendix/python/`.
 
 **Why two languages?**
 
-- **Go** excels at concurrent HTTP scanning, compiles to a single binary, and provides fast CLI startup. It now also owns the secrets scan and the Semgrep shell-out, which is what removed the Python boot tax from the default path.
+- **Go** excels at concurrent HTTP scanning, compiles to a single binary, and provides fast CLI startup. It also owns secrets, textscan, Semgrep orchestration and native SCA. A `--code` scan still auto-enables the separate Python AST/spec/deps phase unless explicitly disabled.
 - **Python** still has the strongest AST/dataflow tooling for the taint analyzer and OpenAPI spec parsing, so those analyzers stayed there.
 
-The **correlator** is the core differentiator. When the black-box scanner confirms a vulnerability that the static analyzer also flagged, the finding is elevated to `correlated` source with `HIGH` confidence. Since v2.0 that elevation is one of eight corroborating signals the build gate reads rather than the gate itself — see [`--enforce-confidence`](#scan-flags) for the full list. (We describe this as a mechanism, not a measured false-positive reduction: no benchmark yet isolates the correlation effect — see [BENCHMARKS.md](BENCHMARKS.md).)
+The **correlator** is the core differentiator. When the black-box scanner confirms a vulnerability that the static analyzer also flagged, the finding is elevated to `correlated` source with `HIGH` confidence. Since v2.0 that elevation is one of the corroborating signals the build gate reads rather than the gate itself — see [`--enforce-confidence`](#common-scan-flags) for the rule summary. (We describe this as a mechanism, not a measured false-positive reduction: no benchmark yet isolates the correlation effect — see [BENCHMARKS.md](BENCHMARKS.md).)
 
 **How severity is determined:**
 
@@ -755,18 +830,31 @@ For full architectural rationale, see [ADR-001](docs/adr/ADR-001-go-python-hybri
 
 ### Black-box (HTTP Scanner)
 
-| Check | What It Detects | Default Severity |
-|---|---|---|
-| **Security Headers** | Missing HSTS, CSP, X-Content-Type-Options, X-Frame-Options, server version disclosure | MEDIUM - INFO |
-| **CORS** | Wildcard origins with credentials, reflected origins, permissive methods | CRITICAL - LOW |
-| **Authentication** | Missing auth, malformed JWT accepted, expired JWT accepted, alg:none bypass | CRITICAL |
-| **Data Exposure** | Passwords/secrets/tokens in responses, stack traces, internal IPs, sequential IDs | CRITICAL - INFO |
-| **Rate Limiting** | No rate limiting detected on endpoints | MEDIUM |
-| **SQL Injection** | Time-based blind SQLi (MySQL, Postgres, MSSQL) | HIGH |
-| **Command Injection** | Echo canary detection (safe, non-destructive) | CRITICAL |
-| **Header Injection** | CRLF injection in response headers | HIGH |
+`DefaultChecks()` is the executable registry. A check has one stable ID,
+category and tier; it does not have one registry-level default severity because
+individual evidence rules inside a check may emit different severities.
 
-Injection checks (last 3 rows) require `--enable-active`.
+| Stable ID | Category | Tier | What it detects |
+|---|---|---|---|
+| `configleak` | `data_exposure` | passive | Exposed environment, VCS and configuration files |
+| `headers` | `headers` | passive | Missing or weak browser security headers and server disclosure |
+| `cors` | `cors` | passive | Wildcard/reflected origins, credentials and permissive methods |
+| `exposure` | `data_exposure` | passive | Secrets, stack traces, internal addresses and sensitive response data |
+| `ratelimit` | `rate_limiting` | passive | Missing observable rate limiting |
+| `cookie-flags` | `cookie` | passive | Missing `Secure`, `HttpOnly` or `SameSite` attributes |
+| `auth` | `auth_bypass` | auth | Authentication bypass behavior; requires the primary credential |
+| `idor` | `idor` | multiuser | Cross-user object access; requires two credentials |
+| `injection` | `injection` | active | SQL, command and CRLF probe responses |
+| `open-redirect` | `redirect` | active | Reflected external redirects |
+| `xss` | `injection` | active | Reflected HTML/script payloads |
+| `ssrf` | `ssrf` | active | In-band server-side request forgery behavior |
+| `host-header` | `host_header` | active | Host-header reflection and poisoning precursors |
+| `graphql` | `graphql` | active | Exposed GraphQL introspection and unsafe GET behavior |
+| `method-tamper` | `method_tamper` | active | Verb-based authorization and dangerous-method behavior |
+
+Passive checks are always enabled. The `auth` and `multiuser` tiers require
+their corresponding credentials. Every `active` check requires
+`--enable-active`.
 
 ### White-box (Static Analysis)
 
@@ -775,7 +863,7 @@ Injection checks (last 3 rows) require `--enable-active`.
 | **Secrets** | AWS keys, private keys, hardcoded passwords, API keys, JWT secrets, DB URLs, bearer tokens |
 | **Semgrep Rules** | 23 bundled rules across auth (Flask/Django/FastAPI missing decorators, JWT verification disabled), injection (SQL, command, eval/exec, Django ORM raw, SSTI, pickle.loads, yaml.load), secrets (hardcoded credentials/DB URLs, AWS keys, GCP service accounts, Slack webhooks, PEM private keys), and crypto (MD5/SHA1 for passwords, legacy ciphers, `random` used for token generation) |
 | **Spec Parser** | Missing security schemes in OpenAPI spec, API keys in query params, unauthenticated endpoints |
-| **AST Analysis** | Python and JavaScript security-relevant patterns via AST parsing |
+| **AST / dataflow analysis** | Python AST/dataflow plus regex-backed JS/TS heuristics in the Python phase; additional JS/TS/IaC rules run in native Go textscan |
 | **Dependencies** | Known CVEs in PyPI (`requirements.txt`, `poetry.lock`, `Pipfile.lock`), npm (`package-lock.json`) and Go modules. Since v2.0 alias-linked advisories merge into **one finding per vulnerability**, named after the canonical id (`CVE-*` > `GHSA-*` > `PYSEC-*`) — see [`docs/checks/deps.md`](docs/checks/deps.md) |
 
 ---
@@ -859,7 +947,9 @@ func CheckMyThing(ctx context.Context, cfg *models.ScanConfig, endpoint Endpoint
 ```
 
 3. Write table-driven tests in `mycheck_test.go` using `net/http/httptest`
-4. Register the check in the orchestrator (`go/internal/engine/orchestrator.go`)
+4. Register the check in `scanner.DefaultChecks()`
+   (`go/internal/scanner/check.go`); the orchestrator consumes that single
+   ordered registry
 5. Document the check in `docs/checks/mycheck.md`
 
 ### Adding a white-box check
@@ -871,7 +961,7 @@ func CheckMyThing(ctx context.Context, cfg *models.ScanConfig, endpoint Endpoint
 | Secret / credential patterns | Go — `go/internal/scanner/secrets/` (native since TASK-115) |
 | A Semgrep rule | Go — `go/internal/scanner/semgrep/rules/` (embedded pack; see below) |
 | Dependency CVEs | Go — `go/internal/scanner/deps/` |
-| AST / taint analysis, OpenAPI spec analysis | Python — `python/analyzers/` (runs only under `--python-engine`) |
+| AST / taint analysis, OpenAPI spec analysis | Python — `python/analyzers/` (`--code` auto-enables this phase unless explicitly disabled; standalone releases need a separate engine tree) |
 
 `python/analyzers/secrets.py` and `python/analyzers/semgrep_runner.py` were
 deleted in TASK-118; asking the Python engine for `secrets` or `semgrep` is a
@@ -943,10 +1033,10 @@ fendix/
 │   │   │   └── deps/            # Dependency CVE scanners
 │   │   ├── engine/              # Orchestrator + correlator
 │   │   ├── models/              # Finding, ScanConfig, severity scoring
-│   │   └── reporters/           # JSON, HTML, SARIF renderers
+│   │   └── reporters/           # JSON, HTML, SARIF, PDF renderers
 │   ├── go.mod
 │   └── go.sum
-├── python/                      # Python layer — opt-in via --python-engine
+├── python/                      # Python AST/spec/deps layer; auto-enabled by --code
 │   ├── engine.py                # Entrypoint: reads stdin, streams findings
 │   ├── analyzers/               # Spec parser, AST taint analyzer, deps
 │   ├── rules/                   # Legacy YAML rules — read by NO code; see CONTRIBUTING.md
@@ -1002,7 +1092,7 @@ cd python && python -m pytest tests/ -v
 - [Per-check reference](docs/checks/) — one page per built-in check.
 - [Architecture decision records](docs/adr/) — why Fendix is built the way it is.
 - [Trust Center](docs/trust-center.md) — one index for security posture, HIGH-finding status, signing/verification, and how to reproduce every claim.
-- [Privacy & data handling](docs/privacy.md) — what Fendix reads, sends (nothing but opt-in CVE lookups), and stores. No telemetry.
+- [Privacy & data handling](docs/privacy.md) — what the CLI reads, sends, and stores, including the current `--offline` limitation. No telemetry.
 - [Security policy](SECURITY.md) and [active-scanner threat model](docs/threat-model.md).
 
 ---

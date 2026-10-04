@@ -499,9 +499,9 @@ func TestTestFixtureBlockDemotionRequiresNoCorroboration(t *testing.T) {
 			"reconcile with the score: %q", last)
 	}
 
-	// A provider-validated live credential that happens to live in a fixture
-	// is still a leak. Reachable stands in for "some signal beyond the pattern
-	// match" here; the arm is len(corroborations)==0, not any specific field.
+	// An independently supported credential finding in a fixture can still be
+	// a leak. Reachable stands in for "some signal beyond the pattern match"
+	// here; provider-shaped syntax alone is not live validation.
 	corroborated := ev
 	corroborated.Reachable = true
 	if got := DecideWithOptions(corroborated, "HIGH", on); got.Status != StatusBlock {

@@ -1,5 +1,13 @@
 # AST Analyzer Check
 
+> **Historical, non-authoritative subset.** The pattern tables below document
+> an early analyzer slice and are not a complete current registry. Current
+> Python code uses `python/analyzers/ast_analyzer.py` for AST/dataflow rules and
+> regex-backed JavaScript/TypeScript heuristics. Native Go textscan separately
+> owns additional Go, Java, JS/TS, Docker, and YAML rules. See the
+> [engine contract reconciliation](../../audits/engine-contract-reconciliation-2026-10-03.md)
+> and its linked Check Library inventory for the current source model.
+
 **Engine:** Python (white-box)
 **Category:** `injection`, `secrets`
 **Default severity:** HIGH – MEDIUM
@@ -7,7 +15,8 @@
 
 ## What It Detects
 
-Security-relevant patterns in Python and JavaScript code using abstract syntax tree (AST) analysis. Unlike regex-based checks, AST analysis understands code structure and reduces false positives.
+The historical examples cover Python AST rules and JavaScript regex
+heuristics. They do not enumerate the current analyzer.
 
 ## Python Patterns (via `ast` module)
 

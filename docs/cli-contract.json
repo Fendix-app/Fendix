@@ -1,0 +1,1466 @@
+{
+  "schema_version": 1,
+  "stable_version": "v3.4.1",
+  "source": "go/cmd/fendix Cobra registration",
+  "commands": [
+    {
+      "path": "fendix benchmark",
+      "use": "benchmark",
+      "short": "Run the internal accuracy + performance benchmark suite",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix benchmark baseline",
+      "use": "baseline",
+      "short": "Run the suite and (with --save) store the result as the committed baseline",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "save",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Persist this run as the committed baseline",
+          "availability": "stable"
+        },
+        {
+          "name": "target",
+          "type": "string",
+          "default": "all",
+          "repeatable": false,
+          "required": false,
+          "usage": "Target to baseline: owasp, dvwa, juiceshop, or all",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix benchmark compare",
+      "use": "compare",
+      "short": "Run the suite and fail if any metric regressed \u003e10% vs the committed baseline",
+      "availability": "stable",
+      "runnable": true,
+      "flags": null
+    },
+    {
+      "path": "fendix benchmark run",
+      "use": "run",
+      "short": "Run the benchmark suite and print scored results",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "output",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Write scored results JSON to this path",
+          "availability": "stable"
+        },
+        {
+          "name": "target",
+          "type": "string",
+          "default": "all",
+          "repeatable": false,
+          "required": false,
+          "usage": "Target to run: owasp, dvwa, juiceshop, or all",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix completion",
+      "use": "completion",
+      "short": "Generate the autocompletion script for the specified shell",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix completion bash",
+      "use": "bash",
+      "short": "Generate the autocompletion script for bash",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "no-descriptions",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "disable completion descriptions",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix completion fish",
+      "use": "fish",
+      "short": "Generate the autocompletion script for fish",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "no-descriptions",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "disable completion descriptions",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix completion powershell",
+      "use": "powershell",
+      "short": "Generate the autocompletion script for powershell",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "no-descriptions",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "disable completion descriptions",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix completion zsh",
+      "use": "zsh",
+      "short": "Generate the autocompletion script for zsh",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "no-descriptions",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "disable completion descriptions",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix db",
+      "use": "db",
+      "short": "Manage the offline CVE-database snapshot (Sprint 09)",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix db list",
+      "use": "list",
+      "short": "Print metadata about the local offline snapshot",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "path",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to the snapshot file (default: ~/.fendix/offline-db.json)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix db update",
+      "use": "update",
+      "short": "Ingest an OSV advisory export into a fendix offline snapshot",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "output",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Where to write the snapshot (default: ~/.fendix/offline-db.json)",
+          "availability": "stable"
+        },
+        {
+          "name": "source",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to an OSV-shaped JSON export to ingest",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix db verify",
+      "use": "verify",
+      "short": "Print the SHA-256 of the local snapshot for integrity verification",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "path",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to the snapshot file (default: ~/.fendix/offline-db.json)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix demo",
+      "use": "demo",
+      "short": "Spin up OWASP Juice Shop locally and run a sample scan",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "image",
+          "type": "string",
+          "default": "bkimminich/juice-shop:v17.1.1",
+          "repeatable": false,
+          "required": false,
+          "usage": "juice-shop Docker image reference (pinned for reproducibility)",
+          "availability": "stable"
+        },
+        {
+          "name": "open",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "open the rendered HTML report in your default browser when the scan finishes",
+          "availability": "stable"
+        },
+        {
+          "name": "output",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "HTML report output path (default: $TMPDIR/fendix-demo-\u003cunix\u003e.html)",
+          "availability": "stable"
+        },
+        {
+          "name": "port",
+          "type": "int",
+          "default": "3000",
+          "repeatable": false,
+          "required": false,
+          "usage": "local port to bind juice-shop on",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix engine",
+      "use": "engine",
+      "short": "Inspect or refresh the Python whitebox engine",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix engine info",
+      "use": "info",
+      "short": "Show where the Python engine is loaded from",
+      "availability": "stable",
+      "runnable": true,
+      "flags": null
+    },
+    {
+      "path": "fendix engine sync",
+      "use": "sync",
+      "short": "Pin the Python taint engine location for future invocations",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "dir",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Explicit python/ engine source tree to pin (preferred for standalone releases)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix help",
+      "use": "help [command]",
+      "short": "Help about any command",
+      "availability": "stable",
+      "runnable": true,
+      "flags": null
+    },
+    {
+      "path": "fendix hook",
+      "use": "hook",
+      "short": "Manage the git pre-commit hook that runs a fast diff scan",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix hook install",
+      "use": "install",
+      "short": "Install the fendix pre-commit hook into the current git repo",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "fail-on",
+          "type": "string",
+          "default": "HIGH",
+          "repeatable": false,
+          "required": false,
+          "usage": "Decision threshold: CRITICAL, HIGH, MEDIUM, LOW; the hook aborts only when a finding reaches BLOCK",
+          "availability": "stable"
+        },
+        {
+          "name": "force",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Overwrite an existing non-fendix pre-commit hook",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix hook status",
+      "use": "status",
+      "short": "Report whether the fendix pre-commit hook is installed",
+      "availability": "stable",
+      "runnable": true,
+      "flags": null
+    },
+    {
+      "path": "fendix hook uninstall",
+      "use": "uninstall",
+      "short": "Remove the fendix-managed pre-commit hook",
+      "availability": "stable",
+      "runnable": true,
+      "flags": null
+    },
+    {
+      "path": "fendix ignore",
+      "use": "ignore",
+      "short": "Inspect and maintain .fendix-ignore",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix ignore list",
+      "use": "list",
+      "short": "Show every rule in .fendix-ignore with expiry status",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "file",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to .fendix-ignore (default: ./.fendix-ignore)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix ignore prune",
+      "use": "prune",
+      "short": "Remove expired rules and rewrite the file",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "dry-run",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Print what would be removed without writing",
+          "availability": "stable"
+        },
+        {
+          "name": "file",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to .fendix-ignore (default: ./.fendix-ignore)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix ignore validate",
+      "use": "validate",
+      "short": "Parse .fendix-ignore and report schema / date errors",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "file",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to .fendix-ignore (default: ./.fendix-ignore)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix import",
+      "use": "import \u003cfile.sarif\u003e [more.sarif ...]",
+      "short": "Import SARIF reports from other scanners and gate/report on them",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "baseline",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to previous findings JSON for diff mode",
+          "availability": "stable"
+        },
+        {
+          "name": "deescalate-tests",
+          "type": "bool",
+          "default": "true",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Report findings in test/fixture code as INFO instead of WARN (evidence is preserved, never suppressed). Pass --deescalate-tests=false to treat test-code findings like production ones.",
+          "availability": "stable"
+        },
+        {
+          "name": "enforce-confidence",
+          "type": "bool",
+          "default": "true",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Only BLOCK a finding at or above --fail-on when its confidence band and evidence support it: LOW warns; MEDIUM needs an independent signal; HIGH needs an independent or self-evident signal. Pass --enforce-confidence=false to restore the legacy severity-only gate — findings that block only because of that relaxation are marked policy_override in the report.",
+          "availability": "stable"
+        },
+        {
+          "name": "fail-on",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence)",
+          "availability": "stable"
+        },
+        {
+          "name": "format",
+          "shorthand": "f",
+          "type": "string",
+          "default": "json",
+          "repeatable": false,
+          "required": false,
+          "usage": "Output format: json, html, sarif, pdf",
+          "availability": "stable"
+        },
+        {
+          "name": "ignore",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to .fendix-ignore file",
+          "availability": "stable"
+        },
+        {
+          "name": "lang",
+          "type": "string",
+          "default": "en",
+          "repeatable": false,
+          "required": false,
+          "usage": "HTML report language: en (default), ar (Arabic, RTL). Other formats stay English.",
+          "availability": "stable"
+        },
+        {
+          "name": "output",
+          "shorthand": "o",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Output file path (default: stdout)",
+          "availability": "stable"
+        },
+        {
+          "name": "save-baseline",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Save current findings to this path",
+          "availability": "stable"
+        },
+        {
+          "name": "target",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Optional label stamped into report metadata (an import has no scanned target of its own)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix init",
+      "use": "init",
+      "short": "Generate a default CI workflow + .fendix-ignore in the current directory",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "ci",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "CI system to emit templates for: github, gitlab, circleci (default: auto-detect → github)",
+          "availability": "stable"
+        },
+        {
+          "name": "force",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "overwrite existing files",
+          "availability": "stable"
+        },
+        {
+          "name": "print",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "print generated content to stdout instead of writing",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix jira",
+      "use": "jira",
+      "short": "Sync findings to Jira as Bug issues (idempotent via fendix-id label)",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "findings",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to a findings JSON file produced by 'fendix scan --format json'",
+          "availability": "stable"
+        },
+        {
+          "name": "strict",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Exit non-zero if ANY finding fails to sync (default: exit non-zero only when every finding fails)",
+          "availability": "stable"
+        },
+        {
+          "name": "timeout",
+          "type": "duration",
+          "default": "5m0s",
+          "repeatable": false,
+          "required": false,
+          "usage": "Overall timeout for the Jira sync",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix managed",
+      "use": "managed",
+      "short": "Managed CI: submit evidence and take the backend's decision",
+      "availability": "development_only",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix managed context",
+      "use": "context",
+      "short": "Write the managed-scan context for this workflow run",
+      "availability": "development_only",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "asset-id",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Asset UUID from the Fendix binding",
+          "availability": "development_only"
+        },
+        {
+          "name": "environment",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "sandbox, staging or production — must match the credential",
+          "availability": "development_only"
+        },
+        {
+          "name": "out",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to write the context to",
+          "availability": "development_only"
+        },
+        {
+          "name": "tenant-id",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Organization (tenant) UUID from the Fendix binding",
+          "availability": "development_only"
+        }
+      ]
+    },
+    {
+      "path": "fendix managed submit",
+      "use": "submit",
+      "short": "Submit managed evidence and wait for the authoritative decision",
+      "availability": "development_only",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "api-base",
+          "type": "string",
+          "default": "https://api.fendix.dev",
+          "repeatable": false,
+          "required": false,
+          "usage": "Backend API origin",
+          "availability": "development_only"
+        },
+        {
+          "name": "decision-output",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Write the authoritative decision to this path",
+          "availability": "development_only"
+        },
+        {
+          "name": "evidence",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to the document written by 'fendix scan --managed-evidence'",
+          "availability": "development_only"
+        },
+        {
+          "name": "timeout",
+          "type": "duration",
+          "default": "10m0s",
+          "repeatable": false,
+          "required": false,
+          "usage": "Total budget for obtaining a decision",
+          "availability": "development_only"
+        }
+      ]
+    },
+    {
+      "path": "fendix metrics",
+      "use": "metrics",
+      "short": "Inspect local product metrics (opt-in via FENDIX_METRICS)",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix metrics clear",
+      "use": "clear",
+      "short": "Delete the local metrics event log",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "yes",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Skip the confirmation prompt",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix metrics export",
+      "use": "export",
+      "short": "Dump all recorded events",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "json",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Emit a single indented JSON array instead of NDJSON",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix metrics show",
+      "use": "show",
+      "short": "Print a summary of the last 30 scans",
+      "availability": "stable",
+      "runnable": true,
+      "flags": null
+    },
+    {
+      "path": "fendix notify",
+      "use": "notify",
+      "short": "Post Slack / Teams alerts for findings above a severity floor",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "findings",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to a findings JSON file produced by 'fendix scan --format json'",
+          "availability": "stable"
+        },
+        {
+          "name": "timeout",
+          "type": "duration",
+          "default": "30s",
+          "repeatable": false,
+          "required": false,
+          "usage": "Overall timeout for posting all webhooks",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix plugins",
+      "use": "plugins",
+      "short": "Manage out-of-tree plugins",
+      "availability": "stable",
+      "runnable": false,
+      "flags": null
+    },
+    {
+      "path": "fendix plugins install",
+      "use": "install \u003cgit-url\u003e",
+      "short": "Clone a plugin repo into ~/.fendix/plugins/",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "name",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Override the on-disk directory name (defaults to the repo's last path component)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix plugins list",
+      "use": "list",
+      "short": "List every plugin the scanner would discover",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "allow-repo-local-plugins",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Include repo-local .fendix/plugins/ in the listing (UNSAFE on untrusted PRs; off by default)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix report",
+      "use": "report",
+      "short": "Re-render a saved findings file",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "classification",
+          "type": "string",
+          "default": "INTERNAL",
+          "repeatable": false,
+          "required": false,
+          "usage": "PDF classification banner text rendered on every page (empty disables; only used by --format pdf)",
+          "availability": "stable"
+        },
+        {
+          "name": "format",
+          "shorthand": "f",
+          "type": "string",
+          "default": "html",
+          "repeatable": false,
+          "required": false,
+          "usage": "Output format: json, html, sarif, pdf",
+          "availability": "stable"
+        },
+        {
+          "name": "input",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to findings JSON file",
+          "availability": "stable"
+        },
+        {
+          "name": "lang",
+          "type": "string",
+          "default": "en",
+          "repeatable": false,
+          "required": false,
+          "usage": "HTML report language: en (default), ar (Arabic, RTL). Other formats stay English.",
+          "availability": "stable"
+        },
+        {
+          "name": "output",
+          "shorthand": "o",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Output file path (default: stdout)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix scan",
+      "use": "scan",
+      "short": "Run a security scan",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "allow-private-targets",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Allow the scanner to connect to private/loopback/link-local addresses and the cloud metadata IP (disables the SSRF egress guard). Auto-enabled when --url already resolves to a private/loopback host.",
+          "availability": "stable"
+        },
+        {
+          "name": "allow-repo-local-plugins",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Opt in to running repo-local plugins under \u003cscan-dir\u003e/.fendix/plugins/ (UNSAFE on untrusted PRs; ~/.fendix/plugins/ is always trusted)",
+          "availability": "stable"
+        },
+        {
+          "name": "auth",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Auth header value, e.g. \"Bearer token123\"",
+          "availability": "stable"
+        },
+        {
+          "name": "auth-header",
+          "type": "string",
+          "default": "Authorization",
+          "repeatable": false,
+          "required": false,
+          "usage": "Custom auth header name; with apikey-query this names the query parameter (pass api_key for the conventional name)",
+          "availability": "stable"
+        },
+        {
+          "name": "auth-type",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Auth type: bearer, apikey, apikey-query, basic, cookie (default: auto-detect)",
+          "availability": "stable"
+        },
+        {
+          "name": "auth-user2",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Second user auth for IDOR checks, e.g. \"Bearer token-user2\"",
+          "availability": "stable"
+        },
+        {
+          "name": "baseline",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to previous findings JSON for diff mode",
+          "availability": "stable"
+        },
+        {
+          "name": "block-on-inapplicable",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Gate the build on a vulnerable dependency even when Fendix found no import of the advisory's affected component. Default false: such a finding is reported in full and held at WARN, because the vulnerable code path is not applicable to this project on the available evidence. Set this when policy is \"no vulnerable version ships, applicable or not\" — e.g. where the SBOM is what gets audited rather than the call graph.",
+          "availability": "stable"
+        },
+        {
+          "name": "checks",
+          "type": "stringSlice",
+          "default": "[]",
+          "repeatable": true,
+          "required": false,
+          "usage": "Override checks when the Python whitebox engine runs (default: auth,injection,deps). --code auto-enables that phase unless --python-engine=false is explicit; the native Go scanners run independently.",
+          "availability": "stable"
+        },
+        {
+          "name": "code",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to source code directory (white-box scanning)",
+          "availability": "stable"
+        },
+        {
+          "name": "config",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to .fendix.yaml policy file (default: auto-detect .fendix.yaml in cwd)",
+          "availability": "stable"
+        },
+        {
+          "name": "crawl-depth",
+          "type": "int",
+          "default": "1",
+          "repeatable": false,
+          "required": false,
+          "usage": "Recursive HTML link crawl depth (0 disables; 1 = home-page links only)",
+          "availability": "stable"
+        },
+        {
+          "name": "debug-bundle",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Write a redacted diagnostic tarball to this path at scan end (intended for bug reports)",
+          "availability": "stable"
+        },
+        {
+          "name": "deescalate-tests",
+          "type": "bool",
+          "default": "true",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Report findings in test/fixture code as INFO instead of WARN (evidence is preserved, never suppressed). A finding at or above --fail-on can still block when independent corroboration supports it; an unsupported test-code match is held at WARN. Pass --deescalate-tests=false to treat test-code findings like production ones.",
+          "availability": "stable"
+        },
+        {
+          "name": "delay",
+          "type": "int",
+          "default": "100",
+          "repeatable": false,
+          "required": false,
+          "usage": "Milliseconds between HTTP requests",
+          "availability": "stable"
+        },
+        {
+          "name": "diff",
+          "type": "string",
+          "default": "",
+          "no_opt_default": "HEAD",
+          "repeatable": false,
+          "required": false,
+          "usage": "Diff-aware scan: only scan files changed vs a git ref (bare --diff = vs HEAD, --diff=origin/main = vs that ref). Whitebox scanners are scoped to the changed files; dep-CVE scanners run only when a manifest changed.",
+          "availability": "stable"
+        },
+        {
+          "name": "enable-active",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Enable active injection probes (default: false)",
+          "availability": "stable"
+        },
+        {
+          "name": "enforce-confidence",
+          "type": "bool",
+          "default": "true",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Only BLOCK a finding at or above --fail-on when the confidence band supports it AND something corroborates the claim: LOW band warns; a finding with no corroborating signal at all warns; MEDIUM band blocks only with an INDEPENDENT signal (cross-engine agreement, confirmed route, reachable taint path, proven path, payload-validated probe, cross-tool corroboration, contradicted authentication requirement); self-evident signals (direct response read, deterministic detection in production source, imported high-precision rule) gate at HIGH. Evidence is never suppressed. Pass --enforce-confidence=false to restore the legacy severity-only gate — findings that block only because of that relaxation are marked policy_override in the report.",
+          "availability": "stable"
+        },
+        {
+          "name": "fail-on",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence)",
+          "availability": "stable"
+        },
+        {
+          "name": "fail-on-coverage-gap",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Exit 2 when an analyzer this run was configured to execute was unavailable or failed (metadata.coverage.configured_complete=false). Disabled, not-applicable and unsupported analyzers never trip it.",
+          "availability": "stable"
+        },
+        {
+          "name": "fail-on-scanner-error",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Exit non-zero (2) if any recorded analyzer — any entry in metadata.scanner_status, which is the full registry (dast, spec, active-probes, secrets, textscan, semgrep, govulncheck, pip, npm, plugins, the python-engine and its checks) — ran and errored. CI-friendly: turns a silent coverage gap into a build failure. Skipped entries never count.",
+          "availability": "stable"
+        },
+        {
+          "name": "fast",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Skip semgrep and the native dependency scanners. Known limitation: --fast does not disable the Python engine auto-enabled by --code; add --python-engine=false when a native-only pre-commit scan is required.",
+          "availability": "stable"
+        },
+        {
+          "name": "format",
+          "shorthand": "f",
+          "type": "string",
+          "default": "json",
+          "repeatable": false,
+          "required": false,
+          "usage": "Output format: json, html, sarif, pdf",
+          "availability": "stable"
+        },
+        {
+          "name": "ignore",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to .fendix-ignore file",
+          "availability": "stable"
+        },
+        {
+          "name": "import",
+          "type": "stringSlice",
+          "default": "[]",
+          "repeatable": true,
+          "required": false,
+          "usage": "Merge findings from another scanner's SARIF 2.1.0 file into this scan (repeatable). Imported findings go through the standard pipeline; a native fendix finding at the same weakness+location becomes strong cross-tool corroboration. See also the standalone 'fendix import' command.",
+          "availability": "stable"
+        },
+        {
+          "name": "lang",
+          "type": "string",
+          "default": "en",
+          "repeatable": false,
+          "required": false,
+          "usage": "HTML report language: en (default), ar (Arabic, RTL). Other formats stay English.",
+          "availability": "stable"
+        },
+        {
+          "name": "managed-context",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to the runner-supplied managed-CI context (managed-scan-context/v1 plus evidence_submission_id).",
+          "availability": "development_only"
+        },
+        {
+          "name": "managed-evidence",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Write the managed-CI submission document (contract managed-ci/v2) to this path. Requires --managed-context.",
+          "availability": "development_only"
+        },
+        {
+          "name": "max-duration",
+          "type": "duration",
+          "default": "0s",
+          "repeatable": false,
+          "required": false,
+          "usage": "Soft-cap on total scan wall-clock time, e.g. 5m (0 = no cap)",
+          "availability": "stable"
+        },
+        {
+          "name": "max-endpoints",
+          "type": "int",
+          "default": "500",
+          "repeatable": false,
+          "required": false,
+          "usage": "Cap total discovered endpoints (0 = no cap)",
+          "availability": "stable"
+        },
+        {
+          "name": "max-probes-per-endpoint",
+          "type": "int",
+          "default": "20",
+          "repeatable": false,
+          "required": false,
+          "usage": "Max active probes per endpoint (only effective with --enable-active)",
+          "availability": "stable"
+        },
+        {
+          "name": "max-requests",
+          "type": "int64",
+          "default": "0",
+          "repeatable": false,
+          "required": false,
+          "usage": "Soft-cap on total HTTP requests across all checks (0 = no cap)",
+          "availability": "stable"
+        },
+        {
+          "name": "no-native-deps",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Disable the in-process Go dep-CVE scanner (TASK-119). Defer to the Python deps.py path instead.",
+          "availability": "stable"
+        },
+        {
+          "name": "no-plugins",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Disable out-of-tree plugin discovery in .fendix/plugins/ + ~/.fendix/plugins/",
+          "availability": "stable"
+        },
+        {
+          "name": "offline",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Use the local offline-db snapshot for native pip/npm CVEs and skip native govulncheck (create the snapshot with 'fendix db update'). Known limitation: the Python deps check auto-enabled by --code does not receive this flag and may run networked tools; for a hermetic scan add --checks auth,injection or --python-engine=false.",
+          "availability": "stable"
+        },
+        {
+          "name": "offline-db",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to the offline-db snapshot (default: ~/.fendix/offline-db.json). Only effective with --offline.",
+          "availability": "stable"
+        },
+        {
+          "name": "output",
+          "shorthand": "o",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Output file path (default: stdout)",
+          "availability": "stable"
+        },
+        {
+          "name": "profile",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Auth profile name from ~/.fendix/profiles/\u003cname\u003e.yaml",
+          "availability": "stable"
+        },
+        {
+          "name": "python-engine",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Spawn the Python whitebox engine for auth/injection/deps checks (TASK-118). --code enables it automatically unless --python-engine=false is explicit. Standalone binaries do not bundle the engine; provide a local python/ tree or FENDIX_ENGINE (the official container supplies one).",
+          "availability": "stable"
+        },
+        {
+          "name": "require-analyzers",
+          "type": "stringSlice",
+          "default": "[]",
+          "repeatable": true,
+          "required": false,
+          "usage": "Comma-separated analyzer names that must be delivered (recorded ok or not_applicable) for exit 0; anything else exits 2. Stricter than --fail-on-coverage-gap: a required analyzer disabled by another flag is a contradiction and exits 2. Names: dast, spec, active-probes, secrets, textscan, semgrep, govulncheck, pip, npm, python-engine, python-engine/auth, python-engine/injection, python-engine/deps, plugins",
+          "availability": "stable"
+        },
+        {
+          "name": "respect-robots",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Treat robots.txt Disallow as a hard restriction (default: queue as discovery hints)",
+          "availability": "stable"
+        },
+        {
+          "name": "save-baseline",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Save current findings to this path",
+          "availability": "stable"
+        },
+        {
+          "name": "spec",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path or HTTP(S) URL to an OpenAPI/Swagger YAML or JSON spec",
+          "availability": "stable"
+        },
+        {
+          "name": "staged",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Diff-aware scan over staged changes only (git diff --cached). Implies --diff. This is what the pre-commit hook runs.",
+          "availability": "stable"
+        },
+        {
+          "name": "timeout",
+          "type": "int",
+          "default": "10",
+          "repeatable": false,
+          "required": false,
+          "usage": "HTTP timeout in seconds",
+          "availability": "stable"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Target API base URL (black-box scanning)",
+          "availability": "stable"
+        },
+        {
+          "name": "use-pip-audit",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Shell out to the pip-audit binary for Python dep-CVE scanning instead of the native OSV.dev client. Falls back to OSV.dev with a warning if pip-audit is not on PATH.",
+          "availability": "stable"
+        },
+        {
+          "name": "verbose",
+          "shorthand": "v",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Print all requests and raw findings",
+          "availability": "stable"
+        },
+        {
+          "name": "wordlist",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to brute-force wordlist (one path per line); overrides built-in CommonPaths",
+          "availability": "stable"
+        },
+        {
+          "name": "workers",
+          "shorthand": "w",
+          "type": "int",
+          "default": "10",
+          "repeatable": false,
+          "required": false,
+          "usage": "Concurrent HTTP workers",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix verify",
+      "use": "verify [finding-id]",
+      "short": "Re-run a single finding by ID and report still-present / resolved",
+      "availability": "stable",
+      "runnable": true,
+      "flags": [
+        {
+          "name": "auth",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Authorization header value (e.g. \"Bearer ...\")",
+          "availability": "stable"
+        },
+        {
+          "name": "baseline",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Path to the saved findings.json from the original scan (required)",
+          "availability": "stable"
+        },
+        {
+          "name": "code",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Source code path (re-test file-anchored / dep findings; same as original --code)",
+          "availability": "stable"
+        },
+        {
+          "name": "enable-active",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Consent to re-send attack payloads when verifying an active-probe finding (mirrors the original scan's --enable-active)",
+          "availability": "stable"
+        },
+        {
+          "name": "json",
+          "type": "bool",
+          "default": "false",
+          "no_opt_default": "true",
+          "repeatable": false,
+          "required": false,
+          "usage": "Emit JSON instead of the human-readable summary",
+          "availability": "stable"
+        },
+        {
+          "name": "timeout",
+          "type": "int",
+          "default": "15",
+          "repeatable": false,
+          "required": false,
+          "usage": "HTTP timeout in seconds (URL-anchored verify only)",
+          "availability": "stable"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "default": "",
+          "repeatable": false,
+          "required": false,
+          "usage": "Target URL (re-test URL-anchored findings; same as original --url)",
+          "availability": "stable"
+        }
+      ]
+    },
+    {
+      "path": "fendix version",
+      "use": "version",
+      "short": "Print version information",
+      "availability": "stable",
+      "runnable": true,
+      "flags": null
+    }
+  ]
+}

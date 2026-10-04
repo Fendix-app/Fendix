@@ -113,10 +113,10 @@ Open the HTML report's "Summary" panel:
   deterministic confidence band supported the claim); `WARN` is real output
   that did not clear the evidence bar, with `confidence_reasons` naming the
   missing signal. If you're wondering "where do I start?", start with `BLOCK`.
-- **By source** — `correlated` findings have the lowest false-positive rate
-  by design (they require both the live target and the source to agree).
-  Cross-engine agreement is one of the corroborating signals that lifts a
-  finding to `BLOCK`.
+- **By source** — `correlated` means separate analyzers supplied evidence for
+  the same issue. The confidence reasons show how that support affected the
+  decision; no repository benchmark currently isolates correlation's
+  false-positive rate.
 - **Affected endpoints (N)** — when one finding type covers many endpoints
   (e.g. "Missing CSP" across 21 endpoints), Fendix collapses them into one
   finding with an `affected_endpoints` list. Fix the underlying control once,

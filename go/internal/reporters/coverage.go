@@ -24,6 +24,24 @@ const (
 	ReasonNoEndpoints     ScannerReason = "no_endpoints"
 )
 
+// CoverageClasses is the closed lifecycle vocabulary exposed by coverage
+// contract v1. Keep this ordered for deterministic documentation output.
+var CoverageClasses = []string{
+	ClassOK, ClassNotApplicable, ClassDisabled, ClassUnavailable,
+	ClassUnsupported, ClassFailed, ClassUnknown,
+}
+
+// ScannerReasons returns the closed reason vocabulary in contract order.
+func ScannerReasons() []ScannerReason {
+	return []ScannerReason{
+		ReasonNotApplicable, ReasonDiffUnchanged, ReasonDisabledByFlag,
+		ReasonDisabledOffline, ReasonDependencyMissing, ReasonUnsupportedTarget,
+		ReasonNetworkError, ReasonTimeout, ReasonExecutionError,
+		ReasonMalformedOutput, ReasonTruncatedOutput, ReasonInputError,
+		ReasonNoEndpoints,
+	}
+}
+
 var skipReasons = map[ScannerReason]bool{
 	ReasonNotApplicable: true, ReasonDiffUnchanged: true, ReasonDisabledByFlag: true,
 	ReasonDisabledOffline: true, ReasonDependencyMissing: true, ReasonUnsupportedTarget: true,

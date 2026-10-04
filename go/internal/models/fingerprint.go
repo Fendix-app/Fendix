@@ -19,9 +19,9 @@ import (
 const FingerprintAlgorithm = "fendix/v2"
 
 // Fingerprint returns the long-lived semantic identity of a finding: a stable
-// answer to "which vulnerability is this?", deliberately independent of where
-// that vulnerability currently sits and of what Fendix currently believes
-// about it.
+// answer to "which vulnerability is this?" It is independent of volatile
+// coordinates and of what Fendix currently believes about the finding, while
+// retaining the artifact and operation needed to distinguish security claims.
 //
 // # Identity versus location
 //
@@ -32,10 +32,10 @@ const FingerprintAlgorithm = "fendix/v2"
 // one of those asks "have I seen this before?" and the answer flipped to no
 // whenever the file was edited above the finding.
 //
-// v2 splits the two concepts apart. LOCATION (Endpoint, Line, TaintChain line
-// numbers) is reporting: it says where to look today. IDENTITY is the logical
-// security claim: which rule fired, about which artifact, concerning which
-// operation. Location may change freely; identity may not.
+// v2 splits volatile coordinates from semantic location. Line and column
+// numbers are reporting details: they say where to look today. The containing
+// file or manifest, code symbol and operation, or HTTP method and path identify
+// the affected artifact and claim; changing one of those can change identity.
 //
 // # What is deliberately excluded
 //
@@ -50,9 +50,10 @@ const FingerprintAlgorithm = "fendix/v2"
 // evidence_against, is the same vulnerability better understood; that is the
 // whole point of keeping a long-lived record.
 //
-// Line and column numbers, absolute paths, worktree and temp prefixes,
-// timestamps and run identifiers are excluded because they encode the machine
-// and the moment rather than the finding.
+// Line and column numbers, timestamps and run identifiers are excluded because
+// they encode the moment rather than the finding. Emitters are expected to
+// provide repository-relative paths: this package normalizes separators and a
+// leading "./", but cannot safely remove an arbitrary absolute worktree prefix.
 //
 // Credential material — raw or digested — is excluded unconditionally. See
 // SecretRef for why a hash is not an acceptable substitute here.
@@ -66,6 +67,14 @@ const FingerprintAlgorithm = "fendix/v2"
 // rule in one file rather than inventing a discriminator out of location.
 func Fingerprint(f Finding) string {
 	return hashIdentity(identityComponents(f))
+}
+
+// FingerprintIdentityComponents exposes the labelled semantic inputs used by
+// Fingerprint for contract documentation and drift tests. The returned slice
+// is a copy; callers cannot mutate the identity calculation. This package is
+// internal, so the helper does not expand the public engine API.
+func FingerprintIdentityComponents(f Finding) []string {
+	return append([]string(nil), identityComponents(f)...)
 }
 
 // FingerprintV1 is the retired sha1(Category|Endpoint|Title) scheme, kept so

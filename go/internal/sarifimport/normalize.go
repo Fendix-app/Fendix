@@ -17,10 +17,51 @@ import (
 // tool cannot balloon the report. Title and Fix get proportionally smaller
 // caps.
 const (
-	evidenceCap = 2000
-	titleCap    = 200
-	fixCap      = 2000
+	evidenceCap                 = 2000
+	titleCap                    = 200
+	fixCap                      = 2000
+	securitySeverityCriticalMin = 9.0
+	securitySeverityHighMin     = 7.0
+	securitySeverityMediumMin   = 4.0
 )
+
+// DocumentationFacts projects importer behavior into the generated contract.
+// Values are derived through the same normalization helpers used at runtime.
+type DocumentationFacts struct {
+	SupportedVersion      string
+	LevelSeverity         map[string]string
+	PrecisionConfidence   map[string]string
+	SecurityThresholds    []string
+	ToolNormalization     string
+	EvidenceLimitBytes    int
+	TitleLimitBytes       int
+	RemediationLimitBytes int
+	TrustBoundary         []string
+}
+
+// DocumentationContract returns the stable machine-facing import contract.
+func DocumentationContract() DocumentationFacts {
+	levels := map[string]string{}
+	for _, level := range []string{"error", "warning", "note", "none"} {
+		levels[level] = string(mapSeverity(level, nil))
+	}
+	precision := map[string]string{}
+	for _, value := range []string{"very-high", "high", "medium", "low"} {
+		precision[value] = string(mapConfidence("warning", &Rule{Properties: RuleProperties{Precision: value}}))
+	}
+	return DocumentationFacts{
+		SupportedVersion: SupportedVersion, LevelSeverity: levels, PrecisionConfidence: precision,
+		SecurityThresholds: []string{
+			fmt.Sprintf("score >= %.1f: CRITICAL", securitySeverityCriticalMin),
+			fmt.Sprintf("score >= %.1f: HIGH", securitySeverityHighMin),
+			fmt.Sprintf("score >= %.1f: MEDIUM", securitySeverityMediumMin),
+			fmt.Sprintf("score < %.1f: LOW", securitySeverityMediumMin),
+		},
+		ToolNormalization:  "lowercase; collapse spaces to hyphens; retain only a-z, 0-9, dot, underscore, and hyphen; empty becomes unknown-tool",
+		EvidenceLimitBytes: evidenceCap, TitleLimitBytes: titleCap, RemediationLimitBytes: fixCap,
+		TrustBoundary: []string{"source is imported", "source tier is unset", "codeFlows do not establish native reachability", "route and taint chain are not trusted from imported SARIF"},
+	}
+}
 
 // ImportStats reconciles what the importer did with what the document held:
 // every result is either imported, skipped as suppressed, or imported with
@@ -232,11 +273,11 @@ func mapSeverity(level string, rule *Rule) models.Severity {
 	if rule != nil && rule.Properties.SecuritySeverity != nil {
 		score := float64(*rule.Properties.SecuritySeverity)
 		switch {
-		case score >= 9.0:
+		case score >= securitySeverityCriticalMin:
 			return models.SeverityCritical
-		case score >= 7.0:
+		case score >= securitySeverityHighMin:
 			return models.SeverityHigh
-		case score >= 4.0:
+		case score >= securitySeverityMediumMin:
 			return models.SeverityMedium
 		default:
 			return models.SeverityLow

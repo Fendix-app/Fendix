@@ -7,7 +7,7 @@
 // removed once secrets/semgrep moved to native Go (TASK-115/116, see
 // python/engine.py). The structure that follows still mirrors the original
 // Python analyzer:
-//   - Same 15 patterns + ENV_SECRET (.env-only).
+//   - 17 general patterns + ENV_SECRET (.env-only).
 //   - Same SEC-<PATTERN_ID> finding IDs so dedup collapses any overlap
 //     when --checks secrets is passed explicitly.
 //   - Same skip-dirs / file-extension gate / .env name match.
@@ -121,6 +121,39 @@ type pattern struct {
 	// valueGroup selects which part of a match is credential material. Zero
 	// (valueGroupAuto) for all but the three entries that say otherwise.
 	valueGroup int
+}
+
+// CatalogRule is the public, non-sensitive contract metadata for one bundled
+// secrets rule. It intentionally excludes the regular expression: publishing
+// detection internals would make the documentation contract capable of
+// changing scanner behaviour and could help evade a rule.
+type CatalogRule struct {
+	ID          string
+	Title       string
+	Severity    models.Severity
+	Confidence  models.Confidence
+	Category    string
+	CWE         string
+	Remediation string
+}
+
+// CatalogRules returns the executable secrets registry in scan order. The
+// documentation contract generator consumes this projection so a rule cannot
+// be added, removed, or reclassified without making the published catalog
+// stale.
+func CatalogRules() []CatalogRule {
+	registry := make([]pattern, 0, len(patterns)+len(envPatterns))
+	registry = append(registry, patterns...)
+	registry = append(registry, envPatterns...)
+	out := make([]CatalogRule, 0, len(registry))
+	for _, p := range registry {
+		out = append(out, CatalogRule{
+			ID: p.id, Title: p.title, Severity: p.severity,
+			Confidence: models.ConfidenceHigh, Category: "secrets", CWE: p.cwe,
+			Remediation: fixText,
+		})
+	}
+	return out
 }
 
 // boundaryAlnum matches a single [A-Za-z0-9] byte. Used as the default

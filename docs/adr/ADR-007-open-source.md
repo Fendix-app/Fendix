@@ -1,8 +1,16 @@
-# ADR-007: Open-Source License + Single-Repo Posture
+# ADR-007: Open-Source License + Historical Single-Repo Posture
 
 ## Status
 
-Accepted (2026-05-01, ratified during Phase 15 kickoff)
+Partially superseded (2026-10-03)
+
+The decision to license this engine repository under MIT remains accepted and
+is reflected by the root `LICENSE`. The single-repository/no-hosted-product
+posture was reversed by the current sibling backend and frontend repositories
+and the optional hosted Fendix product. No replacement ADR in this repository
+sets a complete commercial licensing, self-hosting, support or SLA boundary;
+that boundary remains an owner decision. The original context below is kept as
+history and must not be read as the current product topology.
 
 ## Context
 
@@ -52,7 +60,8 @@ without sacrificing open-source posture on the core.
 
 ## Decision
 
-**MIT, single repo, no open-core split planned.**
+**Historical decision (2026-05-01): MIT, single repo, no open-core split
+planned.** Only the engine's MIT license remains current; see the status above.
 
 ### Rationale per option
 

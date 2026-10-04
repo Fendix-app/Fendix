@@ -2,7 +2,7 @@
 """custom-secret-pattern reference plugin.
 
 Reads a Fendix ScanRequest on stdin and emits Findings on stdout
-following the same NDJSON contract the embedded Python engine uses
+following the same NDJSON contract the Python engine uses
 (ADR-002). Walks the configured code path looking for the fictional
 `acme-secret-<24 hex>` token format and emits one CRITICAL finding
 per match. Stops at FENDIX_PLUGIN_MAX_FILES files to keep huge

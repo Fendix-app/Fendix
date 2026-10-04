@@ -2,7 +2,21 @@
 
 ## Status
 
-Accepted
+Superseded as the runtime severity policy; retained as a tested reference
+model for the confidence caps.
+
+## Superseding implementation
+
+Runtime severity is discrete: each producer assigns severity, correlation and
+proven reachability may escalate it, and
+`models.EnforceSeverityConsistency` applies the confidence cap. No scanner
+calls `CalculateSeverity` or `CalculateSeverityReachable`. Build gating is a
+separate decision axis implemented in `internal/decision` and documented in
+[`DECISION_POLICY.md`](../DECISION_POLICY.md).
+
+The formula below remains in `internal/models/scoring.go` as a reference model
+and test oracle. It must not be described as the function that computes a live
+scan's severity.
 
 ## Context
 

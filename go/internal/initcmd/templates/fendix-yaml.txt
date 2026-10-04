@@ -24,7 +24,11 @@ scan:
   # workers: 10            # uncomment to override CLI default
   # timeout: 10            # HTTP timeout in seconds
   # delay_ms: 100          # ms between requests
-  # format: json           # json | html | sarif
+  # format: json           # json | html | sarif | pdf
+  # Decision-policy defaults are explicit so a generated starter documents
+  # the same gate that the CLI applies when these keys are absent.
+  deescalate_tests: true
+  enforce_confidence: true
 
 crawler:
   # crawl_depth: 1         # 0 disables HTML link following

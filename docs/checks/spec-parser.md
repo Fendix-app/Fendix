@@ -2,7 +2,7 @@
 
 **Engine:** Python (white-box)
 **Category:** `auth`
-**Default severity:** HIGH – LOW
+**Emitted severity:** HIGH or MEDIUM
 **Active probing:** No (static analysis)
 
 ## What It Detects
@@ -13,16 +13,26 @@ Security misconfigurations in OpenAPI 2.0 (Swagger) and OpenAPI 3.x specificatio
 
 | Check | Description | Severity |
 |---|---|---|
-| **No global security** | Spec has no top-level `security` or `securityDefinitions` | HIGH |
-| **HTTP server scheme** | Spec defines `http://` servers (no TLS) | MEDIUM |
-| **No-auth endpoint** | Individual endpoint has no security requirement and no global fallback | HIGH |
-| **Basic auth scheme** | Spec uses HTTP Basic authentication (credentials sent in cleartext) | LOW |
+| `SEC-SPEC-PARSE` | Spec cannot be parsed or exceeds the size/recursion limits | MEDIUM |
+| `SEC-SPEC-NO-GLOBAL-AUTH` | Security schemes exist but top-level security is absent or permits anonymous access | MEDIUM |
+| `SEC-SPEC-HTTP-SCHEME` / `SEC-SPEC-HTTP-SERVER` | Spec allows an unencrypted HTTP transport/server | HIGH |
+| `SEC-SPEC-NO-AUTH` | Operation inherits no authentication requirement because none exists globally | HIGH |
+| `SEC-SPEC-OPEN-ENDPOINT` | Operation explicitly permits anonymous access | MEDIUM with global auth, otherwise HIGH |
+| `SEC-SPEC-BASIC-AUTH` | Spec uses HTTP Basic authentication | MEDIUM |
+| `SEC-SPEC-APIKEY-QUERY` | API key is carried in the query string | MEDIUM |
 
 ## Supported Formats
 
 - OpenAPI 2.0 (Swagger) — YAML and JSON
 - OpenAPI 3.0.x — YAML and JSON
 - OpenAPI 3.1.x — YAML and JSON
+
+The Python analyzer accepts local files and HTTPS URLs. In the current CLI,
+`--spec` by itself runs Go discovery but does not auto-enable this Python
+analyzer; pass `--python-engine`, or supply `--code` (which auto-enables the
+Python phase unless explicitly disabled). Prefer a local spec file: the known
+remote-spec defect means Python rejects HTTP and refetches HTTPS without the
+Go fetcher's equivalent private-IP guard.
 
 ## How It Works
 
@@ -41,7 +51,7 @@ Security misconfigurations in OpenAPI 2.0 (Swagger) and OpenAPI 3.x specificatio
   "severity": "HIGH",
   "source": "whitebox",
   "category": "auth",
-  "endpoint": "openapi.yaml:GET /api/admin/users",
+  "endpoint": "GET /api/admin/users",
   "evidence": "No security requirement defined for GET /api/admin/users and no global security fallback",
   "fix": "Add a security requirement to this endpoint or define a global security scheme.",
   "references": ["CWE-306"],

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Abdel-RahmanSaied/Fendix/internal/policy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -180,6 +181,34 @@ func TestAllTemplatesParseAsYAML(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGeneratedPolicyUsesCurrentSchemaAndDecisionDefaults(t *testing.T) {
+	dir := t.TempDir()
+	if err := Run(Options{RootDir: dir, CI: CIGitHub, Out: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	path := filepath.Join(dir, policy.DefaultPath)
+	p, err := policy.Load(path)
+	if err != nil {
+		t.Fatalf("generated %s does not load through the real policy parser: %v", policy.DefaultPath, err)
+	}
+	if p.Version != policy.SupportedVersion {
+		t.Fatalf("generated policy version = %d; supported = %d", p.Version, policy.SupportedVersion)
+	}
+	if p.Scan == nil || p.Scan.DeescalateTests == nil || !*p.Scan.DeescalateTests {
+		t.Fatal("generated policy must state deescalate_tests: true")
+	}
+	if p.Scan.EnforceConfidence == nil || !*p.Scan.EnforceConfidence {
+		t.Fatal("generated policy must state enforce_confidence: true")
+	}
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), "json | html | sarif | pdf") {
+		t.Fatal("generated policy's format help must list every supported reporter")
 	}
 }
 

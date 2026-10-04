@@ -8,7 +8,8 @@ package i18n
 // English at render time, so there's nothing unreviewed to warn about.
 //
 // The CLI uses this to decide whether to emit the "machine-translated, beta"
-// notice; the gate itself lives in reporters.ResolveLang.
+// notice for callers of reporters.ResolveLang. Production CLI paths currently
+// use a separate resolver and do not apply that gate.
 func IsBeta(lang string) bool {
 	switch normalize(lang) {
 	case "ar":

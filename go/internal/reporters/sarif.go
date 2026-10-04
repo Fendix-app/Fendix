@@ -14,6 +14,11 @@ import (
 // SARIF 2.1.0 structures — see https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html
 
 const (
+	// SARIFVersion is the exact interchange version written by this exporter.
+	SARIFVersion = "2.1.0"
+	// SARIFSchema is the schema URI announced by every exported log.
+	SARIFSchema = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"
+
 	// sarifLegacyFingerprintKey is the scheme a report that announces NO
 	// algorithm was produced under. Every engine build before v3.0.0 omitted
 	// `metadata.fingerprint_algorithm` and hashed sha1(Category|Endpoint|Title),
@@ -43,6 +48,38 @@ const (
 	// 3: de-escalate evidence, never delete it).
 	sarifMaxLogicalLocations = 10
 )
+
+// SARIFDocumentationFacts projects executable mapping functions into the
+// generated documentation contract. It carries no editorial prose.
+type SARIFDocumentationFacts struct {
+	Version          string
+	Schema           string
+	AutomationID     string
+	StatusLevels     map[string]string
+	SeverityFallback map[string]string
+	SecuritySeverity map[string]string
+}
+
+// SARIFDocumentationContract returns mappings by executing the same helpers
+// RenderSARIF uses, so documentation drift is detected when behavior changes.
+func SARIFDocumentationContract() SARIFDocumentationFacts {
+	severities := []models.Severity{models.SeverityCritical, models.SeverityHigh, models.SeverityMedium, models.SeverityLow, models.SeverityInfo}
+	levels := make(map[string]string, len(severities))
+	security := make(map[string]string, len(severities))
+	for _, value := range severities {
+		levels[string(value)] = sarifLevel(value)
+		security[string(value)] = sarifSecuritySeverity(value)
+	}
+	statuses := []string{"BLOCK", "WARN", "INFO"}
+	statusLevels := make(map[string]string, len(statuses))
+	for _, status := range statuses {
+		statusLevels[status] = sarifLevelForStatus(status, models.SeverityInfo)
+	}
+	return SARIFDocumentationFacts{
+		Version: SARIFVersion, Schema: SARIFSchema, AutomationID: automationIDFor(""),
+		StatusLevels: statusLevels, SeverityFallback: levels, SecuritySeverity: security,
+	}
+}
 
 // SARIFLog is the top-level SARIF 2.1.0 object.
 type SARIFLog struct {
@@ -1251,8 +1288,8 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 	}
 
 	log := SARIFLog{
-		Version: "2.1.0",
-		Schema:  "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+		Version: SARIFVersion,
+		Schema:  SARIFSchema,
 		Runs: []SARIFRun{
 			{
 				Tool: SARIFTool{
