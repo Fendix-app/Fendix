@@ -150,6 +150,8 @@ A consumer that wants "was this scan complete?" should read `coverage.configured
   "category":            "secrets",
   "endpoint":            "src/config.py:14",
   "affected_endpoints":  ["src/config.py:14", "src/admin.py:22"],
+  "occurrences":         [{"endpoint": "src/admin.py:22", "fingerprint": "…"},
+                          {"endpoint": "src/config.py:14", "fingerprint": "…"}],
   "evidence":            "API_KEY = 'sk-live-abc... [REDACTED]'",
   "fix":                 "Move to environment variable. Rotate the exposed key immediately.",
   "references":          ["CWE-798"],
@@ -173,6 +175,7 @@ A consumer that wants "was this scan complete?" should read `coverage.configured
 | `category` | string | yes | Taxonomy category (`auth_bypass`, `injection`, `secrets`, `idor`, `data_exposure`, `cors`, `headers`, `info_disclosure`, `auth`, ...). |
 | `endpoint` | string | yes | URL path or `file:line`. Primary endpoint for this finding. |
 | `affected_endpoints` | array of string | no | Populated only when dedup collapsed `N≥2` occurrences into one finding. Includes the primary `endpoint`. |
+| `occurrences` | array of `{endpoint, fingerprint}` | no | Every distinct security occurrence the finding presents, each with its own `fendix/v2` fingerprint computed from that occurrence alone, before grouping. A finding is a presentation group; `.fendix-ignore`, `--baseline` and lifecycle tracking act on occurrences. The finding's `fingerprint` is its primary occurrence's and always appears here. Emitted on every finding by engines newer than v3.5.1; absent on older reports. Additive: `schema_version` stays 2. See [suppression-semantics.md](suppression-semantics.md). |
 | `evidence` | string | yes | Snippet showing what was detected. Auth credentials passed via `--auth` are masked as `[REDACTED]`. Since v2.0 credential material **found by the secrets scanner** is redacted at capture time and rendered as `[REDACTED len=N sha256:xxxxxxxx...]` — deterministic and unsalted, so the same value renders identically in every report, but never carrying the value itself. May end with the suffix `[Unconfirmed by live scan]` when correlation against a live scan ran but produced no match. |
 | `fix` | string | yes | Remediation guidance. |
 | `references` | array of string | yes | CWE / OWASP / RFC identifiers. May be empty array. |

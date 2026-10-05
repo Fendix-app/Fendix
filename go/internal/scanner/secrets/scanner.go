@@ -820,24 +820,54 @@ func secretIdentifier(line string, valueStart int, hasValue bool) string {
 		return ""
 	}
 	prefix := line[:valueStart]
-	// Prefer the OUTERMOST binding — the name on the left of the assignment —
-	// over the nearest one.
+	// The binding is the assignment to the left of the STRING LITERAL the
+	// value sits in — not of the nearest key, and not of the first quote on
+	// the line.
 	//
-	// A connection string carries its own key:value shapes inside the quoted
-	// value: `DATABASE_URL = "postgres://appuser:pw@host/db"` makes `appuser`
-	// the nearest key, so the nearest-key search named the finding after the
-	// database username. That is stable exactly until someone rotates the
-	// credential, at which point a rotation — the correct response to the
-	// finding — files it as a different vulnerability.
+	// Nearest key: a connection string carries its own key:value shapes
+	// inside the quoted value: `DATABASE_URL = "postgres://appuser:pw@host/db"`
+	// makes `appuser` the nearest key, so the nearest-key search named the
+	// finding after the database username. That is stable exactly until
+	// someone rotates the credential, at which point a rotation — the correct
+	// response to the finding — files it as a different vulnerability.
 	//
-	// Everything from the first quote onward is the value's own text, so the
-	// binding is whatever assignment precedes it. lastAssignmentKey still runs
-	// on that prefix (a nested `config["stripe_key"] =` should give
-	// `stripe_key`, not `config`), just never on the value.
-	if q := strings.IndexAny(prefix, `"'`); q >= 0 {
-		if outer := lastAssignmentKey(prefix[:q]); outer != "" {
+	// First quote: cutting the line at its first quote instead named
+	// `create(email="t@example.com", password="pw")` after `email`, an
+	// unrelated argument. The identifier is part of the secret's identity, so
+	// that made identity depend on whatever happened to precede the
+	// credential on its line, and merged distinct credentials that shared a
+	// preceding argument.
+	//
+	// So: find the literal that encloses the value (the value's own quotes, or
+	// the connection string around it) and take the assignment immediately to
+	// its left. lastAssignmentKey still runs on that prefix (a nested
+	// `config["stripe_key"] =` gives `stripe_key`, not `config`), never on the
+	// value's text.
+	if open := enclosingQuote(prefix); open >= 0 {
+		if outer := lastAssignmentKey(prefix[:open]); outer != "" {
 			return outer
 		}
 	}
 	return lastAssignmentKey(prefix)
+}
+
+// enclosingQuote returns the index of the quote that opens the string literal
+// still open at the end of prefix, or -1 when prefix ends outside any literal.
+// Single and double quotes are tracked separately (each closes only its own
+// kind) and a backslash escapes the next byte inside a literal.
+func enclosingQuote(prefix string) int {
+	open := -1
+	var quote byte
+	for i := 0; i < len(prefix); i++ {
+		c := prefix[i]
+		switch {
+		case open >= 0 && c == '\\':
+			i++
+		case open >= 0 && c == quote:
+			open = -1
+		case open < 0 && (c == '"' || c == '\''):
+			open, quote = i, c
+		}
+	}
+	return open
 }

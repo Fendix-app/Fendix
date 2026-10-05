@@ -454,7 +454,7 @@
           "default": "",
           "repeatable": false,
           "required": false,
-          "usage": "Path to previous findings JSON for diff mode",
+          "usage": "Path to a baseline (from --save-baseline) or JSON report; only occurrences not proven present in it are reported",
           "availability": "stable"
         },
         {
@@ -530,7 +530,7 @@
           "default": "",
           "repeatable": false,
           "required": false,
-          "usage": "Save current findings to this path",
+          "usage": "Save current findings, with every occurrence identity, to this path (baseline format v2)",
           "availability": "stable"
         },
         {
@@ -968,7 +968,7 @@
           "default": "",
           "repeatable": false,
           "required": false,
-          "usage": "Path to previous findings JSON for diff mode",
+          "usage": "Path to a baseline (from --save-baseline) or JSON report; only occurrences not proven present in it are reported",
           "availability": "stable"
         },
         {
@@ -1298,7 +1298,7 @@
           "default": "",
           "repeatable": false,
           "required": false,
-          "usage": "Save current findings to this path",
+          "usage": "Save current findings, with every occurrence identity, to this path (baseline format v2)",
           "availability": "stable"
         },
         {

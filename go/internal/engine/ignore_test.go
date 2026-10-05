@@ -280,3 +280,81 @@ func TestEndpointMatchesPattern(t *testing.T) {
 		})
 	}
 }
+
+// Endpoint glob semantics (`.fendix-ignore` `endpoint:`): "**" is zero or
+// more whole segments, "*" stays inside one segment, the legacy trailing-"*"
+// forms keep their prefix meaning, and source locations match on their path
+// (the ":line" suffix is dropped).
+func TestEndpointGlobSemantics(t *testing.T) {
+	cases := []struct {
+		endpoint, pattern string
+		want              bool
+	}{
+		// ** matches zero or more directories.
+		{"tests/helpers.py:2", "**/tests/**", true},
+		{"pkg/tests/helpers.py:2", "**/tests/**", true},
+		{"a/b/c/tests/d/e/helpers.py:9", "**/tests/**", true},
+		{"tests/helpers.py:2", "tests/**", true},
+		{"pkg/tests/helpers.py:2", "tests/**", false},
+		{"pkg/tests", "pkg/tests/**", true},
+		{"pkg/tests/x.py:1", "pkg/**/x.py", true},
+		{"pkg/x.py:1", "pkg/**/x.py", true},
+		{"pkg/a/b/x.py:1", "pkg/**/x.py", true},
+		// Production paths that merely resemble a test path do not match.
+		{"pkg/zapp/db.py:2", "**/tests/**", false},
+		{"pkg/latests/db.py:2", "**/tests/**", false},
+		{"pkg/tests_prod/db.py:2", "**/tests/**", false},
+		{"pkg/tests.py:2", "**/tests/**", false},
+		{"pkg/contests/db.py:2", "**/tests/**", false},
+		// * stays within one segment.
+		{"src/app.py:3", "src/*.py", true},
+		{"src/sub/app.py:3", "src/*.py", false},
+		{"pkg/test_db.py:1", "**/test_*.py", true},
+		{"pkg/test_db.py:1", "*/test_*.py", true},
+		{"a/pkg/test_db.py:1", "*/test_*.py", false},
+		{"pkg/a_test.go:1", "**/*_test.go", true},
+		// A wildcard pattern without "/" matches a segment at any depth and
+		// everything below it (.gitignore convention).
+		{"a/b/c.py:3", "*.py", true},
+		{"c.py:3", "*.py", true},
+		{"a/b/c.go:3", "*.py", false},
+		{"pkg/fixtures/x.py:1", "*fixtures*", true},
+		{"pkg/prod/x.py:1", "*fixtures*", false},
+		{"/api/admin/users", "*admin*", true},
+		// Legacy trailing-* prefix forms are unchanged.
+		{"pkg/tests/deep/x.py:1", "pkg/tests/*", true},
+		{"pkg/tests", "pkg/tests/*", true},
+		{"pkg/testsuite/x.py:1", "pkg/tests/*", false},
+		{"/api/v1/users", "/api/v1*", true},
+		// Windows separators in a rule match forward-slash paths.
+		{"pkg/tests/helpers.py:2", `**\tests\**`, true},
+		// Case-insensitive, and the method in a "METHOD /path" pattern is not
+		// part of the match.
+		{"POST /API/Public/Docs", "GET /api/public/*", true},
+		{"https://h/api/x/y?q=1", "/api/*/y", true},
+		{"https://h/api/x/z/y", "/api/*/y", false},
+		{"https://h/api/x/z/y", "/api/**/y", true},
+		// Exact raw endpoint still pins one line.
+		{"pkg/tests/helpers.py:2", "pkg/tests/helpers.py:2", true},
+		{"pkg/tests/helpers.py:3", "pkg/tests/helpers.py:2", false},
+	}
+	for _, tc := range cases {
+		if got := endpointMatchesPattern(tc.endpoint, tc.pattern); got != tc.want {
+			t.Errorf("endpointMatchesPattern(%q, %q) = %v, want %v", tc.endpoint, tc.pattern, got, tc.want)
+		}
+	}
+}
+
+// A path rule is applied to each occurrence on its own: in one call with a
+// fixture and a production occurrence of the same rule, only the fixture goes.
+func TestApplyIgnoreRules_EndpointIsOccurrenceScoped(t *testing.T) {
+	findings := []models.Finding{
+		{ID: "SEC-001", Title: "Hardcoded password", Category: "secrets", Endpoint: "pkg/tests/helpers.py:2"},
+		{ID: "SEC-001", Title: "Hardcoded password", Category: "secrets", Endpoint: "pkg/zapp/db.py:2"},
+		{ID: "SEC-001", Title: "Hardcoded password", Category: "secrets", Endpoint: "tests/helpers.py:2"},
+	}
+	got := ApplyIgnoreRules(findings, []IgnoreRule{{Endpoint: "**/tests/**"}})
+	if len(got) != 1 || got[0].Endpoint != "pkg/zapp/db.py:2" {
+		t.Fatalf("got %+v, want only the production occurrence", got)
+	}
+}

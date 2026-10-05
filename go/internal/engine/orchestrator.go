@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -914,39 +913,44 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// before Deduplicate, while each finding is still one (endpoint, title).
 	findings = CollapseDuplicateLocations(findings)
 
-	// 5.5. Deduplicate identical findings across endpoints (TASK-088).
-	// Runs after correlation so correlated findings are grouped too.
-	// "Missing CSP × 21 endpoints" → 1 finding with AffectedEndpoints[21].
-	findings = Deduplicate(findings)
-
-	// 5.6. Enforce severity↔confidence consistency (TASK-092). LOW confidence
-	// caps severity at MEDIUM; MEDIUM confidence caps at HIGH. Mismatched
-	// findings get their severity downgraded so the public JSON schema's
-	// consistency rule holds for every emitted report.
-	findings = enforceConsistency(findings)
-
-	// 6. Sort findings deterministically by endpoint+category for stable ID assignment
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].Endpoint != findings[j].Endpoint {
-			return findings[i].Endpoint < findings[j].Endpoint
-		}
-		if findings[i].Category != findings[j].Category {
-			return findings[i].Category < findings[j].Category
-		}
-		return findings[i].Title < findings[j].Title
-	})
-
-	// 7. Assign sequential IDs + stamp the run-stable fendix/v2 semantic
-	// fingerprint. It is computed BEFORE the ignore/baseline steps so a
-	// `fingerprint:` ignore rule can match it. Unlike the positional SEC-NNN ID,
-	// it excludes volatile coordinates and presentation fields, so it is the
-	// durable key for suppressions.
-	for i := range findings {
-		findings[i].ID = fmt.Sprintf("SEC-%03d", i+1)
-		models.StampIdentity(&findings[i])
+	// 5.5. Occurrence identity, BEFORE any grouping.
+	//
+	// Every finding at this point is ONE security occurrence. Its fendix/v2
+	// fingerprint is stamped now, from that occurrence alone, so identity can
+	// never depend on which other occurrences later share its presentation
+	// group or on how their paths sort. Everything identity-sensitive —
+	// `.fendix-ignore` matching, baseline matching, the saved baseline — runs on
+	// these occurrences. Grouping (Deduplicate) runs only afterwards, over the
+	// survivors, and is presentation only.
+	//
+	// Before this ordering, grouping ran first and the group's primary
+	// occurrence (the lexically smallest endpoint) supplied the fingerprint
+	// that baseline and ignore matching tested. A new production credential
+	// that grouped behind a baselined or ignored test fixture inherited its
+	// suppression and passed the gate; whether it did depended on how the
+	// directory names sorted.
+	occurrences := findings
+	for i := range occurrences {
+		// Each finding here is exactly one occurrence. An occurrence list it
+		// arrived with (a plugin's, say) is not evidence of anything and must
+		// not stand in for the identity stamped below.
+		occurrences[i].Occurrences = nil
+		models.StampIdentity(&occurrences[i])
 	}
 
-	// 8. Apply ignore rules from .fendix-ignore.
+	// 6. Positional IDs come from the presentation grouping of the FULL,
+	// unsuppressed occurrence set, exactly as they always have, so an `id:`
+	// ignore rule written from a report keeps naming the same group. Each
+	// occurrence carries the ID of the group it would be presented in.
+	groupIDs := presentationGroupIDs(occurrences)
+	for i := range occurrences {
+		occurrences[i].ID = groupIDs[dedupKey(occurrences[i])].id
+	}
+
+	// 7. Apply ignore rules from .fendix-ignore, per OCCURRENCE. A path-scoped
+	// rule suppresses exactly the occurrences whose own path matches it; a
+	// production occurrence that would have grouped with a suppressed test
+	// fixture survives and is presented (and gated) on its own.
 	//
 	// F-L14: an explicit-but-unparseable --ignore file is a HARD error
 	// (exit 2), consistent with --config policy parse failures in
@@ -960,10 +964,12 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 			fmt.Fprintf(os.Stderr, "fendix: cannot parse --ignore file %s: %v\n", o.cfg.IgnorePath, err)
 			return nil, nil, 2
 		}
-		findings = ApplyIgnoreRules(findings, ignoreFile.Ignore)
+		occurrences = ApplyIgnoreRules(occurrences, ignoreFile.Ignore)
 	}
 
-	// 9. Apply baseline diff if --baseline provided.
+	// 8. Apply baseline diff if --baseline provided, per OCCURRENCE: an
+	// occurrence is known only when the baseline proves THAT occurrence was
+	// present, never because it groups with one that was.
 	//
 	// Fail-closed on a CORRUPT baseline (exit 2), consistent with the --ignore
 	// handling above: an explicit-but-unparseable baseline is a
@@ -972,16 +978,30 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// green run red for the wrong reason). A MISSING baseline is NOT an error —
 	// it's the legitimate first run before --save-baseline has written one.
 	if o.cfg.BaselinePath != "" {
-		diffed, err := ApplyBaselineDiffStrict(findings, o.cfg.BaselinePath)
+		diffed, err := ApplyBaselineDiffStrict(occurrences, o.cfg.BaselinePath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "fendix: cannot parse --baseline file %s: %v\n", o.cfg.BaselinePath, err)
 			return nil, nil, 2
 		}
-		findings = diffed
+		occurrences = diffed
 	}
 
+	// 9. Group the SURVIVING occurrences for presentation (TASK-088): "Missing
+	// CSP × 21 endpoints" → 1 finding with AffectedEndpoints[21]. Because only
+	// survivors are grouped, the primary endpoint, evidence, secret metadata,
+	// affected endpoints, occurrence list and scoring provenance all describe
+	// actionable occurrences; none can point at a suppressed one.
+	findings = regroupOccurrences(occurrences, groupIDs)
+
+	// 9.5. Enforce severity↔confidence consistency (TASK-092). LOW confidence
+	// caps severity at MEDIUM; MEDIUM confidence caps at HIGH. Mismatched
+	// findings get their severity downgraded so the public JSON schema's
+	// consistency rule holds for every emitted report.
+	findings = enforceConsistency(findings)
+
 	// 10. Save baseline if requested (before sanitization, so credentials
-	// are available for future diff).
+	// are available for future diff). The file records every surviving
+	// occurrence identity (baseline format v2).
 	//
 	// F-L14: a requested-but-failed --save-baseline is a HARD error (exit
 	// 2). Pre-fix this logged at ERROR and continued, so a CI job that

@@ -25,6 +25,9 @@ type fakeJira struct {
 	bodies   []string
 	// matchedIssues, when non-empty, is returned from /search.
 	matchedIssues []string
+	// labels, keyed by issue key, are returned with matchedIssues.
+	labels map[string][]string
+	jql    []string
 }
 
 func newFakeJira(t *testing.T) *fakeJira {
@@ -34,11 +37,17 @@ func newFakeJira(t *testing.T) *fakeJira {
 		switch {
 		case strings.Contains(r.URL.Path, "/rest/api/3/search/jql"):
 			fj.searches.Add(1)
+			b, _ := io.ReadAll(r.Body)
+			var q struct {
+				JQL string `json:"jql"`
+			}
+			_ = json.Unmarshal(b, &q)
+			fj.jql = append(fj.jql, q.JQL)
 			out := map[string]any{"issues": []any{}}
 			if len(fj.matchedIssues) > 0 {
-				issues := make([]map[string]string, 0, len(fj.matchedIssues))
+				issues := make([]map[string]any, 0, len(fj.matchedIssues))
 				for _, k := range fj.matchedIssues {
-					issues = append(issues, map[string]string{"key": k})
+					issues = append(issues, map[string]any{"key": k, "fields": map[string]any{"labels": fj.labels[k]}})
 				}
 				out["issues"] = issues
 			}
@@ -149,15 +158,21 @@ func TestSyncFindings_CreatesNewIssue(t *testing.T) {
 	if len(out.Errors) != 0 {
 		t.Errorf("unexpected errors: %v", out.Errors)
 	}
-	// The body must carry the fendix-id label for idempotency.
-	if len(fj.bodies) != 1 || !strings.Contains(fj.bodies[0], "fendix-id:SEC-X1") {
-		t.Errorf("create payload missing fendix-id label: %q", fj.bodies)
+	// The body must carry the occurrence's fingerprint label for
+	// idempotency, and never the positional SEC-NNN as a label.
+	fp := models.Fingerprint(makeFinding("SEC-X1", models.SeverityCritical))
+	if len(fj.bodies) != 1 || !strings.Contains(fj.bodies[0], "fendix-fp:"+fp) {
+		t.Errorf("create payload missing fendix-fp label: %q", fj.bodies)
+	}
+	if strings.Contains(fj.bodies[0], "fendix-id:") {
+		t.Errorf("positional id used as an identity label: %q", fj.bodies[0])
 	}
 }
 
 func TestSyncFindings_IdempotentWhenIssueExists(t *testing.T) {
 	fj := newFakeJira(t)
 	fj.matchedIssues = []string{"SEC-EXISTING"}
+	fj.labels = map[string][]string{"SEC-EXISTING": {"fendix", "fendix-fp:" + models.Fingerprint(makeFinding("SEC-X2", models.SeverityHigh))}}
 	c := newTestClient(t, fj.URL)
 	out, err := c.SyncFindings(context.Background(),
 		[]models.Finding{makeFinding("SEC-X2", models.SeverityHigh)})
@@ -333,5 +348,63 @@ func TestNewFromEnv_ParsesAllFields(t *testing.T) {
 	}
 	if c.cfg.MinSeverity != models.SeverityCritical {
 		t.Errorf("MinSeverity = %q; want CRITICAL", c.cfg.MinSeverity)
+	}
+}
+
+func occFinding(id string, eps ...string) models.Finding {
+	f := makeFinding(id, models.SeverityCritical)
+	f.Endpoint = eps[0]
+	for i, ep := range eps {
+		f.Occurrences = append(f.Occurrences, models.Occurrence{Endpoint: ep, Fingerprint: strings.Repeat(string(rune('a'+i)), 40)})
+	}
+	f.Fingerprint = f.Occurrences[0].Fingerprint
+	return f
+}
+
+// A new occurrence that joins a ticketed finding gets its own issue; it is
+// never reported "Unchanged" because its group's primary is ticketed.
+func TestSyncFindings_NewOccurrenceOfTicketedGroupGetsItsOwnIssue(t *testing.T) {
+	fj := newFakeJira(t)
+	fj.matchedIssues = []string{"SEC-FIXTURE"}
+	fj.labels = map[string][]string{"SEC-FIXTURE": {"fendix", "fendix-fp:" + strings.Repeat("a", 40)}}
+	c := newTestClient(t, fj.URL)
+	f := occFinding("SEC-001", "pkg/tests/helpers.py:2", "pkg/zapp/db.py:2")
+	out, err := c.SyncFindings(context.Background(), []models.Finding{f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Created) != 1 || len(out.Unchanged) != 0 {
+		t.Fatalf("Created=%v Unchanged=%v; want one new issue", out.Created, out.Unchanged)
+	}
+	body := fj.bodies[0]
+	if !strings.Contains(body, "fendix-fp:"+strings.Repeat("b", 40)) || strings.Contains(body, "fendix-fp:"+strings.Repeat("a", 40)) {
+		t.Errorf("new issue must cover exactly the untracked occurrence: %s", body)
+	}
+	if !strings.Contains(body, "pkg/zapp/db.py:2") || strings.Contains(body, "AKIA") {
+		t.Errorf("new issue must name the new location and not borrow the fixture's evidence: %s", body)
+	}
+	if !strings.Contains(fj.jql[0], "labels in") || strings.Contains(fj.jql[0], "SEC-001") {
+		t.Errorf("lookup must be by occurrence fingerprint, not positional id: %s", fj.jql[0])
+	}
+
+	// Once every occurrence is ticketed, the finding is unchanged.
+	fj.labels["SEC-FIXTURE"] = append(fj.labels["SEC-FIXTURE"], "fendix-fp:"+strings.Repeat("b", 40))
+	before := fj.creates.Load()
+	out, _ = c.SyncFindings(context.Background(), []models.Finding{f})
+	if fj.creates.Load() != before || len(out.Unchanged) != 1 {
+		t.Errorf("fully ticketed finding re-filed: %+v", out)
+	}
+}
+
+// A positional ID reused by an unrelated finding in a later scan is not
+// treated as already ticketed.
+func TestSyncFindings_ReusedPositionalIDIsNotTicketed(t *testing.T) {
+	fj := newFakeJira(t)
+	fj.matchedIssues = []string{"SEC-OLD"}
+	fj.labels = map[string][]string{"SEC-OLD": {"fendix", "fendix-id:SEC-003", "fendix-fp:" + strings.Repeat("e", 40)}}
+	c := newTestClient(t, fj.URL)
+	out, _ := c.SyncFindings(context.Background(), []models.Finding{occFinding("SEC-003", "svc/new.py:9")})
+	if len(out.Created) != 1 {
+		t.Errorf("unrelated finding numbered SEC-003 was not ticketed: %+v", out)
 	}
 }

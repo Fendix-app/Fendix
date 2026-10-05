@@ -139,7 +139,7 @@ func isNeutralizeTarget(r rune) bool {
 // or reordering characters. The original slice is not mutated.
 //
 // Fields normalized: Title, Evidence, Fix, Endpoint, Category,
-// AffectedEndpoints, and the TaintChain link Expr/File fields. Numeric
+// AffectedEndpoints, Occurrences[].Endpoint, and the TaintChain link Expr/File fields. Numeric
 // and enum fields (Severity, Confidence, Line, ID) are left alone.
 func NeutralizeFindings(findings []models.Finding) []models.Finding {
 	out := make([]models.Finding, len(findings))
@@ -157,6 +157,15 @@ func NeutralizeFindings(findings []models.Finding) []models.Finding {
 				eps[j] = NeutralizeText(ep)
 			}
 			out[i].AffectedEndpoints = eps
+		}
+
+		if len(out[i].Occurrences) > 0 {
+			occ := make([]models.Occurrence, len(out[i].Occurrences))
+			copy(occ, out[i].Occurrences)
+			for j := range occ {
+				occ[j].Endpoint = NeutralizeText(occ[j].Endpoint)
+			}
+			out[i].Occurrences = occ
 		}
 
 		if len(out[i].TaintChain) > 0 {

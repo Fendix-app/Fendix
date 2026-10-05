@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixes a gate bypass: baselines and `.fendix-ignore` rules suppressed whole
+grouped findings, so a new production credential that the report grouped with
+a baselined or ignored test fixture passed CI with exit 0. Whether it did
+depended on how the directory names sorted. Identity, suppression and
+baselines now act on each occurrence. This changes the baseline file format
+and the scope of some ignore rules; read "Changed" before upgrading.
+
+### Security
+
+- **Baselines and ignore rules no longer suppress occurrences they do not
+  match.** A finding groups every occurrence of one check (same severity,
+  category and title) for presentation, and its `fingerprint` was its
+  lexically first occurrence's. Baseline matching and `.fendix-ignore` rules
+  ran on that group. Three consequences:
+  - A test fixture saved in a baseline hid a new production credential in a
+    directory that sorted after `tests/`, with `new_findings=0` and exit 0.
+  - An `endpoint: "**/tests/**"` rule suppressed the production occurrence
+    with the fixture.
+  - A new occurrence that sorted first changed the group's fingerprint and
+    re-reported every baselined occurrence as new.
+
+  The engine now:
+  1. stamps each occurrence's fingerprint before any grouping;
+  2. applies `.fendix-ignore` and `--baseline` to each occurrence;
+  3. groups only the survivors.
+
+  As a result, the primary endpoint, evidence, secret metadata,
+  `affected_endpoints` and decision of every finding come from occurrences
+  that survived suppression.
+
+- **SARIF identity is per occurrence.**
+  - SARIF used to emit one result per grouped finding, located at the primary
+    occurrence and keyed (`partialFingerprints`) on its fingerprint. A GitHub
+    Code Scanning dismissal of a test-fixture alert therefore kept covering a
+    production occurrence that later joined the same finding, and the
+    production location was never shown.
+  - Each occurrence of a grouped finding is now its own result, with its own
+    location and `partialFingerprints`.
+  - The evidence snippet, taint chain and route appear only on the occurrence
+    they belong to.
+  - Rules and the decision are shared, and `properties.finding_id` /
+    `occurrence_count` name the group.
+  - A grouped finding from a report without `occurrences` renders grouped as
+    before but without `partialFingerprints`.
+- **`fendix jira` tracks occurrences, not positional IDs.**
+  - Idempotency was the label `fendix-id:SEC-NNN`. That positional ID is
+    reassigned every scan, so an unrelated finding numbered like an old one
+    was reported "Unchanged" and never ticketed. A new occurrence joining a
+    ticketed finding was also covered by the existing ticket.
+  - Issues now carry one `fendix-fp:<fingerprint>` label per occurrence. An
+    occurrence not on any issue gets an issue of its own.
+- **`fendix verify` re-tests every occurrence.**
+  - A grouped finding was re-tested only at its primary location and reported
+    `resolved` for the whole group.
+  - Each occurrence is now re-tested. The finding is `resolved` only when every
+    occurrence is, `still-present` when any is. The verdicts appear in
+    `occurrences` on the result.
+
+### Added
+
+- `occurrences` on every finding: `[{endpoint, fingerprint}]`, one entry per
+  security occurrence the finding presents. The finding's own `fingerprint`
+  is always among them. This is additive, so `schema_version` stays 2.
+- Baseline format v2. `--save-baseline` writes `{"baseline_version": 2,
+  "fingerprint_algorithm": "fendix/v2", "findings": [...]}`, with every
+  occurrence recorded. `fendix verify --baseline` reads it.
+
+### Changed
+
+- **Baselines.** An occurrence counts as known only when the baseline proves
+  that exact occurrence was present.
+  - Baselines written by v3.5.1 or earlier, and reports without
+    `occurrences`, still load. Each of their entries proves its own
+    fingerprint and, at each exact recorded location, a finding of the same
+    category and title or rule.
+  - As a one-time effect, an occurrence that was absorbed into a baselined
+    group and has since moved line is reported as new. Re-save the baseline
+    once.
+  - A `baseline_version` above 2, or a different `fingerprint_algorithm`,
+    exits 2.
+- **`.fendix-ignore` scope.**
+  - A `fingerprint:` rule suppresses only the occurrence it names. A rule
+    copied from a grouped finding's top-level `fingerprint` used to suppress
+    the whole group; to suppress other occurrences, add rules with their
+    `occurrences[].fingerprint`.
+  - `id:` is unchanged: it is positional and suppresses the whole presented
+    group.
+  - A rule that sets `fingerprint` or `id` together with `endpoint` or
+    `category` now logs a warning, because only `fingerprint` or `id` is used.
+- **Endpoint globs.**
+  - `**` as a path segment matches zero or more directories, so
+    `**/tests/**` now matches a top-level `tests/` directory.
+  - `*` no longer crosses `/`.
+  - A wildcard pattern with no `/` (`*.py`, `*fixtures*`) matches a path
+    segment at any depth, plus everything below it, as in `.gitignore`.
+  - Patterns whose only wildcard is one trailing `*` (`dir/*`, `prefix*`)
+    keep their prefix meaning.
+  - `\` separators in patterns match `/`.
+  - These changes mostly narrow a match. Two widen it: `**/` now matches a
+    top-level directory, and a slash-less pattern now matches everything
+    below a directory whose name matches it. Review slash-less rules after
+    upgrading.
+- **Secret identifier.** The identifier is now the binding of the string
+  literal that holds the credential. `create(email="…", password="…")` used
+  to be named after `email`, which made the secret's identity depend on an
+  unrelated preceding argument and merged distinct credentials. Findings on
+  such lines get a new fingerprint once; a v3.5.1 baseline still matches them
+  by recorded location.
+
+- **Upgrade effects of the SARIF, Jira and verify changes.**
+  - GitHub Code Scanning: the primary occurrence of a grouped finding keeps its
+    alert. Every other occurrence becomes a new alert once.
+  - `fendix jira` files new issues once for findings that were tracked only by
+    their old `fendix-id:` label.
+
+See [docs/suppression-semantics.md](docs/suppression-semantics.md).
+
 ## [3.5.1] - 2026-10-05
 
 An identity and install-integrity release. `fendix init` now writes CI that

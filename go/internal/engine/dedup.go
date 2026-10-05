@@ -45,14 +45,27 @@ import (
 // the dedupKey itself as a total-order tiebreaker so the output sequence is
 // fully determined by the input SET (F-L6) rather than the input permutation.
 func Deduplicate(findings []models.Finding) []models.Finding {
-	if len(findings) <= 1 {
+	if len(findings) == 0 {
 		return findings
+	}
+	if len(findings) == 1 {
+		// Nothing to merge, but a stamped occurrence still lists itself so
+		// every scanned finding carries its occurrence identities.
+		out := []models.Finding{findings[0]}
+		if occ := occurrenceSet(out[0]); len(occ) > 0 {
+			out[0].Occurrences = sortedOccurrences(occ)
+		}
+		return out
 	}
 
 	type groupState struct {
 		primary   models.Finding
 		endpoints map[string]bool
 		refs      map[string]bool
+		// occurrences is the set of member security identities, keyed by
+		// endpoint+fingerprint. Grouping is presentation only: it must
+		// never erase the identities it groups.
+		occurrences map[models.Occurrence]bool
 		// firstIdx keeps the group in its original relative position so
 		// downstream sort/ID assignment stays stable.
 		firstIdx int
@@ -70,6 +83,8 @@ func Deduplicate(findings []models.Finding) []models.Finding {
 				endpoints: endpointSet(f),
 				refs:      stringSet(f.References),
 				firstIdx:  i,
+
+				occurrences: occurrenceSet(f),
 			}
 			groups[key] = g
 			order = append(order, key)
@@ -93,6 +108,9 @@ func Deduplicate(findings []models.Finding) []models.Finding {
 		}
 		for _, r := range f.References {
 			g.refs[r] = true
+		}
+		for o := range occurrenceSet(f) {
+			g.occurrences[o] = true
 		}
 		// Severity-adjacent fields are accumulated independently of which
 		// finding ends up being the primary, so they stay order-invariant.
@@ -165,6 +183,9 @@ func Deduplicate(findings []models.Finding) []models.Finding {
 			g.primary.AffectedEndpoints = sortedKeys(g.endpoints)
 		}
 		g.primary.References = sortedKeys(g.refs)
+		if len(g.occurrences) > 0 {
+			g.primary.Occurrences = sortedOccurrences(g.occurrences)
+		}
 		out = append(out, g.primary)
 	}
 	return out
@@ -302,6 +323,40 @@ func endpointSet(f models.Finding) map[string]bool {
 			out[ep] = true
 		}
 	}
+	return out
+}
+
+// occurrenceSet returns the security occurrences a finding carries: the ones
+// it already lists (a regrouped or re-ingested finding), or, for a single
+// stamped occurrence, itself. An UNSTAMPED finding (no Fingerprint) carries no
+// occurrence identity and contributes nothing, so callers that never stamp
+// identities see Deduplicate's historical output unchanged.
+func occurrenceSet(f models.Finding) map[models.Occurrence]bool {
+	out := make(map[models.Occurrence]bool, len(f.Occurrences)+1)
+	for _, o := range f.Occurrences {
+		if o.Fingerprint != "" {
+			out[o] = true
+		}
+	}
+	if len(f.Occurrences) == 0 && f.Fingerprint != "" {
+		out[models.Occurrence{Endpoint: f.Endpoint, Fingerprint: f.Fingerprint}] = true
+	}
+	return out
+}
+
+// sortedOccurrences returns a presence set in deterministic (endpoint,
+// fingerprint) order.
+func sortedOccurrences(m map[models.Occurrence]bool) []models.Occurrence {
+	out := make([]models.Occurrence, 0, len(m))
+	for o := range m {
+		out = append(out, o)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Endpoint != out[j].Endpoint {
+			return out[i].Endpoint < out[j].Endpoint
+		}
+		return out[i].Fingerprint < out[j].Fingerprint
+	})
 	return out
 }
 
