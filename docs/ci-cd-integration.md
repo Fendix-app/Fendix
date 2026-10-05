@@ -4,7 +4,7 @@ Fendix produces SARIF 2.1.0 output that integrates directly with GitHub Advanced
 
 ## Quick start — copy this workflow
 
-A complete, ready-to-use, digest-pinned v3.4.1 container workflow lives at
+A complete, ready-to-use, digest-pinned v3.5.0 container workflow lives at
 [`examples/github-actions/fendix-scan.yml`](../examples/github-actions/fendix-scan.yml).
 Drop it into `.github/workflows/fendix-scan.yml` of your project and it
 will:
@@ -22,7 +22,7 @@ The sections below show the individual building blocks if you'd rather
 assemble your own workflow.
 
 Commands shown with a bare `fendix` binary assume a version-matched Python
-engine tree is configured when `--code` coverage is expected. Official v3.4.1
+engine tree is configured when `--code` coverage is expected. Official v3.5.0
 standalone binaries do not include that tree; without it, the native analyzers
 continue and `python-engine` is recorded `skipped/dependency_missing`. The
 reference workflow avoids that degradation by using the official container.
@@ -44,7 +44,7 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     env:
-      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c
     permissions:
       security-events: write  # Required for SARIF upload
       contents: read

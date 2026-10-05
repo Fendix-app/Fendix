@@ -75,7 +75,7 @@ No README update needed for normal patch/minor releases — the install commands
 
 ## Versioning rules of thumb
 
-Fendix is post-1.0 (current release **v3.4.1**), so SemVer applies
+Fendix is post-1.0 (current release **v3.5.0**), so SemVer applies
 at full strength — the pre-1.0 "minor bump = breaking is fine" latitude is gone.
 
 | Bump | When | Examples from history |
@@ -93,6 +93,7 @@ When unsure, prefer the larger bump. Cheap.
 ### `mirror` job failed
 
 - **First check:** is `DIST_REPO_TOKEN` still valid? Fine-grained PATs expire (max 1 year). Renew at github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens.
+- **`Permission to Fendix-app/homebrew-fendix.git denied` (403):** the token cannot write to the org-owned mirror. A fine-grained PAT reaches only repositories of its resource owner, so it must be created with **Fendix-app** as the resource owner and `Contents: Read and write` on `homebrew-fendix`. v3.5.0, the first stable release after the mirror moved to the organization, failed this way; the job stops before the mirror release is created, so `gh run rerun <id> --failed` is safe once the secret is replaced.
 - **Logs:** `gh run view <id> --log-failed | grep -A 5 -i "Mirror"`
 - **Re-run flow:** if it's a transient failure (rare), re-running just the failed job won't work because the mirror job uses `gh release create` which fails on duplicate tags. Easier to fix-forward: push a new commit to main with the fix, delete the tag, re-tag.
 

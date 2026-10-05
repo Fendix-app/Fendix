@@ -33,4 +33,4 @@ grep -F 'brew tap Fendix-app/fendix' README.md >/dev/null
 # shellcheck disable=SC2016 # Match the literal shell assignment.
 grep -F 'REPO="${FENDIX_REPO:-Fendix-app/Fendix}"' scripts/install.sh >/dev/null
 grep -F 'Fendix-app/homebrew-fendix' .github/workflows/release.yml >/dev/null
-grep -F 'fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a' README.md >/dev/null
+grep -F 'fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c' README.md >/dev/null

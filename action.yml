@@ -5,7 +5,7 @@
 # only surfaces issues the PR actually introduced. Uploads SARIF so findings
 # render inline in the GitHub Security tab and as PR annotations.
 #
-# Usage (minimal — SAST/secrets/SCA on changed code in a PR). Stable v3.4.1
+# Usage (minimal — SAST/secrets/SCA on changed code in a PR). Stable v3.5.0
 # requires a prepared, version-matched Python tree and its requirements; see
 # the GitHub Actions section in README.md. The official container is the
 # ready-to-run alternative:
@@ -14,7 +14,7 @@
 #     with: { fetch-depth: 0 }          # diff mode needs history
 #   - uses: Fendix-app/Fendix@v1
 #     with:
-#       version: v3.4.1
+#       version: v3.5.0
 #       code: .
 #       engine_path: ${{ github.workspace }}/vendor/fendix-python
 #
@@ -22,7 +22,7 @@
 #
 #   - uses: Fendix-app/Fendix@v1
 #     with:
-#       version: v3.4.1
+#       version: v3.5.0
 #       url: ${{ secrets.STAGING_API_URL }}
 #       code: .
 #       spec: openapi.yaml
@@ -69,19 +69,19 @@ inputs:
     required: false
     default: "true"
   version:
-    description: "Fendix version to install (e.g. v3.4.1). 'latest' installs the newest release."
+    description: "Fendix version to install (e.g. v3.5.0). 'latest' installs the newest release."
     required: false
     default: "latest"
   extra-args:
     description: "Additional raw arguments appended to the fendix scan command."
     required: false
     default: ""
-  # --- Managed mode (ADR-010 development preview; absent from v3.4.1) ---
+  # --- Managed mode (ADR-010 preview; new in v3.5.0, absent from v3.4.1) ---
   # Managed mode submits sanitized evidence to the Fendix backend, which
   # DECIDES. The runner never computes, infers or falls back to a local
   # decision, so none of the local gating inputs above apply to it.
   mode:
-    description: "'local' (default) runs entirely on the runner and gates on --fail-on. Development preview: 'managed' submits evidence to the Fendix backend and gates on its Decision Record; managed is absent from v3.4.1."
+    description: "'local' (default) runs entirely on the runner and gates on --fail-on. Preview (ADR-010): 'managed' submits evidence to the Fendix backend and gates on its Decision Record; it needs engine v3.5.0 or later."
     required: false
     default: "local"
   token:
@@ -105,7 +105,7 @@ inputs:
     required: false
     default: "https://api.fendix.dev"
   engine_path:
-    description: "Path to the Fendix Python engine directory. Known v3.4.1 defect: the empty default cannot resolve from the standalone release binary; provide a version-matched tree or use the official container."
+    description: "Path to the Fendix Python engine directory. Known defect through v3.5.0: the empty default cannot resolve from the standalone release binary; provide a version-matched tree or use the official container."
     required: false
     default: ""
 
@@ -164,7 +164,7 @@ runs:
         # be newest, which no allowlist can describe in advance.
         case "$VERSION" in
           v[0-9]*.[0-9]*.[0-9]*) ;;
-          *) fail "managed mode requires an exact engine version such as v3.4.1, not '$VERSION'" ;;
+          *) fail "managed mode requires an exact engine version such as v3.5.0, not '$VERSION'" ;;
         esac
         # Raw argument passthrough cannot be allowlisted, and the contract
         # replaces it with typed inputs.
@@ -197,7 +197,7 @@ runs:
         fendix version
 
     # Pin the Python taint engine before scanning. With engine_path set this
-    # pins that explicit tree. Known v3.4.1 defect: official standalone
+    # pins that explicit tree. Known defect through v3.5.0: official standalone
     # releases have no embedded tree, so the empty default fails here. A
     # failure is loud rather than silently degrading to native-Go-only output.
     - name: Sync Fendix Python engine
