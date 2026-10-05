@@ -5,7 +5,7 @@
 > https://github.com/marketplace/manage
 >
 > **Historical submission draft.** Its dated metrics and workflow copy are not
-> the stable v3.5.0 executable contract. Reconcile any future submission with
+> the stable v3.5.1 executable contract. Reconcile any future submission with
 > the root README, `action.yml`, the schema reference and the 2026-10-03
 > contract audit first.
 

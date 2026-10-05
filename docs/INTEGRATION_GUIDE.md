@@ -44,7 +44,7 @@ See §5.
 curl -fsSL https://get.fendix.dev/install.sh | sh
 
 # Pin the current stable version
-curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.5.0 sh
+curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.5.1 sh
 
 # Verify
 fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
@@ -53,7 +53,7 @@ fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
 Or run the published Docker image (bundles Python + all static-analysis deps, so hybrid mode works out of the box):
 
 ```bash
-docker run --rm fendixapp/fendix:3.5.0 scan --url https://example.com
+docker run --rm fendixapp/fendix:3.5.1 scan --url https://example.com
 ```
 
 > **Note:** `get.fendix.dev` is served from the official `Fendix-app/homebrew-fendix` repository. Its root page redirects clients to the canonical documentation, while `/install.sh` remains the stable installer endpoint.
@@ -332,7 +332,7 @@ when that network boundary matters.
     "target": "https://api.example.com",
     "started_at": "2026-06-20T10:00:00Z",
     "duration": "4.521s",
-    "version": "3.5.0",
+    "version": "3.5.1",
     "mode": "blackbox",
     "endpoints_scanned": 42,
     "active_probes": false,
@@ -408,7 +408,7 @@ Goal: fail the build when a scan finds something at/above a severity threshold, 
 
 A **composite** action that installs Fendix, syncs the Python taint engine, runs `fendix scan`, uploads SARIF, then enforces the fail-on gate. It needs `actions/checkout@v4` with `fetch-depth: 0` because diff mode needs git history.
 
-**Known v3.5.0 defect:** the standalone release binary has no embedded Python
+**Known defect through v3.5.1:** the standalone release binary has no embedded Python
 payload, while the Action's default `engine_path: ""` still runs `fendix engine
 sync` as if one existed. A default invocation therefore fails before scanning
 unless the workflow supplies a version-matched `python/` tree. The example
@@ -444,7 +444,7 @@ jobs:
           format: "sarif"     # sarif (Security tab) | json | html | pdf
           output: "fendix-results.sarif"
           upload-sarif: "true"
-          version: "v3.5.0"
+          version: "v3.5.1"
           extra-args: ""      # raw args appended to `fendix scan`
 ```
 
@@ -462,7 +462,7 @@ jobs:
 | `upload-sarif` | `true` | Upload SARIF to code scanning. Only when `format=sarif`. |
 | `version` | `latest` | Fendix version to install. |
 | `extra-args` | `""` | Raw args appended to `fendix scan`. |
-| `engine_path` | `""` | Python engine dir. In v3.5.0, the empty default fails at `engine sync` because the standalone binary has no embedded payload. |
+| `engine_path` | `""` | Python engine dir. Through v3.5.1, the empty default fails at `engine sync` because the standalone binary has no embedded payload. |
 
 **Outputs:** `report` (path to the generated report), `exit-code` (0 no blocking decision / 1 at least one `BLOCK` / 2 error).
 
@@ -490,7 +490,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Pin by digest for reproducibility / supply-chain integrity
-      image: fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c
+      image: fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d
     steps:
       - uses: actions/checkout@v4
         with:
@@ -513,11 +513,11 @@ Or as a one-shot `docker run` step (e.g. from a non-container job):
 
 ```bash
 docker run --rm -v "$PWD:/src" -w /src \
-  fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c \
+  fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d \
   scan --code . --format json --output findings.json --fail-on HIGH
 ```
 
-- **Version v3.5.0 image digest:** `sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c` (public, anonymously pullable; multi-arch `linux/amd64` + `linux/arm64`).
+- **Version v3.5.1 image digest:** `sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d` (public, anonymously pullable; multi-arch `linux/amd64` + `linux/arm64`).
 - **Pin by digest** (not a floating tag) for reproducible, tamper-evident builds — this is the form the release workflow itself signs and references.
 
 ### 3.4 `--fail-on` gating and exit codes
@@ -693,7 +693,7 @@ automation contract.
 
 3. **SEC-NNN finding-ID instability.** `SEC-NNN` IDs reassign across scans. Use the report's versioned `fingerprint` for baselines, `fingerprint:` ignore rules, and persistent mappings. Current builds emit `fendix/v2` semantic fingerprints; line/column coordinates and evidence wording do not re-key a finding.
 
-4. **The Python taint engine resolution.** The flag default is false, but `--code` auto-enables the Python engine unless `--python-engine=false` is explicit. Official v3.5.0 standalone binaries **do not bundle** the tree: the release runs `make embed-engine`, whose current target intentionally resets the embedded directory to a placeholder. Resolution order is explicit dir → `FENDIX_ENGINE` → the pin in `~/.fendix/config` → optional legacy/custom embedded payload → `./python`. A missing tree on the implicit `--code` path is recorded as `python-engine: skipped/dependency_missing` and the native analyzers continue; a missing tree after explicitly passing `--python-engine` is fatal (exit 2). The official Docker image ships `/opt/fendix/python/` and sets the engine environment, so hybrid/white-box works there. The v3.5.0 Action's unconditional `engine sync` with an empty `engine_path` is the known defect described in §3.1.
+4. **The Python taint engine resolution.** The flag default is false, but `--code` auto-enables the Python engine unless `--python-engine=false` is explicit. Official v3.5.1 standalone binaries **do not bundle** the tree: the release runs `make embed-engine`, whose current target intentionally resets the embedded directory to a placeholder. Resolution order is explicit dir → `FENDIX_ENGINE` → the pin in `~/.fendix/config` → optional legacy/custom embedded payload → `./python`. A missing tree on the implicit `--code` path is recorded as `python-engine: skipped/dependency_missing` and the native analyzers continue; a missing tree after explicitly passing `--python-engine` is fatal (exit 2). The official Docker image ships `/opt/fendix/python/` and sets the engine environment, so hybrid/white-box works there. The v3.5.1 Action's unconditional `engine sync` with an empty `engine_path` is the known defect described in §3.1.
 
 5. **SARIF permissions differ by repository.** The public `Fendix-app/Fendix@v1` Action resolves cross-repository. SARIF upload to the Security tab still needs `security-events: write` and may require GitHub Advanced Security for a private consumer repository; where it is unavailable, publish a `$GITHUB_STEP_SUMMARY` table or a PR comment instead.
 
@@ -763,12 +763,12 @@ automation contract.
 | `upload-sarif` | `true` | SARIF → code scanning (needs GHAS on private repos) |
 | `version` | `latest` | Engine version |
 | `extra-args` | `""` | Raw args appended to `fendix scan` |
-| `engine_path` | `""` | Python engine dir; v3.5.0's empty default fails because the release binary has no embedded tree |
+| `engine_path` | `""` | Python engine dir; through v3.5.1 the empty default fails because the release binary has no embedded tree |
 
-**Pinned image (v3.5.0):** `fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c`
+**Pinned image (v3.5.1):** `fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d`
 
 ---
 
 ### Worked-example note (TwiScope)
 
-TwiScope is a Django/DRF backend, so the natural integration is: (1) a developer `fendix hook install --fail-on HIGH` for commit-time secret/IaC gating; (2) a CI job using the public Marketplace Action, which resolves for public and private repositories, or the canonical Docker Hub image, running `fendix scan --code . --fail-on HIGH` against a fresh checkout and surfacing findings through `$GITHUB_STEP_SUMMARY`; and, if internal/staging API targets must be scanned, (3) an Enterprise-org **runner** inside the network performing `mode=hybrid` scans (`--url` staging + `--code` repo) and POSTing results back so they land in the dashboard with full TrackedFinding lifecycle. The v3.5.0 Action requires a version-matched Python engine tree through `engine_path`; use the container when that tree is unavailable. Private repositories need GitHub Advanced Security for SARIF upload, but that does not prevent the Action itself from running. A fresh checkout narrows the scanned files; review the report before publishing it because secret values are redacted at capture time while file locations, safe identifiers, and security structure remain visible.
+TwiScope is a Django/DRF backend, so the natural integration is: (1) a developer `fendix hook install --fail-on HIGH` for commit-time secret/IaC gating; (2) a CI job using the public Marketplace Action, which resolves for public and private repositories, or the canonical Docker Hub image, running `fendix scan --code . --fail-on HIGH` against a fresh checkout and surfacing findings through `$GITHUB_STEP_SUMMARY`; and, if internal/staging API targets must be scanned, (3) an Enterprise-org **runner** inside the network performing `mode=hybrid` scans (`--url` staging + `--code` repo) and POSTing results back so they land in the dashboard with full TrackedFinding lifecycle. The v3.5.1 Action requires a version-matched Python engine tree through `engine_path`; use the container when that tree is unavailable. Private repositories need GitHub Advanced Security for SARIF upload, but that does not prevent the Action itself from running. A fresh checkout narrows the scanned files; review the report before publishing it because secret values are redacted at capture time while file locations, safe identifiers, and security structure remain visible.

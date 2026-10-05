@@ -14,7 +14,7 @@ This document covers two things:
 
 ## Supported versions
 
-Current stable release: **v3.5.0** (2026-10-05 — see
+Current stable release: **v3.5.1** (2026-10-05 — see
 [`CHANGELOG.md`](CHANGELOG.md)).
 
 | Version | Supported          |
@@ -126,8 +126,8 @@ identity, wrong signing time, tampered binary — exits non-zero.
 ### Verifying the Docker image
 
 ```sh
-REF='docker.io/fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.0$'
+REF='docker.io/fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.1$'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify \
@@ -152,9 +152,9 @@ cosign verify-blob-attestation \
   --type slsaprovenance1 \
   fendix-vX.Y.Z-linux-amd64
 
-# Docker image SLSA provenance for the immutable v3.5.0 digest (via Rekor):
-REF='docker.io/fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.0$'
+# Docker image SLSA provenance for the immutable v3.5.1 digest (via Rekor):
+REF='docker.io/fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.1$'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify-attestation \
@@ -187,8 +187,8 @@ cosign verify-blob \
   fendix-vX.Y.Z-linux-amd64.cdx.json
 
 # Docker image SBOM attestation (verifies against the Rekor log):
-REF='docker.io/fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.0$'
+REF='docker.io/fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.1$'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify-attestation \
