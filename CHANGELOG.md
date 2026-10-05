@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-10-05
+
+A managed-CI producer release, shipped as a preview. The engine can write
+managed-CI evidence (contract `managed-ci/v2`), and the GitHub Action can
+submit it to the Fendix backend and gate on the backend's Decision Record.
+Nothing changes unless a workflow selects `mode: managed`. One local fix
+changes exit behaviour: an invalid `--fail-on` now stops the run with exit
+2 instead of silently scanning with no threshold (see "Changed"). **No
+fingerprint changes**, no report schema change (`metadata.schema_version`
+stays `2`), and no change to the finding decision policy.
+
+### Added
+
+- **Managed-CI evidence export (preview, ADR-010).** `fendix scan
+  --managed-context <file> --managed-evidence <file>` writes the exact
+  request body a runner submits: 17 normalized evidence facts per finding,
+  taken from the same evidence the confidence scorer and decision layer
+  read, plus analyzer coverage in registry order. Unmappable engine state
+  or contradictory facts fail the export rather than producing a guessed
+  fact. Analyzer families are reported by what the capability did: a
+  failed member fails the family, a family that ran at all is `completed`.
+  Findings and analyzers are always arrays, so a clean scan is a valid
+  document.
+- **`fendix managed context` and `fendix managed submit` (preview).**
+  `context` builds the scan context from the workflow environment, using
+  the pull request's head commit rather than the ephemeral merge commit.
+  `submit` is the transport: the `FENDIX_CI_TOKEN` credential stays in one
+  process and one header, never in argv, a log line or an error. It
+  retries resets, timeouts, 429 and 5xx with jittered backoff inside a
+  10-minute budget, treats 400/401/403/404/409/413/415 as terminal, polls
+  only the configured origin, and never computes a local fallback
+  decision. Exit 0 or 1 is the backend's decision; exit 2 means no
+  decision was obtained.
+- **Action `mode: managed` (preview).** The GitHub Action can run the
+  managed producer, submit the evidence and gate on the backend's
+  decision, which the job summary heads as authoritative. `mode: local`
+  remains the default and is unchanged.
+- **A signed build record per release** (`build-record.json` with cosign
+  `.sig`/`.crt`). It names every published executable by the SHA-256 of
+  the uncompressed binary (what the engine self-hashes at scan time), the
+  managed-CI contract revision and bundle digest, the finding-policy
+  version and the release workflow identity. A backend accepts managed
+  evidence only from an executable a record it trusts names.
+- **Generated reference contracts.** `docs/cli-contract.json`,
+  `docs/config-contract.json`, `docs/reporting-contract.json` and
+  `docs/security-catalog-contract.json` are generated from the executable
+  registries and checked by drift tests, so the documented command, flag,
+  report and rule surfaces cannot fall behind the code.
+
+### Changed
+
+- **`--fail-on` fails closed.** It now accepts a severity in any case
+  (`high`, `High`, `HIGH`; surrounding spaces ignored) and refuses anything
+  else, `INFO` included, with exit 2 before scanning. v3.4.1 matched only
+  upper-case names and ran an unrecognised value as *no threshold*: `--fail-on
+  high` warned on a HIGH finding and exited 0, so the requested gate was off.
+  This applies to `scan`, `import` and `hook install`. A pipeline that passed
+  an invalid value used to pass and now fails with exit 2; the four valid
+  thresholds are `CRITICAL`, `HIGH`, `MEDIUM` and `LOW`. Classification and
+  the decision policy are unchanged.
+- **`fendix verify` no longer infers remediation from missing input.** A
+  source file or dependency manifest that is absent or unreadable, or a
+  header finding re-checked against a non-2xx response (a login or error
+  page), now returns `unknown` (exit 2) instead of `resolved`. Missing
+  source is not proof the finding was fixed.
+- **Official distribution.** Images publish to `docker.io/fendixapp/fendix`
+  (tags without a `v`: `3.5.0`, `3.5`, `3`, `latest`) and
+  `ghcr.io/fendix-app/fendix`; the Homebrew tap and installer mirror is
+  `Fendix-app/homebrew-fendix`; the GitHub App ships as its own image.
+  The legacy GHCR package is not updated after v3.4.1. Binary signing
+  certificates now carry the `Fendix-app/Fendix` workflow identity;
+  certificates through v3.4.1 keep the identity they were issued with.
+- **SARIF `tool.driver.informationUri`** is now
+  `https://github.com/Fendix-app/Fendix`.
+- **Release binaries are built and tested with Go 1.27.1**, the toolchain
+  the images ship, instead of Go 1.25.
+- **In managed mode the local summary is labelled diagnostic**: "Local
+  diagnostic summary (NOT the managed decision)", because the managed scan
+  runs with no `--fail-on` and its local report never shows BLOCK.
+
+### Fixed
+
+- **govulncheck reports why a Go module could not be loaded.** When the
+  `go` command itself cannot run (no toolchain, a refused toolchain switch,
+  module mode off), the analyzer records `failed` with the go command's
+  diagnosis instead of a misleading "no go.mod file". It can never become a
+  `not_applicable` skip.
+- **Managed evidence over a contract ceiling** (more than 10,000 findings,
+  an 8 MiB body or 200 analyzers) stops with one line naming the ceiling,
+  the actual and the maximum, and exit 2. Nothing is truncated, split or
+  sent.
+
+### Known issues
+
+Recorded in `audits/engine-contract-reconciliation-2026-10-03.md`, not
+fixed in this release:
+
+- `--offline` does not reach the Python deps check that `--code` enables, so
+  it can still call networked tools. For a hermetic scan add `--checks
+  auth,injection` or `--python-engine=false`, plus `--no-plugins`.
+- When the Python engine runs, a remote `--spec` URL is fetched again
+  without the Go private-address guard.
+- `--fast` does not disable the Python phase that `--code` enables; add
+  `--python-engine=false` for a native-only pre-commit scan.
+- The Action's default `mode: local` path runs `engine sync` with no engine
+  tree, and standalone binaries embed none: supply a version-matched tree
+  or use the official container.
+- The JSON `sources` counters omit imported findings, so they do not add up
+  to `total` on import or mixed scans.
+
 ## [3.4.1] - 2026-09-07
 
 A toolchain currency release. No scanner, fingerprint or exit-code changes.
