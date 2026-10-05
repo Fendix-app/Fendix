@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-10-05
+
+An identity and install-integrity release. `fendix init` now writes CI that
+installs Fendix: each generated file pins the release that wrote it, fetches
+the official installer at that release's commit, and requires a verified
+cosign signature. New binaries carry the organization module path
+`github.com/Fendix-app/Fendix/go`, and `brew upgrade` reaches installs that
+older Homebrew recorded as `64`. No scanner, fingerprint, report-schema,
+decision-policy or exit-code changes.
+
 ### Fixed
 
 - `fendix init` writes CI that installs Fendix. The generated GitHub
