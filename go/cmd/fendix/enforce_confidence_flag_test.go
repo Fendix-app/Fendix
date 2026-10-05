@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
 )
 
 // The --enforce-confidence flag is the last hop of the FIX-08 wiring

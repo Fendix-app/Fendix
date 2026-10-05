@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/logagg"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/logagg"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // ScanRequest is the JSON payload sent to the Python engine via stdin.

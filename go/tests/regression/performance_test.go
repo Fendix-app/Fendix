@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/metrics"
-	"github.com/Abdel-RahmanSaied/Fendix/tests/harness"
+	"github.com/Fendix-app/Fendix/go/internal/metrics"
+	"github.com/Fendix-app/Fendix/go/tests/harness"
 )
 
 // TestScanPerformance guards against gross performance regressions on a

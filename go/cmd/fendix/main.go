@@ -12,28 +12,60 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/democmd"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/engine"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/hookcmd"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/ignorecmd"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/initcmd"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/metrics"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/pluginscmd"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/policy"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/verifycmd"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/democmd"
+	"github.com/Fendix-app/Fendix/go/internal/engine"
+	"github.com/Fendix-app/Fendix/go/internal/hookcmd"
+	"github.com/Fendix-app/Fendix/go/internal/ignorecmd"
+	"github.com/Fendix-app/Fendix/go/internal/initcmd"
+	"github.com/Fendix-app/Fendix/go/internal/metrics"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/pluginscmd"
+	"github.com/Fendix-app/Fendix/go/internal/policy"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/semgrep"
+	"github.com/Fendix-app/Fendix/go/internal/verifycmd"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
 // Version is set at build time via ldflags.
 var Version = "dev"
+
+// Revision is the commit a release was built from. Release binaries get it
+// from Go's VCS stamp; the Docker build, whose context has no .git, sets it
+// with -X main.Revision. Empty means unknown.
+var Revision = ""
+
+// releaseRevision returns Revision, else the VCS-stamped commit of a build
+// from an unmodified checkout. A dirty tree has no commit that holds its
+// code, so it reports none.
+func releaseRevision() string {
+	if Revision != "" {
+		return Revision
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	revision, modified := "", true
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value != "false"
+		}
+	}
+	if modified {
+		return ""
+	}
+	return revision
+}
 
 func main() {
 	// Install a real slog default at startup. Without this,
@@ -291,10 +323,12 @@ Use --print to preview without writing.`,
 			print, _ := cmd.Flags().GetBool("print")
 			ci, _ := cmd.Flags().GetString("ci")
 			return initcmd.Run(initcmd.Options{
-				Force: force,
-				Print: print,
-				CI:    ci,
-				Out:   cmd.OutOrStdout(),
+				Force:    force,
+				Print:    print,
+				CI:       ci,
+				Version:  Version,
+				Revision: releaseRevision(),
+				Out:      cmd.OutOrStdout(),
 			})
 		},
 	}

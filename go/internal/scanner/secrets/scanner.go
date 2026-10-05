@@ -46,9 +46,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/gitdiff"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // ErrCodePathMissing signals the codePath argument is empty or points

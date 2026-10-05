@@ -24,8 +24,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/embedded"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/engine"
+	"github.com/Fendix-app/Fendix/go/internal/embedded"
+	"github.com/Fendix-app/Fendix/go/internal/engine"
 	"github.com/spf13/cobra"
 )
 

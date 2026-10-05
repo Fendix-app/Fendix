@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/managedci"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/managedci"
 	"github.com/spf13/cobra"
 )
 

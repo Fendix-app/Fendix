@@ -6,12 +6,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/engine"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/secrets"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/textscan"
+	"github.com/Fendix-app/Fendix/go/internal/engine"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/scanner"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/secrets"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/semgrep"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/textscan"
 )
 
 const (

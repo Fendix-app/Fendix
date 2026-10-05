@@ -21,7 +21,7 @@ package evidence
 import (
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // Evidence is the domain object produced by engines and consumed by the

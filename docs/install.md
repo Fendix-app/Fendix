@@ -65,6 +65,11 @@ installs to `/usr/local/bin/fendix`. Override:
 - `FENDIX_DIR=$HOME/.local/bin` — install to a user-writable directory.
 - `FENDIX_VERSION=v3.5.0` — pin a specific version.
 - `FENDIX_REPO=...` — pull from a fork or private mirror.
+- `FENDIX_SHA256=<hex>` — refuse any binary whose SHA-256 differs (a pin
+  that holds even if the release is later replaced). From v3.5.1.
+- `FENDIX_REQUIRE_SIGNATURE=1` — refuse to install unless cosign verifies
+  the release signature, instead of falling back to the checksum when cosign
+  or the signature is missing. From v3.5.1.
 
 Sudo is requested only if `FENDIX_DIR` isn't writable.
 
@@ -201,7 +206,7 @@ Verify a binary:
 
 Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity.
 Certificates through v3.4.1 keep their pre-transfer identity; see
-[`SECURITY.md`](../SECURITY.md#historical-binary-verification-through-v341).
+[`historical-release-verification.md`](historical-release-verification.md).
 
 ```bash
 cosign verify-blob \
@@ -240,12 +245,11 @@ sidecars — fall back to the `.sha256` file for those. See
 ## `get.fendix.dev` — how it's wired
 
 `https://get.fendix.dev/install.sh` is live as of 2026-04-30. It's a
-CNAME on the operator's `fendix.dev` zone pointing at
-`abdel-rahmansaied.github.io`, served via GitHub Pages from `main:/` in the
-official [`homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix)
-repository with an auto-provisioned Let's Encrypt certificate. The personal
-GitHub Pages hostname is the DNS target only; current source and ownership are
-organization-controlled.
+CNAME on the operator's `fendix.dev` zone pointing at the organization's
+GitHub Pages host, `fendix-app.github.io`, served via GitHub Pages from
+`main:/` in the official
+[`homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix)
+repository with an auto-provisioned Let's Encrypt certificate.
 
 The root page is a scoped client-side compatibility redirect to
 `https://www.fendix.dev/docs/getting-started`; `/install.sh` remains directly
@@ -279,7 +283,7 @@ the engine-repo source and cut a release.
 ```bash
 # DNS resolves to GitHub Pages
 dig +short get.fendix.dev
-# Expected: abdel-rahmansaied.github.io. + 4 GitHub Pages IPs
+# Expected: fendix-app.github.io. + 4 GitHub Pages IPs
 
 # HTTPS works, install.sh has the right content-type
 curl -I https://get.fendix.dev/install.sh

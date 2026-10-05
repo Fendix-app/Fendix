@@ -33,9 +33,9 @@ package decision
 import (
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/confidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/confidence"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // Policy names which decision policy produced a verdict.

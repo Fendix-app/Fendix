@@ -44,7 +44,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // envAllowlist is the fixed set of operator env var names a plugin

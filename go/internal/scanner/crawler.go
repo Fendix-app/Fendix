@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/budget"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/netguard"
+	"github.com/Fendix-app/Fendix/go/internal/budget"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/netguard"
 	"gopkg.in/yaml.v3"
 )
 

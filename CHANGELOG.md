@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `fendix init` writes CI that installs Fendix. The generated GitHub
+  workflow ran `go install …@latest`, which has never resolved; the GitLab
+  and CircleCI files downloaded a v0.13.0 tarball that current releases do
+  not publish, against a placeholder checksum. All three now pin
+  `FENDIX_VERSION` to the release of the `fendix` binary that generated
+  them and install it with the official installer, fetched at
+  `FENDIX_INSTALLER_COMMIT`, the commit that release was built from, so the
+  script cannot be swapped by moving a tag. The GitHub workflow and the
+  GitLab job install cosign and require a verified release signature; all
+  three accept an optional `FENDIX_SHA256` pin. A build that is not a
+  release, or that does not know its commit, writes placeholders the
+  install step rejects. The Docker image passes its commit in as
+  `REVISION`, since its build context has no `.git`.
+- `brew upgrade fendix` offers new releases to existing installs. Older
+  Homebrew read the release URLs (`…-amd64`, `…-arm64`) as version `64` and
+  recorded installs under it; current Homebrew reads the tag in the URL but
+  ranks an installed `64` above every 3.x release, so those installs were
+  never offered an upgrade. The formula now sets `version_scheme 1`, which
+  ranks every release above them; the version itself still comes from the
+  URL, since `brew audit --strict` rejects an explicit one as redundant. One
+  generator, `scripts/release/render-homebrew-formula.sh`, now produces both
+  the published formula and `Formula/fendix.rb`; CI checks they match and
+  drives real Homebrew through a stuck `64` install recovering, `brew
+  outdated` and `brew upgrade` from 3.5.0 to 3.5.1, a fresh install, `brew
+  style` and `brew audit --strict`. The published caveats now match the
+  reviewed copy: the formula does not install the Python analyzer tree.
+- `install.sh` no longer falls back to the checksum alone when asked not
+  to: `FENDIX_REQUIRE_SIGNATURE=1` refuses the install if cosign is missing
+  or the release carries no signature, and `FENDIX_SHA256` refuses any
+  binary whose hash differs from the pin. Both are opt-in; the default
+  `curl … | sh` behaviour is unchanged.
+
+### Changed
+
+- The Go module path is `github.com/Fendix-app/Fendix/go`, matching the
+  repository and the `go/` directory holding `go.mod`. New binaries report
+  it in `go version -m`, stack traces and SBOMs. Nothing could import the
+  previous path remotely, so no importer is affected. Remote `go install`
+  is not a supported installation method.
+- Verification of releases through v3.4.1, whose certificates keep the
+  pre-transfer signer, lives in one place:
+  `docs/historical-release-verification.md`. `install.sh` keeps that
+  signer as a single labelled constant used only for those releases.
+- The public-claims gate now scans Go source, init templates and Python
+  source, catches every spelling of the retired personal namespace, and
+  no longer depends on `rg`, which the CI runner lacks; two of its checks
+  had silently never run.
+
 ## [3.5.0] - 2026-10-05
 
 A managed-CI producer release, shipped as a preview. The engine can write

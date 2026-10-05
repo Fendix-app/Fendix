@@ -602,14 +602,19 @@ For gitlab/circleci, the NEXT-STEPS file explains how to wire the
 snippet into your main CI config (GitLab via `include:`, CircleCI by
 merging into your single `config.yml`).
 
-> **Known product defect:** the emitted CI workflows predate the current
-> distribution contract and are not reliable drop-ins. The GitHub starter uses
-> a mutable source install and supplies no Python analyzer tree; the GitLab and
-> CircleCI starters pin obsolete v0.13.0 personal-namespace release assets and
-> placeholder checksums, while their next-step files disagree about the
-> version. The GitLab starter also labels SARIF as GitLab's different SAST JSON
-> schema. Use the checked-in reference GitHub container workflow, or author a
-> current pinned container job, until the generated workflows are replaced.
+Each emitted workflow pins `FENDIX_VERSION` to the Fendix release that
+generated it and installs that release with the official installer, fetched
+at `FENDIX_INSTALLER_COMMIT` (the commit that release was built from, so the
+script cannot be swapped by moving a tag). The GitHub and GitLab workflows
+install cosign and require a verified release signature; every workflow
+accepts an optional `FENDIX_SHA256` pin.
+
+> **Known product defect:** the emitted workflows install the standalone
+> release binary, which carries no Python analyzer tree, and do not install
+> Semgrep, so their scans record both analyzers as unavailable and report
+> coverage as incomplete. The GitLab starter also labels SARIF as GitLab's
+> different SAST JSON schema. For full analyzer coverage use the checked-in
+> reference GitHub container workflow, or author a current pinned container job.
 
 ### GitHub Actions
 
@@ -931,7 +936,7 @@ package scanner
 
 import (
     "context"
-    "github.com/Abdel-RahmanSaied/Fendix/internal/models"
+    "github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // CheckMyThing scans for [describe what it checks].

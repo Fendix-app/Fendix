@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
 )
 
 // The v2 fingerprint keys a committed credential on the non-sensitive

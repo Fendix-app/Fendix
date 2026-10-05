@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	ev "github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	ev "github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // newAuthTestServer creates a mock server that validates auth:

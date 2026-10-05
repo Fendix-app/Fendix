@@ -3,7 +3,7 @@ package managedci
 import (
 	"fmt"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // The finding policy's consistency rules, by code

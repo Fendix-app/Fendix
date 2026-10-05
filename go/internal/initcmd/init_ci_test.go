@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/policy"
+	"github.com/Fendix-app/Fendix/go/internal/policy"
 	"gopkg.in/yaml.v3"
 )
 

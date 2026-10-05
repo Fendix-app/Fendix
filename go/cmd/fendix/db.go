@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/offline"
+	"github.com/Fendix-app/Fendix/go/internal/offline"
 	"github.com/spf13/cobra"
 )
 

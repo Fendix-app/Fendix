@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/embedded"
+	"github.com/Fendix-app/Fendix/go/internal/embedded"
 )
 
 func TestEnsureEngine_ExplicitDir(t *testing.T) {

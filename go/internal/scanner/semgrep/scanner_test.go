@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/gitdiff"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // sqlResult mirrors the _SQL_RESULT fixture in

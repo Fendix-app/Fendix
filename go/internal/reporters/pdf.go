@@ -22,8 +22,8 @@ import (
 
 	"github.com/go-pdf/fpdf"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters/i18n"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters/i18n"
 )
 
 // PDFOptions configures RenderPDF. Today the only knob is the

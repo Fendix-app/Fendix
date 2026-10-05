@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/benchmark"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/benchmark"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
 )
 
 // TestOfflineScore scores a persisted raw JSON report against a labels.yaml

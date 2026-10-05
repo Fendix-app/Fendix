@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // RC-8 — the rate-limit check probed a hardcoded GET while labelling the

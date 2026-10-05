@@ -117,14 +117,14 @@ migration did not delete, overwrite, or retag that legacy package.
 
 ## Intentional legacy identifiers
 
-- The Go module path and Go imports remain `github.com/Abdel-RahmanSaied/Fendix`. Changing them would break import compatibility and requires a separate major-version migration.
+- From v3.5.1 the Go module path is `github.com/Fendix-app/Fendix/go`, matching the repository and the `go/` directory that holds `go.mod`. The previous path never resolved remotely (it named neither the repository nor that directory), so no importer depended on it. The module is not published as a versioned Go module: remote `go install` and `go get` are not supported installation methods.
 - `Fendix-app/homebrew-fendix` is the official Homebrew tap and compatibility installer host. The canonical tap command is `brew tap Fendix-app/fendix`.
 - Historical changelog, audit and authorship records are retained where changing them would misrepresent history.
 - The previous GHCR package remains pullable for existing users. No shutdown date is set.
 
 ## `get.fendix.dev`
 
-The host currently resolves by CNAME to `abdel-rahmansaied.github.io` and GitHub Pages returns `200`; GitHub Pages cannot issue a server-side `301` or `308`. The release-managed page template now contains only a canonical client redirect to `https://www.fendix.dev/docs/getting-started`, so the obsolete multi-engine-only claim cannot return on a future mirror sync.
+The host resolves by CNAME to the organization's GitHub Pages host, `fendix-app.github.io` (moved from the previous personal Pages host on 2026-10-05), and GitHub Pages returns `200`; GitHub Pages cannot issue a server-side `301` or `308`. The release-managed page template now contains only a canonical client redirect to `https://www.fendix.dev/docs/getting-started`, so the obsolete multi-engine-only claim cannot return on a future mirror sync.
 
 For the required permanent redirect, change the `get.fendix.dev` DNS record from the GitHub Pages CNAME to a redirect-capable host (for example, the same provider serving `www.fendix.dev`) and configure a path-specific rule:
 

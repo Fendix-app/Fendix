@@ -204,24 +204,11 @@ procurement records).
 
 ### Historical binary verification through v3.4.1
 
-Binary certificates through v3.4.1 retain the immutable workflow identity
-from before the repository transfer. Use the historical identity only for
-those existing artifacts:
-
-```sh
-VERSION=v3.4.1
-ASSET=fendix-${VERSION}-linux-amd64
-
-cosign verify-blob \
-  --certificate "$ASSET.crt" \
-  --signature "$ASSET.sig" \
-  --certificate-identity "https://github.com/Abdel-RahmanSaied/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  "$ASSET"
-```
-
-Do not use this historical identity for current releases or the official
-Docker Hub image.
+Binaries and packages published through v3.4.1 were signed before the
+repository moved to `Fendix-app`, and their immutable certificates keep that
+earlier workflow identity. Verify them with
+[`docs/historical-release-verification.md`](docs/historical-release-verification.md).
+Never use that identity for current releases or the official Docker Hub image.
 
 ### Until cosign is enabled
 

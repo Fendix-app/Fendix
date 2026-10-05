@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters/i18n"
+	"github.com/Fendix-app/Fendix/go/internal/reporters/i18n"
 )
 
 // TestRenderHTMLOpts_DefaultLangIsEnglish guards against the

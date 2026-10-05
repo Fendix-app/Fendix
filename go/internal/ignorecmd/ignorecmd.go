@@ -26,8 +26,8 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/engine"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/engine"
 )
 
 // defaultIgnorePath is the path checked when --file isn't passed.

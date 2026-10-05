@@ -138,15 +138,25 @@ Files written:
 - `gitlab` → `.gitlab-ci.fendix.yml` + `NEXT-STEPS-fendix.md` + policy/ignore
 - `circleci` → `.circleci/fendix-config.yml` + `NEXT-STEPS-fendix.md` + policy/ignore
 
-**Known product defect:** the generated CI workflows are historical and are
-not current drop-ins. The GitHub file installs mutable source and supplies no
-Python analyzer tree; GitLab and CircleCI pin obsolete v0.13.0
-personal-namespace release assets with placeholder checksums while their
-next-step files name a different version. The GitLab file also declares SARIF
-under `artifacts:reports:sast`, which expects GitLab's own SAST JSON schema.
-Use the checked-in pinned-container reference workflow or author an equivalent
-current container job until the generator is corrected. The generated policy
-and ignore starters remain independently usable.
+Each generated CI file pins `FENDIX_VERSION` to the release of the `fendix`
+binary that wrote it and installs that release with the official installer,
+`scripts/install.sh` fetched at `FENDIX_INSTALLER_COMMIT`, the commit that
+release was built from (a tag could be moved to serve another script; a
+commit cannot). The installer verifies the checksum; the GitHub and GitLab
+files also install cosign and run it with `FENDIX_REQUIRE_SIGNATURE=1`, so a
+missing or invalid signature fails the job. Set the optional `FENDIX_SHA256`
+to bind a job to one exact binary. A build that is not a release, or that
+does not know its commit (a dirty tree, a local Docker build), writes a
+placeholder the install step rejects, so set real values before committing.
+
+**Known product defect:** the generated workflows install the standalone
+release binary, which carries no Python analyzer tree, and do not install
+Semgrep, so their scans record both analyzers as unavailable and report
+coverage as incomplete. The GitLab file also declares SARIF under
+`artifacts:reports:sast`, which expects GitLab's own SAST JSON schema. For full
+analyzer coverage use the checked-in pinned-container reference workflow or an
+equivalent container job. The generated policy and ignore starters remain
+independently usable.
 
 #### `fendix hook` — git pre-commit gate
 

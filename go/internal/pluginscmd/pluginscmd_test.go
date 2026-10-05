@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/plugin"
+	"github.com/Fendix-app/Fendix/go/internal/plugin"
 )
 
 // ---------------------------------------------------------------------------

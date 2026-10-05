@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/benchmark"
+	"github.com/Fendix-app/Fendix/go/internal/benchmark"
 )
 
 const (

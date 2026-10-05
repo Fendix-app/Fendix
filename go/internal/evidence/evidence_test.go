@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // fullyPopulatedFinding returns a Finding with EVERY exported field set to a

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/embedded"
+	"github.com/Fendix-app/Fendix/go/internal/embedded"
 )
 
 // VersionFile is written to the engine directory after extraction.

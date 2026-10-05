@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
 )
 
 // The contract names ABSTRACT analyzers; the engine names concrete ones. The

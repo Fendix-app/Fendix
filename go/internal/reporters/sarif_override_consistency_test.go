@@ -3,8 +3,8 @@ package reporters
 import (
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/decision"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/decision"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // The export-time structural invariant: policy_override may only appear on a

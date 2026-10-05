@@ -13,6 +13,10 @@
 #   FENDIX_DIR      — install directory (default: /usr/local/bin)
 #   FENDIX_REPO     — override source repo (default: Fendix-app/Fendix)
 #   FENDIX_SIGN_REPO — override the expected GitHub Actions signer repository
+#   FENDIX_SHA256   — expected SHA-256 of the downloaded binary; any other
+#                     binary is refused (a pin independent of the release)
+#   FENDIX_REQUIRE_SIGNATURE — set to 1 to refuse to install unless cosign
+#                     verifies the release signature (no checksum-only fallback)
 
 set -eu
 umask 077
@@ -23,6 +27,16 @@ REPO="${FENDIX_REPO:-Fendix-app/Fendix}"
 # download), so it must NOT default to $REPO. Matches the verify command in
 # README "Verifying signed releases". Overridable for forks.
 INSTALL_DIR="${FENDIX_DIR:-/usr/local/bin}"
+
+# Signer identities, used only to check cosign certificates.
+CURRENT_SIGN_REPO="Fendix-app/Fendix"
+# HISTORICAL COMPATIBILITY ONLY. Releases through v3.4.1 were signed before
+# the repository moved to Fendix-app/Fendix, and their immutable Sigstore
+# certificates name the release workflow at its previous location. This value
+# exists solely so those published releases still verify: it is never a
+# download source, never printed, and never the signer of a new release.
+# See docs/historical-release-verification.md.
+HISTORICAL_SIGN_REPO="Abdel-RahmanSaied/Fendix"
 
 # Colors (if terminal supports them)
 if [ -t 1 ]; then
@@ -91,10 +105,10 @@ signing_repo() {
     # pre-transfer workflow identity. Later releases use the organization.
     case "$VERSION" in
         v0.*|v1.*|v2.*|v3.0.*|v3.1.*|v3.2.*|v3.3.*|v3.4.0|v3.4.1)
-            printf '%s\n' "Abdel-RahmanSaied/Fendix"
+            printf '%s\n' "$HISTORICAL_SIGN_REPO"
             ;;
         *)
-            printf '%s\n' "Fendix-app/Fendix"
+            printf '%s\n' "$CURRENT_SIGN_REPO"
             ;;
     esac
 }
@@ -149,13 +163,43 @@ install() {
         error "Could not fetch the published checksum (${CHECKSUM_URL}). Refusing to install an unverified binary. Re-run with FENDIX_ALLOW_UNVERIFIED=1 to bypass (not recommended)."
     fi
 
+    # --- Optional caller pin (FENDIX_SHA256) -----------------------------------
+    # The published checksum comes from the same release as the binary, so it
+    # proves the download is intact, not that it is the binary the caller
+    # reviewed. A pinned hash does: it holds even if the release is later
+    # replaced. FENDIX_ALLOW_UNVERIFIED does not relax it.
+    if [ -n "${FENDIX_SHA256:-}" ]; then
+        PIN="$FENDIX_SHA256"
+        case "$PIN" in
+            *[!0-9a-f]* ) error "FENDIX_SHA256 must be 64 lowercase hex characters." ;;
+        esac
+        if [ "${#PIN}" -ne 64 ]; then
+            error "FENDIX_SHA256 must be 64 lowercase hex characters."
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+            PINNED_ACTUAL=$(sha256sum "${TMP_DIR}/fendix" | awk '{print $1}')
+        elif command -v shasum >/dev/null 2>&1; then
+            PINNED_ACTUAL=$(shasum -a 256 "${TMP_DIR}/fendix" | awk '{print $1}')
+        else
+            error "FENDIX_SHA256 is set but no sha256sum or shasum is available to check it."
+        fi
+        if [ "$PINNED_ACTUAL" != "$PIN" ]; then
+            error "Binary does not match FENDIX_SHA256 (expected ${PIN}, got ${PINNED_ACTUAL}). Refusing to install."
+        fi
+        info "Binary matches the pinned FENDIX_SHA256."
+    fi
+
     # --- Optional cosign keyless signature verification (defense in depth) ----
     # Releases >= v0.6.0-rc2 ship .sig/.crt sidecars (Sigstore Fulcio, bound to
     # the GitHub Actions OIDC identity that built the release). If cosign is
     # installed AND the sidecars exist, verify them and ABORT on failure. cosign
     # is not required (the checksum already gates the install); its absence, or
-    # missing sidecars on older tags, is informational. Identity/issuer match
-    # README "Verifying signed releases" and release.yml.
+    # missing sidecars on older tags, is informational unless
+    # FENDIX_REQUIRE_SIGNATURE=1, which makes both refuse the install: CI that
+    # expects a signature must not quietly fall back to the checksum, which a
+    # release that lost its sidecars would otherwise allow. Identity/issuer
+    # match README "Verifying signed releases" and release.yml.
+    REQUIRE_SIGNATURE="${FENDIX_REQUIRE_SIGNATURE:-}"
     if command -v cosign >/dev/null 2>&1; then
         if curl --proto '=https' --tlsv1.2 -fsSL -o "${TMP_DIR}/fendix.sig" "${URL}.sig" 2>/dev/null \
             && curl --proto '=https' --tlsv1.2 -fsSL -o "${TMP_DIR}/fendix.crt" "${URL}.crt" 2>/dev/null; then
@@ -171,9 +215,13 @@ install() {
             else
                 error "cosign signature verification FAILED. Refusing to install."
             fi
+        elif [ "$REQUIRE_SIGNATURE" = "1" ]; then
+            error "FENDIX_REQUIRE_SIGNATURE=1 but release ${VERSION} has no .sig/.crt. Refusing to install."
         else
             info "cosign present but no .sig/.crt for this release (pre-v0.6.0-rc2?) — relying on the verified checksum."
         fi
+    elif [ "$REQUIRE_SIGNATURE" = "1" ]; then
+        error "FENDIX_REQUIRE_SIGNATURE=1 but cosign is not installed. Refusing to install."
     else
         info "cosign not installed — skipping signature check (checksum verified). See README 'Verifying signed releases' to verify manually."
     fi

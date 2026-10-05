@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/tests/harness"
+	"github.com/Fendix-app/Fendix/go/tests/harness"
 )
 
 // fixtures maps a fixture dir (relative to this package) to its committed

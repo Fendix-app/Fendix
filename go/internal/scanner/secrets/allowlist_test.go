@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/gitdiff"
+	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 )
 
 // A line that trips a secrets pattern (AWS access key id), used to seed two

@@ -31,7 +31,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/plugin"
+	"github.com/Fendix-app/Fendix/go/internal/plugin"
 )
 
 // NewCmd returns the `fendix plugins` cobra subcommand tree.

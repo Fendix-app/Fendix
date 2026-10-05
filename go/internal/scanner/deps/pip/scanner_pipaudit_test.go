@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
 )
 
 // pip-audit JSON sample matching the >= 2.7.0 schema. Two pinned deps

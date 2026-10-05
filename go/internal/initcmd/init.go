@@ -1,11 +1,13 @@
 package initcmd
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 //go:embed templates/workflow.yml templates/fendix-ignore.txt templates/fendix-yaml.txt templates/gitlab-ci.yml templates/circleci-config.yml templates/next-steps-gitlab.md templates/next-steps-circleci.md
@@ -22,6 +24,46 @@ const (
 // SupportedCIs is the canonical set `--ci` accepts. Used by the CLI
 // flag validator and by tests that iterate over every shape.
 var SupportedCIs = []string{CIGitHub, CIGitLab, CICircleCI}
+
+// versionPlaceholder marks the single spot in each CI template where the
+// pinned Fendix release goes. Every generated CI installs exactly the
+// release that generated it, so a new release re-pins its templates with
+// no file to edit.
+const versionPlaceholder = "@@FENDIX_VERSION@@"
+
+// UnreleasedVersion is what a build that is not a published release
+// writes instead of a tag. The generated install step rejects anything
+// that is not a release tag, so CI fails loudly until the user pins one.
+const UnreleasedVersion = "REPLACE_WITH_A_FENDIX_RELEASE_TAG"
+
+// releaseTag matches the tags release.yml publishes (v3.5.1, v3.5.0-rc.2).
+// Local builds report "dev", "docker" or `git describe` output such as
+// v3.5.0-3-g895c443, none of which has release assets to install.
+var releaseTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[0-9]+)?$`)
+
+// IsReleaseVersion reports whether v names a published Fendix release.
+func IsReleaseVersion(v string) bool {
+	return releaseTag.MatchString(v)
+}
+
+// commitPlaceholder marks where the installer's commit goes. Generated CI
+// fetches scripts/install.sh at the commit the running release was built
+// from, never at a tag: a tag can be moved to serve a different script,
+// a commit cannot. The installer is version-independent, so FENDIX_VERSION
+// can be bumped later without touching this pin.
+const commitPlaceholder = "@@FENDIX_INSTALLER_COMMIT@@"
+
+// UnknownCommit is written when the running binary does not know the
+// commit it was built from (a dirty tree, or a Docker build without
+// REVISION). The install step rejects it.
+const UnknownCommit = "REPLACE_WITH_A_FENDIX_RELEASE_COMMIT"
+
+var releaseCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// IsReleaseCommit reports whether c is a full Git commit hash.
+func IsReleaseCommit(c string) bool {
+	return releaseCommit.MatchString(c)
+}
 
 // Options controls Run's behavior. Zero-value defaults are sensible.
 type Options struct {
@@ -42,6 +84,16 @@ type Options struct {
 	// Must be one of SupportedCIs or empty; invalid values cause Run
 	// to return ErrUnsupportedCI.
 	CI string
+
+	// Version is the running fendix's version (main.Version). Generated
+	// CI pins this release. A value that is not a release tag pins
+	// UnreleasedVersion instead and Run prints a warning.
+	Version string
+
+	// Revision is the commit the running fendix was built from. Generated
+	// CI fetches the installer at this commit. A value that is not a full
+	// commit hash pins UnknownCommit instead and Run prints a warning.
+	Revision string
 
 	// Out is where status lines and (when Print is true) generated
 	// content go. Defaults to os.Stdout when nil.
@@ -104,7 +156,17 @@ func Run(opts Options) error {
 	fmt.Fprintf(opts.Out, "✓ Detected: %s\n", det.SummaryLine())
 	fmt.Fprintf(opts.Out, "✓ CI system: %s\n", ci)
 
-	files, err := planFiles(ci)
+	pin := installPin{version: opts.Version, commit: opts.Revision}
+	if !IsReleaseVersion(pin.version) {
+		pin.version = UnreleasedVersion
+		fmt.Fprintf(opts.Out, "! fendix %q is not a release build: set FENDIX_VERSION in the generated CI file to a release tag from https://github.com/Fendix-app/Fendix/releases before committing\n", opts.Version)
+	}
+	if !IsReleaseCommit(pin.commit) {
+		pin.commit = UnknownCommit
+		fmt.Fprintln(opts.Out, "! this fendix build does not know the commit it was built from: set FENDIX_INSTALLER_COMMIT in the generated CI file to the commit of a Fendix release tag before committing")
+	}
+
+	files, err := planFiles(ci, pin)
 	if err != nil {
 		return err
 	}
@@ -198,7 +260,30 @@ func printAddCommand(w io.Writer, ci string, files []File) {
 	fmt.Fprintln(w, "  git commit -m \"Add Fendix security scanning\"")
 }
 
-func planFiles(ci string) ([]File, error) {
+// installPin is what generated CI installs: the release tag and the commit
+// whose scripts/install.sh installs it.
+type installPin struct {
+	version string
+	commit  string
+}
+
+// pinInstall writes the pin into the template's placeholders. A template
+// without exactly one of each would ship an unpinned or half-pinned
+// install, so that is an error rather than a silent no-op.
+func pinInstall(name string, tmpl []byte, pin installPin) ([]byte, error) {
+	for _, r := range []struct{ placeholder, value string }{
+		{versionPlaceholder, pin.version},
+		{commitPlaceholder, pin.commit},
+	} {
+		if n := bytes.Count(tmpl, []byte(r.placeholder)); n != 1 {
+			return nil, fmt.Errorf("embedded template %s has %d %s placeholders; want exactly 1", name, n, r.placeholder)
+		}
+		tmpl = bytes.Replace(tmpl, []byte(r.placeholder), []byte(r.value), 1)
+	}
+	return tmpl, nil
+}
+
+func planFiles(ci string, pin installPin) ([]File, error) {
 	policy, err := templates.ReadFile("templates/fendix-yaml.txt")
 	if err != nil {
 		return nil, fmt.Errorf("reading embedded policy template: %w", err)
@@ -219,6 +304,9 @@ func planFiles(ci string) ([]File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading embedded gitlab template: %w", err)
 		}
+		if gl, err = pinInstall("gitlab-ci.yml", gl, pin); err != nil {
+			return nil, err
+		}
 		steps, err := templates.ReadFile("templates/next-steps-gitlab.md")
 		if err != nil {
 			return nil, fmt.Errorf("reading embedded gitlab next-steps: %w", err)
@@ -232,6 +320,9 @@ func planFiles(ci string) ([]File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading embedded circleci template: %w", err)
 		}
+		if cc, err = pinInstall("circleci-config.yml", cc, pin); err != nil {
+			return nil, err
+		}
 		steps, err := templates.ReadFile("templates/next-steps-circleci.md")
 		if err != nil {
 			return nil, fmt.Errorf("reading embedded circleci next-steps: %w", err)
@@ -244,6 +335,9 @@ func planFiles(ci string) ([]File, error) {
 		workflow, err := templates.ReadFile("templates/workflow.yml")
 		if err != nil {
 			return nil, fmt.Errorf("reading embedded workflow template: %w", err)
+		}
+		if workflow, err = pinInstall("workflow.yml", workflow, pin); err != nil {
+			return nil, err
 		}
 		out = append([]File{
 			{Path: ".github/workflows/fendix.yml", Content: workflow},

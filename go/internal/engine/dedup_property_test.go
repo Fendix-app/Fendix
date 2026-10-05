@@ -5,7 +5,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // TestDeduplicate_OrderInvariance pins the property that the SET of

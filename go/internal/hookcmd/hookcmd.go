@@ -35,7 +35,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // hookSentinel marks a pre-commit file as fendix-managed so `status` and

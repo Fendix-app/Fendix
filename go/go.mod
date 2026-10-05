@@ -1,4 +1,4 @@
-module github.com/Abdel-RahmanSaied/Fendix
+module github.com/Fendix-app/Fendix/go
 
 go 1.25.0
 

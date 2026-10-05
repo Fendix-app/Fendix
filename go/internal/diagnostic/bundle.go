@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scanner"
 )
 
 // bundleReadme is the top-level explainer included as README.md in every

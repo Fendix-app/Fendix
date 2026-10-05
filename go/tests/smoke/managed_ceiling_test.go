@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/tests/harness"
+	"github.com/Fendix-app/Fendix/go/tests/harness"
 )
 
 // Managed evidence over a contract ceiling (managed-ci/v2: 10,000 findings,

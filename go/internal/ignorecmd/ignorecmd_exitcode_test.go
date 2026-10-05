@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
 )
 
 // runIgnoreCmd executes the `fendix ignore …` subcommand tree with the

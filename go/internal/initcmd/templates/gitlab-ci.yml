@@ -11,8 +11,9 @@
 # What it does:
 #   - Runs on every merge request commit AND on every push to the
 #     default branch.
-#   - Downloads a pinned fendix release (FENDIX_VERSION + the matching
-#     FENDIX_SHA256 below). Bump both together when updating fendix.
+#   - Installs the pinned FENDIX_VERSION below with the official
+#     installer, fetched at a pinned commit. The installer verifies the
+#     release's SHA-256 checksum and requires a valid cosign signature.
 #   - Produces a GitLab-SAST-compatible JSON report uploaded as the
 #     job's `sast` report and as a 30-day artifact.
 #   - Gates the pipeline on HIGH+ findings via fendix's --fail-on.
@@ -22,14 +23,20 @@
 # registry, plumb the credential via a masked CI variable.
 
 variables:
-  # Pin to a specific tag — never "latest". An attacker who controls
-  # a "latest" tag in the release repository would execute arbitrary
-  # code inside your CI job. Bump this together with FENDIX_SHA256.
-  FENDIX_VERSION: "v0.13.0"
-  # SHA-256 of the linux-amd64 release tarball. Published alongside
-  # each tag at:
-  #   https://github.com/Abdel-RahmanSaied/Fendix/releases/download/${FENDIX_VERSION}/fendix-linux-amd64.tar.gz.sha256
-  FENDIX_SHA256: "REPLACE_WITH_SHA256_FROM_RELEASE_PAGE"
+  # The Fendix release this job installs. `fendix init` pins the release
+  # that generated this file. To upgrade, change it to a newer tag from
+  # https://github.com/Fendix-app/Fendix/releases. Never use "latest":
+  # a pinned tag keeps every pipeline on the same verified binary.
+  FENDIX_VERSION: "@@FENDIX_VERSION@@"
+  # The commit whose scripts/install.sh installs Fendix: the commit the
+  # release above was built from. A commit, unlike a tag, cannot be
+  # changed to serve a different script. The installer works for any
+  # release, so upgrading FENDIX_VERSION does not require changing it.
+  FENDIX_INSTALLER_COMMIT: "@@FENDIX_INSTALLER_COMMIT@@"
+  # Optional: the SHA-256 of fendix-<FENDIX_VERSION>-linux-amd64, from the
+  # release's .sha256 file. When set, the installer refuses any other
+  # binary, even one the release repository later serves and signs.
+  FENDIX_SHA256: ""
 
 fendix-security-scan:
   stage: test
@@ -38,14 +45,25 @@ fendix-security-scan:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   before_script:
-    - apk add --no-cache curl ca-certificates tar coreutils
+    # cosign lets the installer verify the release signature as well as
+    # its checksum. FENDIX_REQUIRE_SIGNATURE=1 makes a missing cosign or a
+    # release without a signature abort the install instead of falling
+    # back to the checksum alone.
+    - apk add --no-cache curl ca-certificates cosign
+    - |
+      case "$FENDIX_VERSION" in
+        v[0-9]*) ;;
+        *) echo "FENDIX_VERSION must be a Fendix release tag such as vX.Y.Z, not '$FENDIX_VERSION'" >&2; exit 1 ;;
+      esac
+      printf '%s' "$FENDIX_INSTALLER_COMMIT" | grep -Eqx '[0-9a-f]{40}' || {
+        echo "FENDIX_INSTALLER_COMMIT must be the full commit of a Fendix release tag, not '$FENDIX_INSTALLER_COMMIT'" >&2
+        exit 1
+      }
     - >
-      curl -fsSL -o /tmp/fendix.tar.gz
-      "https://github.com/Abdel-RahmanSaied/Fendix/releases/download/${FENDIX_VERSION}/fendix-linux-amd64.tar.gz"
-    - echo "${FENDIX_SHA256}  /tmp/fendix.tar.gz" | sha256sum -c -
-    - tar xz -C /usr/local/bin -f /tmp/fendix.tar.gz
-    - chmod +x /usr/local/bin/fendix
-    - fendix version
+      curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/fendix-install.sh
+      "https://raw.githubusercontent.com/Fendix-app/Fendix/${FENDIX_INSTALLER_COMMIT}/scripts/install.sh"
+    - FENDIX_DIR=/usr/local/bin FENDIX_REQUIRE_SIGNATURE=1 sh /tmp/fendix-install.sh
+    - fendix version | grep -F "fendix version ${FENDIX_VERSION} "
   script:
     - >
       fendix scan

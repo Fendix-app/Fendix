@@ -3,8 +3,8 @@ package reporters
 import (
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/confidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/confidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // scoredFinding is a BLOCK carrying the score breakdown in both published

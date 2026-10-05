@@ -36,7 +36,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/ghapp"
+	"github.com/Fendix-app/Fendix/go/internal/ghapp"
 )
 
 // Version is set at build time via ldflags (matches cmd/fendix).

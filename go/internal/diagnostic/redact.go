@@ -12,7 +12,7 @@ package diagnostic
 import (
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // redactSecrets returns text with every non-empty secret string replaced by

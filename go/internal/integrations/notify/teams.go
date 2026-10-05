@@ -1,7 +1,7 @@
 package notify
 
 import (
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // TeamsPayload builds an Adaptive Card 1.3 message for one finding.

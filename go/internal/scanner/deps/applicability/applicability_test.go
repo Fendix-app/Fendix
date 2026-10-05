@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
 )
 
 // gisFinding is a django advisory whose own summary names contrib.gis —

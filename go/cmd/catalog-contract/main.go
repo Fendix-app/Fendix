@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/catalog"
+	"github.com/Fendix-app/Fendix/go/internal/catalog"
 )
 
 func main() {

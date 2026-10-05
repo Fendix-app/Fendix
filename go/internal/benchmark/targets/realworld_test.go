@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/benchmark"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/benchmark"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 func TestRealWorldLoudSkipWhenLocalPathAbsent(t *testing.T) {

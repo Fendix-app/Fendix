@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/npm"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/pip"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/semgrep"
 )
 
 // scannerStatusList accumulates the per-scanner outcome for the dep-CVE,

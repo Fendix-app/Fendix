@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/offline"
+	"github.com/Fendix-app/Fendix/go/internal/offline"
 )
 
 const offlineLockfile = `{

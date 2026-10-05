@@ -3,7 +3,7 @@ package reporters
 import (
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // A relaxed-policy BLOCK and an evidence-backed BLOCK must NOT produce
