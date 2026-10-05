@@ -2,7 +2,7 @@
 
 > **Historical, non-authoritative checklist.** This document records the
 > v0.11 GitHub App rollout plan and must not be used to launch the current
-> v3.5.0 product. ADR-010 authorizes contracts/conformance only; the managed
+> v3.5.1 product. ADR-010 authorizes contracts/conformance only; the managed
 > runtime remains not ready for deployment. Preserve the versioned steps below
 > as history.
 

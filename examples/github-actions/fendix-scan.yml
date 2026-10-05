@@ -36,7 +36,7 @@
 #     floating tag like @v4): a tag can be force-moved by the action
 #     owner to point at new code, a SHA cannot. The trailing comment
 #     records the human-readable version each SHA corresponded to.
-#   - Fendix itself runs from the immutable v3.5.0 Docker Hub digest,
+#   - Fendix itself runs from the immutable v3.5.1 Docker Hub digest,
 #     which includes the version-matched Python engine and Go toolchain.
 #     Review and replace the digest deliberately when upgrading.
 #   - Repo-local plugins (.fendix/plugins/ committed to the repo under
@@ -64,7 +64,7 @@ jobs:
   fendix:
     runs-on: ubuntu-latest
     env:
-      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
