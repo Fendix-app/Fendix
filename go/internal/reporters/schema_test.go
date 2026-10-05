@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // validateAgainstSchema enforces the contract documented in docs/schema.md

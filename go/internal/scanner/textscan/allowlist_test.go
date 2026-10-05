@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/gitdiff"
+	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 )
 
 // A Go source line that trips a textscan rule (SQLi via string concat),

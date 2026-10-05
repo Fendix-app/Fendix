@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scanner"
 )
 
 // TestWorkerPool_CancelDuringProduce pins the contract that

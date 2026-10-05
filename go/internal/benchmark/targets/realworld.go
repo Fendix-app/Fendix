@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/benchmark"
+	"github.com/Fendix-app/Fendix/go/internal/benchmark"
 	"gopkg.in/yaml.v3"
 )
 

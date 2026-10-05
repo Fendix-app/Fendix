@@ -931,7 +931,7 @@ package scanner
 
 import (
     "context"
-    "github.com/Abdel-RahmanSaied/Fendix/internal/models"
+    "github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // CheckMyThing scans for [describe what it checks].

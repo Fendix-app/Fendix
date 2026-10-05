@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // generateFindingJSON creates a valid finding JSON line for benchmarking.

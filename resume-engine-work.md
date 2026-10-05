@@ -48,9 +48,9 @@ task plan with dependencies mapped.
 ### 3. Go Engineer Agent
 
 **Scope:** All files under `go/`. Uses `/opt/homebrew/bin/go`.
-**Module path:** `github.com/Abdel-RahmanSaied/Fendix` (case-sensitive — this is
+**Module path:** `github.com/Fendix-app/Fendix/go` (case-sensitive — this is
 the literal `module` line in `go/go.mod`, and imports look like
-`github.com/Abdel-RahmanSaied/Fendix/internal/models`)
+`github.com/Fendix-app/Fendix/go/internal/models`)
 
 **Responsibilities:**
 - Implement Go tasks from the sprint plan
@@ -140,7 +140,7 @@ to the responsible agent for a fix before proceeding.
 | Working directory | `/Users/saied/WorkDir/Fendix/fendix-services/Fendix` |
 | Go binary | `/opt/homebrew/bin/go` |
 | Python binary | `/opt/homebrew/bin/python3.13` |
-| Go module | `github.com/Abdel-RahmanSaied/Fendix` (per `go/go.mod`) |
+| Go module | `github.com/Fendix-app/Fendix/go` (per `go/go.mod`) |
 | Go source | `go/` |
 | Python source | `python/` |
 

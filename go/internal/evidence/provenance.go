@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // ── Carrying scoring provenance across the Evidence → Finding projection ────

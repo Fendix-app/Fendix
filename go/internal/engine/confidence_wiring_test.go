@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/decision"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/decision"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // These tests are the regression gate for the "three dead confidence rules"

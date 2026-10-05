@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // TASK-092: orchestrator step 5.6 must downgrade severity for findings whose

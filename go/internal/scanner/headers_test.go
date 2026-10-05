@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	ev "github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/logagg"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	ev "github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/logagg"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 func TestCheckHeaders_AllMissing(t *testing.T) {

@@ -324,13 +324,13 @@ The `go func() { wg.Wait(); close(results) }()` pattern is idiomatic — a gorou
 ## Go Module Path
 
 ```
-module github.com/Abdel-RahmanSaied/Fendix
+module github.com/Fendix-app/Fendix/go
 ```
 
 This is the module's **identity** defined in `go.mod`, used for all imports. It's like the `name` field in `pyproject.toml`. When you see:
 
 ```go
-import "github.com/Abdel-RahmanSaied/Fendix/internal/models"
+import "github.com/Fendix-app/Fendix/go/internal/models"
 ```
 
 That resolves to the local directory `go/internal/models/` — not a network request. The GitHub-style path is a convention for global uniqueness and enables `go get` to fetch it if published.
@@ -359,4 +359,4 @@ That resolves to the local directory `go/internal/models/` — not a network req
 | f-strings | `f"SEC-{i:03d}"` | `fmt.Sprintf("SEC-%03d", i)` |
 | `internal/` | not a thing | **enforced by compiler** — only parent module can import |
 
-The `internal/` directory is special in Go: code in `github.com/Abdel-RahmanSaied/Fendix/internal/...` can **only** be imported by code rooted at `github.com/Abdel-RahmanSaied/Fendix/`. The compiler enforces this. It's like having truly private packages.
+The `internal/` directory is special in Go: code in `github.com/Fendix-app/Fendix/go/internal/...` can **only** be imported by code rooted at `github.com/Fendix-app/Fendix/go/`. The compiler enforces this. It's like having truly private packages.

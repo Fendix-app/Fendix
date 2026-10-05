@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // makeFinding builds a Finding suitable for round-trip tests. Tests

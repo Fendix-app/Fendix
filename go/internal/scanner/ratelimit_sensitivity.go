@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // abuseSensitivity grades how much an UNLIMITED operation is worth abusing.

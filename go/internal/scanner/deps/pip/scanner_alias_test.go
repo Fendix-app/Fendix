@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
 )
 
 // ─── Verified ground truth (DECISIONS.md D10, live OSV.dev) ─────────────

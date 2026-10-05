@@ -16,7 +16,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 const redirectSentinel = "fendix-redirect.example"

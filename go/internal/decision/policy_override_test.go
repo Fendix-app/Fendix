@@ -3,8 +3,8 @@ package decision
 import (
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // bareBlackbox is the RC-1 shape: a scanner-assigned CRITICAL with nothing

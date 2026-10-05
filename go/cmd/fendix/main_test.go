@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/metrics"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/metrics"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/spf13/cobra"
 )
 

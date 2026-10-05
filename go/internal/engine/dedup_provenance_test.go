@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // RC-3. Deduplicate accumulates endpoints, references, Confidence and Source

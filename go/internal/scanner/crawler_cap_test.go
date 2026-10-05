@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // TestLoadSpec_LocalFileSizeCap pins the contract that a local spec file is

@@ -7,12 +7,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/npm"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/semgrep"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/npm"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/semgrep"
 )
 
 func TestScannerStatusList_OkSkipFail(t *testing.T) {

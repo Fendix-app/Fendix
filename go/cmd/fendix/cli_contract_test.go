@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/policy"
+	"github.com/Fendix-app/Fendix/go/internal/policy"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )

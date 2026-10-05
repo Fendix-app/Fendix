@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // EnvVar names recognised by NewFromEnv. Kept in one place so the

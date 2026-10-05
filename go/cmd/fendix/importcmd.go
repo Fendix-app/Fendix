@@ -6,9 +6,9 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/engine"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/engine"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/spf13/cobra"
 )
 

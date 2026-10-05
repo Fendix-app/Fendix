@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
 )
 
 // batchQuery / batchResponse mirror the OSV.dev /v1/querybatch shape so

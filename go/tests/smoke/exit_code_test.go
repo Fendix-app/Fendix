@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/tests/harness"
+	"github.com/Fendix-app/Fendix/go/tests/harness"
 )
 
 // These exercise the ACTUAL CLI exit path — build the binary, run it as a

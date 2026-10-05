@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // SanitizeFindings replaces any occurrence of auth credential values

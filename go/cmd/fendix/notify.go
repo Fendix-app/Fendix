@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/integrations/notify"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/integrations/notify"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/spf13/cobra"
 )
 

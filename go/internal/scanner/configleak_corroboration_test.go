@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/decision"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/decision"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 func configLeakCfg(target string) *models.ScanConfig {

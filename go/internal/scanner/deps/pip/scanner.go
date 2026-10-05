@@ -42,11 +42,11 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/offline"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/applicability"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/offline"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/applicability"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
 )
 
 // ErrNoRequirements is returned by Scan when codePath has no

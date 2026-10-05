@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // TestSSRFGuard_SharedClientBlocksMetadataIP proves Phase 0b C2/C3: the shared

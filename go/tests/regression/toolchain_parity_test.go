@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/Abdel-RahmanSaied/Fendix/tests/harness"
+	"github.com/Fendix-app/Fendix/go/tests/harness"
 )
 
 // TestReleaseGoMatchesTheImageGo guards the v3.5.0 release blocker. The

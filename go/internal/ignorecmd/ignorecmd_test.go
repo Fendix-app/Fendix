@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/engine"
+	"github.com/Fendix-app/Fendix/go/internal/engine"
 )
 
 // writeIgnore writes content to a temp .fendix-ignore and returns the path.

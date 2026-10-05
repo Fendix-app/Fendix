@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
 )
 
 // ApplyBaselineDiff filters out findings that were already present in a previous scan.

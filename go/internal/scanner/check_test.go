@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 func TestDefaultChecks_OrderAndConfigleakFirst(t *testing.T) {

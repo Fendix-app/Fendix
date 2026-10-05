@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
 )
 
 // Sprint 02.5's performance gate: post-sprint Scan against a 150+

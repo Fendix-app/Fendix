@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // ── Normalized weakness identity for cross-tool correlation ─────────────────

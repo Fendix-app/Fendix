@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/tests/harness"
+	"github.com/Fendix-app/Fendix/go/tests/harness"
 )
 
 const goFixture = "../fixtures/simple-go-project"

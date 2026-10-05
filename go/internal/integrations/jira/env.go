@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // Environment variable names. Kept in one place so the CLI --help

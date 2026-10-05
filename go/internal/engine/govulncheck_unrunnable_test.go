@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/managedci"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/managedci"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
 )
 
 // goModuleWithoutGoCommand writes a Go module and empties PATH, so the go

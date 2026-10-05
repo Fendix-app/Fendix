@@ -15,12 +15,12 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/decision"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
+	"github.com/Fendix-app/Fendix/go/internal/decision"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/pip"
 )
 
 // codeAnalyzers are the base entries every --code scan must record once.

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/pip"
 )
 
 // fakeOSVForDepVerify answers /v1/query with one flask advisory whose CVE

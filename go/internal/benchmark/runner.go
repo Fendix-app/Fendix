@@ -14,7 +14,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // ScanResult is the raw output of running Fendix against a benchmark

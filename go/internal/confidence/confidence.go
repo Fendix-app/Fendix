@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // Rule deltas. Exposed as consts so the scoring policy is auditable at a

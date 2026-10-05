@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // SchemaVersion is the version of the JSON report contract this build

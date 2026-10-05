@@ -37,7 +37,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // Config carries the per-process Jira credentials. Use NewFromEnv to

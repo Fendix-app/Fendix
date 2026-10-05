@@ -56,8 +56,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // importGrepMaxFiles bounds the walk. On overrun the whole pass is

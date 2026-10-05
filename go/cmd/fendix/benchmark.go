@@ -12,9 +12,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/benchmark"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/benchmark/targets"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/cli"
+	"github.com/Fendix-app/Fendix/go/internal/benchmark"
+	"github.com/Fendix-app/Fendix/go/internal/benchmark/targets"
+	"github.com/Fendix-app/Fendix/go/internal/cli"
 	"github.com/spf13/cobra"
 )
 

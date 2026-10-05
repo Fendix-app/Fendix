@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/offline"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/offline"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
 )
 
 // writeOfflineSnapshot writes a snapshot with one vulnerable PyPI flask

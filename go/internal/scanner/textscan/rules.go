@@ -3,7 +3,7 @@ package textscan
 import (
 	"regexp"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // AllRules returns every shipped rule across Go, JS/TS, and IaC.

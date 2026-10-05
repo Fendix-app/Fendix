@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/metrics"
+	"github.com/Fendix-app/Fendix/go/internal/metrics"
 	"github.com/spf13/cobra"
 )
 

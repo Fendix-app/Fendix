@@ -3,7 +3,7 @@ package scanner
 import (
 	"net/http"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // CheckContext is the per-scan execution context handed to every Check.Run.

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // RC-9 — run.automationDetails.id is the category GitHub Code Scanning

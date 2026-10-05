@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // These tests pin the PROOF-UNION fold for cross-tool corroboration at the

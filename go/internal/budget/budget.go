@@ -21,7 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/netguard"
+	"github.com/Fendix-app/Fendix/go/internal/netguard"
 )
 
 // ErrBudgetExceeded is returned by the wrapped RoundTripper when the

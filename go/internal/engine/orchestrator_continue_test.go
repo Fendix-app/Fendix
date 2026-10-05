@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/pip"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/pip"
 )
 
 // TestOrchestrator_ContinuesAfterOSVOutage pins the orchestrator's

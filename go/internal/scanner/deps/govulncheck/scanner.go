@@ -33,9 +33,9 @@ import (
 
 	"golang.org/x/vuln/scan"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
 )
 
 // ErrNoGoMod is returned by Scan when the given path doesn't contain a

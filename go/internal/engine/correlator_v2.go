@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
 )
 
 // CorrelateEvidence is the v0.22 Correlation Service V2: it correlates

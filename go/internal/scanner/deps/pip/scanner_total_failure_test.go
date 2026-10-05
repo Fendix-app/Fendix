@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/scanner/deps/neterr"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/deps/neterr"
 )
 
 // TestScanViaOSV_TotalFailureIsLookupError asserts that when OSV.dev

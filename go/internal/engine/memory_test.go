@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // TestMemory_LargeFindingStream verifies memory stays bounded when processing

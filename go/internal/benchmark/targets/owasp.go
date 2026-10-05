@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/benchmark"
+	"github.com/Fendix-app/Fendix/go/internal/benchmark"
 )
 
 // ErrTargetSkipped marks a target that cannot run in the current product

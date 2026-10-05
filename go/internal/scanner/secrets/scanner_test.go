@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/evidence"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/gitdiff"
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 // writeFile writes content to tmpDir/relPath, creating parent dirs as

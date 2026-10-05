@@ -11,7 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
 func TestIsStaticAssetPath(t *testing.T) {

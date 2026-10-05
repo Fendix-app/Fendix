@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/Abdel-RahmanSaied/Fendix/internal/reporters/i18n"
+	"github.com/Fendix-app/Fendix/go/internal/reporters/i18n"
 )
 
 // ExperimentalLangEnv is intended to acknowledge beta report languages for
