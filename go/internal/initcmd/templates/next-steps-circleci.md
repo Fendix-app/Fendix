@@ -45,11 +45,14 @@ The install step rejects anything that is not a release tag, including
 commit that release was built from; the installer works for any release,
 so it needs no change when you upgrade.
 
-`cimg/base` has no cosign, so the installer verifies the checksum only.
-To bind the job to one binary, set `FENDIX_SHA256` to the `.sha256` of
-`fendix-<version>-linux-amd64`. To require a verified release signature
-instead, install cosign in the job and prefix the installer with
-`FENDIX_REQUIRE_SIGNATURE=1`.
+The job installs cosign before Fendix: it downloads `COSIGN_VERSION` and
+checks it against the pinned `COSIGN_SHA256_LINUX_*` values (from cosign's
+Sigstore-signed `cosign_checksums.txt`) before running it, then runs the
+installer with `FENDIX_REQUIRE_SIGNATURE=1`, so a missing cosign or a release
+without a valid signature fails the job instead of falling back to the
+checksum. To upgrade cosign, change its version and both checksums together.
+To bind the job to one exact Fendix binary as well, set `FENDIX_SHA256` to
+the `.sha256` of `fendix-<version>-linux-amd64`.
 
 ## Commit
 

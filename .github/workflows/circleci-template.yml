@@ -1,0 +1,45 @@
+name: CircleCI template
+
+# Runs the CircleCI config `fendix init --ci circleci` writes, verbatim, in
+# CircleCI's cimg/base image as its circleci user: the pinned cosign
+# installs, a signed release installs with the signature required, and a
+# missing cosign, an unsigned release or a tampered cosign download are
+# refused. Runs when anything that shapes that install changes.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/circleci-template.yml"
+      - "go/internal/initcmd/templates/circleci-config.yml"
+      - "scripts/install.sh"
+      - "scripts/test-circleci-install.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Generated CircleCI install (cimg/base)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.27.1"
+
+      - name: Build fendix
+        working-directory: go
+        env:
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags="-s -w -X main.Version=v3.5.1" -o "${RUNNER_TEMP}/fendix" ./cmd/fendix/
+
+      - name: Run the generated CircleCI install in cimg/base
+        env:
+          FENDIX_BIN: ${{ runner.temp }}/fendix
+          # The commit under test, which raw.githubusercontent.com serves
+          # (a pull_request run builds the unpushed merge commit instead).
+          INSTALLER_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: sh scripts/test-circleci-install.sh

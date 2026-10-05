@@ -16,9 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FENDIX_VERSION` to the release of the `fendix` binary that generated
   them and install it with the official installer, fetched at
   `FENDIX_INSTALLER_COMMIT`, the commit that release was built from, so the
-  script cannot be swapped by moving a tag. The GitHub workflow and the
-  GitLab job install cosign and require a verified release signature; all
-  three accept an optional `FENDIX_SHA256` pin. A build that is not a
+  script cannot be swapped by moving a tag. All three install cosign and
+  require a verified release signature: the CircleCI job, whose `cimg/base`
+  image has no cosign, downloads cosign v3.1.3 and checks it against pinned
+  SHA-256 values before running it. All three accept an optional
+  `FENDIX_SHA256` pin. A build that is not a
   release, or that does not know its commit, writes placeholders the
   install step rejects. The Docker image passes its commit in as
   `REVISION`, since its build context has no `.git`.

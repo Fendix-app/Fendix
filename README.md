@@ -605,9 +605,10 @@ merging into your single `config.yml`).
 Each emitted workflow pins `FENDIX_VERSION` to the Fendix release that
 generated it and installs that release with the official installer, fetched
 at `FENDIX_INSTALLER_COMMIT` (the commit that release was built from, so the
-script cannot be swapped by moving a tag). The GitHub and GitLab workflows
-install cosign and require a verified release signature; every workflow
-accepts an optional `FENDIX_SHA256` pin.
+script cannot be swapped by moving a tag). Every workflow installs cosign
+(the CircleCI one downloads a release checked against pinned SHA-256 values,
+since `cimg/base` has none) and requires a verified release signature; each
+also accepts an optional `FENDIX_SHA256` pin.
 
 > **Known product defect:** the emitted workflows install the standalone
 > release binary, which carries no Python analyzer tree, and do not install
