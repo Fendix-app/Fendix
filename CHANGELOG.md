@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `fendix init` writes CI that installs Fendix. The generated GitHub
+  workflow ran `go install …@latest`, which has never resolved; the GitLab
+  and CircleCI files downloaded a v0.13.0 tarball that current releases do
+  not publish, against a placeholder checksum. All three now pin
+  `FENDIX_VERSION` to the release of the `fendix` binary that generated
+  them and install it with the official installer fetched from that same
+  tag, which verifies the checksum and, where cosign is present, the
+  signature. The GitHub workflow installs cosign first; the GitLab job
+  installs it from Alpine. A non-release build (`dev`, a `git describe`
+  version) writes a placeholder that the install step rejects.
+
+### Changed
+
+- The Go module path is `github.com/Fendix-app/Fendix/go`, matching the
+  repository and the `go/` directory holding `go.mod`. New binaries report
+  it in `go version -m`, stack traces and SBOMs. Nothing could import the
+  previous path remotely, so no importer is affected. Remote `go install`
+  is not a supported installation method.
+- Verification of releases through v3.4.1, whose certificates keep the
+  pre-transfer signer, lives in one place:
+  `docs/historical-release-verification.md`. `install.sh` keeps that
+  signer as a single labelled constant used only for those releases.
+- The public-claims gate now scans Go source, init templates and Python
+  source, catches every spelling of the retired personal namespace, and
+  no longer depends on `rg`, which the CI runner lacks; two of its checks
+  had silently never run.
+
 ## [3.5.0] - 2026-10-05
 
 A managed-CI producer release, shipped as a preview. The engine can write
