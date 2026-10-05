@@ -38,6 +38,14 @@ DETECTORS = (
         "personal_ghcr_path",
         re.compile(r"ghcr\.io/abdel-rahmansaied/[a-z0-9._/-]+", re.IGNORECASE),
     ),
+    # Every other spelling of the retired personal namespace: bare module
+    # paths, repository slugs, tap names, Pages hosts. Matches inside a span
+    # the two detectors above already report are skipped (see find_matches),
+    # so each occurrence is classified exactly once.
+    Detector(
+        "personal_namespace",
+        re.compile(r"abdel-rahmansaied(?:[/.][A-Za-z0-9_-]+)*", re.IGNORECASE),
+    ),
     Detector(
         "obsolete_multi_engine_blocking_claim",
         re.compile(
@@ -81,6 +89,10 @@ def is_public_surface(path: Path) -> bool:
         ("docs/", "deploy/", "examples/", "Formula/", "service-docs/", ".github/")
     ):
         return True
+    # Shipped source: Go imports and module metadata end up in every binary,
+    # and go/internal/initcmd/templates/ is written into users' repositories.
+    if value.startswith(("go/", "python/")):
+        return True
     if value.startswith("scripts/release/mirror-pages-bootstrap/"):
         return True
     return value in {
@@ -111,7 +123,9 @@ def load_allowlist() -> list[dict[str, object]]:
         if entry["id"] in ids:
             raise ValueError(f"duplicate allowlist id: {entry['id']}")
         ids.add(str(entry["id"]))
-        if entry["classification"] not in {"historical", "compatibility"}:
+        # regression-guard: a test's own search pattern for the string it
+        # forbids, the one place the pattern must be spelled out.
+        if entry["classification"] not in {"historical", "compatibility", "regression-guard"}:
             raise ValueError(f"invalid classification for {entry['id']}")
         if not isinstance(entry["expected_count"], int) or entry["expected_count"] < 1:
             raise ValueError(f"invalid expected_count for {entry['id']}")
@@ -122,6 +136,21 @@ def load_allowlist() -> list[dict[str, object]]:
     return data
 
 
+def find_matches(content: str) -> list[tuple[str, re.Match[str]]]:
+    matches: list[tuple[str, re.Match[str]]] = []
+    claimed: list[tuple[int, int]] = []
+    for detector in DETECTORS:
+        for match in detector.expression.finditer(content):
+            if detector.name == "personal_namespace" and any(
+                start < match.end() and match.start() < end for start, end in claimed
+            ):
+                continue
+            if detector.name in {"personal_repository_url", "personal_ghcr_path"}:
+                claimed.append(match.span())
+            matches.append((detector.name, match))
+    return matches
+
+
 def scan(files: list[Path]) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for relative in files:
@@ -129,16 +158,15 @@ def scan(files: list[Path]) -> list[dict[str, object]]:
             content = (ROOT / relative).read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        for detector in DETECTORS:
-            for match in detector.expression.finditer(content):
-                findings.append(
-                    {
-                        "path": relative.as_posix(),
-                        "detector": detector.name,
-                        "match": match.group(0),
-                        "line": content.count("\n", 0, match.start()) + 1,
-                    }
-                )
+        for detector_name, match in find_matches(content):
+            findings.append(
+                {
+                    "path": relative.as_posix(),
+                    "detector": detector_name,
+                    "match": match.group(0),
+                    "line": content.count("\n", 0, match.start()) + 1,
+                }
+            )
     return findings
 
 
@@ -227,6 +255,10 @@ def self_test() -> None:
         ("personal_repository_url", "https://github.com/Fendix-app/Fendix/releases", False),
         ("personal_ghcr_path", "ghcr.io/abdel-rahmansaied/fendix:latest", True),
         ("personal_ghcr_path", "docker.io/fendixapp/fendix:3.4.1", False),
+        ("personal_namespace", '"github.com/Abdel-RahmanSaied/Fendix/internal/models"', True),
+        ("personal_namespace", "brew tap Abdel-RahmanSaied/fendix", True),
+        ("personal_namespace", "get.fendix.dev CNAME abdel-rahmansaied.github.io.", True),
+        ("personal_namespace", '"github.com/Fendix-app/Fendix/go/internal/models"', False),
     )
     detectors = {detector.name: detector.expression for detector in DETECTORS}
     for detector_name, sample, expected in cases:
@@ -235,8 +267,13 @@ def self_test() -> None:
             raise AssertionError(
                 f"{detector_name} regression for {sample!r}: {actual} != {expected}"
             )
+    url = "https://github.com/Abdel-RahmanSaied/Fendix/releases"
+    if [name for name, _ in find_matches(url)] != ["personal_repository_url"]:
+        raise AssertionError("a personal URL must be reported once, by its specific detector")
     public_samples = {
         Path("README.md"),
+        Path("go/go.mod"),
+        Path("go/internal/initcmd/templates/workflow.yml"),
         Path("nfpm.yaml"),
         Path("docs/install.md"),
         Path("service-docs/README.md"),

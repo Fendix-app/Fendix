@@ -227,11 +227,14 @@ it.
   workflow uses only GitHub-published or Sigstore-published
   actions; no random `marketplace.action@latest` pins.
 
-**Residual risk.** Operators who install via `go install ...@latest`
-or `curl ... | sh` get the artifact GitHub serves at request time;
-a momentary repo compromise could distribute a malicious build.
-Using cosign-verified binaries (after TASK-099 ships) closes this
-window. We recommend pinning to a specific tag in CI, not `@latest`.
+**Residual risk.** Operators who install via `curl ... | sh` without
+`FENDIX_VERSION` get the newest release GitHub serves at request time;
+a momentary repo compromise could distribute a malicious build. The
+installer's cosign check (run whenever cosign is installed) narrows
+that window by binding the binary to Fendix's release workflow. Pin a
+specific tag in CI; `fendix init` writes CI that does. Remote
+`go install` is not a supported installation method: it builds
+unsigned, unversioned source.
 
 **Container base-image CVE posture.** Both Dockerfiles
 ([Dockerfile](../Dockerfile), [Dockerfile.app](../Dockerfile.app))

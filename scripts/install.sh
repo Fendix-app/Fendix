@@ -24,6 +24,16 @@ REPO="${FENDIX_REPO:-Fendix-app/Fendix}"
 # README "Verifying signed releases". Overridable for forks.
 INSTALL_DIR="${FENDIX_DIR:-/usr/local/bin}"
 
+# Signer identities, used only to check cosign certificates.
+CURRENT_SIGN_REPO="Fendix-app/Fendix"
+# HISTORICAL COMPATIBILITY ONLY. Releases through v3.4.1 were signed before
+# the repository moved to Fendix-app/Fendix, and their immutable Sigstore
+# certificates name the release workflow at its previous location. This value
+# exists solely so those published releases still verify: it is never a
+# download source, never printed, and never the signer of a new release.
+# See docs/historical-release-verification.md.
+HISTORICAL_SIGN_REPO="Abdel-RahmanSaied/Fendix"
+
 # Colors (if terminal supports them)
 if [ -t 1 ]; then
     BOLD='\033[1m'
@@ -91,10 +101,10 @@ signing_repo() {
     # pre-transfer workflow identity. Later releases use the organization.
     case "$VERSION" in
         v0.*|v1.*|v2.*|v3.0.*|v3.1.*|v3.2.*|v3.3.*|v3.4.0|v3.4.1)
-            printf '%s\n' "Abdel-RahmanSaied/Fendix"
+            printf '%s\n' "$HISTORICAL_SIGN_REPO"
             ;;
         *)
-            printf '%s\n' "Fendix-app/Fendix"
+            printf '%s\n' "$CURRENT_SIGN_REPO"
             ;;
     esac
 }
