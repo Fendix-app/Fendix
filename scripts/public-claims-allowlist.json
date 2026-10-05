@@ -50,16 +50,6 @@
     "removal_condition": "Permanent dated audit record; it is not current product metadata."
   },
   {
-    "id": "readme-v341-historical-signer",
-    "path": "README.md",
-    "detector": "personal_repository_url",
-    "pattern": "https://github\\.com/Abdel-RahmanSaied/Fendix",
-    "expected_count": 1,
-    "reason": "The v3.4.1 binary certificate is immutable and requires its pre-transfer signer identity.",
-    "classification": "historical",
-    "removal_condition": "Permanent while v3.4.1 binary verification remains documented; the surrounding text must label it historical."
-  },
-  {
     "id": "security-v341-historical-signer",
     "path": "SECURITY.md",
     "detector": "personal_repository_url",
@@ -68,16 +58,6 @@
     "reason": "The dedicated historical subsection verifies immutable binary certificates through v3.4.1.",
     "classification": "historical",
     "removal_condition": "Permanent while affected release artifacts remain available; never reuse as the current identity."
-  },
-  {
-    "id": "install-v341-historical-signers",
-    "path": "docs/install.md",
-    "detector": "personal_repository_url",
-    "pattern": "https://github\\.com/Abdel-RahmanSaied/Fendix",
-    "expected_count": 2,
-    "reason": "Binary and package examples verify immutable v3.4.1 certificates issued before the transfer.",
-    "classification": "historical",
-    "removal_condition": "Permanent while v3.4.1 installation verification remains documented; keep the historical label."
   },
   {
     "id": "engine-registry-migration-compatibility",

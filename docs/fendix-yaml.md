@@ -106,7 +106,7 @@ auth:
 ## What's intentionally NOT in the schema
 
 These are per-invocation runtime concerns, not committable policy. The list is
-exhaustive for the stable v3.4.1 `scan` surface:
+exhaustive for the stable v3.5.0 `scan` surface:
 
 - Targets, history and output: `--url`, `--spec`, `--code`, `--import`,
   `--diff`, `--staged`, `--fast`, `--baseline`, `--save-baseline`, `--output`,
@@ -124,8 +124,8 @@ exhaustive for the stable v3.4.1 `scan` surface:
   `--fail-on-coverage-gap`, `--require-analyzers`, and
   `--block-on-inapplicable`.
 
-The development branch also has managed-CI producer flags. They are not part of
-the v3.4.1 stable CLI or `.fendix.yaml` schema.
+v3.5.0 also ships managed-CI producer flags as a preview (ADR-010). They are
+not part of the stable CLI or the `.fendix.yaml` schema.
 
 ## Worked example
 

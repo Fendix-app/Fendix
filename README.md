@@ -15,7 +15,7 @@ Fendix can combine runtime probes and static analyzers in one scan. When both en
 
 Reproducible numbers from the last published capture (`v2.0.1`, 2026-08-24).
 They remain historical measurement evidence and are not relabeled as a
-v3.4.1 run:
+v3.5.0 run:
 
 | Track | P / R / F1 | Reproduce |
 |---|---|---|
@@ -136,7 +136,7 @@ brew install fendix
 curl -fsSL https://get.fendix.dev/install.sh | sh
 ```
 
-Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.4.1`.
+Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.5.0`.
 
 `get.fendix.dev` is served from the official [`homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix) repository through GitHub Pages. To inspect the script before piping to a shell:
 
@@ -150,7 +150,7 @@ If `get.fendix.dev` is ever unreachable, the `raw.githubusercontent.com` URL is 
 
 ```bash
 ARCH=$(dpkg --print-architecture)   # amd64 or arm64
-VERSION=v3.4.1
+VERSION=v3.5.0
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${ARCH}.deb"
 curl -fsSL -o fendix.deb "${URL}"
 sudo dpkg -i fendix.deb && sudo apt-get install -f
@@ -166,7 +166,7 @@ case "$(uname -m)" in
   x86_64)  PKG_ARCH=amd64 ;;
   aarch64) PKG_ARCH=arm64 ;;
 esac
-VERSION=v3.4.1
+VERSION=v3.5.0
 sudo dnf install \
   "https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
 ```
@@ -174,8 +174,8 @@ sudo dnf install \
 ### Docker
 
 ```bash
-docker pull fendixapp/fendix:3.4.1
-docker run --rm fendixapp/fendix:3.4.1 scan --url https://api.example.com
+docker pull fendixapp/fendix:3.5.0
+docker run --rm fendixapp/fendix:3.5.0 scan --url https://api.example.com
 ```
 
 The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and includes Python and the static-analysis dependencies, so hybrid mode works out of the box. Pin a version or digest for reproducible use.
@@ -185,7 +185,7 @@ The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and inc
 Pick a binary for your platform from the [latest official engine release](https://github.com/Fendix-app/Fendix/releases/latest) (`linux/amd64`, `linux/arm64`, `darwin/amd64`, or `darwin/arm64`), verify the matching `.sha256` file, and place it on your PATH:
 
 ```bash
-curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.4.1/fendix-v3.4.1-darwin-arm64
+curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.5.0/fendix-v3.5.0-darwin-arm64
 shasum -a 256 fendix  # compare against the .sha256 alongside the binary
 chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 ```
@@ -216,7 +216,7 @@ Every release artifact (binary, `.deb`, `.rpm`, multi-arch Docker manifest) ship
 Verify a binary:
 
 ```bash
-VERSION=v3.4.1
+VERSION=v3.5.0
 ASSET=fendix-${VERSION}-linux-amd64
 BASE="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}"
 
@@ -227,18 +227,18 @@ curl -fsSL -o "$ASSET.sig" "$BASE/$ASSET.sig"
 cosign verify-blob \
   --certificate "$ASSET.crt" \
   --signature   "$ASSET.sig" \
-  --certificate-identity "https://github.com/Abdel-RahmanSaied/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}" \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com" \
   "$ASSET"
 # → Verified OK
 ```
 
-The v3.4.1 binary certificate above retains its immutable pre-transfer workflow identity. Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity.
+Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity. Binary certificates through v3.4.1 keep the immutable pre-transfer workflow identity they were issued with; [`SECURITY.md`](SECURITY.md) shows how to verify them.
 
 For the current Docker image, use `cosign verify` against the immutable digest and the official workflow identity:
 
 ```bash
-cosign verify fendixapp/fendix@sha256:88783a1a032f925630bdb0977b37821add5e3381d347f91ec101401f4e98e02a \
+cosign verify fendixapp/fendix@sha256:84feedeb6dce922f9dbe9d8baa78a5fbe056314a606750e012522dd56f01fd7c \
   --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com"
 ```
@@ -419,11 +419,11 @@ fendix report --input findings.json --format html --output report.html
 | `fendix metrics` | Show locally-recorded scan metrics (opt-in via `FENDIX_METRICS`) |
 | `fendix completion` | Generate shell completion scripts (Cobra built-in) |
 | `fendix version` | Print version, OS, and architecture information |
-| `fendix managed` | **Development preview, absent from v3.4.1:** create context and submit evidence under the ADR-010 managed-CI contract |
+| `fendix managed` | **Preview (ADR-010), new in v3.5.0:** create context and submit evidence under the managed-CI contract |
 
-The published stable release is v3.4.1. `managed` and its two hidden producer
-flags are present only on the development/RC line and are not a stable product
-availability claim. No command defines a Cobra alias. Run
+The published stable release is v3.5.0. `managed` and its two hidden producer
+flags ship in it as a preview under ADR-010: they sit outside the stable
+compatibility contract and are not a product availability claim. No command defines a Cobra alias. Run
 `fendix <command> --help` for the executable flag contract.
 
 ### Common Scan Flags
@@ -459,7 +459,7 @@ availability claim. No command defines a Cobra alias. Run
 
 This table highlights the flags most often used in stable integrations; it is
 not an exhaustive inventory. `fendix scan --help` is generated from the running
-binary and is authoritative. The exact v3.4.1/development delta is recorded in
+binary and is authoritative. The v3.4.1-to-v3.5.0 command and flag delta is recorded in
 [`audits/engine-contract-reconciliation-2026-10-03.md`](audits/engine-contract-reconciliation-2026-10-03.md).
 
 ### Exit Codes
@@ -490,7 +490,7 @@ Machine-readable findings with scan metadata.
     "target": "https://api.example.com",
     "started_at": "2026-09-07T10:30:00Z",
     "duration": "4.521s",
-    "version": "3.4.1",
+    "version": "3.5.0",
     "mode": "hybrid",
     "endpoints_scanned": 1,
     "active_probes": false,
@@ -614,7 +614,7 @@ merging into your single `config.yml`).
 ### GitHub Actions
 
 The [Fendix Action](action.yml) runs a **diff-aware** scan on pull requests and
-uploads SARIF. The v3.4.1 Action has a known engine-resolution defect: its
+uploads SARIF. Through v3.5.0 the Action has a known engine-resolution defect: its
 default `engine_path` is empty, but it runs `fendix engine sync` against a
 standalone binary that has no embedded Python payload. Until that is fixed,
 set `engine_path` to a checked-out `python/` tree or use the official container,
@@ -639,7 +639,7 @@ jobs:
       - uses: Fendix-app/Fendix@v1
         with:
           code: .
-          # Required by v3.4.1: prepare a version-matched tree here first.
+          # Required through v3.5.0: prepare a version-matched tree here first.
           engine_path: ${{ github.workspace }}/vendor/fendix-python
           url: ${{ secrets.STAGING_API_URL }}   # optional — adds DAST
           spec: openapi.yaml                     # optional
