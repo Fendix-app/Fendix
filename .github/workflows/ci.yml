@@ -123,6 +123,12 @@ jobs:
       - name: Check current public claims and release namespace
         run: scripts/check-public-claims.sh
 
+      # The formula release.yml publishes to the Homebrew tap: explicit
+      # version and scheme, four platform URL/SHA pairs, and Formula/fendix.rb
+      # in sync with the generator. homebrew-formula.yml drives real brew.
+      - name: Check the generated Homebrew formula
+        run: sh scripts/release/test-homebrew-formula.sh
+
   container-smoke:
     name: Container analyzer smoke
     runs-on: ubuntu-latest

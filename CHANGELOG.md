@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release, or that does not know its commit, writes placeholders the
   install step rejects. The Docker image passes its commit in as
   `REVISION`, since its build context has no `.git`.
+- `brew upgrade fendix` offers new releases to existing installs. Older
+  Homebrew read the release URLs (`…-amd64`, `…-arm64`) as version `64` and
+  recorded installs under it; current Homebrew reads the tag in the URL but
+  ranks an installed `64` above every 3.x release, so those installs were
+  never offered an upgrade. The formula now sets `version_scheme 1`, which
+  ranks every release above them; the version itself still comes from the
+  URL, since `brew audit --strict` rejects an explicit one as redundant. One
+  generator, `scripts/release/render-homebrew-formula.sh`, now produces both
+  the published formula and `Formula/fendix.rb`; CI checks they match and
+  drives real Homebrew through a stuck `64` install recovering, `brew
+  outdated` and `brew upgrade` from 3.5.0 to 3.5.1, a fresh install, `brew
+  style` and `brew audit --strict`. The published caveats now match the
+  reviewed copy: the formula does not install the Python analyzer tree.
 - `install.sh` no longer falls back to the checksum alone when asked not
   to: `FENDIX_REQUIRE_SIGNATURE=1` refuses the install if cosign is missing
   or the release carries no signature, and `FENDIX_SHA256` refuses any

@@ -12,6 +12,7 @@ class Fendix < Formula
   desc "Application security scanner with evidence-backed release decisions"
   homepage "https://fendix.dev"
   license "MIT"
+  version_scheme 1
 
   depends_on "python@3.11" => :recommended
 
