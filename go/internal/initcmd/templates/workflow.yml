@@ -50,6 +50,15 @@ env:
   # tag from https://github.com/Fendix-app/Fendix/releases. Never use
   # "latest": a pinned tag keeps every run on the same verified binary.
   FENDIX_VERSION: "@@FENDIX_VERSION@@"
+  # The commit whose scripts/install.sh installs Fendix: the commit the
+  # release above was built from. A commit, unlike a tag, cannot be
+  # changed to serve a different script. The installer works for any
+  # release, so upgrading FENDIX_VERSION does not require changing it.
+  FENDIX_INSTALLER_COMMIT: "@@FENDIX_INSTALLER_COMMIT@@"
+  # Optional: the SHA-256 of fendix-<FENDIX_VERSION>-linux-amd64, from
+  # the release's .sha256 file. When set, the installer refuses any other
+  # binary, even one the release repository later serves and signs.
+  FENDIX_SHA256: ""
 
 jobs:
   fendix:
@@ -68,26 +77,31 @@ jobs:
         with:
           python-version: "3.11"
 
-      # With cosign on PATH the official installer verifies the release's
-      # Sigstore signature, bound to Fendix's release workflow, on top of
-      # its SHA-256 checksum, and refuses a signature that does not verify.
+      # cosign lets the official installer verify the release's Sigstore
+      # signature, bound to Fendix's release workflow, on top of its
+      # SHA-256 checksum.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Install the pinned release with the official installer, fetched
-      # from the same tag so the script and the binary match. The
-      # installer owns download, checksum and signature verification.
+      # Install the pinned release with the official installer, fetched at
+      # FENDIX_INSTALLER_COMMIT. The installer owns download, checksum and
+      # signature verification; FENDIX_REQUIRE_SIGNATURE=1 makes a missing
+      # cosign or a release without a signature abort the install instead
+      # of falling back to the checksum alone.
       - name: Install Fendix
         run: |
           set -eu
+          fail() { echo "::error::$1"; exit 1; }
           case "$FENDIX_VERSION" in
             v[0-9]*) ;;
-            *) echo "::error::FENDIX_VERSION must be a Fendix release tag such as vX.Y.Z, not '$FENDIX_VERSION'"; exit 1 ;;
+            *) fail "FENDIX_VERSION must be a Fendix release tag such as vX.Y.Z, not '$FENDIX_VERSION'" ;;
           esac
+          printf '%s' "$FENDIX_INSTALLER_COMMIT" | grep -Eqx '[0-9a-f]{40}' ||
+            fail "FENDIX_INSTALLER_COMMIT must be the full commit of a Fendix release tag, not '$FENDIX_INSTALLER_COMMIT'"
           bin_dir="$RUNNER_TEMP/fendix/bin"
           mkdir -p "$bin_dir"
           curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/fendix/install.sh" \
-            "https://raw.githubusercontent.com/Fendix-app/Fendix/${FENDIX_VERSION}/scripts/install.sh"
-          PATH="$bin_dir:$PATH" FENDIX_DIR="$bin_dir" sh "$RUNNER_TEMP/fendix/install.sh"
+            "https://raw.githubusercontent.com/Fendix-app/Fendix/${FENDIX_INSTALLER_COMMIT}/scripts/install.sh"
+          PATH="$bin_dir:$PATH" FENDIX_DIR="$bin_dir" FENDIX_REQUIRE_SIGNATURE=1 sh "$RUNNER_TEMP/fendix/install.sh"
           echo "$bin_dir" >> "$GITHUB_PATH"
           "$bin_dir/fendix" version | grep -F "fendix version ${FENDIX_VERSION} "
 

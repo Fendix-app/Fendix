@@ -65,6 +65,11 @@ installs to `/usr/local/bin/fendix`. Override:
 - `FENDIX_DIR=$HOME/.local/bin` — install to a user-writable directory.
 - `FENDIX_VERSION=v3.5.0` — pin a specific version.
 - `FENDIX_REPO=...` — pull from a fork or private mirror.
+- `FENDIX_SHA256=<hex>` — refuse any binary whose SHA-256 differs (a pin
+  that holds even if the release is later replaced). From v3.5.1.
+- `FENDIX_REQUIRE_SIGNATURE=1` — refuse to install unless cosign verifies
+  the release signature, instead of falling back to the checksum when cosign
+  or the signature is missing. From v3.5.1.
 
 Sudo is requested only if `FENDIX_DIR` isn't writable.
 

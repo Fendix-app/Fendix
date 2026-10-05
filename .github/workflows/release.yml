@@ -688,6 +688,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ steps.tags.outputs.tag }}
+            REVISION=${{ steps.release_ref.outputs.sha }}
           tags: ${{ steps.tags.outputs.candidate }}:${{ steps.tags.outputs.candidate_tag }}
           labels: ${{ steps.meta.outputs.labels }}
           # BuildKit emits native SBOM and max-mode provenance attestations.

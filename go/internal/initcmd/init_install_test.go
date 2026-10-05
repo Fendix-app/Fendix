@@ -20,16 +20,24 @@ var ciFile = map[string]string{
 	CICircleCI: ".circleci/fendix-config.yml",
 }
 
-const officialInstaller = "https://raw.githubusercontent.com/Fendix-app/Fendix/${FENDIX_VERSION}/scripts/install.sh"
+// officialInstaller is fetched at a commit, which cannot be repointed the
+// way a tag can.
+const officialInstaller = "https://raw.githubusercontent.com/Fendix-app/Fendix/${FENDIX_INSTALLER_COMMIT}/scripts/install.sh"
+
+const testCommit = "0123456789abcdef0123456789abcdef01234567"
+
+// requiresSignature are the CI systems whose generated job installs cosign
+// and therefore makes the installer refuse an unsigned release.
+var requiresSignature = map[string]bool{CIGitHub: true, CIGitLab: true}
 
 // generate runs `fendix init` for real and returns every written file plus
 // the status output, so assertions see what a user commits.
-func generate(t *testing.T, ci, version string) (map[string]string, string) {
+func generate(t *testing.T, ci, version, revision string) (map[string]string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	var out bytes.Buffer
-	if err := Run(Options{RootDir: dir, CI: ci, Version: version, Out: &out}); err != nil {
-		t.Fatalf("Run --ci=%s version=%q: %v", ci, version, err)
+	if err := Run(Options{RootDir: dir, CI: ci, Version: version, Revision: revision, Out: &out}); err != nil {
+		t.Fatalf("Run --ci=%s version=%q revision=%q: %v", ci, version, revision, err)
 	}
 	files := map[string]string{}
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -71,25 +79,48 @@ func TestIsReleaseVersion(t *testing.T) {
 	}
 }
 
+func TestIsReleaseCommit(t *testing.T) {
+	for c, want := range map[string]bool{
+		testCommit: true,
+		"895c443a4e97f5840422414de67a2d1347ad4deb": true,
+		"":        false,
+		"895c443": false,
+		"895C443A4E97F5840422414DE67A2D1347AD4DEB": false,
+		"v3.5.1":      false,
+		UnknownCommit: false,
+	} {
+		if got := IsReleaseCommit(c); got != want {
+			t.Errorf("IsReleaseCommit(%q) = %v; want %v", c, got, want)
+		}
+	}
+}
+
 // TestGeneratedCIInstallsPinnedReleaseThroughOfficialInstaller is the
 // regression gate for the broken `go install ...@latest` step: every
 // generated CI must install exactly the generating release through the
-// official installer, fetched from that release's tag.
+// official installer, fetched at the commit that release was built from.
 func TestGeneratedCIInstallsPinnedReleaseThroughOfficialInstaller(t *testing.T) {
-	unsupported := regexp.MustCompile(`go install|go get |@latest|releases/latest|` + regexp.QuoteMeta(versionPlaceholder))
+	unsupported := regexp.MustCompile(`go install|go get |@latest|releases/latest|FENDIX_ALLOW_UNVERIFIED|` +
+		regexp.QuoteMeta("/${FENDIX_VERSION}/scripts/install.sh") + `|` +
+		regexp.QuoteMeta(versionPlaceholder) + `|` + regexp.QuoteMeta(commitPlaceholder))
 	for _, ci := range SupportedCIs {
 		t.Run(ci, func(t *testing.T) {
-			files, _ := generate(t, ci, "v3.5.1")
+			files, _ := generate(t, ci, "v3.5.1", testCommit)
 			got := files[ciFile[ci]]
 			var probe any
 			if err := yaml.Unmarshal([]byte(got), &probe); err != nil {
 				t.Fatalf("%s does not parse as YAML: %v", ciFile[ci], err)
 			}
-			if n := strings.Count(got, `FENDIX_VERSION: "v3.5.1"`); n != 1 {
-				t.Errorf("want FENDIX_VERSION pinned to v3.5.1 exactly once; found %d", n)
+			for _, pin := range []string{`FENDIX_VERSION: "v3.5.1"`, `FENDIX_INSTALLER_COMMIT: "` + testCommit + `"`, `FENDIX_SHA256: ""`} {
+				if n := strings.Count(got, pin); n != 1 {
+					t.Errorf("want %s exactly once; found %d", pin, n)
+				}
 			}
 			if !strings.Contains(got, officialInstaller) {
 				t.Errorf("install step does not fetch the official installer %s", officialInstaller)
+			}
+			if got, want := strings.Contains(got, "FENDIX_REQUIRE_SIGNATURE=1 "), requiresSignature[ci]; got != want {
+				t.Errorf("install runs with FENDIX_REQUIRE_SIGNATURE=1: %v; want %v", got, want)
 			}
 			if !strings.Contains(got, `grep -F "fendix version ${FENDIX_VERSION} "`) {
 				t.Error("install step must assert the installed binary is the pinned release")
@@ -141,15 +172,19 @@ func installScript(t *testing.T, wf githubWorkflow) (string, bool) {
 	return "", false
 }
 
-func TestGeneratedGitHubWorkflowVerifiesSignatureBeforeInstall(t *testing.T) {
-	files, _ := generate(t, CIGitHub, "v3.5.1")
+func TestGeneratedGitHubWorkflowRequiresSignatureBeforeInstall(t *testing.T) {
+	files, _ := generate(t, CIGitHub, "v3.5.1", testCommit)
 	wf := parseWorkflow(t, files[ciFile[CIGitHub]])
-	if wf.Env["FENDIX_VERSION"] != "v3.5.1" {
-		t.Fatalf("workflow env FENDIX_VERSION = %q; want v3.5.1", wf.Env["FENDIX_VERSION"])
+	if wf.Env["FENDIX_VERSION"] != "v3.5.1" || wf.Env["FENDIX_INSTALLER_COMMIT"] != testCommit {
+		t.Fatalf("workflow env pins version %q, installer commit %q; want v3.5.1, %s",
+			wf.Env["FENDIX_VERSION"], wf.Env["FENDIX_INSTALLER_COMMIT"], testCommit)
 	}
 	script, cosignFirst := installScript(t, wf)
 	if !cosignFirst {
 		t.Error("a commit-pinned sigstore/cosign-installer step must run before Install Fendix so the installer verifies the signature")
+	}
+	if !strings.Contains(script, "FENDIX_REQUIRE_SIGNATURE=1 sh ") {
+		t.Error("the installer must run with FENDIX_REQUIRE_SIGNATURE=1 so a missing signature fails the install")
 	}
 	if strings.Contains(script, "FENDIX_ALLOW_UNVERIFIED") {
 		t.Error("the install step must not bypass the installer's verification")
@@ -161,19 +196,28 @@ func TestGeneratedGitHubWorkflowVerifiesSignatureBeforeInstall(t *testing.T) {
 	}
 }
 
-// TestNonReleaseBuildPinsFailClosedPlaceholder covers dev and local
-// builds: they have no release to pin, so the generated CI must refuse to
-// install anything rather than fall back to "latest".
-func TestNonReleaseBuildPinsFailClosedPlaceholder(t *testing.T) {
-	for _, v := range []string{"", "dev", "docker", "v3.5.0-3-g895c443"} {
-		t.Run(v, func(t *testing.T) {
-			files, out := generate(t, CIGitHub, v)
-			if !strings.Contains(out, "is not a release build") {
-				t.Errorf("init output does not warn about the unpinned version:\n%s", out)
+// TestUnknownBuildPinsFailClosedPlaceholders covers dev and local builds:
+// without a release tag or the commit it was built from there is nothing
+// safe to pin, so the generated CI must refuse to install anything rather
+// than fall back to "latest" or a movable tag.
+func TestUnknownBuildPinsFailClosedPlaceholders(t *testing.T) {
+	for _, c := range []struct{ version, revision, wantVersion, wantCommit, warning string }{
+		{"", testCommit, UnreleasedVersion, testCommit, "is not a release build"},
+		{"dev", testCommit, UnreleasedVersion, testCommit, "is not a release build"},
+		{"docker", testCommit, UnreleasedVersion, testCommit, "is not a release build"},
+		{"v3.5.0-3-g895c443", testCommit, UnreleasedVersion, testCommit, "is not a release build"},
+		{"v3.5.1", "", "v3.5.1", UnknownCommit, "does not know the commit"},
+		{"v3.5.1", "895c443", "v3.5.1", UnknownCommit, "does not know the commit"},
+	} {
+		t.Run(c.version+"@"+c.revision, func(t *testing.T) {
+			files, out := generate(t, CIGitHub, c.version, c.revision)
+			if !strings.Contains(out, c.warning) {
+				t.Errorf("init output does not warn %q:\n%s", c.warning, out)
 			}
 			wf := parseWorkflow(t, files[ciFile[CIGitHub]])
-			if wf.Env["FENDIX_VERSION"] != UnreleasedVersion {
-				t.Fatalf("FENDIX_VERSION = %q; want %q", wf.Env["FENDIX_VERSION"], UnreleasedVersion)
+			if wf.Env["FENDIX_VERSION"] != c.wantVersion || wf.Env["FENDIX_INSTALLER_COMMIT"] != c.wantCommit {
+				t.Fatalf("pins version %q, commit %q; want %q, %q",
+					wf.Env["FENDIX_VERSION"], wf.Env["FENDIX_INSTALLER_COMMIT"], c.wantVersion, c.wantCommit)
 			}
 		})
 	}
@@ -187,30 +231,39 @@ func TestGeneratedInstallStepRejectsPlaceholderBeforeDownloading(t *testing.T) {
 	if err != nil {
 		t.Skip("sh not available")
 	}
-	files, _ := generate(t, CIGitHub, "dev")
-	wf := parseWorkflow(t, files[ciFile[CIGitHub]])
-	script, _ := installScript(t, wf)
+	for _, c := range []struct{ version, revision, wantErr string }{
+		{"dev", testCommit, "must be a Fendix release tag"},
+		{"v3.5.1", "", "FENDIX_INSTALLER_COMMIT must be the full commit"},
+	} {
+		t.Run(c.version+"@"+c.revision, func(t *testing.T) {
+			files, _ := generate(t, CIGitHub, c.version, c.revision)
+			wf := parseWorkflow(t, files[ciFile[CIGitHub]])
+			script, _ := installScript(t, wf)
 
-	runnerTemp := t.TempDir()
-	githubPath := filepath.Join(runnerTemp, "github_path")
-	cmd := exec.Command(sh, "-c", script)
-	cmd.Env = append(os.Environ(),
-		"FENDIX_VERSION="+wf.Env["FENDIX_VERSION"],
-		"RUNNER_TEMP="+runnerTemp,
-		"GITHUB_PATH="+githubPath,
-	)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("install step accepted %q:\n%s", wf.Env["FENDIX_VERSION"], out)
-	}
-	if !strings.Contains(string(out), "must be a Fendix release tag") {
-		t.Errorf("install step failed without naming the cause:\n%s", out)
-	}
-	if _, err := os.Stat(filepath.Join(runnerTemp, "fendix")); !os.IsNotExist(err) {
-		t.Error("install step created its download directory before validating the version")
-	}
-	if _, err := os.Stat(githubPath); !os.IsNotExist(err) {
-		t.Error("install step added to GITHUB_PATH for an unpinned version")
+			runnerTemp := t.TempDir()
+			githubPath := filepath.Join(runnerTemp, "github_path")
+			cmd := exec.Command(sh, "-c", script)
+			cmd.Env = append(os.Environ(),
+				"FENDIX_VERSION="+wf.Env["FENDIX_VERSION"],
+				"FENDIX_INSTALLER_COMMIT="+wf.Env["FENDIX_INSTALLER_COMMIT"],
+				"RUNNER_TEMP="+runnerTemp,
+				"GITHUB_PATH="+githubPath,
+			)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("install step accepted version %q, commit %q:\n%s",
+					wf.Env["FENDIX_VERSION"], wf.Env["FENDIX_INSTALLER_COMMIT"], out)
+			}
+			if !strings.Contains(string(out), c.wantErr) {
+				t.Errorf("install step failed without naming the cause %q:\n%s", c.wantErr, out)
+			}
+			if _, err := os.Stat(filepath.Join(runnerTemp, "fendix")); !os.IsNotExist(err) {
+				t.Error("install step created its download directory before validating the pins")
+			}
+			if _, err := os.Stat(githubPath); !os.IsNotExist(err) {
+				t.Error("install step added to GITHUB_PATH for an unpinned install")
+			}
+		})
 	}
 }
 
@@ -220,7 +273,7 @@ func TestGeneratedFilesCarryOnlyTheOrganizationIdentity(t *testing.T) {
 	personal := regexp.MustCompile(`(?i)abdel-rahmansaied`)
 	for _, ci := range SupportedCIs {
 		for _, v := range []string{"v3.5.1", "dev"} {
-			files, out := generate(t, ci, v)
+			files, out := generate(t, ci, v, testCommit)
 			if personal.MatchString(out) {
 				t.Errorf("--ci=%s version=%q: init output names the personal namespace", ci, v)
 			}
@@ -246,13 +299,21 @@ func TestGeneratedFilesCarryOnlyTheOrganizationIdentity(t *testing.T) {
 	}
 }
 
-func TestPinVersionRequiresExactlyOnePlaceholder(t *testing.T) {
+func TestPinInstallRequiresExactlyOneOfEachPlaceholder(t *testing.T) {
+	pin := installPin{version: "v3.5.1", commit: testCommit}
+	both := versionPlaceholder + "\n" + commitPlaceholder + "\n"
+	if _, err := pinInstall("both", []byte(both), pin); err != nil {
+		t.Fatalf("pinInstall rejected a template with one of each placeholder: %v", err)
+	}
 	for name, tmpl := range map[string]string{
-		"none": "FENDIX_VERSION: v3.5.1\n",
-		"two":  versionPlaceholder + "\n" + versionPlaceholder + "\n",
+		"no placeholders": "FENDIX_VERSION: v3.5.1\n",
+		"version only":    versionPlaceholder + "\n",
+		"commit only":     commitPlaceholder + "\n",
+		"two versions":    both + versionPlaceholder + "\n",
+		"two commits":     both + commitPlaceholder + "\n",
 	} {
-		if _, err := pinVersion(name, []byte(tmpl), "v3.5.1"); err == nil {
-			t.Errorf("pinVersion accepted a template with %s placeholders", name)
+		if _, err := pinInstall(name, []byte(tmpl), pin); err == nil {
+			t.Errorf("pinInstall accepted a template with %s", name)
 		}
 	}
 }

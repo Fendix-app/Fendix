@@ -14,11 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and CircleCI files downloaded a v0.13.0 tarball that current releases do
   not publish, against a placeholder checksum. All three now pin
   `FENDIX_VERSION` to the release of the `fendix` binary that generated
-  them and install it with the official installer fetched from that same
-  tag, which verifies the checksum and, where cosign is present, the
-  signature. The GitHub workflow installs cosign first; the GitLab job
-  installs it from Alpine. A non-release build (`dev`, a `git describe`
-  version) writes a placeholder that the install step rejects.
+  them and install it with the official installer, fetched at
+  `FENDIX_INSTALLER_COMMIT`, the commit that release was built from, so the
+  script cannot be swapped by moving a tag. The GitHub workflow and the
+  GitLab job install cosign and require a verified release signature; all
+  three accept an optional `FENDIX_SHA256` pin. A build that is not a
+  release, or that does not know its commit, writes placeholders the
+  install step rejects. The Docker image passes its commit in as
+  `REVISION`, since its build context has no `.git`.
+- `install.sh` no longer falls back to the checksum alone when asked not
+  to: `FENDIX_REQUIRE_SIGNATURE=1` refuses the install if cosign is missing
+  or the release carries no signature, and `FENDIX_SHA256` refuses any
+  binary whose hash differs from the pin. Both are opt-in; the default
+  `curl … | sh` behaviour is unchanged.
 
 ### Changed
 

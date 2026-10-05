@@ -26,7 +26,12 @@ variables:
 ```
 
 The install step rejects anything that is not a release tag, including
-"latest".
+"latest". It fetches the installer at `FENDIX_INSTALLER_COMMIT`, the
+commit that release was built from; the installer works for any release,
+so it needs no change when you upgrade. Set `FENDIX_SHA256` to the
+`.sha256` of `fendix-<version>-linux-amd64` to bind the job to that exact
+binary. The job installs cosign and requires a verified release
+signature (`FENDIX_REQUIRE_SIGNATURE=1`).
 
 ## Required project settings
 

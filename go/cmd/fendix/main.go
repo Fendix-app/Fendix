@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -34,6 +35,37 @@ import (
 
 // Version is set at build time via ldflags.
 var Version = "dev"
+
+// Revision is the commit a release was built from. Release binaries get it
+// from Go's VCS stamp; the Docker build, whose context has no .git, sets it
+// with -X main.Revision. Empty means unknown.
+var Revision = ""
+
+// releaseRevision returns Revision, else the VCS-stamped commit of a build
+// from an unmodified checkout. A dirty tree has no commit that holds its
+// code, so it reports none.
+func releaseRevision() string {
+	if Revision != "" {
+		return Revision
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	revision, modified := "", true
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			modified = s.Value != "false"
+		}
+	}
+	if modified {
+		return ""
+	}
+	return revision
+}
 
 func main() {
 	// Install a real slog default at startup. Without this,
@@ -291,11 +323,12 @@ Use --print to preview without writing.`,
 			print, _ := cmd.Flags().GetBool("print")
 			ci, _ := cmd.Flags().GetString("ci")
 			return initcmd.Run(initcmd.Options{
-				Force:   force,
-				Print:   print,
-				CI:      ci,
-				Version: Version,
-				Out:     cmd.OutOrStdout(),
+				Force:    force,
+				Print:    print,
+				CI:       ci,
+				Version:  Version,
+				Revision: releaseRevision(),
+				Out:      cmd.OutOrStdout(),
 			})
 		},
 	}

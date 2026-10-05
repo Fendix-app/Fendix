@@ -41,6 +41,11 @@ COPY Makefile ./
 # started recording their engine as "docker" — replacing one uninformative
 # placeholder with another.
 ARG VERSION=docker
+# REVISION is the commit being built. The build context has no .git, so Go
+# cannot stamp it; release.yml passes it so `fendix init` inside the image can
+# pin the installer to that commit. Empty leaves it unknown (init then writes
+# a placeholder the generated CI rejects).
+ARG REVISION=
 
 # Bundle Python engine into Go embed directory and build.
 # -trimpath + CGO_ENABLED=0 match release.yml so a docker-built fendix
@@ -48,7 +53,7 @@ ARG VERSION=docker
 RUN make embed-engine && \
     cd go && CGO_ENABLED=0 go build \
     -trimpath \
-    -ldflags="-s -w -X main.Version=${VERSION}" \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Revision=${REVISION}" \
     -o /fendix ./cmd/fendix/
 
 # ---- Stage 2: Runtime image ----

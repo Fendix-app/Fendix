@@ -139,11 +139,15 @@ Files written:
 - `circleci` → `.circleci/fendix-config.yml` + `NEXT-STEPS-fendix.md` + policy/ignore
 
 Each generated CI file pins `FENDIX_VERSION` to the release of the `fendix`
-binary that wrote it and installs that release with the official installer
-(`scripts/install.sh` at the same tag), which verifies the checksum and, where
-cosign is present, the signature. A non-release build (`dev`, a local `git
-describe` version) writes a placeholder the install step rejects, so set a
-release tag before committing.
+binary that wrote it and installs that release with the official installer,
+`scripts/install.sh` fetched at `FENDIX_INSTALLER_COMMIT`, the commit that
+release was built from (a tag could be moved to serve another script; a
+commit cannot). The installer verifies the checksum; the GitHub and GitLab
+files also install cosign and run it with `FENDIX_REQUIRE_SIGNATURE=1`, so a
+missing or invalid signature fails the job. Set the optional `FENDIX_SHA256`
+to bind a job to one exact binary. A build that is not a release, or that
+does not know its commit (a dirty tree, a local Docker build), writes a
+placeholder the install step rejects, so set real values before committing.
 
 **Known product defect:** the generated workflows install the standalone
 release binary, which carries no Python analyzer tree, and do not install

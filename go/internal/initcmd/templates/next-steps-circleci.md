@@ -41,8 +41,15 @@ environment:
 ```
 
 The install step rejects anything that is not a release tag, including
-"latest". Install cosign in the job image to have the installer verify
-the release signature as well as its checksum.
+"latest". It fetches the installer at `FENDIX_INSTALLER_COMMIT`, the
+commit that release was built from; the installer works for any release,
+so it needs no change when you upgrade.
+
+`cimg/base` has no cosign, so the installer verifies the checksum only.
+To bind the job to one binary, set `FENDIX_SHA256` to the `.sha256` of
+`fendix-<version>-linux-amd64`. To require a verified release signature
+instead, install cosign in the job and prefix the installer with
+`FENDIX_REQUIRE_SIGNATURE=1`.
 
 ## Commit
 
