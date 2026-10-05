@@ -26,10 +26,6 @@ const officialInstaller = "https://raw.githubusercontent.com/Fendix-app/Fendix/$
 
 const testCommit = "0123456789abcdef0123456789abcdef01234567"
 
-// requiresSignature are the CI systems whose generated job installs cosign
-// and therefore makes the installer refuse an unsigned release.
-var requiresSignature = map[string]bool{CIGitHub: true, CIGitLab: true}
-
 // generate runs `fendix init` for real and returns every written file plus
 // the status output, so assertions see what a user commits.
 func generate(t *testing.T, ci, version, revision string) (map[string]string, string) {
@@ -119,8 +115,11 @@ func TestGeneratedCIInstallsPinnedReleaseThroughOfficialInstaller(t *testing.T) 
 			if !strings.Contains(got, officialInstaller) {
 				t.Errorf("install step does not fetch the official installer %s", officialInstaller)
 			}
-			if got, want := strings.Contains(got, "FENDIX_REQUIRE_SIGNATURE=1 "), requiresSignature[ci]; got != want {
-				t.Errorf("install runs with FENDIX_REQUIRE_SIGNATURE=1: %v; want %v", got, want)
+			// Every generated CI installs cosign and makes a missing cosign or
+			// an unsigned release fail the install; none may fall back to
+			// the checksum alone.
+			if !strings.Contains(got, "FENDIX_REQUIRE_SIGNATURE=1 sh ") {
+				t.Error("install step must run the installer with FENDIX_REQUIRE_SIGNATURE=1")
 			}
 			if !strings.Contains(got, `grep -F "fendix version ${FENDIX_VERSION} "`) {
 				t.Error("install step must assert the installed binary is the pinned release")
@@ -193,6 +192,139 @@ func TestGeneratedGitHubWorkflowRequiresSignatureBeforeInstall(t *testing.T) {
 		if strings.Contains(step.Run, "go install") || strings.Contains(step.Run, "go build") {
 			t.Errorf("step %q builds Fendix from source; it must install the signed release", step.Name)
 		}
+	}
+}
+
+// circleCIJob is the slice of the generated CircleCI config the install
+// contract depends on.
+type circleCIJob struct {
+	Environment map[string]string `yaml:"environment"`
+	Steps       []yaml.Node       `yaml:"steps"`
+}
+
+// circleCIRunSteps returns the run steps of the generated fendix-scan job,
+// in order, keyed by name.
+func circleCIRunSteps(t *testing.T, src string) (circleCIJob, []struct{ Name, Command string }) {
+	t.Helper()
+	var cfg struct {
+		Jobs map[string]circleCIJob `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("CircleCI config does not parse: %v", err)
+	}
+	job, ok := cfg.Jobs["fendix-scan"]
+	if !ok {
+		t.Fatal("CircleCI config has no fendix-scan job")
+	}
+	var runs []struct{ Name, Command string }
+	for _, node := range job.Steps {
+		var step struct {
+			Run struct {
+				Name    string `yaml:"name"`
+				Command string `yaml:"command"`
+			} `yaml:"run"`
+		}
+		if node.Kind == yaml.MappingNode && node.Decode(&step) == nil && step.Run.Command != "" {
+			runs = append(runs, struct{ Name, Command string }{step.Run.Name, step.Run.Command})
+		}
+	}
+	return job, runs
+}
+
+// TestGeneratedCircleCIRequiresVerifiedSignature pins the CircleCI install
+// contract: cimg/base has no cosign, so the job installs a pinned cosign,
+// verifies that download against pinned SHA-256 values before running it,
+// and only then runs the installer with FENDIX_REQUIRE_SIGNATURE=1.
+func TestGeneratedCircleCIRequiresVerifiedSignature(t *testing.T) {
+	files, _ := generate(t, CICircleCI, "v3.5.1", testCommit)
+	job, runs := circleCIRunSteps(t, files[ciFile[CICircleCI]])
+
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(job.Environment["COSIGN_VERSION"]) {
+		t.Errorf("COSIGN_VERSION = %q; want an exact cosign release such as v3.1.3", job.Environment["COSIGN_VERSION"])
+	}
+	for _, key := range []string{"COSIGN_SHA256_LINUX_AMD64", "COSIGN_SHA256_LINUX_ARM64"} {
+		if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(job.Environment[key]) {
+			t.Errorf("%s = %q; want a SHA-256", key, job.Environment[key])
+		}
+	}
+
+	cosignAt, fendixAt := -1, -1
+	for i, r := range runs {
+		switch r.Name {
+		case "Install cosign":
+			cosignAt = i
+		case "Install Fendix":
+			fendixAt = i
+		}
+	}
+	if cosignAt < 0 || fendixAt < 0 || cosignAt > fendixAt {
+		t.Fatalf("want an Install cosign step before Install Fendix; got cosign at %d, fendix at %d", cosignAt, fendixAt)
+	}
+
+	cosign := runs[cosignAt].Command
+	download := strings.Index(cosign, "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${arch}")
+	verify := strings.Index(cosign, `sha256sum -c -`)
+	install := strings.Index(cosign, "sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign")
+	if download < 0 || verify < 0 || install < 0 || !(download < verify && verify < install) {
+		t.Errorf("cosign must be downloaded at COSIGN_VERSION, checked with sha256sum -c, then installed, in that order:\n%s", cosign)
+	}
+	if strings.Contains(cosign, "latest") {
+		t.Error("cosign must be pinned, not fetched as latest")
+	}
+
+	fendix := runs[fendixAt].Command
+	if !strings.Contains(fendix, "FENDIX_REQUIRE_SIGNATURE=1 sh /tmp/fendix-install.sh") {
+		t.Errorf("the installer must run with FENDIX_REQUIRE_SIGNATURE=1:\n%s", fendix)
+	}
+	if strings.Contains(fendix, "FENDIX_ALLOW_UNVERIFIED") {
+		t.Error("the install step must not bypass the installer's verification")
+	}
+}
+
+// TestGeneratedCircleCICosignStepRefusesTamperedDownload executes the
+// generated "Install cosign" step with a download that does not match the
+// pinned checksum: it must stop before anything is installed.
+func TestGeneratedCircleCICosignStepRefusesTamperedDownload(t *testing.T) {
+	sh, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		t.Skip("sha256sum not available (cimg/base and CI runners have it)")
+	}
+	files, _ := generate(t, CICircleCI, "v3.5.1", testCommit)
+	job, runs := circleCIRunSteps(t, files[ciFile[CICircleCI]])
+	var cosign string
+	for _, r := range runs {
+		if r.Name == "Install cosign" {
+			cosign = r.Command
+		}
+	}
+
+	// Fake curl writes bytes that cannot match the pinned checksum; fake
+	// sudo records that it ran. Everything else is the real environment.
+	bin := t.TempDir()
+	sudoLog := filepath.Join(bin, "sudo.log")
+	for name, body := range map[string]string{
+		"curl": `while [ $# -gt 0 ]; do if [ "$1" = -o ]; then printf tampered > "$2"; shift; fi; shift; done`,
+		"sudo": `echo "$@" >> "` + sudoLog + `"`,
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(sh, "--noprofile", "--norc", "-eo", "pipefail", "-c", cosign)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for k, v := range job.Environment {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("Install cosign accepted a download that does not match the pinned checksum:\n%s", out)
+	}
+	if _, err := os.Stat(sudoLog); !os.IsNotExist(err) {
+		log, _ := os.ReadFile(sudoLog)
+		t.Errorf("Install cosign ran sudo before the checksum passed: %s", log)
 	}
 }
 
