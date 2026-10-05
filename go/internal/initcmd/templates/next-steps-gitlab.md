@@ -15,16 +15,18 @@ the `include:` block above (plus a `stages:` line that lists `test`).
 
 ## Pinning the Fendix version
 
-The default template uses `FENDIX_VERSION: "latest"`, which resolves
-the latest tagged release at job run time. To pin a specific version
-(recommended for reproducible builds):
+`fendix init` pins `FENDIX_VERSION` in `.gitlab-ci.fendix.yml` to the
+Fendix release that generated it, so every pipeline installs the same
+verified binary. To upgrade, change it to a newer tag from
+<https://github.com/Fendix-app/Fendix/releases>:
 
 ```yaml
 variables:
-  FENDIX_VERSION: "v0.14.0"
+  FENDIX_VERSION: "vX.Y.Z"
 ```
 
-Override it inline for a single run via GitLab's CI variables UI.
+The install step rejects anything that is not a release tag, including
+"latest".
 
 ## Required project settings
 

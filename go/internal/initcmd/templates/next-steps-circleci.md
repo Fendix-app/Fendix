@@ -30,13 +30,19 @@ exact wiring.
 
 ## Pinning the Fendix version
 
-The default template uses `FENDIX_VERSION: latest`, which resolves at
-job run time. To pin:
+`fendix init` pins `FENDIX_VERSION` in `fendix-config.yml` to the
+Fendix release that generated it, so every run installs the same
+verified binary. To upgrade, change it to a newer tag from
+<https://github.com/Fendix-app/Fendix/releases>:
 
 ```yaml
 environment:
-  FENDIX_VERSION: v0.14.0
+  FENDIX_VERSION: "vX.Y.Z"
 ```
+
+The install step rejects anything that is not a release tag, including
+"latest". Install cosign in the job image to have the installer verify
+the release signature as well as its checksum.
 
 ## Commit
 

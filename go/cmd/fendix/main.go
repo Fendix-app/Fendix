@@ -291,10 +291,11 @@ Use --print to preview without writing.`,
 			print, _ := cmd.Flags().GetBool("print")
 			ci, _ := cmd.Flags().GetString("ci")
 			return initcmd.Run(initcmd.Options{
-				Force: force,
-				Print: print,
-				CI:    ci,
-				Out:   cmd.OutOrStdout(),
+				Force:   force,
+				Print:   print,
+				CI:      ci,
+				Version: Version,
+				Out:     cmd.OutOrStdout(),
 			})
 		},
 	}

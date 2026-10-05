@@ -138,15 +138,21 @@ Files written:
 - `gitlab` → `.gitlab-ci.fendix.yml` + `NEXT-STEPS-fendix.md` + policy/ignore
 - `circleci` → `.circleci/fendix-config.yml` + `NEXT-STEPS-fendix.md` + policy/ignore
 
-**Known product defect:** the generated CI workflows are historical and are
-not current drop-ins. The GitHub file installs mutable source and supplies no
-Python analyzer tree; GitLab and CircleCI pin obsolete v0.13.0
-personal-namespace release assets with placeholder checksums while their
-next-step files name a different version. The GitLab file also declares SARIF
-under `artifacts:reports:sast`, which expects GitLab's own SAST JSON schema.
-Use the checked-in pinned-container reference workflow or author an equivalent
-current container job until the generator is corrected. The generated policy
-and ignore starters remain independently usable.
+Each generated CI file pins `FENDIX_VERSION` to the release of the `fendix`
+binary that wrote it and installs that release with the official installer
+(`scripts/install.sh` at the same tag), which verifies the checksum and, where
+cosign is present, the signature. A non-release build (`dev`, a local `git
+describe` version) writes a placeholder the install step rejects, so set a
+release tag before committing.
+
+**Known product defect:** the generated workflows install the standalone
+release binary, which carries no Python analyzer tree, and do not install
+Semgrep, so their scans record both analyzers as unavailable and report
+coverage as incomplete. The GitLab file also declares SARIF under
+`artifacts:reports:sast`, which expects GitLab's own SAST JSON schema. For full
+analyzer coverage use the checked-in pinned-container reference workflow or an
+equivalent container job. The generated policy and ignore starters remain
+independently usable.
 
 #### `fendix hook` — git pre-commit gate
 

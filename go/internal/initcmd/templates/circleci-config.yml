@@ -8,8 +8,9 @@
 #
 # What it does:
 #   - One job, `fendix-scan`, on the security workflow.
-#   - Downloads a pinned fendix release (FENDIX_VERSION + the matching
-#     FENDIX_SHA256). Bump both together when updating fendix.
+#   - Installs the pinned FENDIX_VERSION below with the official
+#     installer, which verifies the release's SHA-256 checksum before
+#     installing (and its cosign signature when cosign is on PATH).
 #   - Produces a SARIF report uploaded as a 30-day artifact.
 #   - Gates the workflow on HIGH+ findings via fendix's --fail-on.
 
@@ -20,22 +21,25 @@ jobs:
     docker:
       - image: cimg/base:current
     environment:
-      # Pin to a specific tag — never "latest". Bump together with
-      # FENDIX_SHA256 (published alongside each release tag).
-      FENDIX_VERSION: v0.13.0
-      FENDIX_SHA256: REPLACE_WITH_SHA256_FROM_RELEASE_PAGE
+      # The Fendix release this job installs. `fendix init` pins the
+      # release that generated this file. To upgrade, change it to a newer
+      # tag from https://github.com/Fendix-app/Fendix/releases. Never use
+      # "latest": a pinned tag keeps every run on the same verified binary.
+      FENDIX_VERSION: "@@FENDIX_VERSION@@"
     steps:
       - checkout
       - run:
           name: Install Fendix
           command: |
             set -euo pipefail
-            curl -fsSL -o /tmp/fendix.tar.gz \
-              "https://github.com/Abdel-RahmanSaied/Fendix/releases/download/${FENDIX_VERSION}/fendix-linux-amd64.tar.gz"
-            echo "${FENDIX_SHA256}  /tmp/fendix.tar.gz" | sha256sum -c -
-            sudo tar xz -C /usr/local/bin -f /tmp/fendix.tar.gz
-            sudo chmod +x /usr/local/bin/fendix
-            fendix version
+            case "$FENDIX_VERSION" in
+              v[0-9]*) ;;
+              *) echo "FENDIX_VERSION must be a Fendix release tag such as vX.Y.Z, not '$FENDIX_VERSION'" >&2; exit 1 ;;
+            esac
+            curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/fendix-install.sh \
+              "https://raw.githubusercontent.com/Fendix-app/Fendix/${FENDIX_VERSION}/scripts/install.sh"
+            FENDIX_DIR=/usr/local/bin sh /tmp/fendix-install.sh
+            fendix version | grep -F "fendix version ${FENDIX_VERSION} "
       - run:
           name: Run Fendix scan
           command: |
