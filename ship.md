@@ -75,7 +75,7 @@ No README update needed for normal patch/minor releases — the install commands
 
 ## Versioning rules of thumb
 
-Fendix is post-1.0 (current release **v3.5.1**), so SemVer applies
+Fendix is post-1.0 (current release **v3.6.0**), so SemVer applies
 at full strength — the pre-1.0 "minor bump = breaking is fine" latitude is gone.
 
 | Bump | When | Examples from history |
