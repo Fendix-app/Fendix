@@ -7,12 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-10-06
+
 Fixes a gate bypass: baselines and `.fendix-ignore` rules suppressed whole
 grouped findings, so a new production credential that the report grouped with
 a baselined or ignored test fixture passed CI with exit 0. Whether it did
 depended on how the directory names sorted. Identity, suppression and
-baselines now act on each occurrence. This changes the baseline file format
-and the scope of some ignore rules; read "Changed" before upgrading.
+baselines now act on each occurrence, and so do SARIF, `fendix jira` and
+`fendix verify`. This changes the baseline file format, the scope of some
+ignore rules and the shape of SARIF output; read "Changed" and "Upgrading"
+before upgrading.
 
 ### Security
 
@@ -92,6 +96,9 @@ and the scope of some ignore rules; read "Changed" before upgrading.
     copied from a grouped finding's top-level `fingerprint` used to suppress
     the whole group; to suppress other occurrences, add rules with their
     `occurrences[].fingerprint`.
+  - An `endpoint:` rule, alone or with `category:`, is matched against each
+    occurrence's own path. It suppresses the occurrences under that path and
+    leaves the finding's other occurrences reported and gated.
   - `id:` is unchanged: it is positional and suppresses the whole presented
     group.
   - A rule that sets `fingerprint` or `id` together with `endpoint` or
@@ -116,11 +123,40 @@ and the scope of some ignore rules; read "Changed" before upgrading.
   such lines get a new fingerprint once; a v3.5.1 baseline still matches them
   by recorded location.
 
-- **Upgrade effects of the SARIF, Jira and verify changes.**
-  - GitHub Code Scanning: the primary occurrence of a grouped finding keeps its
-    alert. Every other occurrence becomes a new alert once.
-  - `fendix jira` files new issues once for findings that were tracked only by
-    their old `fendix-id:` label.
+### Upgrading
+
+- **GitHub Code Scanning, one time.** The first SARIF upload from v3.6.0
+  changes alerts for grouped findings:
+  - the primary occurrence keeps its alert, because its fingerprint is
+    unchanged;
+  - every other occurrence of a grouped finding opens a new alert of its own;
+  - a dismissal made on the old grouped alert stays with the primary
+    occurrence only, so the other occurrences need their own triage;
+  - a secret whose identifier changed (see "Secret identifier") opens a new
+    alert once.
+- **`fendix jira`** files new issues once for findings that were tracked only
+  by their old `fendix-id:` label.
+- **Baselines.** Re-save once with `--save-baseline` to switch to exact
+  occurrence matching.
+- **Legacy grouped findings.** Reports written by v3.5.1 or earlier carry no
+  `occurrences`, and their grouped finding's one `fingerprint` names only its
+  primary occurrence. v3.6.0 still reads them, and never extends that
+  fingerprint to the other occurrences:
+  - as a `--baseline`, an entry proves its own fingerprint and its exact
+    recorded locations, as described under "Baselines";
+  - `fendix report --input … --format sarif` renders a grouped legacy finding
+    as one result, as before, but without `partialFingerprints`. Code Scanning
+    then falls back to its own fingerprinting, so the result may not match an
+    alert uploaded earlier, and a dismissal of that alert may not carry over.
+    Re-scan with v3.6.0 for per-occurrence identities;
+  - `fendix verify` re-tests each distinct affected endpoint of a grouped
+    legacy finding;
+  - `fendix jira` tracks a legacy finding by its own fingerprint, as one
+    occurrence.
+- **Consumers of the report.** A finding's top-level `fingerprint` and `id`
+  are still present but name its primary occurrence and its position.
+  Anything that suppresses, dismisses, tracks or proves a finding should key
+  on `occurrences[].fingerprint`.
 
 See [docs/suppression-semantics.md](docs/suppression-semantics.md).
 
