@@ -5,7 +5,7 @@
 # only surfaces issues the PR actually introduced. Uploads SARIF so findings
 # render inline in the GitHub Security tab and as PR annotations.
 #
-# Usage (minimal — SAST/secrets/SCA on changed code in a PR). Stable v3.5.1
+# Usage (minimal — SAST/secrets/SCA on changed code in a PR). Stable v3.6.0
 # requires a prepared, version-matched Python tree and its requirements; see
 # the GitHub Actions section in README.md. The official container is the
 # ready-to-run alternative:
@@ -14,7 +14,7 @@
 #     with: { fetch-depth: 0 }          # diff mode needs history
 #   - uses: Fendix-app/Fendix@v1
 #     with:
-#       version: v3.5.1
+#       version: v3.6.0
 #       code: .
 #       engine_path: ${{ github.workspace }}/vendor/fendix-python
 #
@@ -22,7 +22,7 @@
 #
 #   - uses: Fendix-app/Fendix@v1
 #     with:
-#       version: v3.5.1
+#       version: v3.6.0
 #       url: ${{ secrets.STAGING_API_URL }}
 #       code: .
 #       spec: openapi.yaml
@@ -69,7 +69,7 @@ inputs:
     required: false
     default: "true"
   version:
-    description: "Fendix version to install (e.g. v3.5.1). 'latest' installs the newest release."
+    description: "Fendix version to install (e.g. v3.6.0). 'latest' installs the newest release."
     required: false
     default: "latest"
   extra-args:
@@ -105,7 +105,7 @@ inputs:
     required: false
     default: "https://api.fendix.dev"
   engine_path:
-    description: "Path to the Fendix Python engine directory. Known defect through v3.5.1: the empty default cannot resolve from the standalone release binary; provide a version-matched tree or use the official container."
+    description: "Path to the Fendix Python engine directory. Known defect through v3.6.0: the empty default cannot resolve from the standalone release binary; provide a version-matched tree or use the official container."
     required: false
     default: ""
 
@@ -197,7 +197,7 @@ runs:
         fendix version
 
     # Pin the Python taint engine before scanning. With engine_path set this
-    # pins that explicit tree. Known defect through v3.5.1: official standalone
+    # pins that explicit tree. Known defect through v3.6.0: official standalone
     # releases have no embedded tree, so the empty default fails here. A
     # failure is loud rather than silently degrading to native-Go-only output.
     - name: Sync Fendix Python engine

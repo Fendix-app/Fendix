@@ -14,22 +14,22 @@ This document covers two things:
 
 ## Supported versions
 
-Current stable release: **v3.5.1** (2026-10-05 — see
+Current stable release: **v3.6.0** (2026-10-06 — see
 [`CHANGELOG.md`](CHANGELOG.md)).
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 3.5.x   | ✅ active           |
-| 3.4.x   | ✅ critical only    |
-| < 3.4   | ❌ end of life      |
+| 3.6.x   | ✅ active           |
+| 3.5.x   | ✅ critical only    |
+| < 3.5   | ❌ end of life      |
 
 The post-1.0 policy announced pre-1.0 is now in force: **the latest two minor
 versions are supported — full security fixes on the current minor, critical
-fixes only on the previous one.** Everything below `3.4.0` is end of life and
-will not receive backports; upgrade to `3.5.x`.
+fixes only on the previous one.** Everything below `3.5.0` is end of life and
+will not receive backports; upgrade to `3.6.x`.
 
 A patch release on the supported branch is the delivery vehicle for a fix
-(e.g. `3.5.1` for a `3.5.x` issue).
+(e.g. `3.6.1` for a `3.6.x` issue).
 
 ## Reporting a vulnerability
 
@@ -126,8 +126,8 @@ identity, wrong signing time, tampered binary — exits non-zero.
 ### Verifying the Docker image
 
 ```sh
-REF='docker.io/fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.1$'
+REF='docker.io/fendixapp/fendix@sha256:c0912dd6cd3ea20d81c688bdcda09d34ecabafbc38d5cfede2e8ecf3e9028033'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.6.0$'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify \
@@ -152,9 +152,9 @@ cosign verify-blob-attestation \
   --type slsaprovenance1 \
   fendix-vX.Y.Z-linux-amd64
 
-# Docker image SLSA provenance for the immutable v3.5.1 digest (via Rekor):
-REF='docker.io/fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.1$'
+# Docker image SLSA provenance for the immutable v3.6.0 digest (via Rekor):
+REF='docker.io/fendixapp/fendix@sha256:c0912dd6cd3ea20d81c688bdcda09d34ecabafbc38d5cfede2e8ecf3e9028033'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.6.0$'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify-attestation \
@@ -187,8 +187,8 @@ cosign verify-blob \
   fendix-vX.Y.Z-linux-amd64.cdx.json
 
 # Docker image SBOM attestation (verifies against the Rekor log):
-REF='docker.io/fendixapp/fendix@sha256:ee0d5ff3cdbc1ad30b0034f4516dbd81550c2ddc546ce9931c71735d0948ba4d'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.5.1$'
+REF='docker.io/fendixapp/fendix@sha256:c0912dd6cd3ea20d81c688bdcda09d34ecabafbc38d5cfede2e8ecf3e9028033'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.6.0$'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify-attestation \
