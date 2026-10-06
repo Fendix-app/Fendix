@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "engine_version": "v3.5.1",
+  "engine_version": "v3.6.0",
   "checks": [
     {
       "id": "configleak",
