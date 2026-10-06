@@ -235,6 +235,16 @@ type ConfidenceReason struct {
 	Text  string `json:"text"`
 }
 
+// Occurrence is one security occurrence inside a (possibly grouped) finding:
+// where it is, and its own fendix/v2 fingerprint. The fingerprint is computed
+// from that occurrence alone, before any grouping, so it is independent of
+// which other occurrences share its presentation group and of how their
+// paths sort.
+type Occurrence struct {
+	Endpoint    string `json:"endpoint"`
+	Fingerprint string `json:"fingerprint"`
+}
+
 // Finding represents a single security finding produced by either engine.
 // This struct is the shared data contract between Go and Python.
 //
@@ -311,20 +321,30 @@ type Finding struct {
 	// symbol is the same symbol whether or not the flow was proven, and
 	// keying on Route.Handler made a finding change identity the moment its
 	// chain became provable.
-	Symbol            string      `json:"symbol,omitempty"`
-	Title             string      `json:"title"`
-	Severity          Severity    `json:"severity"`
-	Source            Source      `json:"source"`
-	Category          string      `json:"category"`
-	Endpoint          string      `json:"endpoint"`
-	AffectedEndpoints []string    `json:"affected_endpoints,omitempty"`
-	Evidence          string      `json:"evidence"`
-	Fix               string      `json:"fix"`
-	References        []string    `json:"references"`
-	Confidence        Confidence  `json:"confidence"`
-	Line              *string     `json:"line"`
-	TaintChain        []TaintLink `json:"taint_chain,omitempty"`
-	Reachable         bool        `json:"reachable,omitempty"`
+	Symbol            string   `json:"symbol,omitempty"`
+	Title             string   `json:"title"`
+	Severity          Severity `json:"severity"`
+	Source            Source   `json:"source"`
+	Category          string   `json:"category"`
+	Endpoint          string   `json:"endpoint"`
+	AffectedEndpoints []string `json:"affected_endpoints,omitempty"`
+	// Occurrences lists every distinct security occurrence this finding
+	// presents: one entry per (endpoint, occurrence fingerprint). A finding is
+	// a PRESENTATION group; an occurrence is the unit of security identity.
+	// Baselines, `.fendix-ignore` rules and lifecycle tracking act on
+	// occurrences, never on the group, so a new occurrence that joins an old
+	// group can never inherit the group's suppression or disposition. The
+	// finding's own Fingerprint is the primary occurrence's fingerprint and
+	// always appears here. Emitted for every scanned finding; absent only on
+	// reports produced before this field existed.
+	Occurrences []Occurrence `json:"occurrences,omitempty"`
+	Evidence    string       `json:"evidence"`
+	Fix         string       `json:"fix"`
+	References  []string     `json:"references"`
+	Confidence  Confidence   `json:"confidence"`
+	Line        *string      `json:"line"`
+	TaintChain  []TaintLink  `json:"taint_chain,omitempty"`
+	Reachable   bool         `json:"reachable,omitempty"`
 	// SourceTier records the analysis engine tier (Proven Path v1). Empty
 	// for blackbox / pre-field findings. See SourceTier doc.
 	SourceTier SourceTier `json:"source_tier,omitempty"`

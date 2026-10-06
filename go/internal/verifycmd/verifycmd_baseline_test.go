@@ -12,10 +12,11 @@ import (
 )
 
 // `fendix scan --save-baseline <path>` routes through engine.SaveBaseline,
-// which writes a BARE JSON ARRAY of findings. `fendix verify --baseline
-// <path>` must be able to read that back — otherwise the tool's own output
-// is not valid input to its own verify command. The engine-side loader
-// (engine.loadBaseline) already accepts both the bare array and the full
+// which writes a versioned baseline document (format v2; older builds wrote a
+// BARE JSON ARRAY of findings). `fendix verify --baseline <path>` must be able
+// to read every shape back — otherwise the tool's own output is not valid
+// input to its own verify command. The engine-side loader
+// (engine.loadBaseline) accepts the v2 document, the bare array and the full
 // report envelope; verify has to match.
 //
 // This test deliberately produces the file with the REAL writer rather than
@@ -158,5 +159,16 @@ func TestLoadBaseline_AcceptsEmptySaveBaselineOutput(t *testing.T) {
 	}
 	if r.Status != StatusNotFound {
 		t.Errorf("status = %q; want %q", r.Status, StatusNotFound)
+	}
+}
+
+// A baseline document from a future format is refused, not half-read.
+func TestLoadBaseline_RejectsUnsupportedBaselineVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.json")
+	if err := os.WriteFile(path, []byte(`{"baseline_version": 99, "findings": []}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadBaseline(path); err == nil || !strings.Contains(err.Error(), "baseline_version") {
+		t.Fatalf("err = %v; want an unsupported baseline_version error", err)
 	}
 }

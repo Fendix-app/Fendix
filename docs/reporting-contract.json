@@ -246,6 +246,13 @@
                 "null"
               ]
             },
+            "occurrences": {
+              "description": "Every distinct security occurrence this finding presents, one per (endpoint, occurrence fingerprint). Identity, .fendix-ignore matching, baseline matching and lifecycle tracking act on occurrences; the finding is a presentation group. The finding's own fingerprint is its primary occurrence's and always appears here. Absent on reports from engines that predate the field.",
+              "items": {
+                "$ref": "#/definitions/Occurrence"
+              },
+              "type": "array"
+            },
             "policy_override": {
               "type": "boolean"
             },
@@ -375,6 +382,23 @@
           "required": [
             "tool",
             "results"
+          ],
+          "type": "object"
+        },
+        "Occurrence": {
+          "additionalProperties": false,
+          "description": "One security occurrence: where it is, and its own fendix/v2 fingerprint, computed from that occurrence alone before any grouping.",
+          "properties": {
+            "endpoint": {
+              "type": "string"
+            },
+            "fingerprint": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "endpoint",
+            "fingerprint"
           ],
           "type": "object"
         },
@@ -804,8 +828,10 @@
       "decision",
       "effective_risk",
       "evidence",
+      "finding_id",
       "intrinsic_severity",
       "locations_truncated",
+      "occurrence_count",
       "reachable",
       "route_handler",
       "route_method",

@@ -384,6 +384,13 @@ fendix scan --url https://api.example.com --save-baseline baseline.json
 fendix scan --url https://api.example.com --baseline baseline.json
 ```
 
+Matching is per **occurrence**, not per grouped finding. A location added to
+an existing finding is reported as new, and only that location; adding or
+removing other locations never re-files a known one. `--save-baseline` writes
+baseline format v2, which records every occurrence. A baseline written by
+v3.5.1 or earlier still loads, but is matched conservatively; regenerate it
+once. See [docs/suppression-semantics.md](docs/suppression-semantics.md).
+
 ### Re-render a report
 
 Re-render a saved JSON findings file as JSON, HTML, SARIF, or PDF without
@@ -445,8 +452,8 @@ compatibility contract and are not a product availability claim. No command defi
 | `--require-analyzers` | list | | Analyzers that must be delivered (recorded `ok` or `not_applicable`) for exit 0; anything else exits 2. Stricter than `--fail-on-coverage-gap`: `--fast --require-analyzers semgrep` is a contradiction and exits 2. |
 | `--deescalate-tests` | bool | `true` | Report findings in test/fixture code (`tests/`, `test_*.py`, `*_test.py`, `conftest`, `fixtures/`) as `INFO` instead of `WARN`. The finding and its evidence are still emitted — this changes triage status, not visibility. A finding at or above `--fail-on` can still block when independent corroboration supports it; an unsupported test-code match is held at `WARN`. Pass `--deescalate-tests=false` to treat test-code findings like production ones. |
 | `--enforce-confidence` | bool | `true` | Only `BLOCK` a finding at or above `--fail-on` when the deterministic confidence band and evidence support it: `LOW` never blocks; `MEDIUM` needs an independent signal; `HIGH` needs an independent or self-evident signal. A high band with no signal remains `WARN`. Evidence is never suppressed, and every demotion is named in `confidence_reasons`. Pass `--enforce-confidence=false` to restore the legacy severity-only gate. |
-| `--baseline` | string | | Path to previous findings JSON for diff mode |
-| `--save-baseline` | string | | Save current findings to this path |
+| `--baseline` | string | | Path to a baseline (from `--save-baseline`) or JSON report; only occurrences not proven present in it are reported |
+| `--save-baseline` | string | | Save current findings, with every occurrence identity, to this path (baseline format v2) |
 | `--enable-active` | bool | `false` | Enable active injection probes |
 | `--checks` | list | `auth,injection,deps` | Override checks when the Python whitebox engine runs (`--code` auto-enables it unless explicitly disabled). Native Go analyzers run independently when `--code` is set. |
 | `--offline` | bool | `false` | Use a local snapshot for native pip/npm CVEs and skip native govulncheck. Known limitation: the Python deps check does not receive this flag and may invoke networked tools; use `--checks auth,injection` or `--python-engine=false`, plus `--no-plugins`, when hermetic execution is required. |
@@ -701,20 +708,36 @@ Run baseline diffs to only flag **new** vulnerabilities introduced in a PR:
 
 Suppress known findings or exempt endpoints from scanning. Place as `.fendix-ignore` in your project root or pass via `--ignore`.
 
-Use the report's versioned `fingerprint` for one durable finding. `SEC-NNN` ids
-are positional across scans; endpoint/category rules intentionally suppress a
-broader surface. The engine accepts a missing `reason`, but review policy
-should require one.
+Every rule is applied to each **occurrence** before occurrences are grouped
+into findings, so a rule suppresses exactly what it matches. A path rule for
+test fixtures never hides a production occurrence that would have shared
+their finding.
+
+One selector decides each rule, in this order: `fingerprint`, then `id`, then
+`endpoint` (optionally narrowed by `category`), then `category` alone.
+
+- `fingerprint` is durable and preferred. For a grouped finding, copy the
+  fingerprint of the occurrence you mean from its `occurrences` list.
+- `id` (`SEC-NNN`) is positional. It suppresses the whole presented group,
+  including occurrences added later, so use it only for short-lived triage.
+- In `endpoint` patterns, `**` matches zero or more directories and `*` stays
+  within one path segment.
+- The engine accepts a missing `reason`, but review policy should require one.
+
+The full semantics are in
+[docs/suppression-semantics.md](docs/suppression-semantics.md).
 
 ```yaml
-# Suppress by finding ID
 ignore:
+  # One durable occurrence identity
   - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
     reason: "Accepted risk reviewed in JIRA-1234"
 
-  - id: SEC-014
-    reason: "Rate limiting handled at API gateway level"
-    until: 2026-12-01  # optional expiry date
+  # Test fixtures at any depth (top-level tests/ included); production
+  # occurrences of the same rule are still reported
+  - endpoint: "**/tests/**"
+    category: secrets
+    reason: "Sample credentials in test fixtures"
 
   # Suppress entire endpoint
   - endpoint: GET /health

@@ -126,3 +126,66 @@ func TestRotatingACredentialKeepsTheIdentity(t *testing.T) {
 			before[0].Secret.Identifier, after[0].Secret.Identifier)
 	}
 }
+
+// Regression (grouped-suppression audit): the identifier is the binding of the
+// literal the credential sits in. Cutting the line at its FIRST quote named
+// `create(email="t@example.com", password="...")` after `email`, so the
+// secret's identity depended on an unrelated preceding argument.
+func TestIdentifierIsTheCredentialsOwnBindingNotAnEarlierArgument(t *testing.T) {
+	cases := []struct {
+		name, src, want string
+	}{
+		{"keyword args, email first", `    return client.create(email="t@example.com", password="Fixture-Pass-123")` + "\n", "password"},
+		{"keyword args, user first", `    return db.login(user="svc", password="Pr0d-31337-Secret!")` + "\n", "password"},
+		{"single quotes", `    login(email='t@example.com', password='Pr0d-31337-Secret!')` + "\n", "password"},
+		{"escaped quote before", `    login(note="say \"hi\"", password="Pr0d-31337-Secret!")` + "\n", "password"},
+		{"connection string keeps outer binding", `DATABASE_URL = "postgres://appuser:s3cr3tpassw0rd@db.internal:5432/app"` + "\n", "DATABASE_URL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			found := scanContent(t, "pkg/app/db.py", tc.src)
+			got := ""
+			for _, ev := range found {
+				if ev.Secret != nil && ev.Secret.Identifier != "" {
+					got = ev.Secret.Identifier
+					if got != tc.want {
+						t.Errorf("%s: identifier = %q, want %q", ev.RuleID, got, tc.want)
+					}
+				}
+			}
+			if got == "" {
+				t.Fatalf("no secret with an identifier detected in %q", tc.src)
+			}
+		})
+	}
+}
+
+// The identifier, and so the identity, must not change when an unrelated
+// argument before the credential changes.
+func TestIdentifierIgnoresPrecedingArguments(t *testing.T) {
+	a := scanContent(t, "pkg/app/db.py", `    db.login(email="a@example.com", password="Pr0d-31337-Secret!")`+"\n")
+	b := scanContent(t, "pkg/app/db.py", `    db.login(username="svc-account", password="Pr0d-31337-Secret!")`+"\n")
+	if len(a) == 0 || len(b) == 0 || a[0].Secret == nil || b[0].Secret == nil {
+		t.Fatal("credential not detected on one side")
+	}
+	if a[0].Secret.Identifier != b[0].Secret.Identifier {
+		t.Errorf("identifier depends on a preceding argument: %q vs %q", a[0].Secret.Identifier, b[0].Secret.Identifier)
+	}
+}
+
+func TestEnclosingQuote(t *testing.T) {
+	cases := map[string]int{
+		``:                        -1,
+		`x = 1`:                   -1,
+		`a="b", c="`:              9,
+		`a="b"`:                   -1,
+		`a='it"s', p='`:           12,
+		`a="x\"y", p="`:           12,
+		`DATABASE_URL = "pg://u:`: 15,
+	}
+	for in, want := range cases {
+		if got := enclosingQuote(in); got != want {
+			t.Errorf("enclosingQuote(%q) = %d, want %d", in, got, want)
+		}
+	}
+}

@@ -103,6 +103,12 @@ This is the right pattern for CI gating — see
 [`docs/ci-cd-integration.md`](./ci-cd-integration.md). The baseline
 becomes the unfixed-but-known set; the diff is what to gate on.
 
+Baseline matching is per **occurrence**, not per finding. A new location of an
+existing finding (a second credential in another file, say) is reported as
+new even though it would be shown in the same grouped finding. Baselines
+saved by v3.5.1 or earlier are matched conservatively; re-save them once. See
+[`docs/suppression-semantics.md`](./suppression-semantics.md).
+
 ### 2. Look for dedup-collapsed findings
 
 Fendix automatically collapses identical findings that span many
@@ -113,8 +119,12 @@ proxy, all 21 endpoints clear together. Don't open 21 tickets.
 ### 3. Suppress test fixtures and intentional patterns
 
 Test fixtures often have intentional secrets (`API_KEY = "test-key-123"`).
-Add a fixture suppression rule once; don't fight it per-finding. See
-[`.fendix-ignore.example`](../.fendix-ignore.example).
+Add a fixture suppression rule once (`endpoint: "**/tests/**"` with
+`category: secrets`); don't fight it per-finding. Rules apply to each
+occurrence, so a production credential that the report groups with a fixture
+is still reported. See
+[`.fendix-ignore.example`](../.fendix-ignore.example) and
+[`docs/suppression-semantics.md`](./suppression-semantics.md).
 
 Reach for that less often than you used to. Since v2.0 the engine handles the
 two commonest cases itself, by de-escalation rather than suppression — the
@@ -149,7 +159,8 @@ ignore:
   - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
     reason: "Accepted risk reviewed in JIRA-1234"
 
-  # By finding ID — useful for one-off accepted risks
+  # By finding ID — positional, and covers the WHOLE presented group,
+  # including occurrences added later: short-lived triage only
   - id: SEC-014
     reason: "Rate limiting handled at API gateway"
     until: 2026-12-01

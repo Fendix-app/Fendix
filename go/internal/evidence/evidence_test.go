@@ -26,6 +26,10 @@ func fullyPopulatedFinding() models.Finding {
 		Category:          "injection",
 		Endpoint:          "/api/users",
 		AffectedEndpoints: []string{"/api/users", "/api/admin"},
+		Occurrences: []models.Occurrence{
+			{Endpoint: "/api/admin", Fingerprint: "1111111111111111111111111111111111111111"},
+			{Endpoint: "/api/users", Fingerprint: "2222222222222222222222222222222222222222"},
+		},
 		Evidence:          "param id reaches cursor.execute | Code: src/app.py:42",
 		Fix:               "Use parameterized queries",
 		References:        []string{"CWE-89"},

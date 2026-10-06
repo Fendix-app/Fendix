@@ -206,10 +206,18 @@ func TestSaveBaseline(t *testing.T) {
 		t.Fatalf("reading saved baseline: %v", err)
 	}
 
-	var loaded []models.Finding
-	if err := json.Unmarshal(data, &loaded); err != nil {
+	// Baseline format v2: a versioned document, not a bare array.
+	var doc reporters.BaselineDocument
+	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("parsing saved baseline: %v", err)
 	}
+	if doc.BaselineVersion != reporters.BaselineFormatVersion {
+		t.Errorf("baseline_version = %d, want %d", doc.BaselineVersion, reporters.BaselineFormatVersion)
+	}
+	if doc.FingerprintAlgorithm != models.FingerprintAlgorithm {
+		t.Errorf("fingerprint_algorithm = %q, want %q", doc.FingerprintAlgorithm, models.FingerprintAlgorithm)
+	}
+	loaded := doc.Findings
 
 	if len(loaded) != 2 {
 		t.Fatalf("expected 2 findings in saved baseline, got %d", len(loaded))

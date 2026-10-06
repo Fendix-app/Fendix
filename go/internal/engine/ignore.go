@@ -16,11 +16,27 @@ type IgnoreFile struct {
 	Ignore []IgnoreRule `yaml:"ignore"`
 }
 
-// IgnoreRule defines a single suppression rule. Exactly one of Fingerprint /
-// ID / Endpoint / Category selects findings (checked in that precedence).
-// Prefer Fingerprint: it is the run-stable content hash and, unlike ID
-// (positional, drifts) or Endpoint+line (drifts when code above moves), keeps
-// matching the same finding across scans.
+// IgnoreRule defines a single suppression rule.
+//
+// Rules are applied to security OCCURRENCES before they are grouped into
+// findings for presentation, so a rule suppresses exactly the occurrences it
+// matches and nothing that merely shares their group. One selector decides,
+// checked in this precedence:
+//
+//   - Fingerprint: the occurrence's fendix/v2 fingerprint (the `fingerprint`
+//     of a single-location finding, or an `occurrences[].fingerprint` of a
+//     grouped one). Exact, durable, occurrence-scoped. Preferred.
+//   - ID: the positional SEC-NNN ID of the finding the occurrence is
+//     presented in. GROUP-scoped and positional: it suppresses every
+//     occurrence of that group, including ones added later, and it can name a
+//     different finding after any change to the scan. Not for durable
+//     suppression.
+//   - Endpoint, optionally narrowed by Category: the occurrence's own path,
+//     matched as described at endpointMatchesPattern / globMatch.
+//   - Category alone: every occurrence in that category.
+//
+// When Fingerprint or ID is set, Endpoint and Category on the same rule are
+// ignored (a warning is logged); write a separate rule instead.
 type IgnoreRule struct {
 	Fingerprint string `yaml:"fingerprint,omitempty"`
 	ID          string `yaml:"id,omitempty"`
@@ -47,6 +63,10 @@ func ParseIgnoreFile(path string) (*IgnoreFile, error) {
 
 // ApplyIgnoreRules filters out findings that match any ignore rule.
 // Expired rules (past their "until" date) are not applied.
+//
+// The orchestrator calls this with ungrouped occurrences (each carrying its own
+// fingerprint and endpoint, and the positional ID of its presentation group),
+// which is what makes every selector except `id` occurrence-scoped.
 func ApplyIgnoreRules(findings []models.Finding, rules []IgnoreRule) []models.Finding {
 	if len(rules) == 0 {
 		return findings
@@ -55,6 +75,10 @@ func ApplyIgnoreRules(findings []models.Finding, rules []IgnoreRule) []models.Fi
 	now := time.Now()
 	var activeRules []IgnoreRule
 	for _, r := range rules {
+		if (r.Fingerprint != "" || r.ID != "") && (r.Endpoint != "" || r.Category != "") {
+			slog.Warn("ignore rule combines fingerprint/id with endpoint/category; only the fingerprint/id selector is used",
+				"fingerprint", r.Fingerprint, "id", r.ID, "endpoint", r.Endpoint, "category", r.Category)
+		}
 		if r.Until != "" {
 			expiry, err := time.Parse("2006-01-02", r.Until)
 			if err != nil {
@@ -72,7 +96,7 @@ func ApplyIgnoreRules(findings []models.Finding, rules []IgnoreRule) []models.Fi
 	var result []models.Finding
 	for _, f := range findings {
 		if matchesIgnoreRule(f, activeRules) {
-			slog.Info("suppressed finding", "id", f.ID, "title", f.Title, "rule_matched", true)
+			slog.Info("suppressed finding", "id", f.ID, "title", f.Title, "endpoint", f.Endpoint, "fingerprint", f.Fingerprint, "rule_matched", true)
 			continue
 		}
 		result = append(result, f)
@@ -137,7 +161,15 @@ func matchesSingleRule(f models.Finding, r IgnoreRule) bool {
 }
 
 // endpointMatchesPattern checks if an endpoint matches an ignore pattern.
-// Supports: exact match, "METHOD /path" format, and glob patterns with *.
+//
+// Both sides are compared case-insensitively. The endpoint is reduced to its
+// path first (normalizeEndpoint): a source location "pkg/db.py:12" becomes
+// "pkg/db.py" (the line is dropped), a URL "https://host/api/x?q=1" becomes
+// "/api/x", and a leading HTTP method is dropped. A pattern of the form
+// "METHOD /path" is compared on its path only — the method is NOT part of the
+// match. A pattern without wildcards must equal the path (or, as a special
+// case, the raw endpoint, so "pkg/db.py:12" still pins one line). A pattern
+// with wildcards is matched by globMatch.
 func endpointMatchesPattern(endpoint, pattern string) bool {
 	endpoint = strings.ToLower(strings.TrimSpace(endpoint))
 	pattern = strings.ToLower(strings.TrimSpace(pattern))
@@ -148,7 +180,7 @@ func endpointMatchesPattern(endpoint, pattern string) bool {
 	}
 
 	// Extract path from full URL for comparison
-	endpointPath := normalizeEndpoint(endpoint)
+	endpointPath := slashPath(normalizeEndpoint(endpoint))
 
 	// Pattern may be "METHOD /path" or just "/path"
 	patternParts := strings.SplitN(pattern, " ", 2)
@@ -156,6 +188,7 @@ func endpointMatchesPattern(endpoint, pattern string) bool {
 	if len(patternParts) == 2 {
 		patternPath = patternParts[1]
 	}
+	patternPath = slashPath(patternPath)
 
 	// Glob matching with * wildcard
 	if strings.Contains(patternPath, "*") {
@@ -163,49 +196,93 @@ func endpointMatchesPattern(endpoint, pattern string) bool {
 	}
 
 	// Exact path match
-	return endpointPath == strings.ToLower(strings.TrimRight(patternPath, "/"))
+	return endpointPath == strings.TrimRight(patternPath, "/")
 }
 
-// globMatch performs a simple glob pattern match where * matches any sequence of characters
-// within a single path segment, and ** is not supported (use * at end for prefix matching).
-func globMatch(s, pattern string) bool {
-	// Handle trailing /* as prefix match
-	if strings.HasSuffix(pattern, "/*") {
-		prefix := strings.TrimSuffix(pattern, "/*")
-		return strings.HasPrefix(s, prefix+"/") || s == prefix
-	}
+// slashPath makes a path pattern or path separator-agnostic, so a rule written
+// with Windows separators ("pkg\\tests\\**") matches the forward-slash paths
+// every scanner emits.
+func slashPath(p string) string { return strings.ReplaceAll(p, `\`, "/") }
 
-	// Handle trailing * as prefix match
-	if strings.HasSuffix(pattern, "*") && !strings.Contains(pattern[:len(pattern)-1], "*") {
+// globMatch reports whether path s matches pattern. Both are "/"-separated.
+//
+// Semantics (conventional path globbing, as in gitignore and doublestar):
+//
+//   - "**" as a whole path segment matches zero or more segments, so
+//     "**/tests/**" matches "tests/helpers.py", "pkg/tests/helpers.py" and
+//     "a/b/tests/c/d.py", and "pkg/**" matches "pkg" and everything below it.
+//   - "*" matches any run of characters WITHIN one segment; it never crosses
+//     "/". "src/*.py" matches "src/app.py" but not "src/sub/app.py".
+//   - Every other character, "?" included, is literal. The match is anchored
+//     at both ends.
+//   - A wildcard pattern with no "/" matches a path segment at ANY depth, and
+//     everything below a matching directory (the .gitignore convention):
+//     "*.py" matches "a/b/c.py", and "*fixtures*" matches "pkg/fixtures/x.py".
+//
+// Two legacy forms keep their historical prefix meaning, because existing
+// `.fendix-ignore` files depend on them. They apply only when the pattern's
+// sole wildcard is one trailing "*":
+//
+//   - "dir/*" matches "dir" and everything below it, at any depth.
+//   - "prefix*" matches any path that starts with "prefix".
+func globMatch(s, pattern string) bool {
+	if strings.Count(pattern, "*") == 1 && strings.HasSuffix(pattern, "*") {
 		prefix := strings.TrimSuffix(pattern, "*")
+		if strings.HasSuffix(prefix, "/") {
+			return s == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(s, prefix)
+		}
 		return strings.HasPrefix(s, prefix)
 	}
-
-	// Simple case: no wildcards
-	if !strings.Contains(pattern, "*") {
-		return s == pattern
+	if !strings.Contains(pattern, "/") {
+		return matchSegments([]string{"**", pattern, "**"}, strings.Split(s, "/"))
 	}
+	return matchSegments(strings.Split(pattern, "/"), strings.Split(s, "/"))
+}
 
-	// General glob: split on * and match segments
+// matchSegments matches pattern segments against path segments, with "**"
+// standing for zero or more whole segments.
+func matchSegments(p, s []string) bool {
+	for len(p) > 0 {
+		if p[0] == "**" {
+			for len(p) > 1 && p[1] == "**" {
+				p = p[1:]
+			}
+			if len(p) == 1 {
+				return true
+			}
+			for i := 0; i <= len(s); i++ {
+				if matchSegments(p[1:], s[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(s) == 0 || !matchSegment(p[0], s[0]) {
+			return false
+		}
+		p, s = p[1:], s[1:]
+	}
+	return len(s) == 0
+}
+
+// matchSegment matches one segment, where each "*" (or run of them) matches
+// any run of characters and everything else is literal.
+func matchSegment(pattern, s string) bool {
 	parts := strings.Split(pattern, "*")
-	pos := 0
-	for i, part := range parts {
-		if part == "" {
-			continue
-		}
-		idx := strings.Index(s[pos:], part)
-		if idx == -1 {
+	if len(parts) == 1 {
+		return pattern == s
+	}
+	if !strings.HasPrefix(s, parts[0]) {
+		return false
+	}
+	s = s[len(parts[0]):]
+	last := parts[len(parts)-1]
+	for _, part := range parts[1 : len(parts)-1] {
+		idx := strings.Index(s, part)
+		if idx < 0 {
 			return false
 		}
-		if i == 0 && idx != 0 {
-			// First segment must match at start
-			return false
-		}
-		pos += idx + len(part)
+		s = s[idx+len(part):]
 	}
-	// If pattern ends with *, remaining string is ok
-	if strings.HasSuffix(pattern, "*") {
-		return true
-	}
-	return pos == len(s)
+	return len(s) >= len(last) && strings.HasSuffix(s, last)
 }

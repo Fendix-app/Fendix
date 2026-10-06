@@ -503,9 +503,18 @@ paths:
 	if err != nil {
 		t.Fatalf("reading baseline: %v", err)
 	}
-	var baseline []models.Finding
-	if err := json.Unmarshal(baselineData, &baseline); err != nil {
+	var baselineDoc reporters.BaselineDocument
+	if err := json.Unmarshal(baselineData, &baselineDoc); err != nil {
 		t.Fatalf("parsing baseline: %v", err)
+	}
+	baseline := baselineDoc.Findings
+	if baselineDoc.BaselineVersion != reporters.BaselineFormatVersion {
+		t.Fatalf("baseline_version = %d, want %d", baselineDoc.BaselineVersion, reporters.BaselineFormatVersion)
+	}
+	for _, f := range baseline {
+		if len(f.Occurrences) == 0 {
+			t.Errorf("saved baseline finding %s lists no occurrences", f.ID)
+		}
 	}
 	if len(baseline) == 0 {
 		t.Fatal("baseline file contained no findings")

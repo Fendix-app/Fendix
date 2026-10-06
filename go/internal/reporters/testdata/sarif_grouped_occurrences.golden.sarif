@@ -1,0 +1,126 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Fendix",
+          "version": "golden",
+          "informationUri": "https://github.com/Fendix-app/Fendix",
+          "rules": [
+            {
+              "id": "fendix.secrets.secrets-hardcoded-password",
+              "name": "Hardcoded password",
+              "shortDescription": {
+                "text": "Hardcoded password"
+              },
+              "help": {
+                "text": "Move the credential to a secret store."
+              },
+              "helpUri": "https://cwe.mitre.org/data/definitions/798.html",
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "category": "secrets",
+                "tags": [
+                  "CWE-798"
+                ],
+                "confidence": "HIGH",
+                "security-severity": "8.0",
+                "severity_model": "intrinsic"
+              }
+            }
+          ]
+        }
+      },
+      "automationDetails": {
+        "id": "fendix/scan/whitebox"
+      },
+      "results": [
+        {
+          "ruleId": "fendix.secrets.secrets-hardcoded-password",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "Hardcoded password at pkg/tests/helpers.py:2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pkg/tests/helpers.py"
+                },
+                "region": {
+                  "startLine": 2,
+                  "snippet": {
+                    "text": "il=\"t@example.com\", password=\"[REDACTED len=16 sha256:fedaa870...]\")"
+                  }
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fendix/v2": "a2718025fd74aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "rank": 80,
+          "properties": {
+            "status": "BLOCK",
+            "confidence_score": 90,
+            "confidence_band": "HIGH",
+            "intrinsic_severity": "HIGH",
+            "effective_risk": "HIGH",
+            "evidence": "il=\"t@example.com\", password=\"[REDACTED len=16 sha256:fedaa870...]\")",
+            "finding_id": "SEC-001",
+            "occurrence_count": 2,
+            "decision": {
+              "status": "BLOCK"
+            }
+          }
+        },
+        {
+          "ruleId": "fendix.secrets.secrets-hardcoded-password",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "Hardcoded password at pkg/zapp/db.py:2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pkg/zapp/db.py"
+                },
+                "region": {
+                  "startLine": 2
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "fendix/v2": "a2c381fcb888bbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "rank": 80,
+          "properties": {
+            "status": "BLOCK",
+            "confidence_score": 90,
+            "confidence_band": "HIGH",
+            "intrinsic_severity": "HIGH",
+            "effective_risk": "HIGH",
+            "finding_id": "SEC-001",
+            "occurrence_count": 2,
+            "decision": {
+              "status": "BLOCK"
+            }
+          }
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ]
+    }
+  ]
+}

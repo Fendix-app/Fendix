@@ -43,17 +43,21 @@ type Evidence struct {
 	Category          string
 	Endpoint          string
 	AffectedEndpoints []string
-	Evidence          string // the human-readable snippet (== models.Finding.Evidence)
-	Fix               string
-	References        []string
-	Confidence        models.Confidence
-	Line              *string
-	TaintChain        []models.TaintLink
-	Reachable         bool
-	SourceTier        models.SourceTier
-	Route             *models.Route
-	RouteConfirmed    bool
-	ProvenPath        bool
+	// Occurrences mirrors models.Finding.Occurrences: the per-occurrence
+	// identities of a grouped finding, carried so a Finding→Evidence→Finding
+	// round trip cannot drop them.
+	Occurrences    []models.Occurrence
+	Evidence       string // the human-readable snippet (== models.Finding.Evidence)
+	Fix            string
+	References     []string
+	Confidence     models.Confidence
+	Line           *string
+	TaintChain     []models.TaintLink
+	Reachable      bool
+	SourceTier     models.SourceTier
+	Route          *models.Route
+	RouteConfirmed bool
+	ProvenPath     bool
 	// v0.24 decision-report fields (render block; project 1:1 onto Finding).
 	Status            string
 	ConfidenceScore   int
@@ -295,6 +299,7 @@ func FromFinding(f models.Finding) Evidence {
 		Category:            f.Category,
 		Endpoint:            f.Endpoint,
 		AffectedEndpoints:   f.AffectedEndpoints,
+		Occurrences:         f.Occurrences,
 		Evidence:            f.Evidence,
 		Fix:                 f.Fix,
 		References:          f.References,
@@ -334,6 +339,7 @@ func (e Evidence) ToFinding() models.Finding {
 		Category:            e.Category,
 		Endpoint:            e.Endpoint,
 		AffectedEndpoints:   e.AffectedEndpoints,
+		Occurrences:         e.Occurrences,
 		Evidence:            e.Evidence,
 		Fix:                 e.Fix,
 		References:          e.References,

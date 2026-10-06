@@ -160,6 +160,16 @@
         "file":       { "type": "string" }
       }
     },
+    "Occurrence": {
+      "type": "object",
+      "description": "One security occurrence: where it is, and its own fendix/v2 fingerprint, computed from that occurrence alone before any grouping.",
+      "required": ["endpoint", "fingerprint"],
+      "additionalProperties": false,
+      "properties": {
+        "endpoint":    { "type": "string" },
+        "fingerprint": { "type": "string" }
+      }
+    },
     "TaintLink": {
       "type": "object",
       "required": ["file", "line", "expr"],
@@ -182,6 +192,7 @@
         "category":           { "type": "string", "minLength": 1 },
         "endpoint":           { "type": "string" },
         "affected_endpoints": { "type": "array", "items": { "type": "string" } },
+        "occurrences":        { "type": "array", "items": { "$ref": "#/definitions/Occurrence" }, "description": "Every distinct security occurrence this finding presents, one per (endpoint, occurrence fingerprint). Identity, .fendix-ignore matching, baseline matching and lifecycle tracking act on occurrences; the finding is a presentation group. The finding's own fingerprint is its primary occurrence's and always appears here. Absent on reports from engines that predate the field." },
         "evidence":           { "type": "string" },
         "fix":                { "type": "string" },
         "references":         { "type": "array", "items": { "type": "string" } },

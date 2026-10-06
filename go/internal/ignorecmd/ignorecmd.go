@@ -55,7 +55,16 @@ func NewCmd() *cobra.Command {
 			"  validate  Parse the file and report errors\n" +
 			"  prune     Remove expired rules and rewrite the file\n\n" +
 			"All subcommands default to .fendix-ignore in the current directory;\n" +
-			"pass --file <path> to target a different file.",
+			"pass --file <path> to target a different file.\n\n" +
+			"Rule semantics (applied per occurrence, before findings are grouped):\n" +
+			"  fingerprint  one occurrence identity (preferred; durable). For a grouped\n" +
+			"               finding use an occurrences[].fingerprint from the report.\n" +
+			"  id           positional SEC-NNN; suppresses the whole presented group,\n" +
+			"               including occurrences added later. Short-lived triage only.\n" +
+			"  endpoint     the occurrence's own path; \"**\" = zero or more directories,\n" +
+			"               \"*\" = within one segment. Optional category must also match.\n" +
+			"  category     every occurrence in the category.\n" +
+			"One selector decides a rule, in that order. See docs/suppression-semantics.md.",
 	}
 	cmd.AddCommand(newListCmd())
 	cmd.AddCommand(newValidateCmd())

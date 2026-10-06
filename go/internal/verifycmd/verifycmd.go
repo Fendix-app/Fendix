@@ -93,6 +93,9 @@ type Result struct {
 	// Reason carries a human-readable explanation, especially for
 	// unknown / not-found-in-baseline outcomes.
 	Reason string `json:"reason,omitempty"`
+	// Occurrences holds one verdict per occurrence when the finding is a
+	// group of several; Status is their fold (see verifyEach).
+	Occurrences []OccurrenceResult `json:"occurrences,omitempty"`
 	// VerifiedAt is when the re-test ran (UTC ISO-8601).
 	VerifiedAt string `json:"verified_at"`
 	// Latency is how long the re-test took. Useful for diagnosing
@@ -141,6 +144,25 @@ func Run(ctx context.Context, findingID string, opts Options) (*Result, error) {
 	}
 	out.Original = original
 
+	// A grouped finding presents several security occurrences. Re-testing
+	// only its primary location and reporting the result for the whole
+	// group would declare a still-vulnerable occurrence "resolved" — and that
+	// verdict is evidence a tracked issue can be closed on. So each
+	// occurrence is re-tested on its own, and the group is resolved only when
+	// every occurrence is.
+	if units := verifyUnits(original); len(units) > 1 {
+		verifyEach(ctx, units, opts, out)
+	} else {
+		verifyOne(ctx, original, opts, out)
+	}
+
+	out.LatencyMs = time.Since(start).Milliseconds()
+	return out, nil
+}
+
+// verifyOne dispatches one finding (or one occurrence of a grouped finding)
+// to its verifier, writing Status and Reason into out.
+func verifyOne(ctx context.Context, original *models.Finding, opts Options, out *Result) {
 	// Gate by Source first. A correlated finding fuses a blackbox URL match
 	// with a whitebox file/taint match; a single-shape verifier would answer
 	// for ONE side only. C4 gives correlated findings a real two-sided verdict
@@ -148,8 +170,7 @@ func Run(ctx context.Context, findingID string, opts Options) (*Result, error) {
 	// broken the moment EITHER half stops reproducing.
 	if original.Source == models.SourceCorrelated {
 		verifyCorrelated(ctx, original, opts, out)
-		out.LatencyMs = time.Since(start).Milliseconds()
-		return out, nil
+		return
 	}
 
 	// Dispatch by finding shape. Active-probe findings (blackbox injection/
@@ -175,8 +196,103 @@ func Run(ctx context.Context, findingID string, opts Options) (*Result, error) {
 			original.Source, original.Category)
 	}
 
-	out.LatencyMs = time.Since(start).Milliseconds()
-	return out, nil
+}
+
+// OccurrenceResult is the verdict for one occurrence of a grouped finding.
+type OccurrenceResult struct {
+	Endpoint    string `json:"endpoint"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Status      Status `json:"status"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+// verifyUnits splits a grouped finding into one finding per occurrence (its
+// listed occurrences, or for a report that predates them, its distinct
+// affected endpoints). A finding with one location is returned as itself.
+func verifyUnits(f *models.Finding) []*models.Finding {
+	type loc struct{ endpoint, fingerprint string }
+	var locs []loc
+	seen := map[loc]bool{}
+	for _, o := range f.Occurrences {
+		l := loc{o.Endpoint, o.Fingerprint}
+		if o.Endpoint != "" && !seen[l] {
+			seen[l] = true
+			locs = append(locs, l)
+		}
+	}
+	// A correlated finding's affected endpoints are the two halves of ONE
+	// correlated occurrence (the live URL and the source file), not several
+	// occurrences; verifyCorrelated needs them together.
+	if len(locs) == 0 && f.Source != models.SourceCorrelated {
+		for _, ep := range f.AffectedEndpoints {
+			l := loc{endpoint: ep}
+			if ep != "" && !seen[l] {
+				seen[l] = true
+				locs = append(locs, l)
+			}
+		}
+	}
+	if len(locs) <= 1 {
+		return []*models.Finding{f}
+	}
+	units := make([]*models.Finding, 0, len(locs))
+	for _, l := range locs {
+		u := *f
+		u.Endpoint = l.endpoint
+		u.AffectedEndpoints = nil
+		u.Occurrences = nil
+		if l.fingerprint != "" {
+			u.Fingerprint = l.fingerprint
+			u.Occurrences = []models.Occurrence{{Endpoint: l.endpoint, Fingerprint: l.fingerprint}}
+		}
+		if l.endpoint != f.Endpoint {
+			// The evidence, line and proof were captured at the primary
+			// location; another occurrence is located by its own endpoint.
+			u.Evidence = ""
+			u.TaintChain = nil
+			u.Route = nil
+			u.Line = nil
+			if !strings.Contains(l.endpoint, " ") && !strings.HasPrefix(l.endpoint, "/") && !strings.Contains(l.endpoint, "://") {
+				ep := l.endpoint
+				u.Line = &ep
+			}
+		}
+		units = append(units, &u)
+	}
+	return units
+}
+
+// verifyEach re-tests every occurrence and folds the verdicts: any
+// still-present occurrence keeps the finding present; it is resolved only
+// when every occurrence is resolved; anything else is unknown.
+func verifyEach(ctx context.Context, units []*models.Finding, opts Options, out *Result) {
+	var present, unknown []string
+	for _, u := range units {
+		r := &Result{}
+		verifyOne(ctx, u, opts, r)
+		out.Occurrences = append(out.Occurrences, OccurrenceResult{
+			Endpoint: u.Endpoint, Fingerprint: u.Fingerprint, Status: r.Status, Reason: r.Reason,
+		})
+		switch r.Status {
+		case StatusStillPresent:
+			present = append(present, u.Endpoint)
+		case StatusResolved:
+		default:
+			unknown = append(unknown, u.Endpoint)
+		}
+	}
+	switch {
+	case len(present) > 0:
+		out.Status = StatusStillPresent
+		out.Reason = fmt.Sprintf("%d of %d occurrences still present: %s", len(present), len(units), strings.Join(present, ", "))
+	case len(unknown) > 0:
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf("%d of %d occurrences could not be re-tested (%s); the finding is not resolved until every occurrence is",
+			len(unknown), len(units), strings.Join(unknown, ", "))
+	default:
+		out.Status = StatusResolved
+		out.Reason = fmt.Sprintf("all %d occurrences re-tested and resolved", len(units))
+	}
 }
 
 // ─── baseline / dispatch helpers ────────────────────────────────────
@@ -207,6 +323,18 @@ func loadBaseline(path string) (*reporters.JSONReport, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	// A versioned baseline (format v2, what `fendix scan --save-baseline`
+	// writes now) is an object with `baseline_version` and no report
+	// metadata, so it is recognised before ParseJSONReport, which would
+	// reject it for lacking metadata.version / metadata.mode.
+	if reporters.IsBaselineDocument(data) {
+		doc, err := reporters.ParseBaselineDocument(data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", path, err)
+		}
+		return &reporters.JSONReport{Total: len(doc.Findings), Findings: doc.Findings}, nil
 	}
 
 	switch firstJSONToken(data) {

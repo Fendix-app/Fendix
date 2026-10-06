@@ -37,6 +37,12 @@
       "fix": "",
       "id": "SEC-001",
       "line": "57",
+      "occurrences": [
+        {
+          "endpoint": "app/auth.py:57",
+          "fingerprint": "6f60ddce8b794132c0d7335da0dc64fa019a733a"
+        }
+      ],
       "references": [
         "CWE-312",
         "https://codeql.github.com/codeql-query-help/python/py-clear-text-logging-sensitive-data/",
@@ -86,6 +92,12 @@
       "fix": "Use parameterized queries or an ORM instead of string concatenation.",
       "id": "SEC-002",
       "line": "102",
+      "occurrences": [
+        {
+          "endpoint": "app/views.py:102",
+          "fingerprint": "c10aaed2762a35fce3434da254de8321dabf19b4"
+        }
+      ],
       "references": [
         "CWE-89",
         "https://codeql.github.com/codeql-query-help/python/py-sql-injection/",

@@ -236,6 +236,12 @@ type SARIFResultProperties struct {
 	// being lost at the boundary — a consumer can see that two engines
 	// agreed, not merely that fendix scored the finding highly.
 	CorroboratingTools []string `json:"corroborating_tools,omitempty"`
+	// FindingID / OccurrenceCount are set only on a result expanded from a
+	// grouped finding: the Fendix finding (SEC-NNN) this occurrence is
+	// presented in, and how many occurrences that finding has. Presentation
+	// only — a result's identity is its own partialFingerprints.
+	FindingID       string `json:"finding_id,omitempty"`
+	OccurrenceCount int    `json:"occurrence_count,omitempty"`
 	// Decision is the machine-readable justification for Status. Pointer +
 	// omitempty so a report produced without the decision pass stays
 	// byte-identical to one produced before this field existed.
@@ -1069,9 +1075,14 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 		rules = append(rules, rule)
 	}
 
-	// Build results — each finding references its check's shared rule, not a per-instance one.
-	results := make([]SARIFResult, 0, len(findings))
-	for _, f := range findings {
+	// Build results — each finding references its check's shared rule, not a
+	// per-instance one. A grouped finding becomes one result PER OCCURRENCE so
+	// that a result's identity (partialFingerprints) is never shared by two
+	// security occurrences — see sarif_occurrences.go.
+	units := sarifUnits(findings)
+	results := make([]SARIFResult, 0, len(units))
+	for _, unit := range units {
+		f := unit.f
 		key := ruleKeyFor(f)
 		result := SARIFResult{
 			RuleID:    key,
@@ -1216,8 +1227,22 @@ func RenderSARIF(w io.Writer, findings []models.Finding, meta ScanMetadata) erro
 		// NeutralizeText is not decorative here: under `fendix report --input`
 		// this value comes from an operator-supplied JSON file, i.e. it is
 		// untrusted like every other field in this loop.
-		if fp := strings.TrimSpace(NeutralizeText(f.Fingerprint)); fp != "" {
+		//
+		// A legacy group (several endpoints, no per-occurrence identities) gets
+		// none: its fingerprint names one occurrence, and as the identity of a
+		// result that stands for all of them it would carry an alert's
+		// dismissal from one occurrence to the others.
+		if fp := strings.TrimSpace(NeutralizeText(f.Fingerprint)); fp != "" && !unit.noIdentity {
 			result.PartialFingerprints = map[string]string{fingerprintKey: fp}
+		}
+		// An expanded occurrence names the finding it is presented in, so a
+		// consumer can regroup without that grouping touching identity.
+		if unit.groupSize > 1 {
+			if result.Properties == nil {
+				result.Properties = &SARIFResultProperties{}
+			}
+			result.Properties.FindingID = NeutralizeText(unit.groupID)
+			result.Properties.OccurrenceCount = unit.groupSize
 		}
 
 		results = append(results, result)

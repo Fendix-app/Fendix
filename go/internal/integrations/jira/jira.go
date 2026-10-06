@@ -143,16 +143,27 @@ func (c *Client) SyncFindings(ctx context.Context, findings []models.Finding) (S
 			out.Errors = append(out.Errors, SyncError{FindingID: f.ID, Phase: "validate", Err: ErrUnsafeFindingID})
 			continue
 		}
-		key, found, err := c.findExisting(ctx, f.ID)
+		occ := occurrencesOf(f)
+		if !allLabelSafe(occ) {
+			out.Errors = append(out.Errors, SyncError{FindingID: f.ID, Phase: "validate", Err: ErrUnsafeFindingID})
+			continue
+		}
+		keys, tracked, err := c.findTracked(ctx, occ)
 		if err != nil {
 			out.Errors = append(out.Errors, SyncError{FindingID: f.ID, Phase: "search", Err: err})
 			continue
 		}
-		if found {
-			out.Unchanged = append(out.Unchanged, key)
+		var untracked []models.Occurrence
+		for _, o := range occ {
+			if !tracked[o.Fingerprint] {
+				untracked = append(untracked, o)
+			}
+		}
+		if len(untracked) == 0 {
+			out.Unchanged = append(out.Unchanged, keys...)
 			continue
 		}
-		key, err = c.createIssue(ctx, f)
+		key, err := c.createIssueFor(ctx, f, untracked, len(untracked) < len(occ))
 		if err != nil {
 			out.Errors = append(out.Errors, SyncError{FindingID: f.ID, Phase: "create", Err: err})
 			continue
@@ -160,6 +171,96 @@ func (c *Client) SyncFindings(ctx context.Context, findings []models.Finding) (S
 		out.Created = append(out.Created, key)
 	}
 	return out, nil
+}
+
+// Idempotency is per security OCCURRENCE, keyed on its fendix/v2
+// fingerprint (label "fendix-fp:<fingerprint>"), never on the finding.
+//
+// A finding is a presentation group, and its positional ID (SEC-NNN) is
+// reassigned every scan. Keying on "fendix-id:SEC-NNN" meant an unrelated
+// vulnerability that happened to be numbered SEC-003 in a later scan was
+// reported "Unchanged" and never ticketed, and a new occurrence that joined a
+// ticketed group (a production credential grouped with a ticketed test
+// fixture) was silently covered by the existing ticket. Now an issue lists
+// the occurrences it covers, a finding is unchanged only when EVERY one of
+// its occurrences is already on some issue, and the occurrences that are not
+// get an issue of their own.
+const fingerprintLabelPrefix = "fendix-fp:"
+
+// occurrencesOf returns the identities a finding presents: its occurrence
+// list, or itself (its stamped or computed fingerprint) when it has none.
+func occurrencesOf(f models.Finding) []models.Occurrence {
+	seen := map[string]bool{}
+	var out []models.Occurrence
+	for _, o := range f.Occurrences {
+		fp := strings.ToLower(strings.TrimSpace(o.Fingerprint))
+		if fp != "" && !seen[fp] {
+			seen[fp] = true
+			out = append(out, models.Occurrence{Endpoint: o.Endpoint, Fingerprint: fp})
+		}
+	}
+	if len(out) == 0 {
+		fp := f.Fingerprint
+		if fp == "" {
+			fp = models.Fingerprint(f)
+		}
+		out = append(out, models.Occurrence{Endpoint: f.Endpoint, Fingerprint: strings.ToLower(fp)})
+	}
+	return out
+}
+
+func allLabelSafe(occ []models.Occurrence) bool {
+	for _, o := range occ {
+		if !labelSafeID.MatchString(o.Fingerprint) {
+			return false
+		}
+	}
+	return true
+}
+
+// findTracked returns the keys of issues that already carry any of these
+// occurrences' labels, and which occurrence fingerprints they cover.
+func (c *Client) findTracked(ctx context.Context, occ []models.Occurrence) ([]string, map[string]bool, error) {
+	tracked := map[string]bool{}
+	var keys []string
+	const chunk = 50
+	for start := 0; start < len(occ); start += chunk {
+		end := min(start+chunk, len(occ))
+		quoted := make([]string, 0, end-start)
+		for _, o := range occ[start:end] {
+			quoted = append(quoted, quoteJQL(fingerprintLabelPrefix+o.Fingerprint))
+		}
+		issues, err := c.search(ctx, fmt.Sprintf(`project = %s AND labels in (%s)`,
+			quoteJQL(c.cfg.ProjectKey), strings.Join(quoted, ", ")))
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, is := range issues {
+			keys = appendUnique(keys, is.Key)
+			for _, l := range is.Fields.Labels {
+				if fp, ok := strings.CutPrefix(l, fingerprintLabelPrefix); ok {
+					tracked[strings.ToLower(fp)] = true
+				}
+			}
+		}
+	}
+	return keys, tracked, nil
+}
+
+func appendUnique(xs []string, x string) []string {
+	for _, y := range xs {
+		if y == x {
+			return xs
+		}
+	}
+	return append(xs, x)
+}
+
+type jiraIssue struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Labels []string `json:"labels"`
+	} `json:"fields"`
 }
 
 // severityClears reports whether a finding's severity is at-or-above
@@ -176,57 +277,39 @@ func (c *Client) severityClears(s models.Severity) bool {
 // the GH App handler).
 var labelSafeID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// findExisting queries Jira for an issue with the fendix-id label
-// for the given finding. Returns (issueKey, found, error). "Not
-// found" is `("", false, nil)` — a normal idempotency outcome, not
-// an error.
+// search runs one JQL query and returns the matching issues with their
+// labels.
 //
 // Uses the POST /rest/api/3/search/jql endpoint introduced May 2025
 // (the GET /rest/api/3/search endpoint was deprecated and removed
 // for new instances at that time).
-func (c *Client) findExisting(ctx context.Context, findingID string) (string, bool, error) {
-	// Defensive: SyncFindings already enforces this, but a future
-	// caller might invoke findExisting directly. Fail closed.
-	if !labelSafeID.MatchString(findingID) {
-		return "", false, ErrUnsafeFindingID
-	}
-	// JQL: project = "<KEY>" AND labels = "fendix-id:<id>"
-	// Project keys are restricted by Jira to [A-Z][A-Z0-9_]+; we still
-	// escape defensively in case a customer's key violates the rule.
-	jql := fmt.Sprintf(`project = %s AND labels = %s`,
-		quoteJQL(c.cfg.ProjectKey), quoteJQL("fendix-id:"+findingID))
+func (c *Client) search(ctx context.Context, jql string) ([]jiraIssue, error) {
 	payload, err := json.Marshal(map[string]any{
 		"jql":        jql,
-		"fields":     []string{"key"},
-		"maxResults": 1,
+		"fields":     []string{"key", "labels"},
+		"maxResults": 100,
 	})
 	if err != nil {
-		return "", false, fmt.Errorf("marshal search payload: %w", err)
+		return nil, fmt.Errorf("marshal search payload: %w", err)
 	}
 	endpoint := c.cfg.BaseURL + "/rest/api/3/search/jql"
 	resp, err := c.do(ctx, http.MethodPost, endpoint, payload)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		excerpt, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", false, fmt.Errorf("search %s: status %d (body: %s)",
+		return nil, fmt.Errorf("search %s: status %d (body: %s)",
 			redactBasicAuth(endpoint), resp.StatusCode, strings.TrimSpace(string(excerpt)))
 	}
-
 	var body struct {
-		Issues []struct {
-			Key string `json:"key"`
-		} `json:"issues"`
+		Issues []jiraIssue `json:"issues"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", false, fmt.Errorf("decode search response: %w", err)
+		return nil, fmt.Errorf("decode search response: %w", err)
 	}
-	if len(body.Issues) == 0 {
-		return "", false, nil
-	}
-	return body.Issues[0].Key, true, nil
+	return body.Issues, nil
 }
 
 // quoteJQL renders a Go string as a JQL-quoted literal. Per
@@ -256,16 +339,31 @@ func quoteJQL(s string) string {
 // labels and silently break idempotency for every subsequent sync.
 // Fail closed before that can happen.
 func (c *Client) createIssue(ctx context.Context, f models.Finding) (string, error) {
-	if !labelSafeID.MatchString(f.ID) {
+	return c.createIssueFor(ctx, f, occurrencesOf(f), false)
+}
+
+// createIssueFor files one issue covering exactly the given occurrences of f.
+// joined marks occurrences that joined a finding whose other occurrences are
+// already ticketed.
+func (c *Client) createIssueFor(ctx context.Context, f models.Finding, occ []models.Occurrence, joined bool) (string, error) {
+	if !labelSafeID.MatchString(f.ID) || !allLabelSafe(occ) {
 		return "", ErrUnsafeFindingID
+	}
+	labels := []string{"fendix", "fendix-sev:" + string(f.Severity)}
+	for _, o := range occ {
+		labels = append(labels, fingerprintLabelPrefix+o.Fingerprint)
+	}
+	summary := fmt.Sprintf("[%s] %s", f.Severity, f.Title)
+	if joined {
+		summary += " (new occurrence)"
 	}
 	body := map[string]any{
 		"fields": map[string]any{
 			"project":     map[string]string{"key": c.cfg.ProjectKey},
-			"summary":     truncate(fmt.Sprintf("[%s] %s", f.Severity, f.Title), 240),
-			"description": jiraDescription(f),
+			"summary":     truncate(summary, 240),
+			"description": jiraDescriptionFor(f, occ),
 			"issuetype":   map[string]string{"name": c.cfg.IssueType},
-			"labels":      []string{"fendix", "fendix-id:" + f.ID, "fendix-sev:" + string(f.Severity)},
+			"labels":      labels,
 			"priority":    map[string]string{"name": severityToJiraPriority(f.Severity)},
 		},
 	}
@@ -337,6 +435,20 @@ func redactBasicAuth(u string) string {
 // (which doesn't), and customer-tier limits on description format.
 // The Jira API accepts plaintext as a `description: "string"` field.
 func jiraDescription(f models.Finding) string {
+	return jiraDescriptionFor(f, occurrencesOf(f))
+}
+
+// jiraDescriptionFor describes the issue for the given occurrences of f. The
+// finding's evidence was captured from its primary occurrence, so it is shown
+// only when that occurrence is one of them — an issue for other occurrences
+// never borrows it.
+func jiraDescriptionFor(f models.Finding, occ []models.Occurrence) string {
+	primary := false
+	for _, o := range occ {
+		if o.Endpoint == f.Endpoint {
+			primary = true
+		}
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "*Severity:* %s\n", f.Severity)
 	if f.Category != "" {
@@ -345,17 +457,27 @@ func jiraDescription(f models.Finding) string {
 	if f.Confidence != "" {
 		fmt.Fprintf(&b, "*Confidence:* %s\n", f.Confidence)
 	}
-	if f.Endpoint != "" {
-		fmt.Fprintf(&b, "*Endpoint:* %s\n", f.Endpoint)
+	if len(occ) == 1 && occ[0].Endpoint != "" {
+		fmt.Fprintf(&b, "*Endpoint:* %s\n", occ[0].Endpoint)
+	} else if len(occ) > 1 {
+		fmt.Fprintf(&b, "*Locations (%d):*\n", len(occ))
+		for _, o := range occ {
+			fmt.Fprintf(&b, "- %s\n", o.Endpoint)
+		}
 	}
-	fmt.Fprintf(&b, "\n*Evidence:*\n{noformat}\n%s\n{noformat}\n", f.Evidence)
+	if primary {
+		fmt.Fprintf(&b, "\n*Evidence:*\n{noformat}\n%s\n{noformat}\n", f.Evidence)
+	}
 	if f.Fix != "" {
 		fmt.Fprintf(&b, "\n*Fix:*\n%s\n", f.Fix)
 	}
 	if len(f.References) > 0 {
 		fmt.Fprintf(&b, "\n*References:* %s\n", strings.Join(f.References, ", "))
 	}
-	fmt.Fprintf(&b, "\n----\nFendix finding ID: `%s`\n", f.ID)
+	fmt.Fprintf(&b, "\n----\nFendix finding ID (this scan only): `%s`\n", f.ID)
+	for _, o := range occ {
+		fmt.Fprintf(&b, "Occurrence fingerprint: `%s`\n", o.Fingerprint)
+	}
 	return b.String()
 }
 

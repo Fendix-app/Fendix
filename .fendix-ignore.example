@@ -1,16 +1,21 @@
 # Fendix Suppression File
 # ========================
 # Place as .fendix-ignore in your project root, or pass via --ignore <path>.
-# Each rule suppresses findings that match ALL specified fields.
-# Omitted fields match everything (e.g. no endpoint = all endpoints).
+# Rules apply to each OCCURRENCE (one location) before occurrences are grouped
+# into findings: a rule suppresses exactly the occurrences it matches, never
+# the other occurrences that would have shared their finding.
+# Full semantics: docs/suppression-semantics.md
 
 ignore:
-  # ── Suppress one durable semantic finding ───────────────────
+  # ── Suppress one durable occurrence identity ────────────────
+  # For a grouped finding, copy the fingerprint of the occurrence you mean
+  # from its `occurrences` list.
   - fingerprint: a53e0be81c80617f5a6aa84cc8dd78954f78a7c2
     reason: "Accepted risk reviewed in JIRA-1234"
 
   # ── Suppress by finding ID ──────────────────────────────────
-  # SEC-NNN is positional across scans; use only for short-lived triage.
+  # SEC-NNN is positional across scans and suppresses the WHOLE presented
+  # group, including occurrences added later. Short-lived triage only.
   - id: SEC-014
     reason: "Rate limiting handled at API gateway level"
     until: 2026-12-01  # optional expiry — rule stops applying after this date
@@ -29,13 +34,28 @@ ignore:
     reason: "Security headers managed by reverse proxy (nginx)"
     until: 2026-06-30
 
-  # ── Suppress a known test fixture secret ────────────────────
-  - endpoint: "tests/fixtures/config.py:*"
+  # ── Suppress test fixture secrets ───────────────────────────
+  # "**/" matches zero or more directories, so this covers tests/ at the top
+  # level and at any depth. A production occurrence of the same rule is
+  # still reported.
+  - endpoint: "**/tests/**"
     category: secrets
     reason: "Test fixtures contain intentional sample secrets"
 
+  # ── Pin one file (the line number is ignored for path patterns) ──
+  - endpoint: "tests/fixtures/config.py"
+    category: secrets
+    reason: "Sample secrets in one fixture file"
+
 # Notes:
 # - "until" uses YYYY-MM-DD format. Expired rules are automatically skipped.
-# - "endpoint" supports glob patterns (e.g. /api/v1/*)
+# - "endpoint" globs: "**" = zero or more directories, "*" = within one path
+#   segment; a wildcard pattern with no "/" (e.g. "*_test.py") matches at any
+#   depth, like .gitignore. Legacy "dir/*" and "prefix*" still match
+#   everything below/after.
+#   The ":line" suffix of a code location is dropped before matching; a rule
+#   equal to the full "path:line" pins that one line.
 # - "reason" is optional to the engine; require it in review for auditability.
-# - Rules match ALL specified fields (AND logic, not OR).
+# - One selector decides a rule: fingerprint, else id, else endpoint (+ category,
+#   both must match), else category. Endpoint/category written next to a
+#   fingerprint or id are ignored (a warning is logged).
