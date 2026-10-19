@@ -7,4 +7,4 @@ packaging>=26.2
 jsonschema>=4.25.1,<5
 # Semgrep's MCP 1.16.x imports eval_type_backport, removed in Pydantic 2.14.
 # Keep that API available until the Semgrep/MCP dependency line is upgraded.
-pydantic<2.14
+pydantic<2.15
