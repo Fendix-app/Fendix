@@ -107,10 +107,10 @@ jobs:
           prepare = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(prepare)
           work = Path(tempfile.mkdtemp(prefix="fendix-lock-", dir=os.environ["RUNNER_TEMP"]))
-          # "v3.6.3" is the release this tree becomes; it only names the log line.
-          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.6.3", work)
+          # "v3.6.4" is the release this tree becomes; it only names the log line.
+          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.6.4", work)
           PY
-          grep -qF "Installing the locked dependencies of Fendix v3.6.3 (requirements.lock, --require-hashes)" prepare.log
+          grep -qF "Installing the locked dependencies of Fendix v3.6.4 (requirements.lock, --require-hashes)" prepare.log
       - name: Assert the venv holds exactly the locked versions
         run: |
           python3 - <<'PY'

@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.4] - 2026-10-24
+
+A security rebuild of v3.6.3. The scanner source is unchanged; what changes
+is the toolchain and one bundled certificate store:
+- release binaries, packages and the official image are built with Go 1.27.3
+  (was 1.27.1), and the image ships Go 1.27.3 for govulncheck;
+- the image's Python environment and the Action's hash-locked engine install
+  carry certifi 2026.10.23.
+
+Report schema, SARIF structure, fingerprints, finding identity, decision
+policy, exit codes and the Action's inputs and outputs are unchanged.
+
+### Security
+
+- **Go 1.27.3.** The `fendix` binary in every release artifact (standalone
+  binaries, `.deb`/`.rpm`, Homebrew and the official image) and the Go
+  toolchain the image ships move from Go 1.27.1 to Go 1.27.3, which fixes:
+  - GO-2026-6809 (CVE-2026-111943): `crypto/x509` now rejects the eMudhra
+    (emSign) intermediate CA certificates whose private keys were
+    compromised. Every TLS connection the engine makes is verified through
+    it, including connections to scan targets, to the vulnerability
+    databases, and, in the image, to the Go module proxy and the Go
+    vulnerability database govulncheck reads.
+  - GO-2026-6611 (CVE-2026-78669), fixed in Go 1.27.2: excessive CPU
+    consumption from repeated initial window changes in `net/http`.
+  - GO-2026-6609 (CVE-2026-78667): no limit on the size of parsed `Range`
+    headers in `net/http`.
+  - GO-2026-6607 (CVE-2026-97031): malformed ECH outer extension references
+    in `crypto/tls`.
+- **certifi 2026.10.23 (GHSA-6q48-6c7w-9gw2).** certifi before 2026.10.19
+  bundles the `emSign ECC Root CA - G3` root, under which eight eMudhra
+  intermediate CAs have compromised private keys. requests and httpx verify
+  TLS against this bundle. The official image's Python environment and
+  `python/requirements.lock`, which the composite Action installs with
+  `--require-hashes`, now carry 2026.10.23. `python/requirements.txt` gains a
+  `certifi>=2026.10.19` floor, because the Dockerfiles install it without the
+  lock.
+
+### Changed
+
+- **govulncheck in the official image evaluates the standard library at Go
+  1.27.3.** govulncheck reports standard-library advisories against the
+  toolchain that loads the module, which in the image is the bundled one. A
+  Go module scanned with the v3.6.3 image that reaches
+  `x509.Certificate.Verify` was reported as affected by GO-2026-6809; with
+  v3.6.4 it is not. Scans of Go repositories in the image can therefore
+  report fewer standard-library findings than v3.6.3 did. A standalone binary
+  uses the `go` command on the host's `PATH`, so its results do not change.
+
+### Upgrading
+
+- **Nothing to migrate.** No configuration, baseline or `.fendix-ignore`
+  change is needed, and finding identity is unchanged.
+- **A `GODEBUG=http2client=0` workaround can go.** If you set it to contain
+  CVE-2026-78669 on v3.6.3 or earlier, v3.6.4 no longer needs it: the binary
+  carries the fix.
+- **The GitHub Action is unchanged,** and `@v1` still points to the v3.6.2
+  release commit. To install this release, set `version: v3.6.4`, or leave
+  `version` unset to install the latest release.
+
 ## [3.6.3] - 2026-10-17
 
 A security-correctness patch:
