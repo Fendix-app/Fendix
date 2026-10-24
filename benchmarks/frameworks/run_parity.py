@@ -20,6 +20,17 @@ Gate mode (what `make parity` runs): add `--isolate --gate baseline.json` to fai
 baseline. Both need --isolate, so the baseline and the gate always measure the
 same thing.
 
+Corpus root: `--corpus-root <dir>` reads the manifests and case files from <dir>
+instead of this script's directory. <dir> holds the same nine framework
+directories in the same manifest format (the case count may differ). The
+release workflow points it at the private holdout corpus.
+
+Held-out recall: `--isolate --compare-recall-to <baseline.json>` prints, per
+language family, `family dev=X holdout=Y drop=Z` (recall of the baseline's cases
+against recall of this run) and exits 1 when any family's recall is more than
+`--max-recall-drop` (default 0.10, ten points) below its baseline recall, or
+cannot be measured. `--quiet` limits the output to those lines, for a public log.
+
 Standard library only; Python 3.9+.
 """
 
@@ -36,8 +47,9 @@ import sys
 import tempfile
 import time
 from collections import Counter, defaultdict
+from fractions import Fraction
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent
 FRAMEWORKS = ["django", "flask", "fastapi", "express", "nestjs", "nextjs", "spring", "nethttp", "gin"]
@@ -175,8 +187,8 @@ def synthetic_secrets(framework: str) -> Dict[str, str]:
     }
 
 
-def materialize(framework: str, dest: Path) -> None:
-    shutil.copytree(ROOT / framework, dest)
+def materialize(framework: str, dest: Path, root: Path = ROOT) -> None:
+    shutil.copytree(root / framework, dest)
     secrets = synthetic_secrets(framework)
     for path in dest.rglob("*"):
         if not path.is_file() or path.name == "manifest.json":
@@ -235,7 +247,7 @@ def source_size(root: Path) -> dict:
     return {"files": files, "lines": lines}
 
 
-def timing(fendix: str, framework: str, tmp: Path, fail_on: str, repeats: int, scale: int) -> dict:
+def timing(fendix: str, framework: str, tmp: Path, fail_on: str, repeats: int, scale: int, root: Path = ROOT) -> dict:
     """Median wall time for the corpus as-is and for `scale` copies of it.
 
     The 1x corpus is ~30 small files, so its time is mostly fixed startup cost
@@ -243,11 +255,11 @@ def timing(fendix: str, framework: str, tmp: Path, fail_on: str, repeats: int, s
     """
     result = {}
     for label, copies in (("1x", 1), (f"{scale}x", scale)):
-        root = tmp / f"{framework}-time-{label}"
+        tree = tmp / f"{framework}-time-{label}"
         for k in range(copies):
-            materialize(framework, root / f"copy{k:02d}")
-        samples = [scan(fendix, root, fail_on)[1] for _ in range(repeats)]
-        size = source_size(root)
+            materialize(framework, tree / f"copy{k:02d}", root)
+        samples = [scan(fendix, tree, fail_on)[1] for _ in range(repeats)]
+        size = source_size(tree)
         median = statistics.median(samples)
         result[label] = {
             **size,
@@ -255,11 +267,11 @@ def timing(fendix: str, framework: str, tmp: Path, fail_on: str, repeats: int, s
             "seconds_samples": [round(s, 2) for s in samples],
             "kloc_per_second": round(size["lines"] / 1000 / median, 2) if median else None,
         }
-        shutil.rmtree(root)
+        shutil.rmtree(tree)
     return result
 
 
-def materialize_isolated(framework: str, case: dict, manifest: dict, dest: Path) -> None:
+def materialize_isolated(framework: str, case: dict, manifest: dict, dest: Path, root: Path = ROOT) -> None:
     """One case alone: the framework tree with every OTHER case's files removed.
 
     The engine groups findings by title across files (engine.Deduplicate), so
@@ -268,7 +280,7 @@ def materialize_isolated(framework: str, case: dict, manifest: dict, dest: Path)
     gives the status the engine assigns to that case's own evidence. Support
     files (routing tables, app bootstrap) stay, so route binding still works.
     """
-    materialize(framework, dest)
+    materialize(framework, dest, root)
     keep = {case["file"], case.get("entry_file")}
     for other in manifest["cases"]:
         if other["id"] == case["id"]:
@@ -280,8 +292,8 @@ def materialize_isolated(framework: str, case: dict, manifest: dict, dest: Path)
                     target.unlink()
 
 
-def score_framework(framework: str, report: dict, scan_root: Path) -> dict:
-    manifest = json.loads((ROOT / framework / "manifest.json").read_text())
+def score_framework(framework: str, report: dict, scan_root: Path, root: Path = ROOT) -> dict:
+    manifest = json.loads((root / framework / "manifest.json").read_text())
     # A cross_file case owns two files: the sink file and its handler. A finding
     # in either one counts for that case (the sink file carries the marker).
     case_of_file: Dict[str, str] = {}
@@ -444,12 +456,100 @@ def write_baseline(path, engine: str, current: Dict[str, CaseState]) -> None:
     Path(path).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
+# ── Held-out recall comparison ───────────────────────────────────────────────
+
+# family -> (vulnerable cases detected, vulnerable cases). A family appears even
+# when it holds no vulnerable case, so "nothing to measure" stays visible.
+RecallCounts = Dict[str, Tuple[int, int]]
+DEFAULT_MAX_RECALL_DROP = Fraction(1, 10)
+
+
+class RecallComparison(NamedTuple):
+    lines: List[str]  # one `family dev=X holdout=Y drop=Z` line per family
+    failures: List[str]  # one reason per family that fails the comparison
+
+
+def tally_recall(rows: Iterable[Tuple[str, str]]) -> RecallCounts:
+    """(detected, vulnerable) per family from (family, outcome) pairs."""
+    counts: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
+    for family, outcome in rows:
+        entry = counts[family]
+        if outcome in ("TP", "FN"):
+            entry[1] += 1
+            entry[0] += outcome == "TP"
+    return {family: (hit, total) for family, (hit, total) in counts.items()}
+
+
+def baseline_recall_counts(baseline: Dict[str, CaseState], frameworks: Iterable[str]) -> RecallCounts:
+    """Recall counts for the baseline's cases of the given frameworks.
+
+    Case ids start with the framework name (SPEC.md), which gives the family.
+    Like --gate, a run of fewer frameworks compares against only those.
+    """
+    selected = set(frameworks)
+    return tally_recall(
+        (FAMILY[case_id.split("-", 1)[0]], outcome)
+        for case_id, (outcome, _) in baseline.items()
+        if case_id.split("-", 1)[0] in selected
+    )
+
+
+def compare_recall(dev: RecallCounts, holdout: RecallCounts, max_drop) -> RecallComparison:
+    """Compare recall per family; fail a family whose holdout recall is more than `max_drop` below dev.
+
+    The limit is exact ("more than 10 points" lets exactly 10 pass, which
+    floating point would not: 0.8 - 0.7 > 0.1). A family with no vulnerable
+    case on either side has no recall to compare, and that fails too: an
+    unmeasured family must not read as a pass.
+    """
+    limit = Fraction(str(max_drop))
+    lines: List[str] = []
+    failures: List[str] = []
+    for family in sorted(set(dev) | set(holdout)):
+        dev_hit, dev_total = dev.get(family, (0, 0))
+        out_hit, out_total = holdout.get(family, (0, 0))
+        dev_recall = Fraction(dev_hit, dev_total) if dev_total else None
+        out_recall = Fraction(out_hit, out_total) if out_total else None
+        if dev_recall is None or out_recall is None:
+            lines.append(f"{family} dev={_recall_text(dev_recall)} holdout={_recall_text(out_recall)} drop=n/a")
+            empty = [name for name, recall in (("dev", dev_recall), ("holdout", out_recall)) if recall is None]
+            failures.append(f"{family}: no vulnerable cases in the {' or '.join(empty)} set, so recall cannot be compared")
+            continue
+        drop = dev_recall - out_recall
+        lines.append(f"{family} dev={_recall_text(dev_recall)} holdout={_recall_text(out_recall)} drop={_recall_text(drop)}")
+        if drop > limit:
+            failures.append(f"{family}: holdout recall is {_recall_text(drop)} below dev, limit {_recall_text(limit)}")
+    return RecallComparison(lines, failures)
+
+
+def _recall_text(value: Optional[Fraction]) -> str:
+    return "n/a" if value is None else f"{float(value):.3f}"
+
+
+def _drop_limit(text: str) -> Fraction:
+    try:
+        value = Fraction(text)
+    except (ValueError, ZeroDivisionError):
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}")
+    if not 0 <= value <= 1:
+        raise argparse.ArgumentTypeError("must be between 0 and 1: a fraction of recall, so 0.10 is ten points")
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--fendix", required=True, help="path to the fendix binary under test")
     parser.add_argument("--out", required=True, help="directory for results.json")
     parser.add_argument("--fail-on", default="HIGH")
     parser.add_argument("--frameworks", default=",".join(FRAMEWORKS))
+    parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=ROOT,
+        metavar="DIR",
+        help="read the manifests and case files from DIR instead of this script's directory; DIR holds the "
+        "same framework directories in the same manifest format",
+    )
     parser.add_argument("--repeats", type=int, default=3, help="timed runs per size (median is reported)")
     parser.add_argument("--scale", type=int, default=20, help="copies of the corpus for the throughput run")
     parser.add_argument("--no-timing", action="store_true")
@@ -457,6 +557,19 @@ def main() -> int:
         "--isolate",
         action="store_true",
         help="scan every case in its own tree so its status is not inherited from a grouped sibling (slow: one scan per case)",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="print only the --compare-recall-to lines (no per-framework progress or summary), and reduce an "
+        "unexpected error to its type, so a public log never names a case",
+    )
+    parser.add_argument(
+        "--max-recall-drop",
+        type=_drop_limit,
+        metavar="FRACTION",
+        help=f"with --compare-recall-to: the largest recall drop per family that still passes, as a fraction "
+        f"(default {float(DEFAULT_MAX_RECALL_DROP):.2f}, ten points)",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -469,16 +582,43 @@ def main() -> int:
         metavar="BASELINE",
         help="record this run as the baseline file (requires --isolate and every framework)",
     )
+    mode.add_argument(
+        "--compare-recall-to",
+        metavar="BASELINE",
+        help="compare this run's recall per language family with the recall of this baseline's cases "
+        "(the development set) and exit 1 when a family is more than --max-recall-drop below it, or has "
+        "no vulnerable cases to compare (requires --isolate)",
+    )
     args = parser.parse_args()
     frameworks = [f for f in args.frameworks.split(",") if f]
-    if (args.gate or args.write_baseline) and not args.isolate:
-        parser.error("--gate and --write-baseline need --isolate: the baseline pins per-case blocks")
+    if (args.gate or args.write_baseline or args.compare_recall_to) and not args.isolate:
+        parser.error("--gate, --write-baseline and --compare-recall-to need --isolate: the baseline pins per-case blocks")
     if args.write_baseline and sorted(frameworks) != sorted(FRAMEWORKS):
         parser.error("--write-baseline records every framework; drop --frameworks")
+    if args.write_baseline and args.corpus_root.resolve() != ROOT:
+        parser.error("--write-baseline records the development corpus; drop --corpus-root")
+    if args.max_recall_drop is not None and not args.compare_recall_to:
+        parser.error("--max-recall-drop only applies with --compare-recall-to")
+    if args.quiet and (args.gate or args.write_baseline):
+        parser.error("--quiet prints no per-case lines, so it cannot be combined with --gate or --write-baseline")
     unknown = [f for f in frameworks if f not in FRAMEWORKS]
     if unknown:
         parser.error(f"unknown framework(s): {', '.join(unknown)}")
+    absent = [f for f in frameworks if not (args.corpus_root / f / "manifest.json").is_file()]
+    if absent:
+        parser.error(f"no manifest.json under {args.corpus_root} for: {', '.join(absent)}")
 
+    if not args.quiet:
+        return run(args, frameworks)
+    try:
+        return run(args, frameworks)
+    except Exception as exc:  # noqa: BLE001 - the message and traceback can name cases of a private corpus
+        print(f"parity: run failed with {type(exc).__name__}; details withheld by --quiet", file=sys.stderr)
+        return 2
+
+
+def run(args: argparse.Namespace, frameworks: List[str]) -> int:
+    root = args.corpus_root
     version = subprocess.run([args.fendix, "version"], capture_output=True, text=True).stdout.strip()
     semgrep = shutil.which("semgrep")
     semgrep_version = (
@@ -490,17 +630,17 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="fendix-parity-") as tmp:
         for framework in frameworks:
             scan_root = Path(tmp) / framework
-            materialize(framework, scan_root)
+            materialize(framework, scan_root, root)
             report, _ = scan(args.fendix, scan_root, args.fail_on)
-            results.append(score_framework(framework, report, scan_root))
+            results.append(score_framework(framework, report, scan_root, root))
             if args.isolate:
-                manifest = json.loads((ROOT / framework / "manifest.json").read_text())
+                manifest = json.loads((root / framework / "manifest.json").read_text())
                 isolated = {}
                 for case in manifest["cases"]:
                     case_root = Path(tmp) / f"{framework}-iso" / case["id"]
-                    materialize_isolated(framework, case, manifest, case_root)
+                    materialize_isolated(framework, case, manifest, case_root, root)
                     case_report, _ = scan(args.fendix, case_root, args.fail_on)
-                    scored = score_framework(framework, case_report, case_root)
+                    scored = score_framework(framework, case_report, case_root, root)
                     isolated[case["id"]] = next(c for c in scored["cases"] if c["id"] == case["id"])
                     shutil.rmtree(case_root)
                 for c in results[-1]["cases"]:
@@ -509,9 +649,10 @@ def main() -> int:
                     c["outcome"], c["blocks"], c["best_status"] = iso["outcome"], iso["blocks"], iso["best_status"]
                     c["rules"], c["line_delta"] = iso["rules"], iso["line_delta"]
             if not args.no_timing:
-                results[-1]["timing"] = timing(args.fendix, framework, Path(tmp), args.fail_on, args.repeats, args.scale)
+                results[-1]["timing"] = timing(args.fendix, framework, Path(tmp), args.fail_on, args.repeats, args.scale, root)
             m = metrics(results[-1]["cases"])
-            print(f"{framework:9} recall={m['recall']} fpr={m['false_positive_rate']} blocks={m['block_recall']}", file=sys.stderr)
+            if not args.quiet:
+                print(f"{framework:9} recall={m['recall']} fpr={m['false_positive_rate']} blocks={m['block_recall']}", file=sys.stderr)
 
     all_cases = [c for r in results for c in r["cases"]]
     summary = {
@@ -557,7 +698,8 @@ def main() -> int:
             indent=2,
         )
     )
-    print(json.dumps(summary["by_family"], indent=2))
+    if not args.quiet:
+        print(json.dumps(summary["by_family"], indent=2))
 
     current = {c["id"]: (c["outcome"], c["blocks"]) for c in all_cases}
     if args.write_baseline:
@@ -579,6 +721,18 @@ def main() -> int:
         verdict = "GATE FAILED" if gate.regressions else "GATE OK"
         print(f"{verdict}: {len(gate.regressions)} regressions, {len(gate.improvements)} improvements ({len(baseline)} cases)")
         return 1 if gate.regressions else 0
+    if args.compare_recall_to:
+        dev = baseline_recall_counts(load_baseline(args.compare_recall_to), frameworks)
+        holdout = tally_recall((r["family"], c["outcome"]) for r in results for c in r["cases"])
+        limit = args.max_recall_drop if args.max_recall_drop is not None else DEFAULT_MAX_RECALL_DROP
+        comparison = compare_recall(dev, holdout, limit)
+        for line in comparison.lines:
+            print(line)
+        for failure in comparison.failures:
+            print(f"RECALL: {failure}")
+        verdict = "RECALL COMPARISON FAILED" if comparison.failures else "RECALL COMPARISON OK"
+        print(f"{verdict}: {len(comparison.failures)} of {len(comparison.lines)} families fail (limit {_recall_text(limit)})")
+        return 1 if comparison.failures else 0
     return 0
 
 

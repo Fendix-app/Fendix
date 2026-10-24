@@ -16,6 +16,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 from benchmark.run_benchmark import evaluate, load_corpus
 
 
@@ -253,3 +255,313 @@ def test_committed_baseline_matches_the_corpus():
         if (outcome in ("TP", "FN")) != vulnerable:
             problems.append(f"{case_id}: outcome {outcome} contradicts vulnerable={vulnerable}")
     assert not problems, "\n  ".join(problems)
+
+
+# ── Corpus root and held-out recall (the release-time holdout run) ────────────
+#
+# The holdout lives in a private repository and has the same nine framework
+# directories and manifest format as the development corpus, but fewer cases
+# (30 per framework, not 58). run_parity.py reads it through --corpus-root and,
+# with --compare-recall-to, checks its recall per language family against the
+# development baseline. Nothing here needs the engine or the holdout itself.
+
+_FAKE_ENGINE = """#!{python}
+import json, os, sys
+
+args = sys.argv[1:]
+if args[:1] == ["version"]:
+    print("fendix fake-engine")
+    raise SystemExit(0)
+root = args[args.index("--code") + 1]
+findings = []
+for folder, _, names in os.walk(root):
+    for name in sorted(names):
+        path = os.path.join(folder, name)
+        for number, line in enumerate(open(path, encoding="utf-8"), start=1):
+            if "EVAL-SINK" in line:
+                findings.append({{
+                    "rule_id": "PY_SQL_INJECTION",
+                    "title": "SQL injection",
+                    "status": "BLOCK",
+                    "endpoint": os.path.relpath(path, root).replace(os.sep, "/") + ":" + str(number),
+                }})
+print(json.dumps({{"findings": findings}}))
+"""
+
+
+def _write_flask_corpus(root: Path, cases: list[tuple[str, str, bool]]) -> None:
+    """A one-framework corpus under `root`: (case id, class, vulnerable) per case.
+
+    The fake engine reports every EVAL-SINK file as SQL injection, so a
+    vulnerable sqli case is a TP and a vulnerable case of any other class is
+    an FN.
+    """
+    app = root / "flask" / "app"
+    app.mkdir(parents=True)
+    manifest = []
+    for case_id, klass, vulnerable in cases:
+        rel = f"app/{case_id}.py"
+        marker = "EVAL-SINK" if vulnerable else "EVAL-SAFE"
+        (root / "flask" / rel).write_text(f"# {marker}\nvalue = 1\n", encoding="utf-8")
+        manifest.append(
+            {
+                "id": case_id,
+                "class": klass,
+                "variant": "direct" if vulnerable else "safe",
+                "vulnerable": vulnerable,
+                "file": rel,
+            }
+        )
+    (root / "flask" / "manifest.json").write_text(
+        json.dumps({"framework": "flask", "language": "python", "cases": manifest}), encoding="utf-8"
+    )
+
+
+def _fake_engine(tmp_path: Path) -> Path:
+    binary = tmp_path / "fendix"
+    binary.write_text(_FAKE_ENGINE.format(python=sys.executable), encoding="utf-8")
+    binary.chmod(0o755)
+    return binary
+
+
+def _dev_baseline(tmp_path: Path, hits: int, misses: int) -> Path:
+    state = {f"flask-dev-hit{i}": ("TP", True) for i in range(hits)}
+    state |= {f"flask-dev-miss{i}": ("FN", False) for i in range(misses)}
+    path = tmp_path / "dev-baseline.json"
+    _parity.write_baseline(path, "fendix dev", state)
+    return path
+
+
+def test_corpus_root_flag_changes_manifest_source(tmp_path):
+    """materialize() and score_framework() read the given root, not the script's directory."""
+    root = tmp_path / "holdout"
+    _write_flask_corpus(root, [("flask-h-one", "sqli", True), ("flask-h-two", "sqli", False)])
+
+    held_out = tmp_path / "held-out-tree"
+    _parity.materialize("flask", held_out, root=root)
+    held_manifest = json.loads((held_out / "manifest.json").read_text(encoding="utf-8"))
+    assert [c["id"] for c in held_manifest["cases"]] == ["flask-h-one", "flask-h-two"]
+    assert (held_out / "app" / "flask-h-one.py").is_file()
+    assert not (held_out / "app" / "sqli_direct.py").exists()  # a development-corpus file
+
+    scored = _parity.score_framework("flask", {"findings": []}, held_out, root=root)
+    assert [c["id"] for c in scored["cases"]] == ["flask-h-one", "flask-h-two"]
+    assert [c["outcome"] for c in scored["cases"]] == ["FN", "TN"]
+
+    # With no root, today's behaviour is unchanged: the development corpus.
+    default_tree = tmp_path / "default-tree"
+    _parity.materialize("flask", default_tree)
+    assert (default_tree / "manifest.json").read_bytes() == (_FRAMEWORKS_ROOT / "flask" / "manifest.json").read_bytes()
+
+
+def test_corpus_root_substitutes_placeholders_in_the_given_root(tmp_path):
+    root = tmp_path / "holdout"
+    _write_flask_corpus(root, [("flask-h-secret", "hardcoded_secret", True)])
+    (root / "flask" / "app" / "flask-h-secret.py").write_text("# EVAL-SINK\nkey = '__EVAL_GITHUB_TOKEN__'\n")
+
+    tree = tmp_path / "tree"
+    _parity.materialize("flask", tree, root=root)
+    text = (tree / "app" / "flask-h-secret.py").read_text(encoding="utf-8")
+    assert "__EVAL_" not in text
+    assert re.search(r"ghp_[A-Za-z0-9]{36}", text)
+
+
+def test_timing_scales_the_corpus_it_was_given(tmp_path):
+    root = tmp_path / "holdout"
+    _write_flask_corpus(root, [("flask-h-a", "sqli", True), ("flask-h-b", "sqli", False)])
+    timed = _parity.timing(str(_fake_engine(tmp_path)), "flask", tmp_path / "scratch", "HIGH", 1, 3, root=root)
+    assert timed["1x"]["files"] == 2  # not the ~60 files of the development corpus
+    assert timed["3x"]["files"] == 6
+
+
+def test_main_rejects_a_corpus_root_that_lacks_a_requested_framework(tmp_path, monkeypatch, capsys):
+    (tmp_path / "empty-root").mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_parity.py", "--fendix", "unused", "--out", str(tmp_path / "out"), "--frameworks", "flask",
+         "--corpus-root", str(tmp_path / "empty-root")],
+    )
+    with pytest.raises(SystemExit) as raised:
+        _parity.main()
+    assert raised.value.code == 2
+    assert "flask" in capsys.readouterr().err
+
+
+def _counts(**families):
+    return {family: tuple(pair) for family, pair in families.items()}
+
+
+def test_recall_comparison_passes_when_every_family_is_within_ten_points():
+    dev = _counts(python=(80, 100), **{"js-ts": (90, 100)}, java=(70, 100), go=(60, 100))
+    holdout = _counts(python=(75, 100), **{"js-ts": (81, 100)}, java=(70, 100), go=(66, 100))  # js-ts: -9 points
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    assert result.failures == []
+    assert result.lines == [
+        "go dev=0.600 holdout=0.660 drop=-0.060",
+        "java dev=0.700 holdout=0.700 drop=0.000",
+        "js-ts dev=0.900 holdout=0.810 drop=0.090",
+        "python dev=0.800 holdout=0.750 drop=0.050",
+    ]
+
+
+def test_recall_comparison_fails_and_names_the_family_that_drops_eleven_points():
+    dev = _counts(python=(80, 100), java=(70, 100))
+    holdout = _counts(python=(69, 100), java=(70, 100))  # python: -11 points
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    assert len(result.failures) == 1
+    assert result.failures[0].startswith("python:")
+    assert "python dev=0.800 holdout=0.690 drop=0.110" in result.lines
+    assert "java dev=0.700 holdout=0.700 drop=0.000" in result.lines
+
+
+def test_recall_comparison_accepts_exactly_ten_points_without_float_noise():
+    # 0.8 - 0.7 is 0.10000000000000009 in binary floating point; the limit is
+    # "more than 10 points", so exactly 10 must pass.
+    result = _parity.compare_recall(_counts(python=(8, 10)), _counts(python=(7, 10)), 0.10)
+    assert result.failures == []
+
+
+def test_recall_comparison_limit_is_configurable():
+    dev, holdout = _counts(go=(80, 100)), _counts(go=(74, 100))
+    assert _parity.compare_recall(dev, holdout, 0.05).failures != []
+    assert _parity.compare_recall(dev, holdout, 0.06).failures == []
+
+
+@pytest.mark.parametrize(
+    "dev, holdout, empty_side",
+    [
+        (_counts(go=(0, 0)), _counts(go=(9, 10)), "dev"),
+        (_counts(go=(9, 10)), _counts(go=(0, 0)), "holdout"),
+        (_counts(go=(9, 10)), {}, "holdout"),  # the family is missing from the run altogether
+        (_counts(), _counts(go=(9, 10)), "dev"),  # ... or from the baseline
+    ],
+)
+def test_recall_comparison_fails_closed_when_a_family_has_no_vulnerable_cases_on_one_side(dev, holdout, empty_side):
+    """A family that cannot be measured fails the comparison instead of passing silently."""
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    assert len(result.failures) == 1
+    assert result.failures[0].startswith("go:")
+    assert empty_side in result.failures[0]
+    assert any(line.startswith("go ") and "drop=n/a" in line for line in result.lines)
+
+
+def test_baseline_recall_counts_cover_only_the_frameworks_that_ran():
+    baseline = {
+        "flask-a": ("TP", True),
+        "flask-b": ("FN", False),
+        "flask-c": ("TN", False),  # a safe case never counts toward recall
+        "django-a": ("TP", True),
+        "gin-a": ("TP", True),
+        "nethttp-a": ("FN", False),
+    }
+    assert _parity.baseline_recall_counts(baseline, ["flask", "gin"]) == {"python": (1, 2), "go": (1, 1)}
+
+
+def test_tally_recall_lists_a_family_that_has_only_safe_cases():
+    counts = _parity.tally_recall([("python", "TN"), ("go", "TP"), ("go", "FN"), ("go", "FP")])
+    assert counts == {"python": (0, 0), "go": (1, 2)}
+
+
+@pytest.mark.parametrize(
+    "extra, complaint",
+    [
+        (["--max-recall-drop", "0.1"], "--compare-recall-to"),
+        # The dev baseline was recorded with --isolate, so the comparison needs it too.
+        (["--compare-recall-to", "b.json"], "--isolate"),
+        (["--isolate", "--compare-recall-to", "b.json", "--gate", "b.json"], "not allowed with"),
+        (["--isolate", "--compare-recall-to", "b.json", "--write-baseline", "b.json"], "not allowed with"),
+        # --gate prints one line per regressed case, which --quiet exists to prevent.
+        (["--isolate", "--gate", "b.json", "--quiet"], "--quiet"),
+        (["--isolate", "--compare-recall-to", "b.json", "--max-recall-drop", "1.5"], "between 0 and 1"),
+        # A baseline written from the holdout would replace the development one.
+        (["--isolate", "--write-baseline", "b.json", "--corpus-root", "somewhere-else"], "--corpus-root"),
+    ],
+)
+def test_main_rejects_incompatible_recall_comparison_flags(tmp_path, monkeypatch, capsys, extra, complaint):
+    monkeypatch.setattr(sys, "argv", ["run_parity.py", "--fendix", "unused", "--out", str(tmp_path), *extra])
+    with pytest.raises(SystemExit) as raised:
+        _parity.main()
+    assert raised.value.code == 2
+    assert complaint in capsys.readouterr().err
+
+
+def test_holdout_run_reports_recall_per_family_and_exits_one_on_a_drop(tmp_path, monkeypatch, capsys):
+    """End to end with a fake engine: a 30-case-style corpus under --corpus-root, scored and compared.
+
+    The holdout has 4 vulnerable cases, 3 detected (recall 0.75); the dev
+    baseline detected all 10 of its vulnerable cases (recall 1.0): a 25 point
+    drop, so the run exits 1.
+    """
+    root = tmp_path / "holdout"
+    _write_flask_corpus(
+        root,
+        [
+            ("flask-h-a", "sqli", True),
+            ("flask-h-b", "sqli", True),
+            ("flask-h-c", "sqli", True),
+            ("flask-h-d", "cmdi", True),  # the fake engine only reports SQL injection: a miss
+            ("flask-h-e", "sqli", False),
+        ],
+    )
+    argv = [
+        "run_parity.py", "--fendix", str(_fake_engine(tmp_path)), "--out", str(tmp_path / "out"),
+        "--frameworks", "flask", "--isolate", "--no-timing", "--corpus-root", str(root),
+        "--compare-recall-to", str(_dev_baseline(tmp_path, hits=10, misses=0)), "--max-recall-drop", "0.10",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert _parity.main() == 1
+    out = capsys.readouterr().out
+    assert "python dev=1.000 holdout=0.750 drop=0.250" in out
+
+    # The same holdout against a dev baseline it is within 10 points of.
+    argv[argv.index("--compare-recall-to") + 1] = str(_dev_baseline(tmp_path, hits=8, misses=2))  # 0.8
+    monkeypatch.setattr(sys, "argv", argv)
+    assert _parity.main() == 0
+    assert "python dev=0.800 holdout=0.750 drop=0.050" in capsys.readouterr().out
+
+
+def test_quiet_holdout_run_prints_only_family_level_lines(tmp_path, monkeypatch, capsys):
+    """--quiet keeps case ids, outcomes and per-framework numbers out of a public log."""
+    root = tmp_path / "holdout"
+    _write_flask_corpus(
+        root,
+        [("flask-secret-case-id", "sqli", True), ("flask-other-case-id", "cmdi", True), ("flask-safe-case-id", "sqli", False)],
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_parity.py", "--fendix", str(_fake_engine(tmp_path)), "--out", str(tmp_path / "out"),
+            "--frameworks", "flask", "--isolate", "--no-timing", "--quiet", "--corpus-root", str(root),
+            "--compare-recall-to", str(_dev_baseline(tmp_path, hits=1, misses=1)),
+        ],
+    )
+    assert _parity.main() == 0  # dev 0.5, holdout 0.5
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "case-id" not in captured.out
+    assert not re.search(r"\b(TP|FN|FP|TN)\b", captured.out)
+    lines = captured.out.splitlines()
+    assert lines[0] == "python dev=0.500 holdout=0.500 drop=0.000"
+    assert len(lines) == 2  # the one family line and the verdict
+
+
+def test_quiet_holdout_run_withholds_failure_details(tmp_path, monkeypatch, capsys):
+    """An unexpected error in --quiet mode names its type only: messages and tracebacks can name holdout cases."""
+    root = tmp_path / "holdout"
+    _write_flask_corpus(root, [("flask-secret-case-id", "sqli", True)])
+    broken = tmp_path / "broken-engine"
+    broken.write_text(f"#!{sys.executable}\nimport sys\nif sys.argv[1] == 'version':\n    print('v')\n"
+                      "else:\n    sys.stderr.write('flask-secret-case-id exploded')\n    sys.exit(3)\n")
+    broken.chmod(0o755)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_parity.py", "--fendix", str(broken), "--out", str(tmp_path / "out"), "--frameworks", "flask",
+         "--isolate", "--quiet", "--corpus-root", str(root), "--compare-recall-to", str(_dev_baseline(tmp_path, 1, 0))],
+    )
+    assert _parity.main() == 2
+    captured = capsys.readouterr()
+    assert "RuntimeError" in captured.err
+    assert "secret-case-id" not in captured.out + captured.err
