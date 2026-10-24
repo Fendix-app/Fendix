@@ -41,6 +41,11 @@ Thumbs.db
 # Fendix runtime
 .fendix/
 
+# Framework parity gate (make parity): venv and per-run results. The
+# binary it builds, bin/fendix-parity, is covered by bin/ above.
+.venv-parity/
+.parity/
+
 # Benchmark run artifacts (per-run timestamped dirs)
 bench-results/
 

@@ -1,4 +1,4 @@
-.PHONY: build test lint clean embed-engine e2e fuzz bench coverage-smoke
+.PHONY: build test lint clean embed-engine e2e fuzz bench coverage-smoke parity parity-venv parity-baseline parity-prereqs
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
 GO_DIR := go
@@ -100,6 +100,50 @@ heavy-eval: build
 heavy-eval-fast: build
 	@echo "→ Running heavy-eval (SAST stages only, ~5 min)..."
 	$(PYTHON) scripts/heavy-eval/run.py --binary $(HEAVY_EVAL_BIN) --python-engine --fast
+
+# Framework parity gate (benchmarks/frameworks/, defined by SPEC.md).
+#
+#   make parity-venv   create $(PARITY_VENV) from python/requirements.lock with
+#                      --require-hashes (needs Python 3.11, the lock's version:
+#                      make parity-venv PARITY_PYTHON=python3.11); run it once
+#   make parity        build bin/fendix-parity from source, scan all 522 cases
+#                      (each in its own tree, ~10 min) and exit 1 when any case
+#                      is worse than benchmarks/frameworks/baseline.json
+#   make parity-baseline
+#                      the same scan, then rewrite baseline.json from it; run it
+#                      in a PR that improves results and commit the new file
+#
+# PARITY_ARGS passes extra flags to run_parity.py, for example
+# `make parity PARITY_ARGS="--frameworks flask,django"` gates a subset (the
+# gate then ignores baseline entries of the frameworks that did not run).
+# Results land in $(PARITY_OUT)/results.json.
+PARITY_VENV ?= .venv-parity
+PARITY_PYTHON ?= python3
+PARITY_ARGS ?=
+PARITY_BIN := $(BIN_DIR)/fendix-parity
+PARITY_OUT := .parity
+PARITY_BASELINE := benchmarks/frameworks/baseline.json
+# The venv goes first on PATH so the engine finds its python3 and semgrep there.
+# --fendix must be absolute: the harness runs the binary from a temp directory.
+PARITY_RUN = PATH="$(abspath $(PARITY_VENV))/bin:$$PATH" FENDIX_ENGINE="$(CURDIR)/$(PY_DIR)" \
+	python3 benchmarks/frameworks/run_parity.py --fendix "$(CURDIR)/$(PARITY_BIN)" \
+	--out $(PARITY_OUT) --no-timing --isolate $(PARITY_ARGS)
+
+parity-venv:
+	$(PARITY_PYTHON) -m venv $(PARITY_VENV)
+	$(PARITY_VENV)/bin/pip install --require-hashes -r $(PY_DIR)/requirements.lock
+
+parity-prereqs:
+	@test -x "$(PARITY_VENV)/bin/semgrep" || \
+		(echo "parity: no semgrep in $(PARITY_VENV); run 'make parity-venv' first" >&2; exit 1)
+	@echo "→ Building $(PARITY_BIN) from source..."
+	cd $(GO_DIR) && go build -o ../$(PARITY_BIN) ./cmd/fendix
+
+parity: parity-prereqs
+	$(PARITY_RUN) --gate $(PARITY_BASELINE)
+
+parity-baseline: parity-prereqs
+	$(PARITY_RUN) --write-baseline $(PARITY_BASELINE)
 
 test-python:
 	@echo "→ Running Python tests..."

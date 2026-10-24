@@ -14,6 +14,12 @@ Usage:
     PATH=<dir with python3 + semgrep>:$PATH FENDIX_ENGINE=<python engine dir> \\
         python3 benchmarks/frameworks/run_parity.py --fendix <binary> --out <dir>
 
+Gate mode (what `make parity` runs): add `--isolate --gate baseline.json` to fail
+(exit 1) when any case is worse than the committed baseline, and
+`--isolate --write-baseline baseline.json` to record the current run as the new
+baseline. Both need --isolate, so the baseline and the gate always measure the
+same thing.
+
 Standard library only; Python 3.9+.
 """
 
@@ -31,7 +37,7 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent
 FRAMEWORKS = ["django", "flask", "fastapi", "express", "nestjs", "nextjs", "spring", "nethttp", "gin"]
@@ -374,6 +380,70 @@ def metrics(cases: List[dict]) -> dict:
     }
 
 
+# ── Regression gate ──────────────────────────────────────────────────────────
+
+# (outcome, blocks) per case id: the part of a case's result the gate pins.
+CaseState = Tuple[str, bool]
+
+# The only outcome changes that count as getting better. Any other change in a
+# case's outcome (TP->FN, TN->FP, or a label flip such as TP->TN) is a
+# regression, so a manifest edit forces a deliberate --write-baseline.
+IMPROVEMENTS = {("FN", "TP"), ("FP", "TN")}
+SAFE_OUTCOMES = {"TN", "FP"}
+
+
+class GateResult(NamedTuple):
+    regressions: List[str]
+    improvements: List[str]
+
+
+def compare_to_baseline(current: Dict[str, CaseState], baseline: Dict[str, CaseState]) -> GateResult:
+    """Compare a run with the baseline, case by case.
+
+    Regressions (the gate fails): a detected case is missed, a safe case is
+    flagged, a vulnerable case no longer blocks, a safe case newly blocks, a
+    baseline case is absent from the run, or a run case is absent from the
+    baseline. Improvements are reported but never fail the gate.
+    """
+    regressions: List[str] = []
+    improvements: List[str] = []
+    for case_id in sorted(baseline):
+        if case_id not in current:
+            regressions.append(f"{case_id}: missing from run")
+            continue
+        was, was_blocks = baseline[case_id]
+        now, now_blocks = current[case_id]
+        if was != now:
+            (improvements if (was, now) in IMPROVEMENTS else regressions).append(f"{case_id}: {was}->{now}")
+        if now in SAFE_OUTCOMES:
+            if now_blocks and not was_blocks:
+                regressions.append(f"{case_id}: safe case now blocks")
+            elif was_blocks and not now_blocks and was == now:
+                improvements.append(f"{case_id}: safe case no longer blocks")
+        elif was == now:  # a vulnerable case whose outcome is unchanged
+            if was_blocks and not now_blocks:
+                regressions.append(f"{case_id}: no longer blocks")
+            elif now_blocks and not was_blocks:
+                improvements.append(f"{case_id}: now blocks")
+    regressions.extend(f"{case_id}: not in baseline" for case_id in sorted(set(current) - set(baseline)))
+    return GateResult(regressions, improvements)
+
+
+def load_baseline(path) -> Dict[str, CaseState]:
+    """Read a baseline file into the {case id: (outcome, blocks)} form the gate compares."""
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    return {case_id: (c["outcome"], bool(c["blocks"])) for case_id, c in document["cases"].items()}
+
+
+def write_baseline(path, engine: str, current: Dict[str, CaseState]) -> None:
+    """Record a run as the baseline. Sorted keys and a final newline keep diffs minimal."""
+    document = {
+        "engine": engine,
+        "cases": {case_id: {"outcome": outcome, "blocks": blocks} for case_id, (outcome, blocks) in sorted(current.items())},
+    }
+    Path(path).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--fendix", required=True, help="path to the fendix binary under test")
@@ -388,7 +458,26 @@ def main() -> int:
         action="store_true",
         help="scan every case in its own tree so its status is not inherited from a grouped sibling (slow: one scan per case)",
     )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--gate",
+        metavar="BASELINE",
+        help="compare the run with this baseline file; exit 1 on any regression (requires --isolate)",
+    )
+    mode.add_argument(
+        "--write-baseline",
+        metavar="BASELINE",
+        help="record this run as the baseline file (requires --isolate and every framework)",
+    )
     args = parser.parse_args()
+    frameworks = [f for f in args.frameworks.split(",") if f]
+    if (args.gate or args.write_baseline) and not args.isolate:
+        parser.error("--gate and --write-baseline need --isolate: the baseline pins per-case blocks")
+    if args.write_baseline and sorted(frameworks) != sorted(FRAMEWORKS):
+        parser.error("--write-baseline records every framework; drop --frameworks")
+    unknown = [f for f in frameworks if f not in FRAMEWORKS]
+    if unknown:
+        parser.error(f"unknown framework(s): {', '.join(unknown)}")
 
     version = subprocess.run([args.fendix, "version"], capture_output=True, text=True).stdout.strip()
     semgrep = shutil.which("semgrep")
@@ -399,7 +488,7 @@ def main() -> int:
     )
     results = []
     with tempfile.TemporaryDirectory(prefix="fendix-parity-") as tmp:
-        for framework in [f for f in args.frameworks.split(",") if f]:
+        for framework in frameworks:
             scan_root = Path(tmp) / framework
             materialize(framework, scan_root)
             report, _ = scan(args.fendix, scan_root, args.fail_on)
@@ -469,6 +558,27 @@ def main() -> int:
         )
     )
     print(json.dumps(summary["by_family"], indent=2))
+
+    current = {c["id"]: (c["outcome"], c["blocks"]) for c in all_cases}
+    if args.write_baseline:
+        write_baseline(args.write_baseline, version, current)
+        print(f"wrote baseline for {len(current)} cases to {args.write_baseline}")
+    if args.gate:
+        baseline = load_baseline(args.gate)
+        # With --frameworks, gate only the frameworks that ran. Case ids start
+        # with the framework name (SPEC.md), so the rest of the baseline is
+        # out of scope rather than "missing from run".
+        baseline = {k: v for k, v in baseline.items() if any(k.startswith(f"{f}-") for f in frameworks)}
+        gate = compare_to_baseline(current, baseline)
+        for line in gate.improvements:
+            print(f"improved: {line}")
+        for line in gate.regressions:
+            print(f"REGRESSION: {line}")
+        if gate.improvements:
+            print(f"Re-run with --write-baseline {args.gate} and commit it, so the new expectations show in the diff.")
+        verdict = "GATE FAILED" if gate.regressions else "GATE OK"
+        print(f"{verdict}: {len(gate.regressions)} regressions, {len(gate.improvements)} improvements ({len(baseline)} cases)")
+        return 1 if gate.regressions else 0
     return 0
 
 

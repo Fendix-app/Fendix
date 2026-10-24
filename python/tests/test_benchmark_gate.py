@@ -10,8 +10,10 @@ Run the full report with:  python -m benchmark.run_benchmark
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 
 from benchmark.run_benchmark import evaluate, load_corpus
@@ -162,3 +164,92 @@ def test_parity_corpus_is_well_formed():
                 )
 
     assert not problems, "parity corpus problems:\n  " + "\n  ".join(problems)
+
+
+# ── Framework parity gate (benchmarks/frameworks/run_parity.py) ───────────────
+
+
+def _load_run_parity():
+    """Import the harness by file path.
+
+    benchmarks/frameworks is a data directory, not a package, and putting it on
+    sys.path would let a corpus file named like a stdlib or test module shadow
+    that module for the whole test session. Loading the one file under a private
+    name avoids both.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "fendix_run_parity", _FRAMEWORKS_ROOT / "run_parity.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_parity = _load_run_parity()
+compare_to_baseline = _parity.compare_to_baseline
+load_baseline = _parity.load_baseline
+
+
+def test_gate_rejects_tp_to_fn():
+    assert compare_to_baseline(current={"a": ("FN", False)}, baseline={"a": ("TP", True)}).regressions == [
+        "a: TP->FN"
+    ]
+
+
+def test_gate_rejects_tn_to_fp_and_new_safe_block():
+    r = compare_to_baseline(current={"s": ("FP", True)}, baseline={"s": ("TN", False)})
+    assert r.regressions == ["s: TN->FP", "s: safe case now blocks"]
+
+
+def test_gate_rejects_lost_block():
+    assert compare_to_baseline(current={"a": ("TP", False)}, baseline={"a": ("TP", True)}).regressions == [
+        "a: no longer blocks"
+    ]
+
+
+def test_gate_reports_improvements_without_failing():
+    r = compare_to_baseline(current={"a": ("TP", True)}, baseline={"a": ("FN", False)})
+    assert r.regressions == [] and r.improvements == ["a: FN->TP"]
+
+
+def test_gate_rejects_unknown_or_missing_cases():
+    r = compare_to_baseline(current={}, baseline={"a": ("TP", True)})
+    assert r.regressions == ["a: missing from run"]
+
+
+def test_gate_rejects_case_not_in_baseline():
+    r = compare_to_baseline(current={"new": ("TP", True)}, baseline={})
+    assert r.regressions == ["new: not in baseline"]
+
+
+def test_baseline_round_trips_through_the_file(tmp_path):
+    state = {"b": ("FN", False), "a": ("TP", True)}
+    path = tmp_path / "baseline.json"
+    _parity.write_baseline(path, "fendix version dev", state)
+    assert load_baseline(path) == state
+    assert list(json.loads(path.read_text(encoding="utf-8"))["cases"]) == ["a", "b"]
+
+
+def test_committed_baseline_matches_the_corpus():
+    """baseline.json holds exactly the manifest's cases, each scored as its label implies.
+
+    run_parity.py --frameworks gates a subset by the "<framework>-" prefix of the
+    case ids, so the prefix is checked here too.
+    """
+    baseline = load_baseline(_FRAMEWORKS_ROOT / "baseline.json")
+    cases = {}
+    for fw in _PARITY_FRAMEWORKS:
+        manifest = json.loads((_FRAMEWORKS_ROOT / fw / "manifest.json").read_text(encoding="utf-8"))
+        for case in manifest["cases"]:
+            cases[case["id"]] = (fw, case["vulnerable"])
+
+    assert set(baseline) == set(cases)
+    problems = []
+    for case_id, (fw, vulnerable) in cases.items():
+        outcome, _ = baseline[case_id]
+        if not case_id.startswith(f"{fw}-"):
+            problems.append(f"{case_id}: id does not start with '{fw}-'")
+        if (outcome in ("TP", "FN")) != vulnerable:
+            problems.append(f"{case_id}: outcome {outcome} contradicts vulnerable={vulnerable}")
+    assert not problems, "\n  ".join(problems)
