@@ -151,8 +151,10 @@ RULE_CLASS = {
 }
 
 
-# Fallback for findings the engine emits without a rule_id (v3.6.3: the Python
-# engine's JavaScript pattern checks). Keyed on the title, checked in order.
+# Fallback for findings that carry no rule_id: emitters that still set none (the
+# spec parser's) and reports written before the Python engine's JavaScript
+# pattern checks gained one (those now map through RULE_CLASS as SEC-JS_*).
+# Keyed on the title, checked in order.
 TITLE_CLASS = [
     (re.compile(r"\bSQL\b", re.I), "sqli"),
     (re.compile(r"command injection|child_process|os\.system|shell", re.I), "cmdi"),

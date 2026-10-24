@@ -30,7 +30,8 @@ How to apply it:
    the rules named `deps.*` and the advisory ids `CVE-*`, `GHSA-*` and `PYSEC-*`.
    A rule pack does not change them, and they change on their own.
 3. Sample 20 of the new findings per language (new = a `rule_id` whose count went
-   up), judge each as a true or false positive by reading the code, and put
+   up; against `v3.6.4.json`, leave out the `SEC-JS_*` rules, see What is counted),
+   judge each as a true or false positive by reading the code, and put
    `true positives / 20` in the PR description. Clean applications are not
    vulnerable by design, so most hits there need an explanation.
 
@@ -114,8 +115,14 @@ plumbing without network access or a real engine.
   repository that commits one scores few kLOC for a lot of scanned text.
 - **findings** is the length of the `findings` array of the JSON report, after the
   engine's own de-duplication. A finding the report carries no `rule_id` for is
-  counted under `(no rule_id)`; today that is the Python engine's pattern checks on
-  JavaScript and TypeScript.
+  counted under `(no rule_id)`. From the engine change after v3.6.4 that gave the
+  Python engine's JavaScript and TypeScript pattern checks a `rule_id`, those checks
+  are counted under `SEC-JS_EVAL`, `SEC-JS_INNER_HTML`, `SEC-JS_DOCUMENT_WRITE` and
+  `SEC-JS_SQL_TEMPLATE` instead, and the `(no rule_id)` bucket no longer holds them.
+  `v3.6.4.json` predates that change, so its `(no rule_id)` counts include these
+  checks. Against it, a drop in `(no rule_id)` with a matching rise in the `SEC-JS_*`
+  buckets is a relabel of the same findings. The sampling step under Noise budget
+  must not count `SEC-JS_*` as new on that account.
 - **per_kloc** is `findings / kloc` computed before rounding; `kloc` and `per_kloc`
   are rounded to three decimals.
 

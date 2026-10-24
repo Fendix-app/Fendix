@@ -126,7 +126,7 @@ The `direct` and `indirect` columns include the new classes.
 ### JavaScript/TypeScript catches template-literal SQL and secrets, nothing else
 
 - **SQL** is found only when written as a template literal (direct, indirect and cross-file). That detection comes from the Python engine's JS pattern check.
-  - Its findings carry **no `rule_id`** yet `BLOCK`.
+  - Its findings carry **no `rule_id`** yet `BLOCK`. (Update, 2026-10-25: they now carry `rule_id: SEC-JS_*`; this measurement predates that change.)
   - It also blocks on a template literal that interpolates a constant.
 - **Nothing else is found:**
   - command injection, through any of `promisify(exec)`, destructured `exec` or `execSync`;

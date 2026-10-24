@@ -15,8 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine's Python-source findings. The `rule_id` is each finding's own id
   (`SEC-JS_EVAL`, `SEC-JS_INNER_HTML`, `SEC-JS_DOCUMENT_WRITE`,
   `SEC-JS_SQL_TEMPLATE`), which is exactly the rule that fingerprint identity
-  already derived from the id, so no fingerprint, baseline match, suppression
-  or grouping changes.
+  already derived from the id. Fingerprints, `.fendix-ignore` matching,
+  baseline matching and grouping do not change.
+
+  **GitHub alerts for these four checks will be re-partitioned once.** SARIF
+  rule ids key on the `rule_id` where there is one and fall back to the title
+  slug where there is not, so their SARIF `ruleId` changes from the title slug
+  to the rule slug:
+
+  | Check | Before | After |
+  |---|---|---|
+  | `JS_SQL_TEMPLATE` | `fendix.injection.sql-query-built-via-template-literal-injection-risk` | `fendix.injection.sec-js-sql-template` |
+  | `JS_INNER_HTML` | `fendix.injection.unsafe-assignment-to-innerhtml-xss-risk` | `fendix.injection.sec-js-inner-html` |
+  | `JS_DOCUMENT_WRITE` | `fendix.injection.unsafe-use-of-document-write-xss-risk` | `fendix.injection.sec-js-document-write` |
+  | `JS_EVAL` | `fendix.injection.unsafe-use-of-eval-in-javascript` | `fendix.injection.sec-js-eval` |
+
+  Existing Code Scanning alerts under the old rule ids close and reopen under
+  the new ones on the first upload after upgrading, and an alert you had
+  dismissed reappears and must be dismissed again. This is a one-time cost.
+  The JSON report's `rule_id` field, and the `rule_id` of a managed-CI evidence
+  submission (which fell back to the category, `injection`), now carry the id
+  too.
 
 ## [3.6.4] - 2026-10-24
 
