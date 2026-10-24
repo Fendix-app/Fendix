@@ -198,7 +198,161 @@ def test_parse_findings_rejects_output_that_is_not_a_scan_report(text):
         noise.parse_findings(text)
 
 
+# ── scanner health: a scan where a required analyzer did not run is not a measurement ──
+
+# What `fendix scan --code <dir> --format json --offline` reports for a healthy scan on a
+# machine without an offline snapshot (copied from a real run): the four required scanners
+# are ok, and everything else is skipped or unavailable for reasons --offline explains.
+_REQUIRED = ("secrets", "textscan", "semgrep", "python-engine")
+_HEALTHY_STATUS = [
+    {"name": "dast", "state": "skipped", "reason": "not_applicable", "detail": "no --url"},
+    {"name": "spec", "state": "skipped", "reason": "not_applicable", "detail": "no --spec"},
+    {"name": "active-probes", "state": "skipped", "reason": "disabled_by_flag", "detail": "--enable-active not set"},
+    {"name": "secrets", "state": "ok"},
+    {"name": "textscan", "state": "ok"},
+    {"name": "semgrep", "state": "ok"},
+    {"name": "govulncheck", "state": "skipped", "reason": "disabled_offline", "detail": "--offline"},
+    {"name": "pip", "state": "skipped", "reason": "dependency_missing", "detail": "--offline: no usable snapshot"},
+    {"name": "npm", "state": "skipped", "reason": "dependency_missing", "detail": "--offline: no usable snapshot"},
+    {"name": "python-engine", "state": "ok"},
+    {"name": "python-engine/auth", "state": "skipped", "reason": "not_applicable", "detail": "no spec supplied"},
+    {"name": "python-engine/injection", "state": "ok", "detail": "648 JavaScript/TypeScript file(s) got pattern checks only"},
+    {"name": "python-engine/deps", "state": "ok"},
+    {"name": "plugins", "state": "skipped", "reason": "not_applicable", "detail": "no plugins configured"},
+]
+
+
+def _status_with(name: str, **fields) -> list:
+    """The healthy status list with the entry `name` replaced by one carrying `fields`."""
+    return [{"name": name, **fields} if e["name"] == name else dict(e) for e in _HEALTHY_STATUS]
+
+
+def _report(findings=(), scanner_status=None) -> str:
+    status = _HEALTHY_STATUS if scanner_status is None else scanner_status
+    return json.dumps({"metadata": {"scanner_status": status}, "findings": list(findings)})
+
+
+def test_the_required_scanners_are_the_four_the_ruling_names():
+    assert tuple(noise.REQUIRED_SCANNERS) == _REQUIRED
+
+
+def test_a_healthy_offline_report_passes_the_health_check():
+    noise.check_scanner_health(json.loads(_report()))  # does not raise
+
+
+def test_expected_offline_non_ok_states_do_not_fail_the_check():
+    # Every entry that is not a required scanner may be in any state: --offline,
+    # missing snapshots and inapplicable sub-checks all produce them.
+    for name, state, reason in [
+        ("dast", "skipped", "not_applicable"),
+        ("spec", "skipped", "not_applicable"),
+        ("active-probes", "skipped", "disabled_by_flag"),
+        ("govulncheck", "skipped", "disabled_offline"),
+        ("pip", "skipped", "dependency_missing"),
+        ("npm", "skipped", "dependency_missing"),
+        ("python-engine/auth", "skipped", "not_applicable"),
+        ("python-engine/injection", "skipped", "unsupported_target"),
+        ("python-engine/deps", "failed", "tool_error"),
+        ("plugins", "skipped", "not_applicable"),
+    ]:
+        report = json.loads(_report(scanner_status=_status_with(name, state=state, reason=reason)))
+        noise.check_scanner_health(report)
+
+
+@pytest.mark.parametrize("scanner", _REQUIRED)
+@pytest.mark.parametrize(
+    "state, reason",
+    [("failed", "exec_error"), ("skipped", "dependency_missing"), ("unavailable", "binary_not_found"), ("timeout", None)],
+)
+def test_a_required_scanner_that_is_not_ok_is_a_target_error_naming_it(scanner, state, reason):
+    fields = {"state": state, "detail": "semgrep: command not found"}
+    if reason:
+        fields["reason"] = reason
+    report = json.loads(_report(scanner_status=_status_with(scanner, **fields)))
+
+    with pytest.raises(noise.TargetError) as err:
+        noise.check_scanner_health(report)
+
+    message = str(err.value)
+    assert scanner in message
+    assert state in message
+    if reason:
+        assert reason in message
+    assert "command not found" in message
+
+
+def test_a_multi_line_detail_is_reported_on_one_line():
+    detail = "engine tree not found.\nFix: set FENDIX_ENGINE."
+    status = _status_with("python-engine", state="skipped", reason="dependency_missing", detail=detail)
+
+    with pytest.raises(noise.TargetError) as err:
+        noise.check_scanner_health(json.loads(_report(scanner_status=status)))
+
+    assert "\n" not in str(err.value)
+    assert "engine tree not found. Fix: set FENDIX_ENGINE." in str(err.value)
+
+
+def test_every_unhealthy_required_scanner_is_named_in_one_error():
+    status = _status_with("semgrep", state="failed", reason="exec_error")
+    status = [{"name": "python-engine", "state": "skipped", "reason": "dependency_missing"} if e["name"] == "python-engine" else e for e in status]
+
+    with pytest.raises(noise.TargetError) as err:
+        noise.check_scanner_health(json.loads(_report(scanner_status=status)))
+
+    assert "semgrep" in str(err.value) and "python-engine" in str(err.value)
+    assert "secrets" not in str(err.value)
+
+
+@pytest.mark.parametrize("scanner", _REQUIRED)
+def test_a_required_scanner_missing_from_the_status_list_is_a_target_error(scanner):
+    status = [e for e in _HEALTHY_STATUS if e["name"] != scanner]
+
+    with pytest.raises(noise.TargetError, match=scanner):
+        noise.check_scanner_health(json.loads(_report(scanner_status=status)))
+
+
+def test_a_required_scanner_reported_twice_must_be_ok_both_times():
+    status = _HEALTHY_STATUS + [{"name": "semgrep", "state": "failed", "reason": "exec_error"}]
+
+    with pytest.raises(noise.TargetError, match="semgrep"):
+        noise.check_scanner_health(json.loads(_report(scanner_status=status)))
+
+
+def test_the_sub_check_of_a_required_scanner_is_not_the_scanner():
+    # "python-engine/auth" being skipped must not be read as python-engine failing, and
+    # "python-engine" being absent must not be satisfied by its sub-checks being ok.
+    status = [e for e in _HEALTHY_STATUS if e["name"] != "python-engine"]
+
+    with pytest.raises(noise.TargetError, match="python-engine"):
+        noise.check_scanner_health(json.loads(_report(scanner_status=status)))
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"findings": []},
+        {"findings": [], "metadata": {}},
+        {"findings": [], "metadata": {"scanner_status": None}},
+        {"findings": [], "metadata": {"scanner_status": []}},
+        {"findings": [], "metadata": {"scanner_status": {"semgrep": "ok"}}},
+        {"findings": [], "metadata": {"scanner_status": ["semgrep"]}},
+        {"findings": [], "metadata": None},
+        {"findings": [], "metadata": []},
+    ],
+)
+def test_a_report_without_a_usable_scanner_status_is_a_target_error(report):
+    with pytest.raises(noise.TargetError, match="scanner_status"):
+        noise.check_scanner_health(report)
+
+
+@pytest.mark.parametrize("state", [None, "OK", "", "okay", True])
+def test_only_the_exact_state_ok_counts_as_healthy(state):
+    with pytest.raises(noise.TargetError, match="semgrep"):
+        noise.check_scanner_health(json.loads(_report(scanner_status=_status_with("semgrep", state=state))))
+
+
 # ── running the scanner (fake binary, no engine) ─────────────────────────────
+
 
 
 def _fake_fendix(tmp_path: Path, *, exit_code: int, stdout: str = "", stderr: str = "") -> Path:
@@ -227,7 +381,7 @@ def test_scan_passes_the_documented_arguments(tmp_path):
             #!{sys.executable}
             import json, sys
             json.dump(sys.argv[1:], open({str(argv_file)!r}, "w"))
-            print(json.dumps({{"findings": []}}))
+            print({_report()!r})
             """
         )
     )
@@ -242,7 +396,7 @@ def test_scan_passes_the_documented_arguments(tmp_path):
 
 @pytest.mark.parametrize("exit_code", [0, 1])
 def test_scan_accepts_exit_codes_zero_and_one_as_normal(tmp_path, exit_code):
-    out = json.dumps({"findings": [{"rule_id": "r1"}, {"rule_id": "r1"}]})
+    out = _report([{"rule_id": "r1"}, {"rule_id": "r1"}])
     fake = _fake_fendix(tmp_path, exit_code=exit_code, stdout=out)
 
     assert noise.scan(str(fake), tmp_path, cwd=tmp_path, timeout=60) == [{"rule_id": "r1"}, {"rule_id": "r1"}]
@@ -251,7 +405,7 @@ def test_scan_accepts_exit_codes_zero_and_one_as_normal(tmp_path, exit_code):
 @pytest.mark.parametrize("exit_code", [2, 3, 70, 127])
 def test_scan_reports_any_other_exit_code_as_a_target_error(tmp_path, exit_code):
     fake = _fake_fendix(
-        tmp_path, exit_code=exit_code, stdout=json.dumps({"findings": []}), stderr="boom: engine unavailable"
+        tmp_path, exit_code=exit_code, stdout=_report(), stderr="boom: engine unavailable"
     )
 
     with pytest.raises(noise.TargetError) as err:
@@ -260,6 +414,31 @@ def test_scan_reports_any_other_exit_code_as_a_target_error(tmp_path, exit_code)
     message = str(err.value)
     assert f"exited {exit_code}" in message
     assert "boom: engine unavailable" in message
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_scan_rejects_a_scan_where_a_required_scanner_failed(tmp_path, exit_code):
+    # The engine exits 0 (or 1 on findings) even when semgrep crashed; the report says so.
+    status = _status_with("semgrep", state="failed", reason="exec_error", detail="semgrep exited 2")
+    fake = _fake_fendix(tmp_path, exit_code=exit_code, stdout=_report([{"rule_id": "r1"}], status))
+
+    with pytest.raises(noise.TargetError) as err:
+        noise.scan(str(fake), tmp_path, cwd=tmp_path, timeout=60)
+
+    assert "semgrep" in str(err.value) and "failed" in str(err.value) and "exec_error" in str(err.value)
+
+
+def test_scan_rejects_a_report_with_no_scanner_status(tmp_path):
+    fake = _fake_fendix(tmp_path, exit_code=0, stdout=json.dumps({"findings": [{"rule_id": "r1"}]}))
+
+    with pytest.raises(noise.TargetError, match="scanner_status"):
+        noise.scan(str(fake), tmp_path, cwd=tmp_path, timeout=60)
+
+
+def test_scan_accepts_a_healthy_offline_report_and_returns_the_findings(tmp_path):
+    fake = _fake_fendix(tmp_path, exit_code=0, stdout=_report([{"rule_id": "r1"}]))
+
+    assert noise.scan(str(fake), tmp_path, cwd=tmp_path, timeout=60) == [{"rule_id": "r1"}]
 
 
 def test_scan_reports_unparseable_output_as_a_target_error(tmp_path):
@@ -518,3 +697,39 @@ def test_main_rejects_an_unknown_only_name(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit):
         noise.main(["--fendix", "unused", "--out", str(tmp_path / "out"), "--targets", str(targets_path), "--only", "nope"])
+
+
+def test_main_leaves_out_a_target_whose_required_scanner_did_not_run(tmp_path, monkeypatch, capsys):
+    # End to end through the real scan(): a fake fendix whose semgrep "failed" on one tree.
+    targets = [_target(name="healthy"), _target(name="degraded", repo="o/degraded")]
+    targets_path = _write_targets(tmp_path, targets)
+    for t in targets:
+        _write(tmp_path / "trees" / t["name"] / "a.py", lines=100)
+
+    def fake_fetch(target, dest):
+        import shutil
+
+        shutil.copytree(tmp_path / "trees" / target["name"], dest)
+
+    monkeypatch.setattr(noise, "fetch", fake_fetch)
+    sick = _status_with("semgrep", state="failed", reason="exec_error", detail="semgrep exited 2")
+    script = tmp_path / "per-tree-fendix"
+    script.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            import sys
+            code = sys.argv[sys.argv.index("--code") + 1]
+            sys.stdout.write({_report([{"rule_id": "r1"}], sick)!r} if "degraded" in code else {_report([{"rule_id": "r1"}])!r})
+            """
+        )
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    out = tmp_path / "out"
+
+    rc = noise.main(["--fendix", str(script), "--out", str(out), "--targets", str(targets_path)])
+
+    assert rc == 1
+    assert list(json.loads((out / "noise.json").read_text())) == ["healthy"]
+    err = capsys.readouterr().err
+    assert "degraded" in err and "semgrep" in err and "exec_error" in err

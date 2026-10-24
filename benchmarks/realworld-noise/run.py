@@ -19,10 +19,13 @@ Writes <dir>/noise.json:
 
     {name: {"kloc": float, "findings": int, "per_kloc": float, "by_rule": {rule_id: int}}}
 
-A target that cannot be fetched or scanned is reported on stderr and left out of
-noise.json; the run goes on with the other targets and exits 1 at the end. Exit
-codes 0 and 1 from `fendix scan` are normal (1 means findings at or above the
-fail threshold); anything else is a per-target error.
+A scan only counts when the analyzers in REQUIRED_SCANNERS (secrets, textscan, semgrep,
+python-engine) report state "ok" in the report's metadata.scanner_status; with semgrep or
+the Python engine missing, the engine still exits 0 with too few findings. A target that
+cannot be fetched or scanned, or whose required analyzer did not run, is reported on
+stderr and left out of noise.json; the run goes on with the other targets and exits 1 at
+the end. Exit codes 0 and 1 from `fendix scan` are normal (1 means findings at or above
+the fail threshold); anything else is a per-target error.
 
 Set TMPDIR to choose where the clones go. They are deleted when the run ends
 unless --keep-clones is given. Standard library only; Python 3.9+.
@@ -54,6 +57,13 @@ REMOTE_BASE = "https://github.com/"
 # `fendix scan` exits 1 when findings reach the fail threshold; both are a finished scan.
 SCAN_OK_EXIT_CODES = (0, 1)
 NO_RULE_ID = "(no rule_id)"
+
+# A scan only counts as a measurement when these analyzers ran: if semgrep or the Python
+# engine is missing or crashes, the scan still exits 0 with fewer findings and the noise
+# would be under-measured. Every other analyzer is allowed to be skipped or unavailable:
+# --offline disables the dependency scanners, and dast, spec, active-probes, plugins and
+# the python-engine/* sub-checks do not apply to a source-only scan.
+REQUIRED_SCANNERS = ("secrets", "textscan", "semgrep", "python-engine")
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -126,20 +136,57 @@ def summarize(kloc: float, findings: List[dict]) -> dict:
     }
 
 
-def parse_findings(text: str) -> List[dict]:
-    """The findings array of a `fendix scan --format json` report."""
+def parse_report(text: str) -> dict:
+    """The JSON object of a `fendix scan --format json` report."""
     try:
         report = json.loads(text)
     except ValueError as exc:
         raise TargetError(f"scan output is not JSON: {exc}") from exc
     if not isinstance(report, dict):
         raise TargetError("scan output is not a JSON object")
+    return report
+
+
+def report_findings(report: dict) -> List[dict]:
+    """The findings array of a parsed report."""
     findings = report.get("findings")
     if findings is None:
         return []
     if not isinstance(findings, list) or not all(isinstance(f, dict) for f in findings):
         raise TargetError("scan output has a malformed 'findings' field")
     return findings
+
+
+def parse_findings(text: str) -> List[dict]:
+    """The findings array of a `fendix scan --format json` report."""
+    return report_findings(parse_report(text))
+
+
+def check_scanner_health(report: dict) -> None:
+    """Raise TargetError unless every analyzer in REQUIRED_SCANNERS reports state "ok".
+
+    The engine records a crashed or missing analyzer in `metadata.scanner_status` and
+    still exits 0, so the exit code cannot be trusted for this. Entries for any other
+    analyzer are ignored, whatever their state. A report with no scanner_status at all
+    is rejected: it cannot show that anything ran.
+    """
+    metadata = report.get("metadata")
+    status = metadata.get("scanner_status") if isinstance(metadata, dict) else None
+    if not isinstance(status, list) or not status or not all(isinstance(e, dict) for e in status):
+        raise TargetError("scan output has no usable metadata.scanner_status, so it cannot show the analyzers ran")
+
+    problems = []
+    for name in REQUIRED_SCANNERS:
+        entries = [e for e in status if e.get("name") == name]
+        if not entries:
+            problems.append(f"{name} is missing from scanner_status")
+            continue
+        for entry in entries:
+            if entry.get("state") != "ok":
+                detail = "".join(f" {key}={' '.join(str(entry[key]).split())}" for key in ("reason", "detail") if entry.get(key))
+                problems.append(f"{name} state={entry.get('state')!r}{detail}")
+    if problems:
+        raise TargetError("required analyzer did not run: " + "; ".join(problems))
 
 
 def load_targets(path) -> List[dict]:
@@ -185,7 +232,11 @@ def _tail(data: Optional[bytes], limit: int = 1500) -> str:
 
 
 def scan(fendix: str, code_dir, *, cwd, timeout: float) -> List[dict]:
-    """Run `fendix scan` over `code_dir` and return its findings."""
+    """Run `fendix scan` over `code_dir` and return its findings.
+
+    Raises TargetError when the scan did not finish, or finished without its required
+    analyzers (see check_scanner_health): such a scan would under-count findings.
+    """
     argv = [fendix, "scan", "--code", str(code_dir), "--format", "json", "--offline"]
     try:
         proc = subprocess.run(argv, cwd=str(cwd), capture_output=True, timeout=timeout)
@@ -195,7 +246,9 @@ def scan(fendix: str, code_dir, *, cwd, timeout: float) -> List[dict]:
         raise TargetError(f"cannot run {fendix}: {exc}") from exc
     if proc.returncode not in SCAN_OK_EXIT_CODES:
         raise TargetError(f"fendix scan exited {proc.returncode}: {_tail(proc.stderr)}")
-    return parse_findings(proc.stdout.decode("utf-8", errors="replace"))
+    report = parse_report(proc.stdout.decode("utf-8", errors="replace"))
+    check_scanner_health(report)
+    return report_findings(report)
 
 
 def fetch(target: dict, dest: Path, *, timeout: float = 900) -> None:

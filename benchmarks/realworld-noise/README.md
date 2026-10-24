@@ -86,6 +86,20 @@ cannot be fetched or scanned is reported on stderr and left out of `noise.json`;
 the other targets still run and the exit status is 1. Never commit a `noise.json`
 that is missing a target.
 
+A scan that finishes is still rejected when an analyzer it depends on did not run.
+The engine records a crashed or missing analyzer in `metadata.scanner_status` and
+exits 0 anyway, with fewer findings, which would make a rule pack look quieter than
+it is. So `secrets`, `textscan`, `semgrep` and `python-engine` must each report state
+`ok`, or the target is an error that names the scanner, its state and its reason
+(for example `semgrep state='skipped' reason=dependency_missing` when `semgrep` is
+not on `PATH`, or `python-engine ... engine tree not found` when `FENDIX_ENGINE` is
+wrong). A report with no `scanner_status` is rejected too. Every other analyzer may
+be skipped or unavailable, because `--offline` and a source-only scan switch them off:
+`dast`, `spec`, `active-probes`, `govulncheck`, `pip`, `npm`, `plugins` and the
+`python-engine/*` sub-checks. `noise.json` carries no health field: a target that
+fails the check is absent, so a file with every target in it is healthy by
+construction.
+
 `run.py` uses only the standard library and works on Python 3.9 and later.
 `python/tests/test_realworld_noise.py` covers its pure parts and its git and scan
 plumbing without network access or a real engine.
