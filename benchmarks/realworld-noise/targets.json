@@ -1,0 +1,65 @@
+[
+  {
+    "name": "juice-shop",
+    "repo": "juice-shop/juice-shop",
+    "sha": "717f5efa886b0417eeecb52378b03cf10567b7e2",
+    "language": "ts",
+    "code_dir": "."
+  },
+  {
+    "name": "nodegoat",
+    "repo": "OWASP/NodeGoat",
+    "sha": "c5cb68a7084e4ae7dcc60e6a98768720a81841e8",
+    "language": "js",
+    "code_dir": "."
+  },
+  {
+    "name": "webgoat",
+    "repo": "WebGoat/WebGoat",
+    "sha": "e7b131360d74336c0c94ab5c8a21259503f59be8",
+    "language": "java",
+    "code_dir": "."
+  },
+  {
+    "name": "govwa",
+    "repo": "0c34/govwa",
+    "sha": "4058f79f31eeb4a36d8f1e64bba1f0c899646e6f",
+    "language": "go",
+    "code_dir": "."
+  },
+  {
+    "name": "pygoat",
+    "repo": "adeyosemanputra/pygoat",
+    "sha": "46fef968f3f44d1191363baf936aaa3335dc5c6d",
+    "language": "python",
+    "code_dir": "."
+  },
+  {
+    "name": "node-express-realworld",
+    "repo": "gothinkster/node-express-realworld-example-app",
+    "sha": "30b68e1e881462b2f4164ea09ab4c4f5699c7b0b",
+    "language": "ts",
+    "code_dir": "."
+  },
+  {
+    "name": "full-stack-fastapi-template",
+    "repo": "fastapi/full-stack-fastapi-template",
+    "sha": "b1125d8839482cb7bbae603ddc6d0081bf87532e",
+    "language": "python",
+    "code_dir": "backend"
+  },
+  {
+    "name": "spring-petclinic",
+    "repo": "spring-projects/spring-petclinic",
+    "sha": "500158f732419217507c7656904b8e6aa1bcc0d6",
+    "language": "java",
+    "code_dir": "."
+  },
+  {
+    "name": "golang-gin-realworld",
+    "repo": "gothinkster/golang-gin-realworld-example-app",
+    "sha": "626c372d259472148d93303f74aa9b9a1cdcef24",
+    "language": "go",
+    "code_dir": "."
+  }
+]
