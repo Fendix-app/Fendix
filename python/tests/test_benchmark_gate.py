@@ -233,6 +233,23 @@ def test_baseline_round_trips_through_the_file(tmp_path):
     assert list(json.loads(path.read_text(encoding="utf-8"))["cases"]) == ["a", "b"]
 
 
+def test_js_pattern_rule_ids_keep_their_class_after_they_gained_a_rule_id():
+    """The Python engine's JS pattern checks used to carry no rule_id and were
+    classed by title. They now carry their id (SEC-JS_*) as the rule_id, which
+    must map to the same class or those cases would read as misses."""
+    rule_classes = _parity.rule_classes
+    for rule_id, title, klass in [
+        ("SEC-JS_SQL_TEMPLATE", "SQL query built via template literal \u2014 injection risk", "sqli"),
+        ("SEC-JS_INNER_HTML", "Unsafe assignment to innerHTML \u2014 XSS risk", "xss"),
+        ("SEC-JS_DOCUMENT_WRITE", "Unsafe use of document.write() \u2014 XSS risk", "xss"),
+    ]:
+        assert rule_classes(rule_id, title) == frozenset({klass}), rule_id
+        assert rule_classes("", title) == frozenset({klass}), f"title fallback for {rule_id}"
+    # eval() is not a corpus class: unmapped by rule_id and by title.
+    assert rule_classes("SEC-JS_EVAL", "Unsafe use of eval() in JavaScript") == frozenset()
+    assert rule_classes("", "Unsafe use of eval() in JavaScript") == frozenset()
+
+
 def test_committed_baseline_matches_the_corpus():
     """baseline.json holds exactly the manifest's cases, each scored as its label implies.
 

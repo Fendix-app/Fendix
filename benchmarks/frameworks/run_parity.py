@@ -84,10 +84,18 @@ MARKER = re.compile(r"EVAL-(SINK|SAFE)\b")
 # render_template_string, which is template injection). Every rule id the
 # engine emits that is not listed here is reported as "unmapped", so a missing
 # mapping shows up in the results instead of silently counting as a miss.
+#
+# The Python engine's four JavaScript pattern checks use their finding id as
+# the rule_id (SEC-JS_SQL_TEMPLATE, ...), not a "<analyzer>/<rule>" pair: that
+# string is already their fingerprint's rule component, so changing it would
+# move the fingerprint of every such finding. They are keyed with the SEC-
+# prefix here for that reason. SEC-JS_EVAL is deliberately absent: eval() is
+# not a corpus class, which is also why JS_EVAL_LITERAL is unmapped.
 RULE_CLASS = {
     # SQL injection
     "PY_SQL_INJECTION": "sqli",
     "JS_SQL_TEMPLATE": "sqli",
+    "SEC-JS_SQL_TEMPLATE": "sqli",
     "JAVA_SQL_INJECTION": "sqli",
     "GO_SQL_INJECTION": "sqli",
     "django-orm-raw-sql": "sqli",
@@ -104,8 +112,10 @@ RULE_CLASS = {
     # XSS
     "PY_XSS_HTML_SINK": ("xss", "ssti"),
     "JS_INNER_HTML": "xss",
+    "SEC-JS_INNER_HTML": "xss",
     "JS_INNER_HTML_USER_INPUT": "xss",
     "JS_DOCUMENT_WRITE": "xss",
+    "SEC-JS_DOCUMENT_WRITE": "xss",
     "JAVA_XSS_REFLECTED": "xss",
     # Server-side template injection (CWE-94)
     "flask-render-template-string-injection": "ssti",

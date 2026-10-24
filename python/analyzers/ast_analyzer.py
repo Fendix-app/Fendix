@@ -252,6 +252,12 @@ class ASTAnalyzer:
                     emit_fn(
                         {
                             "id": f"SEC-{pat_id}",
+                            # Identity is rule=<this string> today (the Go side
+                            # falls back to a non-positional `id`), so rule_id
+                            # must be the id VERBATIM or every JS-pattern
+                            # fingerprint in an existing baseline moves. See
+                            # TestJSPatternFingerprintUnchanged.
+                            "rule_id": f"SEC-{pat_id}",
                             "title": title,
                             "severity": severity,
                             "source": "whitebox",

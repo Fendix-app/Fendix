@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Python engine's JavaScript/TypeScript pattern findings now carry a
+  `rule_id`.** `JS_EVAL`, `JS_INNER_HTML`, `JS_DOCUMENT_WRITE` and
+  `JS_SQL_TEMPLATE` reached the report with `rule_id` empty, unlike the Python
+  engine's Python-source findings. The `rule_id` is each finding's own id
+  (`SEC-JS_EVAL`, `SEC-JS_INNER_HTML`, `SEC-JS_DOCUMENT_WRITE`,
+  `SEC-JS_SQL_TEMPLATE`), which is exactly the rule that fingerprint identity
+  already derived from the id, so no fingerprint, baseline match, suppression
+  or grouping changes.
+
 ## [3.6.4] - 2026-10-24
 
 A security rebuild of v3.6.3. The scanner source is unchanged; what changes
