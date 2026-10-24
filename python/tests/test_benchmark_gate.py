@@ -324,9 +324,19 @@ def _fake_engine(tmp_path: Path) -> Path:
     return binary
 
 
-def _dev_baseline(tmp_path: Path, hits: int, misses: int) -> Path:
-    state = {f"flask-dev-hit{i}": ("TP", True) for i in range(hits)}
-    state |= {f"flask-dev-miss{i}": ("FN", False) for i in range(misses)}
+def _dev_baseline(tmp_path: Path, outcomes: dict[str, str]) -> Path:
+    """A dev baseline over the real flask corpus: `outcomes` by case id, every other case a clean result.
+
+    Unlisted vulnerable cases are FN and unlisted safe cases TN, so a test names only the cases it cares about.
+    """
+    manifest = json.loads((_FRAMEWORKS_ROOT / "flask" / "manifest.json").read_text(encoding="utf-8"))
+    state = {}
+    for case in manifest["cases"]:
+        default = "FN" if case["vulnerable"] else "TN"
+        outcome = outcomes.get(case["id"], default)
+        state[case["id"]] = (outcome, outcome == "TP")
+    unknown = set(outcomes) - set(state)
+    assert not unknown, f"not flask dev cases: {unknown}"
     path = tmp_path / "dev-baseline.json"
     _parity.write_baseline(path, "fendix dev", state)
     return path
@@ -389,7 +399,8 @@ def test_main_rejects_a_corpus_root_that_lacks_a_requested_framework(tmp_path, m
 
 
 def _counts(**families):
-    return {family: tuple(pair) for family, pair in families.items()}
+    """Pair-level counts with one shared (sqli, direct) pair per family: family=(detected, vulnerable)."""
+    return {family: {("sqli", "direct"): tuple(pair)} for family, pair in families.items()}
 
 
 def test_recall_comparison_passes_when_every_family_is_within_ten_points():
@@ -398,10 +409,10 @@ def test_recall_comparison_passes_when_every_family_is_within_ten_points():
     result = _parity.compare_recall(dev, holdout, 0.10)
     assert result.failures == []
     assert result.lines == [
-        "go dev=0.600 holdout=0.660 drop=-0.060",
-        "java dev=0.700 holdout=0.700 drop=0.000",
-        "js-ts dev=0.900 holdout=0.810 drop=0.090",
-        "python dev=0.800 holdout=0.750 drop=0.050",
+        "go dev=0.600 holdout=0.660 drop=-0.060 pairs=1",
+        "java dev=0.700 holdout=0.700 drop=0.000 pairs=1",
+        "js-ts dev=0.900 holdout=0.810 drop=0.090 pairs=1",
+        "python dev=0.800 holdout=0.750 drop=0.050 pairs=1",
     ]
 
 
@@ -411,8 +422,8 @@ def test_recall_comparison_fails_and_names_the_family_that_drops_eleven_points()
     result = _parity.compare_recall(dev, holdout, 0.10)
     assert len(result.failures) == 1
     assert result.failures[0].startswith("python:")
-    assert "python dev=0.800 holdout=0.690 drop=0.110" in result.lines
-    assert "java dev=0.700 holdout=0.700 drop=0.000" in result.lines
+    assert "python dev=0.800 holdout=0.690 drop=0.110 pairs=1" in result.lines
+    assert "java dev=0.700 holdout=0.700 drop=0.000 pairs=1" in result.lines
 
 
 def test_recall_comparison_accepts_exactly_ten_points_without_float_noise():
@@ -428,39 +439,98 @@ def test_recall_comparison_limit_is_configurable():
     assert _parity.compare_recall(dev, holdout, 0.06).failures == []
 
 
+def test_a_direct_only_holdout_is_compared_with_dev_direct_cases_only():
+    """A dev cross_file miss must not lower dev recall when the holdout has no cross_file case."""
+    dev = {"python": {("sqli", "direct"): (10, 10), ("sqli", "cross_file"): (0, 10), ("cmdi", "indirect"): (0, 10)}}
+    holdout = {"python": {("sqli", "direct"): (9, 10)}}
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    # Over all 30 dev cases dev recall would be 0.333 and this would pass; matched, it is 1.0 against 0.9.
+    assert result.lines == ["python dev=1.000 holdout=0.900 drop=0.100 pairs=1"]
+    assert result.failures == []  # exactly ten points
+    worse = _parity.compare_recall(dev, {"python": {("sqli", "direct"): (8, 10)}}, 0.10)
+    assert [f.split(":")[0] for f in worse.failures] == ["python"]
+
+
+def test_a_pair_present_only_in_the_holdout_is_excluded():
+    dev = {"python": {("sqli", "direct"): (8, 10)}}
+    holdout = {"python": {("sqli", "direct"): (8, 10), ("ssti", "alt_api"): (0, 5)}}
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    # Counting the holdout-only pair would give 8/15 = 0.533 and fail.
+    assert result.lines == ["python dev=0.800 holdout=0.800 drop=0.000 pairs=1"]
+    assert result.failures == []
+
+
+def test_recall_is_pooled_over_the_comparable_pairs_of_a_family():
+    dev = {"go": {("sqli", "direct"): (10, 10), ("xss", "direct"): (6, 10), ("ssrf", "direct"): (0, 40)}}
+    holdout = {"go": {("sqli", "direct"): (9, 10), ("xss", "direct"): (5, 10)}}
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    assert result.lines == ["go dev=0.800 holdout=0.700 drop=0.100 pairs=2"]  # 16/20 against 14/20; ssrf is dev-only
+    assert result.failures == []
+
+
 @pytest.mark.parametrize(
-    "dev, holdout, empty_side",
+    "dev, holdout, reason",
     [
-        (_counts(go=(0, 0)), _counts(go=(9, 10)), "dev"),
-        (_counts(go=(9, 10)), _counts(go=(0, 0)), "holdout"),
-        (_counts(go=(9, 10)), {}, "holdout"),  # the family is missing from the run altogether
-        (_counts(), _counts(go=(9, 10)), "dev"),  # ... or from the baseline
+        ({"go": {("sqli", "direct"): (0, 0)}}, {"go": {("sqli", "direct"): (9, 10)}}, "dev set"),
+        ({"go": {("sqli", "direct"): (9, 10)}}, {"go": {("sqli", "direct"): (0, 0)}}, "holdout set"),
+        ({"go": {("sqli", "direct"): (9, 10)}}, {}, "holdout set"),  # the family is missing from the run altogether
+        ({}, {"go": {("sqli", "direct"): (9, 10)}}, "dev set"),  # ... or from the baseline
+        # Both sides have vulnerable cases but no (class, variant) pair in common.
+        ({"go": {("sqli", "direct"): (9, 10)}}, {"go": {("cmdi", "direct"): (9, 10)}}, "pair"),
     ],
 )
-def test_recall_comparison_fails_closed_when_a_family_has_no_vulnerable_cases_on_one_side(dev, holdout, empty_side):
+def test_recall_comparison_fails_closed_when_a_family_has_no_comparable_vulnerable_cases(dev, holdout, reason):
     """A family that cannot be measured fails the comparison instead of passing silently."""
     result = _parity.compare_recall(dev, holdout, 0.10)
     assert len(result.failures) == 1
     assert result.failures[0].startswith("go:")
-    assert empty_side in result.failures[0]
-    assert any(line.startswith("go ") and "drop=n/a" in line for line in result.lines)
+    assert reason in result.failures[0]
+    assert result.lines == ["go dev=n/a holdout=n/a drop=n/a pairs=0"]
 
 
 def test_baseline_recall_counts_cover_only_the_frameworks_that_ran():
     baseline = {
-        "flask-a": ("TP", True),
-        "flask-b": ("FN", False),
-        "flask-c": ("TN", False),  # a safe case never counts toward recall
-        "django-a": ("TP", True),
-        "gin-a": ("TP", True),
-        "nethttp-a": ("FN", False),
+        "flask-sqli-direct": ("TP", True),
+        "flask-sqli-cross_file": ("FN", False),
+        "flask-sqli-safe": ("TN", False),  # a safe case never counts toward recall
+        "django-sqli-direct": ("TP", True),
+        "gin-sqli-direct": ("TP", True),
+        "nethttp-sqli-direct": ("FN", False),
     }
-    assert _parity.baseline_recall_counts(baseline, ["flask", "gin"]) == {"python": (1, 2), "go": (1, 1)}
+    assert _parity.baseline_recall_counts(baseline, ["flask", "gin"]) == {
+        "python": {("sqli", "direct"): (1, 1), ("sqli", "cross_file"): (0, 1), ("sqli", "safe"): (0, 0)},
+        "go": {("sqli", "direct"): (1, 1)},
+    }
+
+
+def test_baseline_recall_counts_read_class_and_variant_from_the_manifest_not_the_id(tmp_path):
+    root = tmp_path / "dev"
+    (root / "flask").mkdir(parents=True)
+    (root / "flask" / "manifest.json").write_text(
+        json.dumps({"cases": [{"id": "flask-odd", "class": "path_traversal", "variant": "alt_api", "vulnerable": True, "file": "x.py"}]})
+    )
+    counts = _parity.baseline_recall_counts({"flask-odd": ("TP", True)}, ["flask"], root=root)
+    assert counts == {"python": {("path_traversal", "alt_api"): (1, 1)}}
+
+
+def test_baseline_recall_counts_reject_a_case_the_dev_manifest_does_not_list():
+    with pytest.raises(ValueError, match="flask-not-a-case"):
+        _parity.baseline_recall_counts({"flask-not-a-case": ("TP", True)}, ["flask"])
 
 
 def test_tally_recall_lists_a_family_that_has_only_safe_cases():
-    counts = _parity.tally_recall([("python", "TN"), ("go", "TP"), ("go", "FN"), ("go", "FP")])
-    assert counts == {"python": (0, 0), "go": (1, 2)}
+    counts = _parity.tally_recall(
+        [
+            ("python", "sqli", "safe", "TN"),
+            ("go", "sqli", "direct", "TP"),
+            ("go", "sqli", "direct", "FN"),
+            ("go", "sqli", "safe", "FP"),
+        ]
+    )
+    assert counts == {
+        "python": {("sqli", "safe"): (0, 0)},
+        "go": {("sqli", "direct"): (1, 2), ("sqli", "safe"): (0, 0)},
+    }
 
 
 @pytest.mark.parametrize(
@@ -487,11 +557,13 @@ def test_main_rejects_incompatible_recall_comparison_flags(tmp_path, monkeypatch
 
 
 def test_holdout_run_reports_recall_per_family_and_exits_one_on_a_drop(tmp_path, monkeypatch, capsys):
-    """End to end with a fake engine: a 30-case-style corpus under --corpus-root, scored and compared.
+    """End to end with a fake engine: a small corpus under --corpus-root, scored and compared.
 
-    The holdout has 4 vulnerable cases, 3 detected (recall 0.75); the dev
-    baseline detected all 10 of its vulnerable cases (recall 1.0): a 25 point
-    drop, so the run exits 1.
+    The holdout has 4 vulnerable `direct` cases, 3 detected (recall 0.75). The
+    dev baseline detected flask's sqli and cmdi `direct` cases, so over those
+    two pairs dev recall is 1.0: a 25 point drop, and the run exits 1. Every
+    other dev case is a miss, which would drag an unmatched dev recall to about
+    0.05 and let this pass.
     """
     root = tmp_path / "holdout"
     _write_flask_corpus(
@@ -507,18 +579,21 @@ def test_holdout_run_reports_recall_per_family_and_exits_one_on_a_drop(tmp_path,
     argv = [
         "run_parity.py", "--fendix", str(_fake_engine(tmp_path)), "--out", str(tmp_path / "out"),
         "--frameworks", "flask", "--isolate", "--no-timing", "--corpus-root", str(root),
-        "--compare-recall-to", str(_dev_baseline(tmp_path, hits=10, misses=0)), "--max-recall-drop", "0.10",
+        "--compare-recall-to",
+        str(_dev_baseline(tmp_path, {"flask-sqli-direct": "TP", "flask-cmdi-direct": "TP"})),
+        "--max-recall-drop", "0.10",
     ]
     monkeypatch.setattr(sys, "argv", argv)
     assert _parity.main() == 1
     out = capsys.readouterr().out
-    assert "python dev=1.000 holdout=0.750 drop=0.250" in out
+    assert "python dev=1.000 holdout=0.750 drop=0.250 pairs=2" in out
+    assert "RECALL: python:" in out
 
-    # The same holdout against a dev baseline it is within 10 points of.
-    argv[argv.index("--compare-recall-to") + 1] = str(_dev_baseline(tmp_path, hits=8, misses=2))  # 0.8
+    # The same holdout against a dev baseline it is within 10 points of: dev 0.5 over the same two pairs.
+    argv[argv.index("--compare-recall-to") + 1] = str(_dev_baseline(tmp_path, {"flask-sqli-direct": "TP"}))
     monkeypatch.setattr(sys, "argv", argv)
     assert _parity.main() == 0
-    assert "python dev=0.800 holdout=0.750 drop=0.050" in capsys.readouterr().out
+    assert "python dev=0.500 holdout=0.750 drop=-0.250 pairs=2" in capsys.readouterr().out
 
 
 def test_quiet_holdout_run_prints_only_family_level_lines(tmp_path, monkeypatch, capsys):
@@ -534,7 +609,7 @@ def test_quiet_holdout_run_prints_only_family_level_lines(tmp_path, monkeypatch,
         [
             "run_parity.py", "--fendix", str(_fake_engine(tmp_path)), "--out", str(tmp_path / "out"),
             "--frameworks", "flask", "--isolate", "--no-timing", "--quiet", "--corpus-root", str(root),
-            "--compare-recall-to", str(_dev_baseline(tmp_path, hits=1, misses=1)),
+            "--compare-recall-to", str(_dev_baseline(tmp_path, {"flask-sqli-direct": "TP"})),
         ],
     )
     assert _parity.main() == 0  # dev 0.5, holdout 0.5
@@ -543,7 +618,7 @@ def test_quiet_holdout_run_prints_only_family_level_lines(tmp_path, monkeypatch,
     assert "case-id" not in captured.out
     assert not re.search(r"\b(TP|FN|FP|TN)\b", captured.out)
     lines = captured.out.splitlines()
-    assert lines[0] == "python dev=0.500 holdout=0.500 drop=0.000"
+    assert lines[0] == "python dev=0.500 holdout=0.500 drop=0.000 pairs=2"
     assert len(lines) == 2  # the one family line and the verdict
 
 
@@ -559,7 +634,7 @@ def test_quiet_holdout_run_withholds_failure_details(tmp_path, monkeypatch, caps
         sys,
         "argv",
         ["run_parity.py", "--fendix", str(broken), "--out", str(tmp_path / "out"), "--frameworks", "flask",
-         "--isolate", "--quiet", "--corpus-root", str(root), "--compare-recall-to", str(_dev_baseline(tmp_path, 1, 0))],
+         "--isolate", "--quiet", "--corpus-root", str(root), "--compare-recall-to", str(_dev_baseline(tmp_path, {}))],
     )
     assert _parity.main() == 2
     captured = capsys.readouterr()

@@ -53,9 +53,12 @@ jobs:
   # private holdout corpus (Fendix-app/parity-holdout, same layout as
   # benchmarks/frameworks/) and fail the release when any language family's
   # recall there is more than 10 points below its recall on the development
-  # corpus in benchmarks/frameworks/baseline.json. A detector tuned to the
-  # development cases scores well there and badly here, and this is where that
-  # shows before the numbers go out.
+  # corpus in benchmarks/frameworks/baseline.json. Recall is compared on
+  # matching cases: only the (class, variant) pairs that both corpora have
+  # vulnerable cases for, so a holdout of `direct` cases is not measured against
+  # development cross_file misses. A detector tuned to the development cases
+  # scores well there and badly here, and this is where that shows before the
+  # numbers go out.
   #
   # This repository is public, so its logs and artifacts are too, and a
   # per-case holdout result would leak the holdout into the next round of
@@ -128,7 +131,7 @@ jobs:
         if: steps.holdout.outputs.configured == 'true'
         run: make parity-venv parity-prereqs
 
-      # --quiet prints only `family dev=X holdout=Y drop=Z` lines and a verdict.
+      # --quiet prints only `family dev=X holdout=Y drop=Z pairs=N` lines and a verdict.
       # The exit status is the gate: 1 when a family's drop exceeds the limit
       # or cannot be measured, 2 when the run itself failed.
       - name: Compare holdout recall with development recall

@@ -26,10 +26,15 @@ directories in the same manifest format (the case count may differ). The
 release workflow points it at the private holdout corpus.
 
 Held-out recall: `--isolate --compare-recall-to <baseline.json>` prints, per
-language family, `family dev=X holdout=Y drop=Z` (recall of the baseline's cases
-against recall of this run) and exits 1 when any family's recall is more than
-`--max-recall-drop` (default 0.10, ten points) below its baseline recall, or
-cannot be measured. `--quiet` limits the output to those lines, for a public log.
+language family, `family dev=X holdout=Y drop=Z pairs=N` and exits 1 when any
+family's recall is more than `--max-recall-drop` (default 0.10, ten points)
+below its baseline recall, or cannot be measured. Recall is compared on matching
+cases only: a (class, variant) pair counts when the family has vulnerable cases
+of that pair both in the baseline (the development corpus) and in this run; N is
+the number of such pairs. A holdout of `direct` cases is therefore not compared
+with development `cross_file` cases it has no counterpart for. The development
+side takes each case's class and variant from the manifests next to this script.
+`--quiet` limits the output to those lines, for a public log.
 
 Standard library only; Python 3.9+.
 """
@@ -458,65 +463,98 @@ def write_baseline(path, engine: str, current: Dict[str, CaseState]) -> None:
 
 # ── Held-out recall comparison ───────────────────────────────────────────────
 
-# family -> (vulnerable cases detected, vulnerable cases). A family appears even
-# when it holds no vulnerable case, so "nothing to measure" stays visible.
-RecallCounts = Dict[str, Tuple[int, int]]
+# family -> {(class, variant): (vulnerable cases detected, vulnerable cases)}.
+# A pair appears for every case, safe ones included (as (0, 0)), and a family
+# appears even when it holds no vulnerable case, so "nothing to measure" stays
+# visible.
+Pair = Tuple[str, str]
+RecallCounts = Dict[str, Dict[Pair, Tuple[int, int]]]
 DEFAULT_MAX_RECALL_DROP = Fraction(1, 10)
 
 
 class RecallComparison(NamedTuple):
-    lines: List[str]  # one `family dev=X holdout=Y drop=Z` line per family
+    lines: List[str]  # one `family dev=X holdout=Y drop=Z pairs=N` line per family
     failures: List[str]  # one reason per family that fails the comparison
 
 
-def tally_recall(rows: Iterable[Tuple[str, str]]) -> RecallCounts:
-    """(detected, vulnerable) per family from (family, outcome) pairs."""
-    counts: Dict[str, List[int]] = defaultdict(lambda: [0, 0])
-    for family, outcome in rows:
-        entry = counts[family]
+def tally_recall(rows: Iterable[Tuple[str, str, str, str]]) -> RecallCounts:
+    """Recall counts per family and (class, variant) from (family, class, variant, outcome) rows."""
+    counts: Dict[str, Dict[Pair, List[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
+    for family, klass, variant, outcome in rows:
+        entry = counts[family][(klass, variant)]
         if outcome in ("TP", "FN"):
             entry[1] += 1
             entry[0] += outcome == "TP"
-    return {family: (hit, total) for family, (hit, total) in counts.items()}
+    return {family: {pair: (hit, total) for pair, (hit, total) in pairs.items()} for family, pairs in counts.items()}
 
 
-def baseline_recall_counts(baseline: Dict[str, CaseState], frameworks: Iterable[str]) -> RecallCounts:
+def baseline_recall_counts(baseline: Dict[str, CaseState], frameworks: Iterable[str], root: Path = ROOT) -> RecallCounts:
     """Recall counts for the baseline's cases of the given frameworks.
 
-    Case ids start with the framework name (SPEC.md), which gives the family.
-    Like --gate, a run of fewer frameworks compares against only those.
+    The baseline stores only {outcome, blocks} per case id, so each case's
+    class and variant come from the development manifest under `root`, the
+    corpus the baseline was recorded on. The manifest is authoritative: parsing
+    "<framework>-<class>-<variant>" out of the id would work today but would
+    guess if a class or variant name ever contained the separator. A baseline
+    case the manifest does not list is an error (a stale baseline), not a case
+    to skip. Like --gate, a run of fewer frameworks compares against only those.
     """
-    selected = set(frameworks)
-    return tally_recall(
-        (FAMILY[case_id.split("-", 1)[0]], outcome)
-        for case_id, (outcome, _) in baseline.items()
-        if case_id.split("-", 1)[0] in selected
-    )
+    selected = list(frameworks)
+    described: Dict[str, Tuple[str, Pair]] = {}
+    for framework in selected:
+        manifest = json.loads((root / framework / "manifest.json").read_text(encoding="utf-8"))
+        for case in manifest["cases"]:
+            described[case["id"]] = (FAMILY[framework], (case["class"], case["variant"]))
+    rows = []
+    for case_id, (outcome, _) in baseline.items():
+        if case_id.split("-", 1)[0] not in selected:
+            continue
+        if case_id not in described:
+            raise ValueError(f"baseline case {case_id} is not in the manifests under {root}; regenerate the baseline")
+        family, (klass, variant) = described[case_id]
+        rows.append((family, klass, variant, outcome))
+    return tally_recall(rows)
 
 
 def compare_recall(dev: RecallCounts, holdout: RecallCounts, max_drop) -> RecallComparison:
-    """Compare recall per family; fail a family whose holdout recall is more than `max_drop` below dev.
+    """Compare recall per family on matching cases; fail a family whose holdout recall is more than `max_drop` below dev.
+
+    Only (class, variant) pairs that have vulnerable cases on both sides are
+    compared, and recall is pooled over them: dev recall over the dev cases of
+    those pairs, holdout recall over the holdout cases of the same pairs. A
+    pair present on one side only has no counterpart, so it lowers neither
+    recall. This keeps a holdout of easy `direct` cases from being measured
+    against development cross_file or indirect misses.
 
     The limit is exact ("more than 10 points" lets exactly 10 pass, which
     floating point would not: 0.8 - 0.7 > 0.1). A family with no vulnerable
-    case on either side has no recall to compare, and that fails too: an
-    unmeasured family must not read as a pass.
+    case on a side, or with no pair in common, has no recall to compare, and
+    that fails too: an unmeasured family must not read as a pass.
     """
     limit = Fraction(str(max_drop))
     lines: List[str] = []
     failures: List[str] = []
     for family in sorted(set(dev) | set(holdout)):
-        dev_hit, dev_total = dev.get(family, (0, 0))
-        out_hit, out_total = holdout.get(family, (0, 0))
-        dev_recall = Fraction(dev_hit, dev_total) if dev_total else None
-        out_recall = Fraction(out_hit, out_total) if out_total else None
-        if dev_recall is None or out_recall is None:
-            lines.append(f"{family} dev={_recall_text(dev_recall)} holdout={_recall_text(out_recall)} drop=n/a")
-            empty = [name for name, recall in (("dev", dev_recall), ("holdout", out_recall)) if recall is None]
-            failures.append(f"{family}: no vulnerable cases in the {' or '.join(empty)} set, so recall cannot be compared")
+        dev_pairs = {pair: c for pair, c in dev.get(family, {}).items() if c[1]}
+        out_pairs = {pair: c for pair, c in holdout.get(family, {}).items() if c[1]}
+        missing = [name for name, pairs in (("dev", dev_pairs), ("holdout", out_pairs)) if not pairs]
+        shared = sorted(set(dev_pairs) & set(out_pairs))
+        if missing or not shared:
+            lines.append(f"{family} dev=n/a holdout=n/a drop=n/a pairs=0")
+            reason = (
+                f"no vulnerable cases in the {' or '.join(missing)} set"
+                if missing
+                else "no (class, variant) pair has vulnerable cases in both the dev and holdout sets"
+            )
+            failures.append(f"{family}: {reason}, so recall cannot be compared")
             continue
+        dev_recall = Fraction(sum(dev_pairs[p][0] for p in shared), sum(dev_pairs[p][1] for p in shared))
+        out_recall = Fraction(sum(out_pairs[p][0] for p in shared), sum(out_pairs[p][1] for p in shared))
         drop = dev_recall - out_recall
-        lines.append(f"{family} dev={_recall_text(dev_recall)} holdout={_recall_text(out_recall)} drop={_recall_text(drop)}")
+        lines.append(
+            f"{family} dev={_recall_text(dev_recall)} holdout={_recall_text(out_recall)} "
+            f"drop={_recall_text(drop)} pairs={len(shared)}"
+        )
         if drop > limit:
             failures.append(f"{family}: holdout recall is {_recall_text(drop)} below dev, limit {_recall_text(limit)}")
     return RecallComparison(lines, failures)
@@ -586,8 +624,9 @@ def main() -> int:
         "--compare-recall-to",
         metavar="BASELINE",
         help="compare this run's recall per language family with the recall of this baseline's cases "
-        "(the development set) and exit 1 when a family is more than --max-recall-drop below it, or has "
-        "no vulnerable cases to compare (requires --isolate)",
+        "(the development set), on the (class, variant) pairs both sets have vulnerable cases for, and "
+        "exit 1 when a family is more than --max-recall-drop below it, or has nothing to compare "
+        "(requires --isolate)",
     )
     args = parser.parse_args()
     frameworks = [f for f in args.frameworks.split(",") if f]
@@ -722,8 +761,9 @@ def run(args: argparse.Namespace, frameworks: List[str]) -> int:
         print(f"{verdict}: {len(gate.regressions)} regressions, {len(gate.improvements)} improvements ({len(baseline)} cases)")
         return 1 if gate.regressions else 0
     if args.compare_recall_to:
-        dev = baseline_recall_counts(load_baseline(args.compare_recall_to), frameworks)
-        holdout = tally_recall((r["family"], c["outcome"]) for r in results for c in r["cases"])
+        # The dev side is the development corpus next to this script, whatever --corpus-root says.
+        dev = baseline_recall_counts(load_baseline(args.compare_recall_to), frameworks, ROOT)
+        holdout = tally_recall((r["family"], c["class"], c["variant"], c["outcome"]) for r in results for c in r["cases"])
         limit = args.max_recall_drop if args.max_recall_drop is not None else DEFAULT_MAX_RECALL_DROP
         comparison = compare_recall(dev, holdout, limit)
         for line in comparison.lines:
