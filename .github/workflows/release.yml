@@ -49,16 +49,25 @@ jobs:
           echo "::error::Tagged releases MUST set vars.COSIGN_ENABLED=true (Settings → Secrets and variables → Actions → Variables). To intentionally ship an unsigned tag, set vars.COSIGN_ENABLED=allow-unsigned."
           exit 1
 
-  # Held-out recall check: before anything is built or published, scan the
-  # private holdout corpus (Fendix-app/parity-holdout, same layout as
-  # benchmarks/frameworks/) and fail the release when any language family's
-  # recall there is more than 10 points below its recall on the development
-  # corpus in benchmarks/frameworks/baseline.json. Recall is compared on
-  # matching cases: only the (class, variant) pairs that both corpora have
-  # vulnerable cases for, so a holdout of `direct` cases is not measured against
-  # development cross_file misses. A detector tuned to the development cases
-  # scores well there and badly here, and this is where that shows before the
-  # numbers go out.
+  # Held-out recall check. It decides which per-family detection claims may be
+  # published for this release; it does not decide whether the release ships.
+  #
+  # The job scans the private holdout corpus (Fendix-app/parity-holdout, same
+  # layout as benchmarks/frameworks/) and compares each language family's
+  # recall there with its recall on the development corpus in
+  # benchmarks/frameworks/baseline.json. Recall is compared on matching cases:
+  # only the (class, variant) pairs that both corpora have vulnerable cases
+  # for, with the development recall weighted to the holdout's mix of pairs, so
+  # a holdout of `direct` cases is not measured against development
+  # cross_file misses. A detector tuned to the development cases scores well
+  # there and badly here. The job goes red when any family's holdout recall is
+  # more than 10 points below its development recall (or cannot be measured):
+  # that family's numbers stay out of published claims until the gap closes.
+  #
+  # Nothing depends on this job. A red result is visible on the run and does
+  # not stop `release`, `publish`, `docker` or `mirror`, so a security patch
+  # still ships while a family is overfit. If the job is made a dependency of
+  # `release`, a family that fails today would stop every release.
   #
   # This repository is public, so its logs and artifacts are too, and a
   # per-case holdout result would leak the holdout into the next round of
@@ -70,13 +79,7 @@ jobs:
   # It runs only on a tag push (the same condition as `release`). The holdout
   # repository and its deploy key are set up outside this workflow: while
   # secrets.PARITY_HOLDOUT_DEPLOY_KEY is empty or absent the job reports that
-  # and passes, so a release is never blocked by a holdout that does not exist.
-  # Once the key is set, a failing comparison fails this job, and `release`
-  # needs it, which skips everything downstream: build-record, publish, docker
-  # and mirror all depend on `release` already. Gating `release` rather than
-  # each publishing job keeps their `needs:` and docker's `always()` condition
-  # as they are, and also stops the cosign signatures from being written to the
-  # public transparency log for a release that will not ship.
+  # and passes, so a holdout that does not exist yet never turns the run red.
   parity-holdout:
     name: Parity holdout recall
     runs-on: ubuntu-latest
@@ -152,7 +155,7 @@ jobs:
   release:
     name: Build & Release
     runs-on: ubuntu-latest
-    needs: [enforce-signing, parity-holdout]
+    needs: enforce-signing
     if: github.event_name == 'push'
     strategy:
       matrix:

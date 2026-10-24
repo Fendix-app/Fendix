@@ -32,8 +32,11 @@ below its baseline recall, or cannot be measured. Recall is compared on matching
 cases only: a (class, variant) pair counts when the family has vulnerable cases
 of that pair both in the baseline (the development corpus) and in this run; N is
 the number of such pairs. A holdout of `direct` cases is therefore not compared
-with development `cross_file` cases it has no counterpart for. The development
-side takes each case's class and variant from the manifests next to this script.
+with development `cross_file` cases it has no counterpart for. Dev recall is
+standardised to the holdout's mix: each shared pair's dev recall is weighted by
+the holdout's number of vulnerable cases of that pair, so a different case mix
+between the two corpora is not reported as a drop. The development side takes
+each case's class and variant from the manifests next to this script.
 `--quiet` limits the output to those lines, for a public log.
 
 Standard library only; Python 3.9+.
@@ -520,11 +523,18 @@ def compare_recall(dev: RecallCounts, holdout: RecallCounts, max_drop) -> Recall
     """Compare recall per family on matching cases; fail a family whose holdout recall is more than `max_drop` below dev.
 
     Only (class, variant) pairs that have vulnerable cases on both sides are
-    compared, and recall is pooled over them: dev recall over the dev cases of
-    those pairs, holdout recall over the holdout cases of the same pairs. A
-    pair present on one side only has no counterpart, so it lowers neither
-    recall. This keeps a holdout of easy `direct` cases from being measured
-    against development cross_file or indirect misses.
+    compared. A pair present on one side only has no counterpart, so it lowers
+    neither recall. This keeps a holdout of easy `direct` cases from being
+    measured against development cross_file or indirect misses.
+
+    Holdout recall is the holdout's own: detected / vulnerable over the shared
+    pairs. Dev recall is standardised to the holdout's mix: each shared pair's
+    dev recall is weighted by how many vulnerable cases the holdout has of that
+    pair, sum(n_holdout(p) * dev_hit(p) / dev_total(p)) / sum(n_holdout(p)), the
+    recall the development engine would score on a holdout-shaped set. Pooling
+    each side by its own case counts would weigh a pair differently on each
+    side and report a drop for an engine that generalises perfectly, only
+    because the holdout has more cases of a hard pair than the dev corpus does.
 
     The limit is exact ("more than 10 points" lets exactly 10 pass, which
     floating point would not: 0.8 - 0.7 > 0.1). A family with no vulnerable
@@ -548,8 +558,9 @@ def compare_recall(dev: RecallCounts, holdout: RecallCounts, max_drop) -> Recall
             )
             failures.append(f"{family}: {reason}, so recall cannot be compared")
             continue
-        dev_recall = Fraction(sum(dev_pairs[p][0] for p in shared), sum(dev_pairs[p][1] for p in shared))
-        out_recall = Fraction(sum(out_pairs[p][0] for p in shared), sum(out_pairs[p][1] for p in shared))
+        weight = sum(out_pairs[p][1] for p in shared)
+        dev_recall = sum(Fraction(out_pairs[p][1] * dev_pairs[p][0], dev_pairs[p][1]) for p in shared) / weight
+        out_recall = Fraction(sum(out_pairs[p][0] for p in shared), weight)
         drop = dev_recall - out_recall
         lines.append(
             f"{family} dev={_recall_text(dev_recall)} holdout={_recall_text(out_recall)} "

@@ -460,12 +460,37 @@ def test_a_pair_present_only_in_the_holdout_is_excluded():
     assert result.failures == []
 
 
-def test_recall_is_pooled_over_the_comparable_pairs_of_a_family():
+def test_recall_is_compared_over_the_comparable_pairs_of_a_family():
     dev = {"go": {("sqli", "direct"): (10, 10), ("xss", "direct"): (6, 10), ("ssrf", "direct"): (0, 40)}}
     holdout = {"go": {("sqli", "direct"): (9, 10), ("xss", "direct"): (5, 10)}}
     result = _parity.compare_recall(dev, holdout, 0.10)
-    assert result.lines == ["go dev=0.800 holdout=0.700 drop=0.100 pairs=2"]  # 16/20 against 14/20; ssrf is dev-only
+    assert result.lines == ["go dev=0.800 holdout=0.700 drop=0.100 pairs=2"]  # ssrf is dev-only and ignored
     assert result.failures == []
+
+
+def test_dev_recall_is_standardised_to_the_holdout_mix_of_pairs():
+    """A pair weighs what it weighs in the holdout on both sides, so a different case mix is not a drop.
+
+    The engine generalises perfectly here: per-pair recall is identical on both
+    sides (a/direct 100%, b/cross_file 0%). The holdout simply has three times
+    as many b/cross_file cases. Pooling each side by its own case counts would
+    give dev 10/20 = 0.500 against holdout 10/40 = 0.250 and fail it.
+    """
+    dev = {"python": {("a", "direct"): (10, 10), ("b", "cross_file"): (0, 10)}}
+    holdout = {"python": {("a", "direct"): (10, 10), ("b", "cross_file"): (0, 30)}}
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    assert result.lines == ["python dev=0.250 holdout=0.250 drop=0.000 pairs=2"]
+    assert result.failures == []
+
+
+def test_standardisation_uses_the_holdout_weights_for_a_real_drop():
+    # Holdout weights: a/direct 30, b/cross_file 10. Dev per-pair recall 1.0 and 0.5, so the
+    # dev expectation is (30 * 1.0 + 10 * 0.5) / 40 = 0.875; the holdout found 30/40 = 0.75.
+    dev = {"java": {("a", "direct"): (10, 10), ("b", "cross_file"): (5, 10)}}
+    holdout = {"java": {("a", "direct"): (24, 30), ("b", "cross_file"): (6, 10)}}
+    result = _parity.compare_recall(dev, holdout, 0.10)
+    assert result.lines == ["java dev=0.875 holdout=0.750 drop=0.125 pairs=2"]
+    assert [f.split(":")[0] for f in result.failures] == ["java"]
 
 
 @pytest.mark.parametrize(
@@ -589,11 +614,13 @@ def test_holdout_run_reports_recall_per_family_and_exits_one_on_a_drop(tmp_path,
     assert "python dev=1.000 holdout=0.750 drop=0.250 pairs=2" in out
     assert "RECALL: python:" in out
 
-    # The same holdout against a dev baseline it is within 10 points of: dev 0.5 over the same two pairs.
+    # The same holdout against a dev baseline that found sqli but missed cmdi. Dev recall is standardised to
+    # the holdout's mix (3 sqli cases, 1 cmdi case): (3 * 1.0 + 1 * 0.0) / 4 = 0.75, so there is no drop. Pooled
+    # by each side's own counts (one dev case per pair) it would be 0.5.
     argv[argv.index("--compare-recall-to") + 1] = str(_dev_baseline(tmp_path, {"flask-sqli-direct": "TP"}))
     monkeypatch.setattr(sys, "argv", argv)
     assert _parity.main() == 0
-    assert "python dev=0.500 holdout=0.750 drop=-0.250 pairs=2" in capsys.readouterr().out
+    assert "python dev=0.750 holdout=0.750 drop=0.000 pairs=2" in capsys.readouterr().out
 
 
 def test_quiet_holdout_run_prints_only_family_level_lines(tmp_path, monkeypatch, capsys):
