@@ -1,0 +1,75 @@
+{
+  "framework": "nestjs",
+  "language": "typescript",
+  "cases": [
+    {"id": "nestjs-sqli-direct", "class": "sqli", "variant": "direct", "vulnerable": true, "file": "src/controllers/sqli-direct.controller.ts"},
+    {"id": "nestjs-sqli-indirect", "class": "sqli", "variant": "indirect", "vulnerable": true, "file": "src/controllers/sqli-indirect.controller.ts"},
+    {"id": "nestjs-sqli-safe", "class": "sqli", "variant": "safe", "vulnerable": false, "file": "src/controllers/sqli-safe.controller.ts"},
+    {"id": "nestjs-sqli-safe_lookalike", "class": "sqli", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/sqli-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-cmdi-direct", "class": "cmdi", "variant": "direct", "vulnerable": true, "file": "src/controllers/cmdi-direct.controller.ts"},
+    {"id": "nestjs-cmdi-indirect", "class": "cmdi", "variant": "indirect", "vulnerable": true, "file": "src/controllers/cmdi-indirect.controller.ts"},
+    {"id": "nestjs-cmdi-safe", "class": "cmdi", "variant": "safe", "vulnerable": false, "file": "src/controllers/cmdi-safe.controller.ts"},
+    {"id": "nestjs-cmdi-safe_lookalike", "class": "cmdi", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/cmdi-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-xss-direct", "class": "xss", "variant": "direct", "vulnerable": true, "file": "src/controllers/xss-direct.controller.ts"},
+    {"id": "nestjs-xss-indirect", "class": "xss", "variant": "indirect", "vulnerable": true, "file": "src/controllers/xss-indirect.controller.ts"},
+    {"id": "nestjs-xss-safe", "class": "xss", "variant": "safe", "vulnerable": false, "file": "src/controllers/xss-safe.controller.ts"},
+    {"id": "nestjs-xss-safe_lookalike", "class": "xss", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/xss-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-ssrf-direct", "class": "ssrf", "variant": "direct", "vulnerable": true, "file": "src/controllers/ssrf-direct.controller.ts"},
+    {"id": "nestjs-ssrf-indirect", "class": "ssrf", "variant": "indirect", "vulnerable": true, "file": "src/controllers/ssrf-indirect.controller.ts"},
+    {"id": "nestjs-ssrf-safe", "class": "ssrf", "variant": "safe", "vulnerable": false, "file": "src/controllers/ssrf-safe.controller.ts"},
+    {"id": "nestjs-ssrf-safe_lookalike", "class": "ssrf", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/ssrf-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-path_traversal-direct", "class": "path_traversal", "variant": "direct", "vulnerable": true, "file": "src/controllers/path-traversal-direct.controller.ts"},
+    {"id": "nestjs-path_traversal-indirect", "class": "path_traversal", "variant": "indirect", "vulnerable": true, "file": "src/controllers/path-traversal-indirect.controller.ts"},
+    {"id": "nestjs-path_traversal-safe", "class": "path_traversal", "variant": "safe", "vulnerable": false, "file": "src/controllers/path-traversal-safe.controller.ts"},
+    {"id": "nestjs-path_traversal-safe_lookalike", "class": "path_traversal", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/path-traversal-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-open_redirect-direct", "class": "open_redirect", "variant": "direct", "vulnerable": true, "file": "src/controllers/open-redirect-direct.controller.ts"},
+    {"id": "nestjs-open_redirect-indirect", "class": "open_redirect", "variant": "indirect", "vulnerable": true, "file": "src/controllers/open-redirect-indirect.controller.ts"},
+    {"id": "nestjs-open_redirect-safe", "class": "open_redirect", "variant": "safe", "vulnerable": false, "file": "src/controllers/open-redirect-safe.controller.ts"},
+    {"id": "nestjs-open_redirect-safe_lookalike", "class": "open_redirect", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/open-redirect-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-hardcoded_secret-direct", "class": "hardcoded_secret", "variant": "direct", "vulnerable": true, "file": "src/controllers/hardcoded-secret-direct.controller.ts"},
+    {"id": "nestjs-hardcoded_secret-indirect", "class": "hardcoded_secret", "variant": "indirect", "vulnerable": true, "file": "src/controllers/hardcoded-secret-indirect.controller.ts"},
+    {"id": "nestjs-hardcoded_secret-safe", "class": "hardcoded_secret", "variant": "safe", "vulnerable": false, "file": "src/controllers/hardcoded-secret-safe.controller.ts"},
+    {"id": "nestjs-hardcoded_secret-safe_lookalike", "class": "hardcoded_secret", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/hardcoded-secret-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-weak_password_hash-direct", "class": "weak_password_hash", "variant": "direct", "vulnerable": true, "file": "src/controllers/weak-password-hash-direct.controller.ts"},
+    {"id": "nestjs-weak_password_hash-indirect", "class": "weak_password_hash", "variant": "indirect", "vulnerable": true, "file": "src/controllers/weak-password-hash-indirect.controller.ts"},
+    {"id": "nestjs-weak_password_hash-safe", "class": "weak_password_hash", "variant": "safe", "vulnerable": false, "file": "src/controllers/weak-password-hash-safe.controller.ts"},
+    {"id": "nestjs-weak_password_hash-safe_lookalike", "class": "weak_password_hash", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/weak-password-hash-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-jwt_no_verify-direct", "class": "jwt_no_verify", "variant": "direct", "vulnerable": true, "file": "src/controllers/jwt-no-verify-direct.controller.ts"},
+    {"id": "nestjs-jwt_no_verify-indirect", "class": "jwt_no_verify", "variant": "indirect", "vulnerable": true, "file": "src/controllers/jwt-no-verify-indirect.controller.ts"},
+    {"id": "nestjs-jwt_no_verify-safe", "class": "jwt_no_verify", "variant": "safe", "vulnerable": false, "file": "src/controllers/jwt-no-verify-safe.controller.ts"},
+    {"id": "nestjs-jwt_no_verify-safe_lookalike", "class": "jwt_no_verify", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/jwt-no-verify-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-weak_random_token-direct", "class": "weak_random_token", "variant": "direct", "vulnerable": true, "file": "src/controllers/weak-random-token-direct.controller.ts"},
+    {"id": "nestjs-weak_random_token-indirect", "class": "weak_random_token", "variant": "indirect", "vulnerable": true, "file": "src/controllers/weak-random-token-indirect.controller.ts"},
+    {"id": "nestjs-weak_random_token-safe", "class": "weak_random_token", "variant": "safe", "vulnerable": false, "file": "src/controllers/weak-random-token-safe.controller.ts"},
+    {"id": "nestjs-weak_random_token-safe_lookalike", "class": "weak_random_token", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/weak-random-token-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-ssti-direct", "class": "ssti", "variant": "direct", "vulnerable": true, "file": "src/controllers/ssti-direct.controller.ts"},
+    {"id": "nestjs-ssti-indirect", "class": "ssti", "variant": "indirect", "vulnerable": true, "file": "src/controllers/ssti-indirect.controller.ts"},
+    {"id": "nestjs-ssti-safe", "class": "ssti", "variant": "safe", "vulnerable": false, "file": "src/controllers/ssti-safe.controller.ts"},
+    {"id": "nestjs-ssti-safe_lookalike", "class": "ssti", "variant": "safe_lookalike", "vulnerable": false, "file": "src/controllers/ssti-safe-lookalike.controller.ts"},
+
+    {"id": "nestjs-sqli-cross_file", "class": "sqli", "variant": "cross_file", "vulnerable": true, "file": "src/lib/sqli-cross-file.ts", "entry_file": "src/controllers/sqli-cross-file.controller.ts"},
+    {"id": "nestjs-sqli-alt_api", "class": "sqli", "variant": "alt_api", "vulnerable": true, "file": "src/controllers/sqli-alt-api.controller.ts"},
+    {"id": "nestjs-cmdi-cross_file", "class": "cmdi", "variant": "cross_file", "vulnerable": true, "file": "src/lib/cmdi-cross-file.ts", "entry_file": "src/controllers/cmdi-cross-file.controller.ts"},
+    {"id": "nestjs-cmdi-alt_api", "class": "cmdi", "variant": "alt_api", "vulnerable": true, "file": "src/controllers/cmdi-alt-api.controller.ts"},
+    {"id": "nestjs-xss-cross_file", "class": "xss", "variant": "cross_file", "vulnerable": true, "file": "src/lib/xss-cross-file.ts", "entry_file": "src/controllers/xss-cross-file.controller.ts"},
+    {"id": "nestjs-xss-alt_api", "class": "xss", "variant": "alt_api", "vulnerable": true, "file": "src/controllers/xss-alt-api.controller.ts"},
+    {"id": "nestjs-ssrf-cross_file", "class": "ssrf", "variant": "cross_file", "vulnerable": true, "file": "src/lib/ssrf-cross-file.ts", "entry_file": "src/controllers/ssrf-cross-file.controller.ts"},
+    {"id": "nestjs-ssrf-alt_api", "class": "ssrf", "variant": "alt_api", "vulnerable": true, "file": "src/controllers/ssrf-alt-api.controller.ts"},
+    {"id": "nestjs-path_traversal-cross_file", "class": "path_traversal", "variant": "cross_file", "vulnerable": true, "file": "src/lib/path-traversal-cross-file.ts", "entry_file": "src/controllers/path-traversal-cross-file.controller.ts"},
+    {"id": "nestjs-path_traversal-alt_api", "class": "path_traversal", "variant": "alt_api", "vulnerable": true, "file": "src/controllers/path-traversal-alt-api.controller.ts"},
+    {"id": "nestjs-open_redirect-cross_file", "class": "open_redirect", "variant": "cross_file", "vulnerable": true, "file": "src/lib/open-redirect-cross-file.ts", "entry_file": "src/controllers/open-redirect-cross-file.controller.ts"},
+    {"id": "nestjs-open_redirect-alt_api", "class": "open_redirect", "variant": "alt_api", "vulnerable": true, "file": "src/controllers/open-redirect-alt-api.controller.ts"},
+    {"id": "nestjs-hardcoded_secret-cross_file", "class": "hardcoded_secret", "variant": "cross_file", "vulnerable": true, "file": "src/lib/hardcoded-secret-cross-file.ts", "entry_file": "src/controllers/hardcoded-secret-cross-file.controller.ts"},
+    {"id": "nestjs-hardcoded_secret-alt_api", "class": "hardcoded_secret", "variant": "alt_api", "vulnerable": true, "file": "src/controllers/hardcoded-secret-alt-api.controller.ts"}
+  ]
+}

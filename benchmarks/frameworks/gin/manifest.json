@@ -1,0 +1,75 @@
+{
+  "framework": "gin",
+  "language": "go",
+  "cases": [
+    {"id": "gin-sqli-direct", "class": "sqli", "variant": "direct", "vulnerable": true, "file": "sqli_direct.go"},
+    {"id": "gin-sqli-indirect", "class": "sqli", "variant": "indirect", "vulnerable": true, "file": "sqli_indirect.go"},
+    {"id": "gin-sqli-safe", "class": "sqli", "variant": "safe", "vulnerable": false, "file": "sqli_safe.go"},
+    {"id": "gin-sqli-safe_lookalike", "class": "sqli", "variant": "safe_lookalike", "vulnerable": false, "file": "sqli_safe_lookalike.go"},
+
+    {"id": "gin-cmdi-direct", "class": "cmdi", "variant": "direct", "vulnerable": true, "file": "cmdi_direct.go"},
+    {"id": "gin-cmdi-indirect", "class": "cmdi", "variant": "indirect", "vulnerable": true, "file": "cmdi_indirect.go"},
+    {"id": "gin-cmdi-safe", "class": "cmdi", "variant": "safe", "vulnerable": false, "file": "cmdi_safe.go"},
+    {"id": "gin-cmdi-safe_lookalike", "class": "cmdi", "variant": "safe_lookalike", "vulnerable": false, "file": "cmdi_safe_lookalike.go"},
+
+    {"id": "gin-xss-direct", "class": "xss", "variant": "direct", "vulnerable": true, "file": "xss_direct.go"},
+    {"id": "gin-xss-indirect", "class": "xss", "variant": "indirect", "vulnerable": true, "file": "xss_indirect.go"},
+    {"id": "gin-xss-safe", "class": "xss", "variant": "safe", "vulnerable": false, "file": "xss_safe.go"},
+    {"id": "gin-xss-safe_lookalike", "class": "xss", "variant": "safe_lookalike", "vulnerable": false, "file": "xss_safe_lookalike.go"},
+
+    {"id": "gin-ssrf-direct", "class": "ssrf", "variant": "direct", "vulnerable": true, "file": "ssrf_direct.go"},
+    {"id": "gin-ssrf-indirect", "class": "ssrf", "variant": "indirect", "vulnerable": true, "file": "ssrf_indirect.go"},
+    {"id": "gin-ssrf-safe", "class": "ssrf", "variant": "safe", "vulnerable": false, "file": "ssrf_safe.go"},
+    {"id": "gin-ssrf-safe_lookalike", "class": "ssrf", "variant": "safe_lookalike", "vulnerable": false, "file": "ssrf_safe_lookalike.go"},
+
+    {"id": "gin-path_traversal-direct", "class": "path_traversal", "variant": "direct", "vulnerable": true, "file": "path_traversal_direct.go"},
+    {"id": "gin-path_traversal-indirect", "class": "path_traversal", "variant": "indirect", "vulnerable": true, "file": "path_traversal_indirect.go"},
+    {"id": "gin-path_traversal-safe", "class": "path_traversal", "variant": "safe", "vulnerable": false, "file": "path_traversal_safe.go"},
+    {"id": "gin-path_traversal-safe_lookalike", "class": "path_traversal", "variant": "safe_lookalike", "vulnerable": false, "file": "path_traversal_safe_lookalike.go"},
+
+    {"id": "gin-open_redirect-direct", "class": "open_redirect", "variant": "direct", "vulnerable": true, "file": "open_redirect_direct.go"},
+    {"id": "gin-open_redirect-indirect", "class": "open_redirect", "variant": "indirect", "vulnerable": true, "file": "open_redirect_indirect.go"},
+    {"id": "gin-open_redirect-safe", "class": "open_redirect", "variant": "safe", "vulnerable": false, "file": "open_redirect_safe.go"},
+    {"id": "gin-open_redirect-safe_lookalike", "class": "open_redirect", "variant": "safe_lookalike", "vulnerable": false, "file": "open_redirect_safe_lookalike.go"},
+
+    {"id": "gin-hardcoded_secret-direct", "class": "hardcoded_secret", "variant": "direct", "vulnerable": true, "file": "hardcoded_secret_direct.go"},
+    {"id": "gin-hardcoded_secret-indirect", "class": "hardcoded_secret", "variant": "indirect", "vulnerable": true, "file": "hardcoded_secret_indirect.go"},
+    {"id": "gin-hardcoded_secret-safe", "class": "hardcoded_secret", "variant": "safe", "vulnerable": false, "file": "hardcoded_secret_safe.go"},
+    {"id": "gin-hardcoded_secret-safe_lookalike", "class": "hardcoded_secret", "variant": "safe_lookalike", "vulnerable": false, "file": "hardcoded_secret_safe_lookalike.go"},
+
+    {"id": "gin-sqli-cross_file", "class": "sqli", "variant": "cross_file", "vulnerable": true, "file": "internal/userstore/userstore.go", "entry_file": "sqli_cross_file.go"},
+    {"id": "gin-sqli-alt_api", "class": "sqli", "variant": "alt_api", "vulnerable": true, "file": "sqli_alt_api.go"},
+    {"id": "gin-cmdi-cross_file", "class": "cmdi", "variant": "cross_file", "vulnerable": true, "file": "internal/netdiag/netdiag.go", "entry_file": "cmdi_cross_file.go"},
+    {"id": "gin-cmdi-alt_api", "class": "cmdi", "variant": "alt_api", "vulnerable": true, "file": "cmdi_alt_api.go"},
+    {"id": "gin-xss-cross_file", "class": "xss", "variant": "cross_file", "vulnerable": true, "file": "internal/greeting/greeting.go", "entry_file": "xss_cross_file.go"},
+    {"id": "gin-xss-alt_api", "class": "xss", "variant": "alt_api", "vulnerable": true, "file": "xss_alt_api.go"},
+    {"id": "gin-ssrf-cross_file", "class": "ssrf", "variant": "cross_file", "vulnerable": true, "file": "internal/linkpreview/linkpreview.go", "entry_file": "ssrf_cross_file.go"},
+    {"id": "gin-ssrf-alt_api", "class": "ssrf", "variant": "alt_api", "vulnerable": true, "file": "ssrf_alt_api.go"},
+    {"id": "gin-path_traversal-cross_file", "class": "path_traversal", "variant": "cross_file", "vulnerable": true, "file": "internal/docstore/docstore.go", "entry_file": "path_traversal_cross_file.go"},
+    {"id": "gin-path_traversal-alt_api", "class": "path_traversal", "variant": "alt_api", "vulnerable": true, "file": "path_traversal_alt_api.go"},
+    {"id": "gin-open_redirect-cross_file", "class": "open_redirect", "variant": "cross_file", "vulnerable": true, "file": "internal/navigation/navigation.go", "entry_file": "open_redirect_cross_file.go"},
+    {"id": "gin-open_redirect-alt_api", "class": "open_redirect", "variant": "alt_api", "vulnerable": true, "file": "open_redirect_alt_api.go"},
+    {"id": "gin-hardcoded_secret-cross_file", "class": "hardcoded_secret", "variant": "cross_file", "vulnerable": true, "file": "internal/awsconfig/awsconfig.go", "entry_file": "hardcoded_secret_cross_file.go"},
+    {"id": "gin-hardcoded_secret-alt_api", "class": "hardcoded_secret", "variant": "alt_api", "vulnerable": true, "file": "hardcoded_secret_alt_api.go"},
+
+    {"id": "gin-weak_password_hash-direct", "class": "weak_password_hash", "variant": "direct", "vulnerable": true, "file": "weak_password_hash_direct.go"},
+    {"id": "gin-weak_password_hash-indirect", "class": "weak_password_hash", "variant": "indirect", "vulnerable": true, "file": "weak_password_hash_indirect.go"},
+    {"id": "gin-weak_password_hash-safe", "class": "weak_password_hash", "variant": "safe", "vulnerable": false, "file": "weak_password_hash_safe.go"},
+    {"id": "gin-weak_password_hash-safe_lookalike", "class": "weak_password_hash", "variant": "safe_lookalike", "vulnerable": false, "file": "weak_password_hash_safe_lookalike.go"},
+
+    {"id": "gin-jwt_no_verify-direct", "class": "jwt_no_verify", "variant": "direct", "vulnerable": true, "file": "jwt_no_verify_direct.go"},
+    {"id": "gin-jwt_no_verify-indirect", "class": "jwt_no_verify", "variant": "indirect", "vulnerable": true, "file": "jwt_no_verify_indirect.go"},
+    {"id": "gin-jwt_no_verify-safe", "class": "jwt_no_verify", "variant": "safe", "vulnerable": false, "file": "jwt_no_verify_safe.go"},
+    {"id": "gin-jwt_no_verify-safe_lookalike", "class": "jwt_no_verify", "variant": "safe_lookalike", "vulnerable": false, "file": "jwt_no_verify_safe_lookalike.go"},
+
+    {"id": "gin-weak_random_token-direct", "class": "weak_random_token", "variant": "direct", "vulnerable": true, "file": "weak_random_token_direct.go"},
+    {"id": "gin-weak_random_token-indirect", "class": "weak_random_token", "variant": "indirect", "vulnerable": true, "file": "weak_random_token_indirect.go"},
+    {"id": "gin-weak_random_token-safe", "class": "weak_random_token", "variant": "safe", "vulnerable": false, "file": "weak_random_token_safe.go"},
+    {"id": "gin-weak_random_token-safe_lookalike", "class": "weak_random_token", "variant": "safe_lookalike", "vulnerable": false, "file": "weak_random_token_safe_lookalike.go"},
+
+    {"id": "gin-ssti-direct", "class": "ssti", "variant": "direct", "vulnerable": true, "file": "ssti_direct.go"},
+    {"id": "gin-ssti-indirect", "class": "ssti", "variant": "indirect", "vulnerable": true, "file": "ssti_indirect.go"},
+    {"id": "gin-ssti-safe", "class": "ssti", "variant": "safe", "vulnerable": false, "file": "ssti_safe.go"},
+    {"id": "gin-ssti-safe_lookalike", "class": "ssti", "variant": "safe_lookalike", "vulnerable": false, "file": "ssti_safe_lookalike.go"}
+  ]
+}

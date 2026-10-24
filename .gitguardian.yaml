@@ -36,3 +36,8 @@ secret:
     # Python analyzer + rule-pack tests carry the same kind of fixtures.
     - "python/tests/**"
     - "python/rules/**"
+    # Framework parity corpus: intentionally vulnerable sample apps. Its
+    # secret-class cases hold placeholder tokens only (__EVAL_AWS_ACCESS_KEY_ID__,
+    # __EVAL_GITHUB_TOKEN__, ...); no real or format-valid credential is ever
+    # committed. The harness substitutes synthetic values in a temp copy.
+    - "benchmarks/frameworks/**"
