@@ -44,7 +44,7 @@ See §5.
 curl -fsSL https://get.fendix.dev/install.sh | sh
 
 # Pin the current stable version
-curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.6.3 sh
+curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.6.4 sh
 
 # Verify
 fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
@@ -53,7 +53,7 @@ fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
 Or run the published Docker image (bundles Python + all static-analysis deps, so hybrid mode works out of the box):
 
 ```bash
-docker run --rm fendixapp/fendix:3.6.3 scan --url https://example.com
+docker run --rm fendixapp/fendix:3.6.4 scan --url https://example.com
 ```
 
 > **Note:** `get.fendix.dev` is served from the official `Fendix-app/homebrew-fendix` repository. Its root page redirects clients to the canonical documentation, while `/install.sh` remains the stable installer endpoint.
@@ -332,7 +332,7 @@ when that network boundary matters.
     "target": "https://api.example.com",
     "started_at": "2026-06-20T10:00:00Z",
     "duration": "4.521s",
-    "version": "3.6.3",
+    "version": "3.6.4",
     "mode": "blackbox",
     "endpoints_scanned": 42,
     "active_probes": false,
@@ -807,7 +807,7 @@ automation contract.
 
 3. **SEC-NNN finding-ID instability.** `SEC-NNN` IDs reassign across scans. Use the report's versioned `fingerprint` for baselines, `fingerprint:` ignore rules, and persistent mappings. Current builds emit `fendix/v2` semantic fingerprints; line/column coordinates and evidence wording do not re-key a finding.
 
-4. **The Python taint engine resolution.** The flag default is false, but `--code` auto-enables the Python engine unless `--python-engine=false` is explicit. Official v3.6.3 standalone binaries **do not bundle** the tree: the release runs `make embed-engine`, whose current target intentionally resets the embedded directory to a placeholder. Resolution order is explicit dir → `FENDIX_ENGINE` → the pin in `~/.fendix/config` → optional legacy/custom embedded payload → `./python`. A missing tree on the implicit `--code` path is recorded as `python-engine: skipped/dependency_missing` and the native analyzers continue; a missing tree after explicitly passing `--python-engine` is fatal (exit 2). The official Docker image ships `/opt/fendix/python/` and sets the engine environment, so hybrid/white-box works there. The v3.6.0 Action ran `fendix engine sync` unconditionally when `engine_path` was empty, which failed the job; from v3.6.1 the Action prepares the engine from the release's signed build record (§3.1).
+4. **The Python taint engine resolution.** The flag default is false, but `--code` auto-enables the Python engine unless `--python-engine=false` is explicit. Official v3.6.4 standalone binaries **do not bundle** the tree: the release runs `make embed-engine`, whose current target intentionally resets the embedded directory to a placeholder. Resolution order is explicit dir → `FENDIX_ENGINE` → the pin in `~/.fendix/config` → optional legacy/custom embedded payload → `./python`. A missing tree on the implicit `--code` path is recorded as `python-engine: skipped/dependency_missing` and the native analyzers continue; a missing tree after explicitly passing `--python-engine` is fatal (exit 2). The official Docker image ships `/opt/fendix/python/` and sets the engine environment, so hybrid/white-box works there. The v3.6.0 Action ran `fendix engine sync` unconditionally when `engine_path` was empty, which failed the job; from v3.6.1 the Action prepares the engine from the release's signed build record (§3.1).
 
 5. **SARIF upload differs by repository.** Upload to code scanning needs `security-events: write`, plus `actions: read` on a private repository, and a private repository also needs GitHub Code Security. Where Code Security is unavailable, skip the upload and rely on the PR comment or a `$GITHUB_STEP_SUMMARY` report, as the reference workflow does (§3.2). Never let a failed upload skip the gate.
 

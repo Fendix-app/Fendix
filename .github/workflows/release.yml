@@ -79,7 +79,7 @@ jobs:
       # ci.yml's go and e2e jobs test with the same patch.
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
 
       - name: Bundle Python engine
         run: make embed-engine
@@ -322,7 +322,7 @@ jobs:
                 "GOOS": "${{ matrix.goos }}",
                 "GOARCH": "${{ matrix.goarch }}",
                 "CGO_ENABLED": "0",
-                "go_version": "1.27.1"
+                "go_version": "1.27.3"
               },
               "resolvedDependencies": [
                 {
@@ -846,7 +846,7 @@ jobs:
         if: vars.COSIGN_ENABLED == 'true'
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
 
       - name: Install syft
         if: vars.COSIGN_ENABLED == 'true'
