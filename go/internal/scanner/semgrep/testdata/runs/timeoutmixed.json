@@ -1,0 +1,122 @@
+{
+ "engine_requested": "OSS",
+ "errors": [
+  {
+   "code": 2,
+   "level": "warn",
+   "message": "Timeout when running c.mixed.slow-probe on /t/slow2/s.py:\n ",
+   "path": "/t/slow2/s.py",
+   "rule_id": "c.mixed.slow-probe",
+   "type": "Timeout"
+  }
+ ],
+ "paths": {
+  "scanned": [
+   "/t/slow2/ok.py",
+   "/t/slow2/s.py"
+  ]
+ },
+ "profiling_results": [],
+ "results": [
+  {
+   "check_id": "c.mixed.python-subprocess-shell-true-with-variable",
+   "end": {
+    "col": 31,
+    "line": 2,
+    "offset": 48
+   },
+   "extra": {
+    "engine_kind": "OSS",
+    "fingerprint": "requires login",
+    "lines": "requires login",
+    "message": "subprocess with shell=True and a non-literal command \u2014 command injection risk. Drop shell=True and pass argv as a list, OR shlex.quote() each interpolated argument if shell semantics are truly required.\n",
+    "metadata": {
+     "category": "injection",
+     "confidence": "HIGH",
+     "cwe": "CWE-78",
+     "fendix_severity": "CRITICAL"
+    },
+    "severity": "ERROR",
+    "validation_state": "NO_VALIDATOR"
+   },
+   "path": "/t/slow2/ok.py",
+   "start": {
+    "col": 1,
+    "line": 2,
+    "offset": 18
+   }
+  }
+ ],
+ "skipped_rules": [],
+ "time": {
+  "fixpoint_timeouts": [],
+  "matching_time": {
+   "per_file_and_rule_time": {
+    "mean": 0.00019691671643938337,
+    "std_dev": 1.3034946654934917e-07
+   },
+   "total_time": 0.002756834030151367,
+   "very_slow_rules_on_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "max_memory_bytes": 2010003392,
+  "parsing_time": {
+   "per_file_time": {
+    "mean": 0.00031571728842599053,
+    "std_dev": 5.981339181953073e-07
+   },
+   "total_time": 0.004420042037963867,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "prefiltering": {
+   "file_level_time": 0.0,
+   "project_level_time": 0.0,
+   "rules_matched_ratio": 0.3125,
+   "rules_selected_ratio": 0.3125,
+   "rules_with_file_prefilters_ratio": 0.7083333333333334,
+   "rules_with_project_prefilters_ratio": 0.0
+  },
+  "profiling_times": {
+   "config_time": 0.12289023399353027,
+   "core_time": 1.2563073635101318,
+   "ignores_time": 6.914138793945312e-05,
+   "total_time": 1.3829782009124756
+  },
+  "rules": [],
+  "rules_parse_time": 0.000888824462890625,
+  "scanning_time": {
+   "per_file_time": {
+    "mean": 0.5519601106643677,
+    "std_dev": 0.3007316259476198
+   },
+   "total_time": 1.1039202213287354,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "tainting_time": {
+   "per_def_and_rule_time": {
+    "mean": 0.0,
+    "std_dev": 0.0
+   },
+   "total_time": 0.0,
+   "very_slow_rules_on_defs": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "targets": [],
+  "total_bytes": 0
+ },
+ "version": "1.182.1"
+}

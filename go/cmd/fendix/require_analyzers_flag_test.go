@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,6 +25,14 @@ type requireRun struct {
 	gaps     []string
 	strict   bool
 	stderr   string
+	semgrep  statusEntry
+}
+
+type statusEntry struct {
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+	Detail string `json:"detail"`
 }
 
 func runRequired(t *testing.T, args ...string) requireRun {
@@ -55,7 +64,8 @@ func runRequired(t *testing.T, args ...string) requireRun {
 	}
 	var rep struct {
 		Metadata struct {
-			Coverage struct {
+			ScannerStatus []statusEntry `json:"scanner_status"`
+			Coverage      struct {
 				Strict            bool     `json:"strict"`
 				RequiredAnalyzers []string `json:"required_analyzers"`
 				RequiredGaps      []string `json:"required_gaps"`
@@ -69,6 +79,11 @@ func runRequired(t *testing.T, args ...string) requireRun {
 	run.gaps = rep.Metadata.Coverage.RequiredGaps
 	run.strict = rep.Metadata.Coverage.Strict
 	run.stderr = stderr.String()
+	for _, entry := range rep.Metadata.ScannerStatus {
+		if entry.Name == "semgrep" {
+			run.semgrep = entry
+		}
+	}
 	return run
 }
 
@@ -124,5 +139,72 @@ func TestRequireAnalyzers_UnavailableSemgrepExits2OnlyWhenRequired(t *testing.T)
 	if optional.code != 0 || len(optional.gaps) != 0 || optional.strict {
 		t.Fatalf("unrequired semgrep missing from PATH: exit %d, gaps %v, strict %v; want 0, none, false",
 			optional.code, optional.gaps, optional.strict)
+	}
+}
+
+// installRecordedSemgrep puts a semgrep on PATH that replays a recorded
+// Semgrep 1.182.1 run (internal/scanner/semgrep/testdata/runs) with the exit
+// code that run ended with.
+func installRecordedSemgrep(t *testing.T, fixture string, exitCode int) {
+	t.Helper()
+	path, err := filepath.Abs(filepath.Join("..", "..", "internal", "scanner", "semgrep", "testdata", "runs", fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\ncat '" + path + "'\nexit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "semgrep"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+}
+
+// A Semgrep whose engine was killed mid-run (out of memory) still writes a
+// well-formed envelope with no results. Until v3.6.5 that was recorded ok;
+// it is failed now, and a required Semgrep makes the scan exit 2.
+func TestRequireAnalyzers_FatalSemgrepRunIsNotOk(t *testing.T) {
+	installRecordedSemgrep(t, "oom.json", 2)
+	optional := runRequired(t)
+	if optional.semgrep.State != "failed" || optional.semgrep.Reason != "execution_error" {
+		t.Fatalf("semgrep = %+v, want failed/execution_error", optional.semgrep)
+	}
+	if !strings.Contains(optional.semgrep.Detail, "the engine was killed") {
+		t.Errorf("detail must name the cause, got %q", optional.semgrep.Detail)
+	}
+	if optional.code != 0 {
+		t.Errorf("not required: exit %d, want 0 (coverage incomplete, gate by the analyzers that ran)", optional.code)
+	}
+
+	required := runRequired(t, "--require-analyzers", "semgrep")
+	if required.code != 2 || !reflect.DeepEqual(required.gaps, []string{"semgrep"}) {
+		t.Fatalf("required semgrep that failed fatally: exit %d, gaps %v; want 2 and [semgrep]", required.code, required.gaps)
+	}
+
+	// Exit 0 with an error-level entry behind per-file warnings is fatal too.
+	installRecordedSemgrep(t, "ruleerror-then-warn.json", 0)
+	if got := runRequired(t, "--require-analyzers", "semgrep"); got.code != 2 || got.semgrep.State != "failed" {
+		t.Fatalf("rule parse error then warnings: exit %d, semgrep %+v; want 2 and failed", got.code, got.semgrep)
+	}
+
+	// No envelope at all on exit 0.
+	installRecordedSemgrep(t, "garbagecore.stderr", 0)
+	if got := runRequired(t, "--require-analyzers", "semgrep"); got.code != 2 || got.semgrep.Reason != "malformed_output" {
+		t.Fatalf("exit 0 without JSON: exit %d, semgrep %+v; want 2 and failed/malformed_output", got.code, got.semgrep)
+	}
+}
+
+// Per-file problems are normal on real trees: a file that does not parse
+// leaves Semgrep ok, required or not, with the count in its detail.
+func TestRequireAnalyzers_PerFileProblemsKeepSemgrepOk(t *testing.T) {
+	installRecordedSemgrep(t, "syntax2.json", 0)
+	got := runRequired(t, "--require-analyzers", "semgrep")
+	if got.code != 0 || got.semgrep.State != "ok" {
+		t.Fatalf("per-file parse error: exit %d, semgrep %+v; want 0 and ok", got.code, got.semgrep)
+	}
+	if !strings.Contains(got.semgrep.Detail, "PartialParsing 1") {
+		t.Errorf("the per-file problem must be counted in the detail, got %q", got.semgrep.Detail)
 	}
 }

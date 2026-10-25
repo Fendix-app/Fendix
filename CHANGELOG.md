@@ -16,10 +16,12 @@ gate: on a self-hosted runner with glibc older than 2.34, pip built Semgrep
 failed and coverage incomplete, and the job still went green. An unavailable
 required analyzer can no longer produce a green release gate.
 
-The `fendix` engine is unchanged apart from its version: report schema, SARIF
-structure, fingerprints, finding identity, decision policy, CLI flags and
-defaults, and exit codes are the same as v3.6.5. The Python lock is
-v3.6.5's (Semgrep 1.182.1, MCP 1.29.0).
+The engine gets the same fix: a fatal Semgrep run is now recorded `failed`,
+never `ok`, so a Semgrep that dies on the scanned tree fails a required
+Semgrep there too. Report schema, SARIF structure, fingerprints, finding
+identity, decision policy, CLI flags and defaults, and exit codes are
+otherwise the same as v3.6.5. The Python lock is v3.6.5's (Semgrep 1.182.1,
+MCP 1.29.0).
 
 ### Security
 
@@ -57,6 +59,34 @@ v3.6.5's (Semgrep 1.182.1, MCP 1.29.0).
   `require-analyzers: none` is a warning that coverage is not enforced. Every
   local-mode run now writes a job summary with the result, the exit code, the
   required analyzers and the coverage.
+
+- **A fatal Semgrep run is `failed`, not `ok`** (engine, every
+  integration). Until v3.6.5 the engine accepted any parseable Semgrep JSON
+  envelope whatever the exit code, and read stdout that was not JSON as zero
+  findings. A Semgrep whose engine was killed mid-run, for example by the
+  kernel for memory, prints a valid envelope with an error and no results
+  and exits 2. That was recorded `semgrep ok` with no findings, and passed
+  `--require-analyzers semgrep` with exit 0. The preflight cannot catch it,
+  because it happens only on the scanned tree. Now, following Semgrep
+  1.182.1's own contract (its `error.py`, `output.py` and `core_output.py`,
+  and recorded runs of the real binary):
+  - **`failed/execution_error`:** a non-zero exit other than 1, a death by
+    signal, or any error of level `error`. That covers an invalid or missing
+    config (exit 7), a rule that does not parse (exit 2), and an engine killed
+    or crashed, out of memory included (exit 2). An error-level entry counts
+    even on exit 0, because Semgrep sets its exit code from its last error
+    only: a rule parse error followed by per-file warnings exits 0. The detail
+    names the first error, bounded to one line.
+  - **`failed/malformed_output`:** exit 0 with no JSON results envelope.
+  - **Still `ok`:** per-file problems of level `warn` (a file that does not
+    fully parse, a per-file or per-rule timeout, a per-file memory limit) are
+    normal on real trees and leave the run `ok`. They are no longer
+    invisible: `detail` counts them by type, for example `1 non-fatal
+    per-file problem(s) reported by semgrep (PartialParsing 1)`, never with
+    the message, which can quote the source. Only an error's `level` is read,
+    never its `code`, because a per-file timeout has `code` 2 at level `warn`.
+  - **Findings kept.** Findings Semgrep still printed in a failed run stay in
+    the report.
 
 ### Changed
 
@@ -103,10 +133,16 @@ v3.6.5's (Semgrep 1.182.1, MCP 1.29.0).
   is no longer needed for code scans; keeping it is harmless.
 - **A scan that exits 2 no longer uploads SARIF.** Code-scanning alerts stay as
   the last finished scan left them.
-- **The native CLI is unchanged.** Semgrep stays optional by default: without
-  it the scan records `semgrep` unavailable and coverage incomplete, and the
-  exit code is decided by the analyzers that ran. `--require-analyzers semgrep`
-  makes it required.
+- **The native CLI keeps its defaults.** Semgrep stays optional: without it
+  the scan records `semgrep` unavailable and coverage incomplete, and the exit
+  code is decided by the analyzers that ran. `--require-analyzers semgrep`
+  makes it required. What changes is that a Semgrep that ran and failed
+  fatally is now recorded `failed`. A scan with `--fail-on-scanner-error`,
+  `--fail-on-coverage-gap` or `--require-analyzers semgrep` therefore exits 2
+  on such a run, where v3.6.5 passed it. Without those flags the exit code is
+  unchanged, and the report shows the gap.
+- **`semgrep` `ok` can now carry a `detail`** counting per-file problems.
+  Consumers that read `detail` only for non-ok entries are unaffected.
 - **`@v1` still points to the v3.6.2 release commit.** It moves to the v3.6.6
   release commit after that release's external-user end-to-end run; until
   then, the fail-closed Action is available by pinning the v3.6.6 release

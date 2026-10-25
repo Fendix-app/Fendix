@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/usr/local/bin/semgrep", line 6, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/usr/local/lib/python3.14/site-packages/semgrep/console_scripts/entrypoint.py", line 305, in main
+    exec_osemgrep()
+    ~~~~~~~~~~~~~^^
+  File "/usr/local/lib/python3.14/site-packages/semgrep/console_scripts/entrypoint.py", line 276, in exec_osemgrep
+    os.execvp(str(path), sys.argv)
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen os>", line 604, in execvp
+  File "<frozen os>", line 627, in _execvpe
+OSError: [Errno 8] Exec format error
