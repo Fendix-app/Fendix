@@ -17,8 +17,9 @@ import re
 import sys
 from collections import deque
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterator, Literal
+from typing import Callable, Iterator, Literal, Mapping
 
 # Skip directories (same as secrets analyzer)
 _SKIP_DIRS: frozenset[str] = frozenset(
@@ -169,14 +170,18 @@ class ASTAnalyzer:
     def _build_route_index(self, root: Path):
         """Walk the tree once and merge every file's routes into one
         function-name → Route index. Keyed on the handler function's name so
-        a Django urls.py route binds to its view defined elsewhere. Returns a
-        RouteTable; on any import/IO failure returns an empty one (binding
-        simply stays off)."""
+        a Django urls.py route binds to its view defined elsewhere. Once every
+        file is read, each Django route is pointed at the module that defines
+        its view (`RouteTable.resolve_views`: one re-export hop, or the name
+        alone when no scanned file is the module). Returns a RouteTable; on
+        any import/IO failure returns an empty one (binding simply stays
+        off)."""
         try:
-            from analyzers.route_extractor import RouteTable, extract_routes
+            from analyzers.route_extractor import RouteTable, scan_module
         except Exception:  # noqa: BLE001 — binding is optional
             return None
         index = RouteTable()
+        summaries = []
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
             for fname in filenames:
@@ -191,13 +196,23 @@ class ASTAnalyzer:
                     continue
                 rel = str(fpath.relative_to(root))
                 try:
-                    routes = extract_routes(src, rel).routes
+                    table, summary = scan_module(src, rel)
                 except (RecursionError, Exception):  # noqa: BLE001 — binding is best-effort
                     # audit #18: one crafted/large file must not abort the
                     # route index (and thus the whole injection pass). Skip it.
                     continue
-                for route in routes:
+                for route in table.routes:
                     index.add(route)
+                if summary is not None:
+                    summaries.append(summary)
+        try:
+            index.resolve_views(summaries)
+        except (RecursionError, Exception) as exc:  # noqa: BLE001 — binding is best-effort
+            # The routes keep the modules their urlconf's imports resolved.
+            print(
+                f"[fendix-engine] ast_analyzer: route view resolution failed: {exc}",
+                file=sys.stderr,
+            )
         return index
 
     # ------------------------------------------------------------------
@@ -376,9 +391,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         self._resolved_joins: dict[ast.Call, ast.Call] = {}
         # Task 3.1: each def → the parameters that carry request data because
         # it is a route handler bound to this file (`_route_param_sources`),
-        # and the module's `Annotated[..., Depends(...)]` aliases. Lazy.
+        # and the module's `_ModuleFacts`, collected once, on first need.
         self._route_sources: dict[ast.AST, frozenset[str]] = {}
-        self._dependency_aliases: frozenset[str] | None = None
+        self._module_facts: _ModuleFacts | None = None
 
     def _line_text(self, lineno: int) -> str:
         """Return the source line (1-indexed), or empty string."""
@@ -558,13 +573,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
         A urlconf route (Django) names its view as `module.func`: `func` must
         be a module-level def of a file one of the route's resolved
-        `handler_modules` names. A decorator route (Flask, FastAPI) is
-        declared on the def itself: same file, and one of `func`'s decorators
-        is the route's."""
-        modules = getattr(route, "handler_modules", ())
-        if modules:
-            return self._is_module_level_def(func) and any(
-                _module_matches_file(m, self._rel) for m in modules
+        `handler_modules` names. The route pass has already followed one
+        re-export hop and, when no scanned file is the resolved module, left
+        the modules empty: then the name alone binds, as it did before
+        modules were resolved. A decorator route (Flask, FastAPI) is declared
+        on the def itself: same file, and one of `func`'s decorators is the
+        route's."""
+        if getattr(route, "framework", "") == "django":
+            modules = getattr(route, "handler_modules", ())
+            return self._is_module_level_def(func) and (
+                not modules or any(_module_matches_file(m, self._rel) for m in modules)
             )
         return route.file.replace(os.sep, "/") == self._rel.replace(
             os.sep, "/"
@@ -582,45 +600,24 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _route_param_sources(
         self, func: ast.FunctionDef | ast.AsyncFunctionDef
     ) -> frozenset[str]:
-        """The parameters of `func` that are request sources: none unless
-        `func` is a route handler bound to this file (`_routes_for`). Then
-        `route_param_source_names(func)`, less the URL variables its routes'
-        converters coerce to a scalar (`<int:id>`, R-pf33), the parameters
-        annotated with a module-level `Annotated[..., Depends(...)]` alias
-        (R-pf27), and, for a Django view, its first positional parameter, the
-        request object whatever its name. Cached per def."""
+        """The parameters of `func` that are request sources:
+        `route_param_sources` over the routes bound to `func` in this file
+        (`_routes_for`; none, so no sources, unless it is a handler) and this
+        module. Cached per def."""
         cached = self._route_sources.get(func)
-        if cached is not None:
-            return cached
-        routes = self._routes_for(func)
-        if not routes:
-            sources = frozenset()
-        else:
-            if self._dependency_aliases is None:
-                self._dependency_aliases = _dependency_alias_names(self._module_root)
-            aliased = {
-                p.arg
-                for p in (*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs)
-                if any(
-                    isinstance(t, ast.Name) and t.id in self._dependency_aliases
-                    for t in _unwrap_annotation(p.annotation)[0]
-                )
-            }
-            sources = route_param_source_names(func) - _converter_coerced_names(routes) - aliased
-            positional = [*func.args.posonlyargs, *func.args.args]
-            if positional and any(getattr(r, "handler_modules", ()) for r in routes):
-                # Django calls a function view as view(request, *args, **kwargs):
-                # its first positional parameter is the HttpRequest, whatever
-                # its name. URL variables arrive as keyword arguments.
-                sources -= {positional[0].arg}
-        self._route_sources[func] = sources
-        return sources
+        if cached is None:
+            routes = self._routes_for(func)
+            if routes and self._module_facts is None:
+                self._module_facts = _module_facts(self._module_root)
+            cached = _route_param_sources_with(func, routes, self._module_facts)
+            self._route_sources[func] = cached
+        return cached
 
     def _name_is_route_param_source(self, name: str) -> bool:
         """True when `name` is a request-carrying parameter of the route
         handler being visited: `self._bound_route() is not None and name in
-        route_param_source_names(self._func_stack[-1])`, less the route's
-        coercing converters and dependency aliases (`_route_param_sources`)."""
+        route_param_source_names(self._func_stack[-1])`, with the module and
+        route rules `route_param_sources` adds."""
         return bool(self._func_stack) and name in self._route_param_sources(
             self._func_stack[-1]
         )
@@ -4438,19 +4435,59 @@ _INJECTED_PARAM_TYPES: frozenset[str] = frozenset(
 # does not send it (Review Focus 2). As a default (`user = Depends(f)`) or in
 # `Annotated[...]` metadata (ruling R-pf27).
 _DEPENDENCY_MARKERS: frozenset[str] = frozenset({"Depends", "Security"})
-# Ruling R-pf33: annotations FastAPI coerces to a non-string scalar before the
-# handler runs. A value that parsed as one of these cannot carry a payload.
-_COERCED_SCALAR_TYPES: frozenset[str] = frozenset(
-    {"int", "float", "bool", "UUID", "datetime", "date", "time", "timedelta", "Decimal"}
+# Ruling R-pf34: a type imported from a module with one of these path segments
+# (`app.api.deps`, `app.dependencies.auth`, `.deps`) is a dependency alias.
+_DEPENDENCY_MODULE_SEGMENTS: frozenset[str] = frozenset({"deps", "dependencies"})
+# Rulings R-pf33 and R-pf36: types FastAPI and pydantic validate to a value that
+# cannot carry free text before the handler runs. The pydantic constrained
+# numbers include the float and decimal siblings of the ruled names.
+_FIXED_VALUE_TYPES: frozenset[str] = frozenset(
+    {
+        "int",
+        "float",
+        "bool",
+        "UUID",
+        "datetime",
+        "date",
+        "time",
+        "timedelta",
+        "Decimal",
+        "PositiveInt",
+        "NegativeInt",
+        "NonNegativeInt",
+        "NonPositiveInt",
+        "PositiveFloat",
+        "NegativeFloat",
+        "NonNegativeFloat",
+        "NonPositiveFloat",
+        "StrictInt",
+        "StrictFloat",
+        "StrictBool",
+    }
 )
+# R-pf36: pydantic constrained-number factories used as an annotation
+# (`n: conint(gt=0)`). `constr(pattern=...)` is a string and stays a source.
+_FIXED_VALUE_FACTORIES: frozenset[str] = frozenset({"conint", "confloat", "condecimal"})
+# R-pf36: a container of fixed-value types (`list[int]`, `set[UUID]`,
+# `tuple[int, ...]`) holds no free text either.
+_CONTAINER_TYPES: frozenset[str] = frozenset(
+    {"list", "List", "set", "Set", "frozenset", "FrozenSet", "tuple", "Tuple", "Sequence"}
+)
+# R-pf36: a class with one of these bases is an Enum: FastAPI accepts only its
+# members' values.
+_ENUM_BASES: frozenset[str] = frozenset({"Enum", "IntEnum", "StrEnum"})
 # Ruling R-pf33: Flask (`int`, `float`, `uuid`) and Django (`int`, `uuid`) URL
 # converters that coerce the same way, read from the route pattern. Both
 # frameworks write a URL variable `<name>` or `<converter:name>`; Flask's
-# converter may take arguments (`<int(signed=True):n>`).
+# converter may take arguments (`<int(signed=True):n>`). A Django regex
+# group `(?P<name>...)` matches too, as a text variable.
 _COERCING_CONVERTERS: frozenset[str] = frozenset({"int", "float", "uuid"})
 _URL_VARIABLE = re.compile(
     r"<\s*(?:([A-Za-z_]\w*)\s*(?:\([^)>]*\))?\s*:)?\s*([A-Za-z_]\w*)\s*>"
 )
+# How deep an annotation is unwrapped (`Optional[Annotated[list[int], ...]]`).
+# Real annotations nest a handful of levels; the cap only bounds a crafted one.
+_MAX_ANNOTATION_DEPTH = 16
 
 
 def _terminal_name(node: ast.AST) -> str:
@@ -4459,6 +4496,16 @@ def _terminal_name(node: ast.AST) -> str:
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
+    return ""
+
+
+def _dotted(node: ast.AST) -> str:
+    """`a.b.c` for a Name/Attribute chain, else ""."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted(node.value)
+        return f"{base}.{node.attr}" if base else ""
     return ""
 
 
@@ -4475,7 +4522,7 @@ def _unwrap_annotation(
     `Annotated[...]` unwrapped and `None` dropped; `metadata` holds the other
     `Annotated` arguments. A string annotation is parsed first. Anything else,
     `list[str]` included, is one type as written."""
-    if ann is None or _depth >= _MAX_TAINT_HOPS:
+    if ann is None or _depth >= _MAX_ANNOTATION_DEPTH:
         return [], []
     if isinstance(ann, ast.Constant):
         if ann.value is None:
@@ -4493,7 +4540,7 @@ def _unwrap_annotation(
         return left_types + right_types, left_meta + right_meta
     if isinstance(ann, ast.Subscript):
         head = _terminal_name(ann.value)
-        args = list(ann.slice.elts) if isinstance(ann.slice, ast.Tuple) else [ann.slice]
+        args = _subscript_args(ann)
         if head in ("Optional", "Union") and args:
             types: list[ast.AST] = []
             meta: list[ast.AST] = []
@@ -4508,50 +4555,179 @@ def _unwrap_annotation(
     return [ann], []
 
 
-def _annotation_is_dependency(ann: ast.AST | None) -> bool:
-    """`Annotated[..., Depends(...)]` or `Annotated[..., Security(...)]`."""
-    return any(_is_dependency_call(m) for m in _unwrap_annotation(ann)[1])
+def _subscript_args(node: ast.Subscript) -> list[ast.AST]:
+    """The arguments of `X[a, b]` (`[a, b]`) or `X[a]` (`[a]`)."""
+    return list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
 
 
-def _annotation_excludes_param(ann: ast.AST | None) -> bool:
-    """True when the annotation alone says the parameter is not client data: a
-    dependency, an injected framework object, or a coerced scalar (R-pf33)."""
+def _is_fixed_value_annotation(
+    ann: ast.AST | None, enums: frozenset[str], _depth: int = 0
+) -> bool:
+    """True when every type the annotation admits is a fixed-value type (R-pf33,
+    R-pf36): a coerced scalar, a pydantic constrained number, a `Literal[...]`,
+    an Enum class of this file, or a container of those."""
+    if _depth >= _MAX_ANNOTATION_DEPTH:
+        return False
+    types = _unwrap_annotation(ann)[0]
+    return bool(types) and all(_is_fixed_value_type(t, enums, _depth) for t in types)
+
+
+def _is_fixed_value_type(t: ast.AST, enums: frozenset[str], _depth: int) -> bool:
+    if _terminal_name(t) in _FIXED_VALUE_TYPES:
+        return True
+    if isinstance(t, ast.Name) and t.id in enums:
+        return True
+    if isinstance(t, ast.Call):
+        return _terminal_name(t.func) in _FIXED_VALUE_FACTORIES
+    if isinstance(t, ast.Subscript):
+        head = _terminal_name(t.value)
+        if head == "Literal":
+            return True
+        if head in _CONTAINER_TYPES:
+            elements = [
+                a
+                for a in _subscript_args(t)
+                if not (isinstance(a, ast.Constant) and a.value is Ellipsis)
+            ]
+            return bool(elements) and all(
+                _is_fixed_value_annotation(a, enums, _depth + 1) for a in elements
+            )
+    return False
+
+
+@dataclass(frozen=True)
+class _ModuleFacts:
+    """What the module around a handler says about its parameters' types.
+
+    - ``enums``: classes of this file whose bases include Enum, IntEnum or
+      StrEnum, directly or through another such class (R-pf36).
+    - ``dependency_aliases``: module-level names bound in this file to an
+      ``Annotated[..., Depends(...)]`` type, directly or through another such
+      alias (R-pf27).
+    - ``imports``: each name an import binds → the dotted path it imports,
+      relative dots dropped (`from .deps import X` → ``deps.X``). It decides
+      R-pf34: a type imported from a ``deps``/``dependencies`` module."""
+
+    enums: frozenset[str] = frozenset()
+    dependency_aliases: frozenset[str] = frozenset()
+    imports: Mapping[str, str] = field(default_factory=dict)
+
+
+def _module_facts(module: ast.AST | None) -> _ModuleFacts:
+    """Collect `_ModuleFacts` from a module's top-level statements (under a
+    top-level `if`/`try`/`with` too) and from every import in it."""
+    if not isinstance(module, ast.Module):
+        return _ModuleFacts()
+    imports: dict[str, str] = {}
+    for node in ast.walk(module):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    imports[alias.asname] = alias.name
+                else:
+                    top = alias.name.split(".", 1)[0]
+                    imports[top] = top
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    base = node.module or ""
+                    imports[alias.asname or alias.name] = (
+                        f"{base}.{alias.name}" if base else alias.name
+                    )
+    type_alias = getattr(ast, "TypeAlias", None)  # `type X = ...`, Python 3.12+
+    enums: set[str] = set()
+    aliases: set[str] = set()
+    for stmt in _module_level_statements(module):
+        if isinstance(stmt, ast.ClassDef):
+            if any(
+                _terminal_name(b) in _ENUM_BASES
+                or (isinstance(b, ast.Name) and b.id in enums)
+                for b in stmt.bases
+            ):
+                enums.add(stmt.name)
+            continue
+        target = value = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign):
+            target, value = stmt.target, stmt.value
+        elif type_alias is not None and isinstance(stmt, type_alias):
+            target, value = stmt.name, stmt.value
+        if not isinstance(target, ast.Name) or value is None:
+            continue
+        types, meta = _unwrap_annotation(value)
+        if any(_is_dependency_call(m) for m in meta) or _names_any(types, aliases):
+            aliases.add(target.id)
+    return _ModuleFacts(frozenset(enums), frozenset(aliases), imports)
+
+
+def _module_level_statements(module: ast.Module):
+    """Yield the statements that run in the module's own scope: its body and
+    the bodies of top-level `if`/`try`/`with` blocks, never a def or class
+    body."""
+    stack = list(reversed(module.body))
+    while stack:
+        stmt = stack.pop()
+        yield stmt
+        if isinstance(stmt, (ast.If, ast.Try, ast.With, ast.AsyncWith)) or (
+            type(stmt).__name__ == "TryStar"
+        ):
+            blocks = [getattr(stmt, "body", []), getattr(stmt, "orelse", [])]
+            blocks += [h.body for h in getattr(stmt, "handlers", [])]
+            blocks.append(getattr(stmt, "finalbody", []))
+            for block in reversed(blocks):
+                stack.extend(reversed(block))
+
+
+def _names_any(types: list[ast.AST], names: frozenset[str] | set[str]) -> bool:
+    """True when one of `types` is a bare Name in `names`."""
+    return any(isinstance(t, ast.Name) and t.id in names for t in types)
+
+
+def _is_dependency_module(path: str) -> bool:
+    """True when a dotted path has a `deps` or `dependencies` segment (R-pf34)."""
+    return any(seg in _DEPENDENCY_MODULE_SEGMENTS for seg in path.split("."))
+
+
+def _is_imported_dependency(t: ast.AST, imports: Mapping[str, str]) -> bool:
+    """R-pf34: a bare Name imported from a `deps`/`dependencies` module
+    (`from app.api.deps import CurrentUser`, `from .deps import X as Y`), or
+    `<m>.<Name>` where `<m>` is an imported module with such a segment
+    (`from app.api import deps` ... `deps.CurrentUser`)."""
+    if isinstance(t, ast.Name):
+        target = imports.get(t.id, "")
+        return "." in target and _is_dependency_module(target.rpartition(".")[0])
+    if isinstance(t, ast.Attribute):
+        head, _, rest = _dotted(t.value).partition(".")
+        if head not in imports:
+            return False
+        return _is_dependency_module(imports[head] + (f".{rest}" if rest else ""))
+    return False
+
+
+def _annotation_is_injected(ann: ast.AST | None, facts: _ModuleFacts) -> bool:
+    """True when the annotation says the framework, not the client, supplies
+    the value: `Annotated[..., Depends(...)]` metadata (R-pf27), an injected
+    framework type (`Request`, ...), a same-file dependency alias (R-pf27), or
+    a type imported from a `deps`/`dependencies` module (R-pf34)."""
     if ann is None:
         return False
     types, meta = _unwrap_annotation(ann)
     if any(_is_dependency_call(m) for m in meta):
         return True
     names = [_terminal_name(t) for t in types]
-    return bool(names) and (
-        all(n in _INJECTED_PARAM_TYPES for n in names)
-        or all(n in _COERCED_SCALAR_TYPES for n in names)
+    if names and all(n in _INJECTED_PARAM_TYPES for n in names):
+        return True
+    return _names_any(types, facts.dependency_aliases) or any(
+        _is_imported_dependency(t, facts.imports) for t in types
     )
 
 
-def route_param_source_names(
-    func: ast.FunctionDef | ast.AsyncFunctionDef,
+def _signature_sources(
+    func: ast.FunctionDef | ast.AsyncFunctionDef, facts: _ModuleFacts
 ) -> frozenset[str]:
-    """The parameters of `func` that carry request data IF `func` is a route
-    handler: FastAPI query, path, header, cookie and body parameters, Flask and
-    Django URL variables. Every positional-only, positional and keyword-only
-    parameter counts except:
-
-    - ``self``;
-    - the first positional parameter (after ``self``) named ``request`` or
-      ``req``: the request object, whose attributes `_references_request_input`
-      already treats as sources;
-    - one annotated with a framework-injected type (`_INJECTED_PARAM_TYPES`),
-      bare or under ``Optional``/``Union``/``| None``/``Annotated``;
-    - one defaulted to ``Depends(...)``/``Security(...)``, or annotated
-      ``Annotated[..., Depends(...)]`` (Review Focus 2, R-pf27);
-    - one annotated with a scalar the framework coerces to before the handler
-      runs (`_COERCED_SCALAR_TYPES`, R-pf33): ``int``, ``Optional[UUID]``,
-      ``Annotated[int, Query()]``. ``str``, ``list[str]``, a pydantic model
-      and an unannotated parameter stay sources.
-
-    It reads only the signature. Whether `func` IS a handler, the URL
-    converters of its route and module-level ``Annotated`` aliases are the
-    caller's to apply (`_PythonSecurityVisitor._route_param_sources`)."""
+    """The parameters of `func` its signature, read with `facts`, leaves as
+    request sources. See `route_param_source_names` for the rules."""
     a = func.args
     positional = [*a.posonlyargs, *a.args]
     defaults: list[ast.AST | None] = [None] * (len(positional) - len(a.defaults))
@@ -4563,51 +4739,125 @@ def route_param_source_names(
         name = param.arg
         if name == "self" or (name == first and name in _REQUEST_NAMES):
             continue
-        if _is_dependency_call(default) or _annotation_excludes_param(param.annotation):
+        if _is_dependency_call(default):
+            continue
+        if _annotation_is_injected(param.annotation, facts) or _is_fixed_value_annotation(
+            param.annotation, facts.enums
+        ):
             continue
         names.add(name)
     return frozenset(names)
 
 
-def _converter_coerced_names(routes) -> frozenset[str]:
-    """URL variables that the converters of `routes`, every route bound to one
-    handler, coerce to a non-string scalar (`<int:id>`, `<uuid:pk>`,
-    `<int(signed=True):n>`): not sources (R-pf33). A variable some route
-    passes as a string (`<id>`, `<path:id>`) stays a source, whichever of the
-    handler's routes is declared first."""
-    coerced: set[str] = set()
-    textual: set[str] = set()
-    for route in routes:
-        for converter, name in _URL_VARIABLE.findall(getattr(route, "pattern", "") or ""):
-            (coerced if converter in _COERCING_CONVERTERS else textual).add(name)
-    return frozenset(coerced - textual)
+def route_param_source_names(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """The parameters of `func` that carry request data IF `func` is a route
+    handler, judged from its signature alone. Every positional-only,
+    positional and keyword-only parameter counts except:
+
+    - ``self``;
+    - the first positional parameter (after ``self``) named ``request`` or
+      ``req``: the request object, whose attributes `_references_request_input`
+      already treats as sources;
+    - one annotated with a framework-injected type (`_INJECTED_PARAM_TYPES`),
+      bare or under ``Optional``/``Union``/``| None``/``Annotated``;
+    - one defaulted to ``Depends(...)``/``Security(...)``, or annotated
+      ``Annotated[..., Depends(...)]`` (Review Focus 2, R-pf27);
+    - one whose annotation admits only fixed values (R-pf33, R-pf36): a
+      scalar FastAPI coerces to (``int``, ``Optional[UUID]``,
+      ``Annotated[int, Query()]``), a pydantic constrained number
+      (``conint(...)``, ``PositiveInt``), a ``Literal[...]``, or a container
+      of those (``list[int]``, ``tuple[int, ...]``). ``str``, ``list[str]``,
+      ``constr(...)``, a pydantic model and an unannotated parameter stay
+      sources.
+
+    Rules that need the module or the route (same-file Enum classes and
+    dependency aliases, `deps` imports, Flask and Django URL patterns) are in
+    `route_param_sources`, which applies the whole set."""
+    return _signature_sources(func, _ModuleFacts())
 
 
-def _dependency_alias_names(module: ast.AST | None) -> frozenset[str]:
-    """Names bound at module level to an `Annotated[..., Depends(...)]` (or
-    `Security`) type, directly or through another such alias, so a parameter
-    annotated `user: CurrentUser` is a dependency too (R-pf27). Same file
-    only: an alias imported from another module is not seen."""
-    if not isinstance(module, ast.Module):
+def route_param_sources(
+    func: ast.FunctionDef | ast.AsyncFunctionDef, routes, module: ast.AST | None
+) -> frozenset[str]:
+    """The parameters of `func` that are request sources, given the `routes`
+    bound to it (empty: not a handler, no sources) and the `module` it is
+    defined in. The whole rule set:
+
+    - `route_param_source_names`'s signature rules, with the module's facts:
+      an annotation naming an Enum class of this file (R-pf36), a same-file
+      ``Annotated[..., Depends(...)]`` alias (R-pf27), or a type imported from
+      a ``deps``/``dependencies`` module (R-pf34) is not a source either;
+    - a Flask or Django route passes a parameter only when its URL pattern
+      names it as text (R-pf36): ``<x>``, ``<path:x>``, ``(?P<x>...)``, or,
+      for a Django regex with no named group, the unnamed groups in order
+      after ``request``. A plain default (``def report(fmt="pdf")`` on
+      ``/report``), a ``defaults=`` or urlconf extra-kwargs value, and a
+      variable coerced by ``<int:x>``/``<float:x>``/``<uuid:x>`` (R-pf33)
+      are developer-controlled or fixed;
+    - a FastAPI route (or one whose framework is unknown) passes every
+      parameter left.
+
+    A parameter is a source when one of the routes passes it."""
+    if not routes:
         return frozenset()
-    type_alias = getattr(ast, "TypeAlias", None)  # `type X = ...`, Python 3.12+
-    aliases: set[str] = set()
-    for stmt in module.body:
-        target = value = None
-        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
-            target, value = stmt.targets[0], stmt.value
-        elif isinstance(stmt, ast.AnnAssign):
-            target, value = stmt.target, stmt.value
-        elif type_alias is not None and isinstance(stmt, type_alias):
-            target, value = stmt.name, stmt.value
-        if not isinstance(target, ast.Name) or value is None:
+    return _route_param_sources_with(func, routes, _module_facts(module))
+
+
+def _route_param_sources_with(
+    func: ast.FunctionDef | ast.AsyncFunctionDef, routes, facts: _ModuleFacts
+) -> frozenset[str]:
+    """`route_param_sources` with the module's facts already collected (the
+    visitor collects them once per file)."""
+    if not routes:
+        return frozenset()
+    candidates = _signature_sources(func, facts)
+    positional = [p.arg for p in (*func.args.posonlyargs, *func.args.args)]
+    sources: set[str] = set()
+    for route in routes:
+        if getattr(route, "framework", "") in ("flask", "django"):
+            sources |= candidates & _url_text_variables(route, positional)
+        else:
+            sources |= candidates
+    return frozenset(sources)
+
+
+def _url_text_variables(route, positional: list[str]) -> frozenset[str]:
+    """The parameters a Flask or Django `route` fills from its URL as text:
+    the variables its pattern names without a coercing converter, and, for a
+    Django regex route with no named group, the positional parameters after
+    the request that its unnamed groups fill."""
+    pattern = getattr(route, "pattern", "") or ""
+    names = {
+        name
+        for converter, name in _URL_VARIABLE.findall(pattern)
+        if converter not in _COERCING_CONVERTERS
+    }
+    if getattr(route, "regex", False) and "(?P<" not in pattern:
+        names.update(positional[1 : 1 + _unnamed_group_count(pattern)])
+    return frozenset(names)
+
+
+def _unnamed_group_count(pattern: str) -> int:
+    """The number of unnamed capturing groups in a regex: `(` not followed by
+    `?`, outside a character class and not escaped."""
+    count = 0
+    in_class = False
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            i += 2
             continue
-        if _annotation_is_dependency(value) or any(
-            isinstance(t, ast.Name) and t.id in aliases
-            for t in _unwrap_annotation(value)[0]
-        ):
-            aliases.add(target.id)
-    return frozenset(aliases)
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == "(" and not pattern.startswith("?", i + 1):
+            count += 1
+        i += 1
+    return count
 
 
 def _module_matches_file(module: str, rel: str) -> bool:

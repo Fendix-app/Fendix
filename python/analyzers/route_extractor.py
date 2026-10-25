@@ -29,7 +29,7 @@ Design notes:
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 # Decorator method names that declare a route on a Flask/FastAPI app or
@@ -46,6 +46,14 @@ _VERB_DECORATORS = {
 }
 # Django URL-declaring callables inside a urlpatterns list.
 _DJANGO_ROUTE_FUNCS = {"path", "re_path", "url"}
+# Django callables whose pattern is a regular expression, not route syntax.
+_DJANGO_REGEX_FUNCS = {"re_path", "url"}
+# Import roots that say which framework a decorator route belongs to.
+_FASTAPI_ROOTS = {"fastapi", "starlette"}
+_FLASK_ROOTS = {"flask"}
+# `@mock.patch("os.getenv")` looks like a PATCH route decorator: a receiver
+# imported from one of these modules is never a route.
+_MOCK_MODULES = {"mock", "unittest.mock"}
 
 
 @dataclass
@@ -71,6 +79,14 @@ class Route:
     # decorated def in `file` itself. Not part of `as_dict`: it locates the
     # handler, it is not reported.
     handler_modules: tuple[str, ...] = ()
+    # Which framework declared the route: "django" for a urlconf entry, and
+    # "fastapi" or "flask" for a decorator route, from the file's imports,
+    # then the pattern's syntax (`{x}` / `<x>`), then `.route(...)` (Flask).
+    # "" when nothing tells. Flask and Django pass a handler only the URL
+    # variables their pattern names; FastAPI passes query parameters too.
+    framework: str = ""
+    # Django only: the pattern is a regular expression (`re_path`, `url`).
+    regex: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -111,25 +127,124 @@ class RouteTable:
         route, if any, actually points at it."""
         return self.all_by_func.get(func_name, [])
 
+    def resolve_views(self, summaries: list[ModuleSummary]) -> None:
+        """Point each Django route at the module that defines its view, once
+        every file of the project is summarised.
+
+        - A resolved module that defines the view as a module-level def keeps
+          it.
+        - Otherwise ONE re-export hop is followed in that module's file (its
+          ``__init__.py`` for a package): ``from .items import show`` (with
+          ``as`` renaming) or ``from .items import *``. A renamed view is
+          indexed under its real name too.
+        - When no scanned file is the resolved module (the scan root sits
+          inside the package, or the import names a module outside the
+          tree), the route falls back to the view's name alone: its
+          `handler_modules` become empty.
+        """
+        # Every dotted suffix of each file's module -> the files it names, so
+        # `app.views` finds `backend/app/views.py` (module `backend.app.views`)
+        # as `_module_matches_file` would.
+        by_suffix: dict[str, list[ModuleSummary]] = {}
+        for summary in summaries:
+            parts = summary.module.split(".") if summary.module else []
+            for i in range(len(parts)):
+                by_suffix.setdefault(".".join(parts[i:]), []).append(summary)
+        for route in list(self.routes):
+            if route.framework != "django" or not route.handler_modules:
+                continue
+            matched = False
+            targets: dict[str, list[str]] = {}
+            for module in route.handler_modules:
+                for summary in by_suffix.get(module, []):
+                    matched = True
+                    found = _view_targets(summary, route.handler_func)
+                    for target_module, func in found or [(module, route.handler_func)]:
+                        targets.setdefault(func, []).append(target_module)
+            if not matched:
+                route.handler_modules = ()
+                continue
+            route.handler_modules = tuple(
+                dict.fromkeys(targets.pop(route.handler_func, route.handler_modules))
+            )
+            for func, modules in targets.items():
+                renamed = replace(route, handler_func=func, handler_modules=tuple(dict.fromkeys(modules)))
+                self.all_by_func.setdefault(func, []).append(renamed)
+
+
+@dataclass(frozen=True)
+class ModuleSummary:
+    """What `RouteTable.resolve_views` needs from one file: its dotted module
+    (relative to the scan root), its module-level defs, and its imports."""
+
+    module: str
+    defs: frozenset[str]
+    names: dict[str, str]
+    star_modules: tuple[str, ...]
+
+
+def _view_targets(summary: ModuleSummary, func: str) -> list[tuple[str, str]]:
+    """`(module, function)` pairs the view `func` of `summary`'s module may
+    be: the module itself when it defines `func`, else one re-export hop."""
+    if func in summary.defs:
+        return [(summary.module, func)]
+    found = []
+    target = summary.names.get(func, "")
+    if "." in target:
+        module, _, real = target.rpartition(".")
+        found.append((module, real))
+    found += [(star, func) for star in summary.star_modules]
+    return found
+
 
 def extract_routes(source: str, rel_path: str) -> RouteTable:
     """Parse `source` and return its RouteTable. Returns an empty table on
     syntax errors (a file we can't parse contributes no routes — the taint
     analyzer already guards parsing separately)."""
+    return scan_module(source, rel_path)[0]
+
+
+def scan_module(source: str, rel_path: str) -> tuple[RouteTable, ModuleSummary | None]:
+    """Parse `source` once: its RouteTable, and the ModuleSummary a project
+    pass hands to `RouteTable.resolve_views` (None when it does not parse)."""
     table = RouteTable()
     try:
         tree = ast.parse(source)
     except (SyntaxError, RecursionError, ValueError):
         # audit #18: a file we can't parse (or that trips the recursion limit /
         # "too many nested" guard) contributes no routes — never aborts.
-        return table
+        return table, None
 
     try:
-        _DecoratorRouteVisitor(table, rel_path).visit(tree)
-        _DjangoUrlpatternsVisitor(table, rel_path, _ImportScope(tree, rel_path)).visit(tree)
+        imports = _ImportScope(tree, rel_path)
+        _DecoratorRouteVisitor(table, rel_path, imports).visit(tree)
+        _DjangoUrlpatternsVisitor(table, rel_path, imports).visit(tree)
+        summary = ModuleSummary(
+            module=imports.module,
+            defs=frozenset(_module_level_defs(tree)),
+            names=dict(imports.names),
+            star_modules=tuple(imports.star_modules),
+        )
     except RecursionError:
-        return table
-    return table
+        return RouteTable(), None
+    return table, summary
+
+
+def _module_level_defs(tree: ast.AST):
+    """Yield the names of the defs made in the module's own scope: its body
+    and top-level `if`/`try`/`with` blocks, never a class or def body."""
+    stack = list(getattr(tree, "body", []))
+    while stack:
+        stmt = stack.pop()
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield stmt.name
+        elif isinstance(stmt, (ast.If, ast.Try, ast.With, ast.AsyncWith)) or (
+            type(stmt).__name__ == "TryStar"
+        ):
+            stack += getattr(stmt, "body", []) + getattr(stmt, "orelse", [])
+            stack += getattr(stmt, "finalbody", [])
+            for handler in getattr(stmt, "handlers", []):
+                stack += handler.body
 
 
 def _module_name(rel_path: str) -> tuple[str, str]:
@@ -187,6 +302,18 @@ class _ImportScope:
             base += node.module.split(".")
         return ".".join(base)
 
+    def resolve(self, dotted: str) -> str:
+        """`dotted` with its head resolved through this file's imports
+        (`mock.patch` -> `unittest.mock.patch`), or as written."""
+        head, _, rest = dotted.partition(".")
+        if head not in self.names:
+            return dotted
+        return self.names[head] + (f".{rest}" if rest else "")
+
+    def roots(self) -> set[str]:
+        """The top-level package of every module this file imports from."""
+        return {t.split(".", 1)[0] for t in (*self.names.values(), *self.star_modules)}
+
     def resolve_view(self, handler: str) -> tuple[str, tuple[str, ...]]:
         """`(function name, candidate modules)` for a view symbol written as
         `handler` in this file. An imported head resolves through its import;
@@ -224,9 +351,14 @@ def _dotted_name(node: ast.AST) -> str:
 class _DecoratorRouteVisitor(ast.NodeVisitor):
     """Binds Flask/FastAPI decorator routes to their decorated function."""
 
-    def __init__(self, table: RouteTable, rel_path: str) -> None:
+    def __init__(self, table: RouteTable, rel_path: str, imports: _ImportScope) -> None:
         self.table = table
         self.rel = rel_path
+        self.imports = imports
+        roots = imports.roots()
+        self.framework = (
+            "fastapi" if roots & _FASTAPI_ROOTS else "flask" if roots & _FLASK_ROOTS else ""
+        )
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
         self._handle(node)
@@ -248,11 +380,16 @@ class _DecoratorRouteVisitor(ast.NodeVisitor):
                 method = _VERB_DECORATORS[attr]
             elif attr != "route":
                 continue  # not a routing decorator we recognise
-            # First positional arg is the URL pattern.
+            # `@mock.patch("os.getenv")` is not a PATCH route.
+            receiver = self.imports.resolve(_dotted_name(deco.func.value))
+            if receiver in _MOCK_MODULES or receiver.startswith("unittest.mock."):
+                continue
+            # First positional arg is the URL pattern. Flask and Starlette
+            # require it to start with "/"; FastAPI allows "" under a prefix.
             if not deco.args:
                 continue
             pattern = _str_const(deco.args[0])
-            if pattern is None:
+            if pattern is None or (pattern and not pattern.startswith("/")):
                 continue
             # Flask: methods=["POST", ...] kwarg overrides the default.
             if attr == "route":
@@ -265,8 +402,20 @@ class _DecoratorRouteVisitor(ast.NodeVisitor):
                     file=self.rel,
                     line=deco.lineno,
                     handler_func=node.name,
+                    framework=self._framework(pattern, attr),
                 )
             )
+
+    def _framework(self, pattern: str, attr: str) -> str:
+        """The file's framework from its imports; else `{x}` (Starlette) or
+        `<x>` (Flask) in the pattern; else `.route(...)`, which is Flask's."""
+        if self.framework:
+            return self.framework
+        if "{" in pattern:
+            return "fastapi"
+        if "<" in pattern or attr == "route":
+            return "flask"
+        return ""
 
 
 def _flask_methods(call: ast.Call) -> str:
@@ -320,6 +469,8 @@ class _DjangoUrlpatternsVisitor(ast.NodeVisitor):
                         line=node.lineno,
                         handler_func=func_name,
                         handler_modules=modules,
+                        framework="django",
+                        regex=name in _DJANGO_REGEX_FUNCS,
                     )
                 )
         self.generic_visit(node)

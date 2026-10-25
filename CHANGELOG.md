@@ -41,29 +41,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escalates it one level as reachable, and it may now block.
   - **Only route handlers.** A parameter counts only in the def a Flask or
     FastAPI route decorator sits on, or in the module-level view a Django
-    `path()`, `re_path()` or `url()` names. The view's module is resolved
-    through the urlconf's imports (`from app.views import a; path("x/",
-    a.search)` is `app/views/a.py`). Parameters of any other function are
-    not sources.
-  - **Not sources:** `self`; a first positional parameter named `request` or
-    `req`, and a Django view's first positional parameter whatever its name
-    (Django passes the request object there); a parameter annotated `Request`, `Response`, `BackgroundTasks`,
-    `WebSocket`, `HTTPConnection` or `Session`; a dependency, defaulted to
-    `Depends(...)` or `Security(...)` or annotated
-    `Annotated[..., Depends(...)]`; a parameter annotated with a module-level
-    alias of such a dependency in the same file
-    (`CurrentUser = Annotated[User, Depends(get_current_user)]`); `*args` and
-    `**kwargs`. An alias imported from another module
-    (`from app.api.deps import CurrentUser`) is not recognised, and a
-    parameter annotated with it still counts as a source.
-  - **Values coerced to a non-string scalar are not sources.** FastAPI
-    parameters annotated `int`, `float`, `bool`, `UUID`, `datetime`, `date`,
-    `time`, `timedelta` or `Decimal`, bare, `Optional[...]`, `X | None` or as
-    the first argument of `Annotated[...]`. Flask `<int:...>`, `<float:...>`
-    and `<uuid:...>` and Django `<int:...>` and `<uuid:...>` URL variables. A
-    variable that another of the view's routes passes as a string stays a
-    source. `str`, `list[str]`, a pydantic model, an unannotated parameter and
-    the `path` converter are sources.
+    `path()`, `re_path()` or `url()` names.
+    - The view's module is resolved through the urlconf's imports
+      (`from app.views import a; path("x/", a.search)` is `app/views/a.py`).
+      One re-export hop is followed when that module does not define the
+      view itself: `from .items import show` (with `as`) or
+      `from .items import *` in the module, or in its `__init__.py` for a
+      package. When no scanned file is the resolved module, for example
+      when the scan root is inside the package, the view's name alone
+      binds it.
+    - A decorator route's first argument must start with `/` (or be `""`,
+      which FastAPI allows under a prefixed router), and a `unittest.mock`
+      or `mock` receiver is never a route, so `@mock.patch("os.getenv")` is
+      not a PATCH route.
+    - Parameters of any other function are not sources.
+  - **Flask and Django pass only the URL variables their pattern names.** A
+    Flask or Django view's parameter is a source only when one of its routes'
+    patterns names it: `<x>`, `<path:x>`, a regex group `(?P<x>...)`, or,
+    for a Django regex with no named group, the unnamed groups in order
+    after `request`.
+    - A plain default (`def report(fmt="pdf")` on `/report`), a Flask
+      `defaults=` value and a Django urlconf extra-kwargs value are set by
+      the developer. So the request object is never a source, whatever the
+      view names it.
+    - FastAPI reads a parameter its path does not name from the query
+      string, so every FastAPI parameter the rules below leave is a source.
+    - A decorator route's framework comes from the file's imports
+      (`fastapi`/`starlette` or `flask`), then from its pattern (`{x}` or
+      `<x>`), then from `.route(...)`, which is Flask's. A route that none of
+      these places is treated as FastAPI.
+  - **Dependencies and injected objects are not sources:**
+    - `self`, and a first positional parameter named `request` or `req`;
+    - a parameter annotated `Request`, `Response`, `BackgroundTasks`,
+      `WebSocket`, `HTTPConnection` or `Session`;
+    - a parameter defaulted to `Depends(...)` or `Security(...)`, or
+      annotated `Annotated[..., Depends(...)]`;
+    - a parameter annotated with a module-level alias of such a dependency
+      in the same file (`CurrentUser = Annotated[User, Depends(get_current_user)]`);
+    - a parameter annotated with a type imported from a module with a `deps`
+      or `dependencies` path segment, by name
+      (`from app.api.deps import CurrentUser`, `from .deps import SessionDep as S`)
+      or through the module (`from app.api import deps`, then
+      `deps.CurrentUser`);
+    - `*args` and `**kwargs`.
+
+    Annotations are recognised bare, under `Optional[...]`/`X | None`, or as
+    the first argument of `Annotated[...]`. A type imported from any other
+    module (`from app.models import User`) stays a source.
+  - **Fixed-value types are not sources.** FastAPI and pydantic validate
+    these before the handler runs, so the value cannot carry free text:
+    - `int`, `float`, `bool`, `UUID`, `datetime`, `date`, `time`,
+      `timedelta` and `Decimal`;
+    - the pydantic constrained numbers `conint(...)`, `confloat(...)`,
+      `condecimal(...)`, `PositiveInt`, `NegativeInt`, `NonNegativeInt`,
+      `NonPositiveInt`, `PositiveFloat`, `NegativeFloat`,
+      `NonNegativeFloat`, `NonPositiveFloat`, `StrictInt`, `StrictFloat`
+      and `StrictBool`;
+    - `Literal[...]`, the safe way to accept a dynamic `ORDER BY` direction;
+    - an Enum class defined in the same file, with a base of `Enum`,
+      `IntEnum` or `StrEnum` or of another such class
+      (`class Sort(str, Enum)`);
+    - a container of these: `list[int]`, `set[UUID]`, `tuple[int, ...]`,
+      `list[Sort]`.
+
+    Each counts bare, under `Optional[...]`/`X | None`, or as the first
+    argument of `Annotated[...]`. Flask `<int:...>`, `<float:...>` and
+    `<uuid:...>` and Django `<int:...>` and `<uuid:...>` URL variables are
+    coerced the same way. A variable that another of the view's routes passes
+    as a string stays a source.
+
+    These stay sources: `str`, `list[str]`, a regex-constrained string
+    (`constr(pattern=...)`, `Path(pattern=...)`, a Django regex group), a
+    pydantic model, an Enum imported from another module, an unannotated
+    parameter, and the `path` converter.
   - **Sanitisers apply as they do to a `request.args` value.** A membership
     guard, a `urlparse(...).netloc` allowlist, path containment, escaping or an
     allowlist lookup leaves the finding unreported or unproven exactly as it
@@ -101,10 +151,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     got the first one's route. Each finding now carries its own view's route,
     or none. A finding whose route changes is identified by its new route's
     file, or by its own file when it has none, once.
-  - **Not covered:** routes registered without a route decorator or a
-    urlconf entry (`app.add_api_route(...)`, `app.add_url_rule(...)`,
-    class-based views). A Flask `defaults=` value counts as a source unless
-    one of the view's routes coerces that name with a converter.
+  - **Not covered:**
+    - routes registered without a route decorator or a urlconf entry:
+      `app.add_api_route(...)`, `app.add_url_rule(...)` and class-based
+      views;
+    - a view wrapped in the urlconf, as in
+      `path("x/", login_required(views.show))`;
+    - a re-export chain longer than one hop.
   - **Framework parity:** FastAPI's `direct`, `indirect` and `alt_api` cases
     for SQL injection, command injection and SSRF, its `direct` and
     `indirect` path-traversal cases and its `alt_api` XSS case now block, and

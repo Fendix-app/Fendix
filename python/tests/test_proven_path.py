@@ -1,10 +1,14 @@
 """Integration test: route binding attaches to a reachable taint finding."""
 from __future__ import annotations
 
+import ast
 import tempfile
 from pathlib import Path
 
-from analyzers.ast_analyzer import ASTAnalyzer
+import pytest
+
+from analyzers.ast_analyzer import ASTAnalyzer, route_param_sources
+from analyzers.route_extractor import extract_routes
 
 
 def _scan(files: dict[str, str]) -> list[dict]:
@@ -84,10 +88,6 @@ def helper():
 # `request`/`req`, a Request/Response/... annotation, a Depends/Security
 # dependency (Review Focus 2, R-pf27), or a value the framework coerces to a
 # non-string scalar (R-pf33).
-
-import ast
-
-import pytest
 
 
 def _rule(findings: list[dict], rule: str) -> list[dict]:
@@ -369,12 +369,11 @@ def test_django_int_converter_is_not_a_source(pattern, proven):
     f = _one({"urls.py": _django_urls(pattern), "views.py": _DJANGO_VIEW})
     if proven:
         _assert_proven_from(f, "slug")
+        # A route is attached only to a proven finding, and here it is the
+        # pattern's own.
+        assert f["route"]["pattern"] == pattern
     else:
         _assert_unproven(f)
-    # The route stays attached either way: the converter changes the source,
-    # not the binding.
-    if proven:
-        assert f["route"]["pattern"] == pattern
 
 
 # -- R-pf27: Annotated dependencies, and same-file aliases of them ------------
@@ -717,3 +716,333 @@ def test_fastapi_first_positional_parameter_is_a_source_when_not_named_request()
     # ordinary query parameter.
     f = _one({"app.py": _fastapi_sqli("name: str, other: str = ''")})
     _assert_proven_from(f, "name")
+
+
+# ---------------------------------------------------------------------------
+# Fix round 1: typed and dependency-injected route parameters (R-pf34, R-pf36)
+# ---------------------------------------------------------------------------
+
+_ENUMS = (
+    "import enum\n"
+    "from enum import Enum, IntEnum\n"
+    "from typing import Literal, List, Set, Tuple\n"
+    "from pydantic import conint, confloat, constr, PositiveInt, StrictInt\n"
+    "from fastapi import Path\n"
+    "class Sort(str, Enum):\n"
+    "    asc = 'asc'\n"
+    "    desc = 'desc'\n"
+    "class Level(IntEnum):\n"
+    "    low = 1\n"
+    "class Colour(enum.StrEnum):\n"
+    "    red = 'red'\n"
+    "class Shade(Sort):\n"
+    "    pass\n"
+)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        # R-pf36: Literal (the textbook safe dynamic ORDER BY).
+        'name: Literal["asc", "desc"] = "asc"',
+        'name: Optional[Literal["asc", "desc"]] = None',
+        # R-pf36: an Enum class of this file, whatever its Enum base.
+        "name: Sort = Sort.asc",
+        "name: Level = Level.low",
+        "name: Colour = Colour.red",
+        "name: Shade = Shade.asc",
+        "name: Annotated[Sort, Query()] = Sort.asc",
+        # R-pf36: pydantic constrained numbers.
+        "name: conint(gt=0) = 1",
+        "name: confloat(ge=0) = 0.0",
+        "name: PositiveInt = 1",
+        "name: StrictInt = 1",
+        # R-pf36: containers of fixed-value types.
+        "name: list[int] = Query([])",
+        "name: List[int] = Query([])",
+        "name: set[UUID] = Query(set())",
+        "name: Tuple[int, ...] = Query(())",
+        "name: Optional[list[int]] = None",
+        "name: list[Sort] = Query([])",
+        "name: list[Literal['a', 'b']] = Query([])",
+    ],
+)
+def test_fixed_value_route_param_is_not_a_source(params):
+    f = _one({"app.py": _fastapi_sqli(params, prelude=_ENUMS)})
+    _assert_unproven(f)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        'name: str = ""',
+        "name: Item",
+        "name: list[str] = Query([])",
+        "name: list[Item]",
+        # R-pf36: a regex-constrained string still carries free text.
+        "name: constr(pattern='^[a-z]+$') = 'a'",
+        "name: str = Path(pattern='^[a-z]+$')",
+        # A class of this file that is not an Enum.
+        "name: Item = Depends",  # a bare reference, not a Depends(...) call
+    ],
+)
+def test_str_and_model_route_params_stay_sources(params):
+    _assert_proven_from(_one({"app.py": _fastapi_sqli(params, prelude=_ENUMS)}), "name")
+
+
+def test_enum_imported_from_another_module_stays_a_source():
+    # R-pf36 recognises an Enum defined in the handler's own file only.
+    prelude = "from app.choices import Sort\n"
+    _assert_proven_from(_one({"app.py": _fastapi_sqli("name: Sort", prelude=prelude)}), "name")
+
+
+# -- R-pf36: Flask and Django pass only the URL variables their pattern names --
+
+
+def test_flask_param_with_a_plain_default_is_not_a_source():
+    src = (
+        "import os\n"
+        "from flask import Flask\n"
+        "app = Flask(__name__)\n"
+        '@app.route("/report")\n'
+        'def report(fmt="pdf"):\n'
+        '    os.system(f"gen --fmt {fmt}")\n'
+    )
+    _assert_unproven(_one({"app.py": src}, "PY_OS_SYSTEM"))
+
+
+def test_flask_param_named_by_one_route_is_a_source():
+    src = (
+        "import os\n"
+        "from flask import Flask\n"
+        "app = Flask(__name__)\n"
+        '@app.route("/report", defaults={"fmt": "pdf"})\n'
+        '@app.route("/report/<fmt>")\n'
+        "def report(fmt):\n"
+        '    os.system(f"gen --fmt {fmt}")\n'
+    )
+    _assert_proven_from(_one({"app.py": src}, "PY_OS_SYSTEM"), "fmt")
+
+
+def test_fastapi_param_with_a_plain_default_is_a_source():
+    # FastAPI reads a parameter the path does not name from the query string.
+    src = (
+        "import os\n"
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        '@router.get("/report")\n'
+        'def report(fmt="pdf"):\n'
+        '    os.system(f"gen --fmt {fmt}")\n'
+    )
+    _assert_proven_from(_one({"app.py": src}, "PY_OS_SYSTEM"), "fmt")
+
+
+@pytest.mark.parametrize(
+    "imports, decorator, framework",
+    [
+        ("from flask import Flask\napp = Flask(__name__)\n", '@app.get("/report")', "flask"),
+        ("from fastapi import FastAPI\napp = FastAPI()\n", '@app.get("/report")', "fastapi"),
+        ("from .core import app\n", '@app.route("/report")', "flask"),
+        ("from .core import app\n", '@app.get("/report/{x}")', "fastapi"),
+        ("from .core import app\n", '@app.get("/report/<x>")', "flask"),
+        ("from .core import app\n", '@app.get("/report")', ""),
+    ],
+)
+def test_decorator_route_framework(imports, decorator, framework):
+    src = f"{imports}{decorator}\ndef report(x='1'):\n    return x\n"
+    [route] = extract_routes(src, "app.py").routes
+    assert route.framework == framework
+
+
+def test_django_extra_kwargs_value_is_not_a_source():
+    urls = (
+        "from django.urls import path\n"
+        "from app import views\n"
+        "urlpatterns = [path('about/', views.page, {'tpl': 'about'})]\n"
+    )
+    views = "import os\ndef page(request, tpl='x'):\n    os.system(f'render {tpl}')\n"
+    f = _one({"app/urls.py": urls, "app/views.py": views}, "PY_OS_SYSTEM")
+    _assert_unproven(f)
+
+
+@pytest.mark.parametrize(
+    "call, proven",
+    [
+        # Named groups: by name. A digit-only group is still a string (R-pf36).
+        ("re_path(r'^r/(?P<slug>[0-9]+)/$', views.show)", True),
+        # Unnamed groups fill the positional parameters after `request`.
+        ("re_path(r'^r/([^/]+)/$', views.show)", True),
+        ("re_path(r'^r/(?:x|y)/([^/]+)/$', views.show)", True),
+        # Django passes only named groups when a pattern has both, and an
+        # escaped or bracketed parenthesis is not a group.
+        ("re_path(r'^r/(?P<other>\\w+)/([^/]+)/$', views.show)", False),
+        ("re_path(r'^r/\\(x\\)/[()]/$', views.show)", False),
+        ("path('r/', views.show)", False),
+    ],
+)
+def test_django_regex_groups_name_the_sources(call, proven):
+    urls = f"from django.urls import path, re_path\nfrom app import views\nurlpatterns = [{call}]\n"
+    views = (
+        "from django.db import connection\n"
+        "def show(request, slug='x', other='y'):\n"
+        "    connection.cursor().execute(f\"SELECT * FROM t WHERE s = '{slug}'\")\n"
+    )
+    f = _one({"app/urls.py": urls, "app/views.py": views})
+    if proven:
+        _assert_proven_from(f, "slug")
+    else:
+        _assert_unproven(f)
+
+
+# -- R-pf34: types imported from a deps/dependencies module are DI ------------
+
+
+@pytest.mark.parametrize(
+    "prelude, annotation",
+    [
+        ("from app.api.deps import CurrentUser\n", "CurrentUser"),
+        ("from app.api.deps import CurrentUser as Me\n", "Me"),
+        ("from app.dependencies.auth import User\n", "User"),
+        ("from .deps import SessionDep\n", "SessionDep"),
+        ("from ..api.dependencies import SessionDep\n", "SessionDep"),
+        ("from app.api.deps import CurrentUser\n", "Optional[CurrentUser]"),
+        ("from app.api.deps import CurrentUser\n", "Annotated[CurrentUser, 'x']"),
+        ("from app.api import deps\n", "deps.CurrentUser"),
+        ("from . import deps\n", "deps.CurrentUser"),
+        ("import app.api.deps as d\n", "d.CurrentUser"),
+        ("import app.api.deps\n", "app.api.deps.CurrentUser"),
+        ("from app import dependencies\n", "dependencies.auth.User"),
+    ],
+)
+def test_param_typed_from_a_deps_module_is_not_a_source(prelude, annotation):
+    f = _one({"app/routes.py": _fastapi_sqli(f"name: {annotation}", prelude=prelude)})
+    _assert_unproven(f)
+
+
+@pytest.mark.parametrize(
+    "prelude, annotation",
+    [
+        ("from app.models import User\n", "User"),
+        ("from app import models\n", "models.User"),
+        ("from app.depsx import User\n", "User"),
+        # `deps` is the imported name here, not a module segment of `User`.
+        ("from app.api import deps\n", "User"),
+    ],
+)
+def test_param_typed_from_another_module_stays_a_source(prelude, annotation):
+    f = _one({"app/routes.py": _fastapi_sqli(f"name: {annotation}", prelude=prelude)})
+    _assert_proven_from(f, "name")
+
+
+# -- unittest.mock decorators are not routes ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "imports, decorator",
+    [
+        ("from unittest import mock\n", '@mock.patch("os.getenv")'),
+        ("import mock\n", '@mock.patch("os.getenv")'),
+        ("from unittest import mock as um\n", '@um.patch("os.getenv")'),
+        ("import unittest.mock\n", '@unittest.mock.patch("os.getenv")'),
+        ("from unittest import mock\n", '@mock.patch("/srv/x")'),
+    ],
+)
+def test_mock_patch_decorator_is_not_a_route(imports, decorator):
+    src = (
+        f"import os\n{imports}{decorator}\n"
+        'def check(m, cmd="ls"):\n'
+        '    os.system(f"x {cmd}")\n'
+    )
+    assert extract_routes(src, "checks.py").routes == []
+    f = _one({"checks.py": src}, "PY_OS_SYSTEM")
+    _assert_unproven(f)
+    assert "route" not in f
+
+
+def test_decorator_with_a_non_path_first_argument_is_not_a_route():
+    # Flask and Starlette require a route to start with "/".
+    src = '@cache.get("users")\ndef h(name):\n    return name\n'
+    assert extract_routes(src, "app.py").routes == []
+    # FastAPI allows "" under a prefixed router.
+    src = 'from fastapi import APIRouter\nrouter = APIRouter()\n@router.get("")\ndef h(name):\n    return name\n'
+    assert [r.pattern for r in extract_routes(src, "app.py").routes] == [""]
+
+
+# -- Django views re-exported by a package, and a scan root inside the package --
+
+_REEXPORT_URLS = (
+    "from django.urls import path\n"
+    "from app import views\n"
+    "urlpatterns = [path('r/<str:slug>/', views.show)]\n"
+)
+_REEXPORT_VIEW = (
+    "from django.db import connection\n"
+    "def {name}(request, slug):\n"
+    "    connection.cursor().execute(f\"SELECT * FROM t WHERE s = '{{slug}}'\")\n"
+)
+
+
+@pytest.mark.parametrize(
+    "init, items_name",
+    [
+        ("from .items import show\n", "show"),
+        ("from .items import *\n", "show"),
+        ("from app.views.items import show\n", "show"),
+        ("from .items import show_item as show\n", "show_item"),
+    ],
+)
+def test_django_view_re_exported_by_its_package_binds(init, items_name):
+    files = {
+        "app/urls.py": _REEXPORT_URLS,
+        "app/views/__init__.py": init,
+        "app/views/items.py": _REEXPORT_VIEW.format(name=items_name),
+    }
+    f = _one(files)
+    _assert_proven_from(f, "slug")
+    assert f["route"]["pattern"] == "r/<str:slug>/"
+    assert f["route"]["file"] == "app/urls.py"
+
+
+def test_django_re_export_follows_one_hop_only():
+    files = {
+        "app/urls.py": _REEXPORT_URLS,
+        "app/views/__init__.py": "from .a import show\n",
+        "app/views/a.py": "from .b import show\n",
+        "app/views/b.py": _REEXPORT_VIEW.format(name="show"),
+    }
+    f = _one(files)
+    _assert_unproven(f)
+    assert "route" not in f
+
+
+def test_django_scan_root_inside_the_package_falls_back_to_the_name():
+    # urls.py imports `app.views`, but the scan root IS `app/`: no scanned
+    # file is `app/views.py`, so the view's name alone binds, as before.
+    f = _one({"urls.py": _REEXPORT_URLS, "views.py": _REEXPORT_VIEW.format(name="show")})
+    _assert_proven_from(f, "slug")
+    assert f["route"]["pattern"] == "r/<str:slug>/"
+
+
+# -- route_param_sources: the whole rule set, for Task 3.8 ---------------------
+
+
+def test_route_param_sources_applies_the_whole_rule_set():
+    module = ast.parse(
+        "from enum import Enum\n"
+        "from typing import Annotated\n"
+        "from fastapi import Depends\n"
+        "from app.api.deps import SessionDep\n"
+        "class Sort(str, Enum):\n"
+        "    asc = 'asc'\n"
+        "Me = Annotated[str, Depends(get_user)]\n"
+        "def h(q: str, sort: Sort, me: Me, db: SessionDep, n: int, raw):\n"
+        "    pass\n"
+    )
+    func = module.body[-1]
+    [fastapi_route] = extract_routes('@router.get("/u/{raw}")\ndef h(): pass\n', "a.py").routes
+    [flask_route] = extract_routes(
+        'from flask import Flask\n@app.route("/u/<raw>")\ndef h(): pass\n', "a.py"
+    ).routes
+    assert route_param_sources(func, [fastapi_route], module) == {"q", "raw"}
+    assert route_param_sources(func, [flask_route], module) == {"raw"}
+    assert route_param_sources(func, [], module) == frozenset()
