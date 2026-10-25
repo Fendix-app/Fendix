@@ -2799,17 +2799,43 @@ class TestHelperTaintThroughCallerAssignment:
     # -- whose bindings a call site reads ------------------------------------
 
     def test_same_named_functions_do_not_share_bindings(self) -> None:
-        # Pinger.handle is walked first; Reader.handle, which assigns from
-        # request, must not lend its `host` to Pinger.handle's call site.
+        # Reader.handle assigns `host` from request BEFORE Pinger.handle's call
+        # in source order, so only keying bindings by node keeps it out.
         self._unproven(
             _PING
-            + "class Pinger:\n"
-            + "    def handle(self, host):\n"
-            + "        return _ping(host)\n"
             + "class Reader:\n"
             + "    def handle(self, request):\n"
             + '        host = request.GET["h"]\n'
             + "        return host\n"
+            + "class Pinger:\n"
+            + "    def handle(self, host):\n"
+            + "        return _ping(host)\n"
+        )
+
+    def test_bare_name_call_does_not_reach_a_same_named_method(self) -> None:
+        # `handle(h, p)` calls the module function; Pinger.handle's `host`
+        # (index 1, after `self`) must not take `p`.
+        self._unproven(
+            "def handle(host, port):\n"
+            + "    return host, port\n"
+            + "class Pinger:\n"
+            + "    def handle(self, host):\n"
+            + '        subprocess.run(f"ping -c 1 {host}", shell=True)\n'
+            + "def view():\n"
+            + '    h = "localhost"\n'
+            + '    p = request.args["p"]\n'
+            + "    return handle(h, p)\n"
+        )
+
+    def test_inline_bare_name_call_does_not_reach_a_same_named_method(self) -> None:
+        self._unproven(
+            "def handle(host, port):\n"
+            + "    return host, port\n"
+            + "class Pinger:\n"
+            + "    def handle(self, host):\n"
+            + '        subprocess.run(f"ping -c 1 {host}", shell=True)\n'
+            + "def view():\n"
+            + '    return handle("localhost", request.args["p"])\n'
         )
 
     def test_module_level_call_resolves_module_bindings(self) -> None:
@@ -2916,3 +2942,197 @@ class TestHelperTaintThroughCallerAssignment:
             + "        _ping(host)\n"
         )
         assert chain[0] == _link(6, "request.GET.getlist('h')")
+
+
+class TestHelperHopHonoursCallerSanitisers:
+    """R-pf32: the hop must not prove what the direct path treats as safe. A
+    caller that passes its value through a guard or sanitiser the direct sink
+    honours leaves the helper's finding reported but unproven. Each guarded
+    shape has a control without the guard, which is proven."""
+
+    @staticmethod
+    def _at(src: str, rule: str, line: int) -> dict:
+        found = [
+            f
+            for f in _collect_src(src)
+            if f["id"] == rule and f["line"] == f"mod.py:{line}"
+        ]
+        assert len(found) == 1, found
+        return found[0]
+
+    def _proven(self, src: str, rule: str, line: int) -> list[dict]:
+        f = self._at(src, rule, line)
+        assert f.get("reachable") is True, f
+        return f["taint_chain"]
+
+    def _unproven(self, src: str, rule: str, line: int) -> None:
+        f = self._at(src, rule, line)
+        assert f.get("reachable") is not True, f
+        assert "taint_chain" not in f, f
+
+    # -- SSRF: membership guard ------------------------------------------------
+
+    _SSRF = (
+        "import requests\n"
+        "from flask import request\n"
+        'ALLOWED = {"a.example", "b.example"}\n'
+        "def _fetch(url):\n"
+        "    return requests.get(url).text\n"
+        "def view():\n"
+        '    host = request.args["h"]\n'
+    )
+
+    def test_ssrf_membership_guard_in_caller_is_not_proven(self) -> None:
+        self._unproven(
+            self._SSRF
+            + "    if host not in ALLOWED:\n"
+            + '        return "no", 400\n'
+            + "    return _fetch(host)\n",
+            "SEC-PY_SSRF",
+            5,
+        )
+
+    def test_ssrf_without_guard_in_caller_is_proven(self) -> None:
+        chain = self._proven(self._SSRF + "    return _fetch(host)\n", "SEC-PY_SSRF", 5)
+        assert chain[0] == _link(7, "request.args['h']")
+
+    # -- SSRF: urlparse(...).netloc allowlist guard ---------------------------
+
+    _SSRF_NETLOC = (
+        "import requests\n"
+        "from urllib.parse import urlparse\n"
+        "from flask import request\n"
+        'ALLOWED_HOSTS = {"api.example.com"}\n'
+        "def _fetch(u):\n"
+        "    return requests.get(u).text\n"
+        "def view():\n"
+        '    url = request.args["u"]\n'
+    )
+
+    def test_ssrf_netloc_guard_in_caller_is_not_proven(self) -> None:
+        self._unproven(
+            self._SSRF_NETLOC
+            + "    if urlparse(url).netloc not in ALLOWED_HOSTS:\n"
+            + '        return "no", 400\n'
+            + "    return _fetch(url)\n",
+            "SEC-PY_SSRF",
+            6,
+        )
+
+    def test_ssrf_without_netloc_guard_in_caller_is_proven(self) -> None:
+        self._proven(self._SSRF_NETLOC + "    return _fetch(url)\n", "SEC-PY_SSRF", 6)
+
+    def test_ssrf_fixed_host_in_caller_is_not_proven(self) -> None:
+        # The direct sink skips a URL whose scheme and host are constant.
+        self._unproven(
+            "import requests\n"
+            "from flask import request\n"
+            "def _fetch(url):\n"
+            "    return requests.get(url).text\n"
+            "def view():\n"
+            '    url = "https://api.example.com/users/" + request.args["id"]\n'
+            "    return _fetch(url)\n",
+            "SEC-PY_SSRF",
+            4,
+        )
+
+    # -- open redirect: membership guard ---------------------------------------
+
+    _REDIRECT = (
+        "from flask import request, redirect\n"
+        'SAFE = {"/home", "/profile"}\n'
+        "def _go(target):\n"
+        "    return redirect(target)\n"
+        "def view():\n"
+        '    nxt = request.args["next"]\n'
+    )
+
+    def test_redirect_membership_guard_in_caller_is_not_proven(self) -> None:
+        self._unproven(
+            self._REDIRECT
+            + "    if nxt not in SAFE:\n"
+            + '        return redirect("/")\n'
+            + "    return _go(nxt)\n",
+            "SEC-PY_OPEN_REDIRECT",
+            4,
+        )
+
+    def test_redirect_without_guard_in_caller_is_proven(self) -> None:
+        chain = self._proven(
+            self._REDIRECT + "    return _go(nxt)\n", "SEC-PY_OPEN_REDIRECT", 4
+        )
+        assert chain[0] == _link(6, "request.args['next']")
+
+    # -- path traversal: resolved path checked against its base ---------------
+
+    _PATH = (
+        "import os\n"
+        "from flask import request, abort\n"
+        'BASE = "/srv/reports"\n'
+        "def _read(path):\n"
+        "    return open(path).read()\n"
+        "def view():\n"
+        '    f = request.args["f"]\n'
+        "    full = os.path.realpath(os.path.join(BASE, f))\n"
+    )
+
+    def test_path_containment_in_caller_is_not_proven(self) -> None:
+        self._unproven(
+            self._PATH
+            + "    if not full.startswith(BASE + os.sep):\n"
+            + "        abort(400)\n"
+            + "    return _read(full)\n",
+            "SEC-PY_PATH_TRAVERSAL",
+            5,
+        )
+
+    def test_path_without_containment_in_caller_is_proven(self) -> None:
+        chain = self._proven(
+            self._PATH + "    return _read(full)\n", "SEC-PY_PATH_TRAVERSAL", 5
+        )
+        assert chain[0] == _link(7, "request.args['f']")
+
+    # -- XSS: escaped before the call ------------------------------------------
+
+    _XSS = (
+        "from flask import request\n"
+        "from markupsafe import Markup, escape\n"
+        "def _render(s):\n"
+        '    return Markup(f"<b>{s}</b>")\n'
+        "def view():\n"
+    )
+
+    def test_xss_escaped_in_caller_is_not_proven(self) -> None:
+        self._unproven(
+            self._XSS
+            + '    name = escape(request.args["n"])\n'
+            + "    return _render(name)\n",
+            "SEC-PY_XSS_HTML_SINK",
+            4,
+        )
+
+    def test_xss_escaped_inline_in_caller_is_not_proven(self) -> None:
+        self._unproven(
+            self._XSS + '    return _render(escape(request.args["n"]))\n',
+            "SEC-PY_XSS_HTML_SINK",
+            4,
+        )
+
+    def test_xss_escaped_fstring_in_caller_is_not_proven(self) -> None:
+        # Only the fully-escaped-expression check (B5) accepts an f-string
+        # whose every interpolation is escaped.
+        self._unproven(
+            self._XSS
+            + "    label = f\"<i>{escape(request.args['n'])}</i>\"\n"
+            + "    return _render(label)\n",
+            "SEC-PY_XSS_HTML_SINK",
+            4,
+        )
+
+    def test_xss_not_escaped_in_caller_is_proven(self) -> None:
+        chain = self._proven(
+            self._XSS + '    name = request.args["n"]\n' + "    return _render(name)\n",
+            "SEC-PY_XSS_HTML_SINK",
+            4,
+        )
+        assert chain[0] == _link(6, "request.args['n']")

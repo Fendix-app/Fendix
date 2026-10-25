@@ -16,6 +16,7 @@ import posixpath
 import re
 import sys
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, Literal
 
@@ -351,6 +352,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # passes a tainted argument at that parameter's position/keyword. Bounded
         # to a SINGLE hop (we don't recurse into the caller's callers).
         self._callsite_index: dict | None = None
+        # Each def, lambda, class and comprehension node → the scope node it
+        # sits in (the module at the top). Filled with the call-site index.
+        self._scope_parents: dict[ast.AST, ast.AST] = {}
         # The callers' own bindings for that hop: the module node and each def
         # node → the bindings made in its scope, in source order (see
         # `_build_function_bindings`). Keyed by node, so same-named functions
@@ -671,7 +675,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         innermost enclosing def, lambda, class or comprehension, else the
         module. Built once from the module root captured by the visitor;
         bare-name callees only (the common helper-call shape). Call sites keep
-        `ast.walk`'s breadth-first order."""
+        `ast.walk`'s breadth-first order. Also records `self._scope_parents`."""
         index: dict[str, list[tuple[ast.Call, ast.AST]]] = {}
         root = self._module_root
         if root is None:
@@ -682,6 +686,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 index.setdefault(node.func.id, []).append((node, scope))
             if node is not root and isinstance(node, _SCOPE_NODES):
+                self._scope_parents[node] = scope
                 scope = node
             queue.extend((child, scope) for child in ast.iter_child_nodes(node))
         return index
@@ -780,7 +785,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         ``param_name``: the positional argument at the parameter's index, or
         the keyword of that name. ``scope`` is where the call runs (see
         `_build_callsite_index`). Yields nothing once a hop is under way
-        (`_interproc_depth`): one hop, never into the caller's callers."""
+        (`_interproc_depth`): one hop, never into the caller's callers.
+
+        A method is never the callee of a bare-name call, which reaches a
+        function of that name instead, so a method has no callers here."""
         if self._interproc_depth >= 1 or not self._func_stack:
             return
         func = self._func_stack[-1]
@@ -790,6 +798,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         idx = params.index(param_name)
         if self._callsite_index is None:
             self._callsite_index = self._build_callsite_index()
+        if isinstance(self._scope_parents.get(func), ast.ClassDef):
+            return
         for call, scope in self._callsite_index.get(func.name, []):
             arg = None
             if idx < len(call.args):
@@ -815,24 +825,100 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         the caller's names are not the helper's. Its prefix runs from the
         caller's request expression through the caller's assignments to the
         call. Single hop — the caller's own parameters are not traced into the
-        caller's callers."""
+        caller's callers.
+
+        A caller whose argument a sanitiser of the direct path accepts proves
+        nothing (`_caller_arg_is_sanitised`): the hop must not prove what the
+        same code written inline would not."""
         for call, scope, arg in self._caller_args(param_name):
-            if _is_taint_source(arg, extra_source):
-                return [self._link(call.lineno, _ast_expr_text(arg))]
             self._interproc_depth += 1
             try:
-                prefix = self._trace_in_bindings(
-                    arg,
-                    self._bindings_before(scope, call),
-                    frozenset(),
-                    depth + 1,
-                    extra_source,
-                )
+                prefix = self._caller_arg_chain(call, scope, arg, extra_source, depth)
             finally:
                 self._interproc_depth -= 1
             if prefix is not None:
-                return prefix + [self._link(call.lineno, _ast_expr_text(call))]
+                return prefix
         return None
+
+    def _caller_arg_chain(
+        self, call: ast.Call, scope: ast.AST, arg: ast.AST, extra_source, depth: int
+    ) -> list[dict] | None:
+        """The chain prefix one caller's argument proves, or None: the
+        argument as an inline source, or traced through the caller's bindings
+        before the call and followed by the call itself. None as well when a
+        sanitiser accepts the argument in the caller."""
+        if _is_taint_source(arg, extra_source):
+            prefix = [self._link(call.lineno, _ast_expr_text(arg))]
+        else:
+            prefix = self._trace_in_bindings(
+                arg,
+                self._bindings_before(scope, call),
+                frozenset(),
+                depth + 1,
+                extra_source,
+            )
+            if prefix is None:
+                return None
+            prefix = prefix + [self._link(call.lineno, _ast_expr_text(call))]
+        if self._caller_arg_is_sanitised(scope, call, arg):
+            return None
+        return prefix
+
+    def _caller_arg_is_sanitised(
+        self, scope: ast.AST, call: ast.Call, arg: ast.AST
+    ) -> bool:
+        """True when any sanitiser a direct sink honours accepts `arg` where
+        the caller passes it: a dict/collection allowlist lookup, an escaping
+        call, a safe URL builder, a membership guard or a `urlparse(...).netloc`
+        allowlist guard (`_arg_is_sanitised` with `url_sink`), a fully escaped
+        HTML expression (`_expr_is_fully_escaped`), path containment
+        (`_path_is_contained`), or a URL whose scheme and host are fixed
+        (`_url_authority_is_constant`).
+
+        The hop does not know which sink the helper holds, so it takes the
+        union of every sink's sanitisers: a sanitised argument leaves the
+        helper's finding unproven rather than proven. Guards must dominate the
+        call, exactly as they must dominate a sink."""
+        with self._caller_context(scope, call):
+            return (
+                self._arg_is_sanitised(arg, call.lineno, url_sink=True)
+                or self._expr_is_fully_escaped(arg)
+                or self._path_is_contained(arg, call.lineno)
+                or self._url_authority_is_constant(arg)
+            )
+
+    @contextmanager
+    def _caller_context(self, scope: ast.AST, call: ast.Call):
+        """Visit `call` as the direct path would when it reaches the call: the
+        caller's enclosing defs as `self._func_stack`, and the module's and
+        those defs' bindings before the call as `self._scopes`. The sanitiser
+        predicates take the function being visited and the bindings in scope
+        from these two, so they run unchanged in the caller. Restored on
+        exit."""
+        defs = self._enclosing_defs(scope)
+        saved = self._func_stack, self._scopes
+        self._func_stack = defs
+        self._scopes = [
+            self._bindings_before(s, call) for s in (self._module_root, *defs)
+        ]
+        try:
+            yield
+        finally:
+            self._func_stack, self._scopes = saved
+
+    def _enclosing_defs(
+        self, scope: ast.AST
+    ) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+        """The defs that code in `scope` runs inside, outermost first, as
+        `self._func_stack` holds them while that code is visited: `scope`
+        itself when it is a def, and every def around it."""
+        defs = []
+        node = scope
+        while node is not None and node is not self._module_root:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defs.append(node)
+            node = self._scope_parents.get(node)
+        return defs[::-1]
 
     def _resolve_param_to_caller_arg(self, param_name: str) -> ast.AST | None:
         """1-hop: if `param_name` is a parameter of the enclosing function and a

@@ -302,8 +302,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
     `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
     proven, so a finding of theirs that this change proves is identified by
-    its sink instead of its source line. A baseline entry or a `.fendix-ignore`
-    `fingerprint:` rule for it stops matching, and it is reported as new once.
+    its sink instead of its evidence line. A baseline entry or a
+    `.fendix-ignore` `fingerprint:` rule for it stops matching, and it is
+    reported as new once.
+  - **One more finding for a path built with `os.path.join`.** A newly proven
+    helper such as `open(os.path.join(BASE, name))` also reports the inner
+    `os.path.join(...)`, which is reported only when the flow is proven. The
+    same code written in the handler already reports both.
   - **Which assignment counts:** for each name, the last one that comes before
     the call in source order. So `host = request.GET["h"]; host = "localhost";
     _ping(host)` is not proven, and a constant assigned after the call does not
@@ -314,11 +319,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     function itself, or at module level for a call made there. An assignment
     in a nested function, lambda or class does not count for the function
     around it.
+  - **Caller-side sanitisers still count.** A caller that passes the value
+    through a guard or sanitiser that a sink in the same function would honour
+    does not prove the helper's finding, whichever sink the helper holds:
+    - an `if value not in ALLOWED: return` membership guard;
+    - a `urlparse(value).netloc` allowlist guard;
+    - a resolved path checked against its base directory, or `basename`;
+    - escaping, including an f-string whose every value is escaped;
+    - an allowlist lookup (`HOSTS.get(value)`);
+    - `url_for(...)` or `reverse(...)`;
+    - a URL with a fixed scheme and host (`"https://api.example.com/" + value`).
+
+    The guard must come before the call, as it must come before a sink. This
+    applies to a request expression passed inline too, which proved before:
+    `_render(escape(request.args["n"]))` no longer proves.
   - **Not followed:** a call inside a lambda, comprehension or class body,
     which still proves only with the request expression passed inline; a
     method call (`self._ping(host)`); a caller in another file; and the
     caller's own parameters, which are not traced into its callers (one hop
     only). A helper whose callers all pass constants is not proven.
+  - **A bare-name call no longer proves a method's parameter.** `handle(h, p)`
+    calls the function `handle`, never a method of that name, but it was
+    matched against a method's parameters too, `self` included. With `p` from
+    the request, a `Pinger.handle(self, host)` sink was proven reachable.
   - **Framework parity:** the Django and Flask `indirect` cases for SQL
     injection, command injection, SSRF, path traversal and open redirect, and
     Flask's `ssti` `indirect` case, now block. No safe case blocks.
