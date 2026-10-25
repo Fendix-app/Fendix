@@ -464,6 +464,7 @@ A **composite** action. Its steps, in order:
 
 - **Signed releases only.** Only releases published with a cosign signature can be installed. Automatic Python preparation needs a signed build record, published from v3.5.0.
 - **Network.** Outbound HTTPS to GitHub (release downloads, and the API for `latest`) and to Sigstore (its TUF root and Rekor) for the signature check; the Python engine also needs `codeload.github.com` and PyPI. Without Sigstore access the install fails. Proxies work through the standard `HTTPS_PROXY` and `NO_PROXY` variables; a `~/.curlrc` is ignored.
+- **Linux runners: glibc 2.34 or later for Semgrep, from v3.6.5.** The Semgrep that v3.6.5 locks (1.182.1) publishes Linux wheels only for glibc 2.34 or later and musl 1.2 or later. Older glibc includes Ubuntu 20.04, Debian 11, RHEL 8 and its rebuilds, and Amazon Linux 2. There, pip builds Semgrep from source without `semgrep-core`. Engine preparation succeeds, but the scan records `semgrep` as `failed` (`execution_error`) and coverage as incomplete, and the gate is decided by the analyzers that ran. GitHub-hosted runners and the official image are not affected. On an older runner, use the container path (§3.2, §3.4) or a newer distribution. `version: v3.6.4` keeps Semgrep 1.141.0 but gives up v3.6.5's fixes; the v3.6.5 Upgrading notes in [`CHANGELOG.md`](../CHANGELOG.md) list what it keeps. Add `extra-args: --require-analyzers semgrep` to fail the job, with exit 2, when Semgrep does not run.
 - **Permissions.**
 
   | Repository | `permissions:` |
