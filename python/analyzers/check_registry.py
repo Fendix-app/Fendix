@@ -5,6 +5,10 @@ through ``_PythonSecurityVisitor._emit_finding`` and the JS_* checks in
 ``_JS_PATTERNS``. Every field restates what the emit site sends, and
 tests/test_check_registry.py fails when the two drift apart.
 
+``id`` is the bare pattern id the analyzer is written in terms of. The catalog
+names each check by its ``rule_id`` instead, as it does for every other
+analyzer, and publishes ``finding_id`` as the check's finding_id.
+
 The catalog itself is generated in Go (go/cmd/catalog-contract). The Go module
 cannot embed files from ../python, so ``export_json()`` is mirrored into
 go/internal/catalog/python_engine_checks.json. Regenerate it from python/ with:
@@ -31,13 +35,23 @@ class Check:
     # proven_severity, this is the unproven value: the finding escalates only
     # when a taint chain is collected.
     default_severity: str
-    # The rule_id the finding carries, which identity and SARIF key on.
+    # The rule_id the finding carries, which identity and SARIF key on. It is
+    # the check's catalog id.
     rule_id: str
+    # The id the analyzer gives the finding (the finding's "id" field).
+    finding_id: str
 
 
 def _py(id: str, title: str, cwe: str, category: str, default_severity: str) -> Check:
     return Check(
-        id, title, cwe, category, ("python",), default_severity, f"python.ast/{id}"
+        id,
+        title,
+        cwe,
+        category,
+        ("python",),
+        default_severity,
+        rule_id=f"python.ast/{id}",
+        finding_id=f"SEC-{id}",
     )
 
 
@@ -51,7 +65,8 @@ def _js(id: str, title: str, cwe: str, default_severity: str) -> Check:
         "injection",
         ("javascript", "typescript"),
         default_severity,
-        f"SEC-{id}",
+        rule_id=f"SEC-{id}",
+        finding_id=f"SEC-{id}",
     )
 
 

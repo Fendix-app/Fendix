@@ -2,14 +2,16 @@
 
 The catalog (docs/security-catalog-contract.json) is generated in Go, and the
 Go module cannot embed files from ../python, so the registry is mirrored into
-go/internal/catalog/python_engine_checks.json. These tests keep three things
-in step: the analyzer's emit sites, analyzers/check_registry.py, and that copy.
+go/internal/catalog/python_engine_checks.json. These tests keep four things
+in step: the analyzer's emit sites, analyzers/check_registry.py, that copy,
+and the published contract.
 """
 
 from __future__ import annotations
 
 import ast
 import inspect
+import json
 import tempfile
 from pathlib import Path
 
@@ -17,13 +19,11 @@ from analyzers import ast_analyzer
 from analyzers.ast_analyzer import _JS_PATTERNS, ASTAnalyzer
 from analyzers.check_registry import CHECKS, export_json
 
-GO_COPY = (
-    Path(__file__).resolve().parents[2]
-    / "go"
-    / "internal"
-    / "catalog"
-    / "python_engine_checks.json"
-)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+GO_COPY = REPO_ROOT / "go" / "internal" / "catalog" / "python_engine_checks.json"
+CONTRACT = REPO_ROOT / "docs" / "security-catalog-contract.json"
+# The analyzer the scan reports the engine's injection pass under.
+CATALOG_ANALYZER = "python-engine/injection"
 
 # _emit_finding(pat_id, title, severity, confidence, cwe, fix, lineno, ...)
 _POSITIONAL = ("pat_id", "title", "severity", "confidence", "cwe")
@@ -86,6 +86,53 @@ def _by_id() -> dict:
     return {c.id: c for c in CHECKS}
 
 
+def _emitted_identity(function: str):
+    """Render functions for the `id` and `rule_id` a finding built in
+    `function` carries, read from the f-strings in the analyzer's source.
+
+    Returns (finding_id, rule_id), each mapping a pattern id to the string the
+    analyzer emits. Reading the emitter keeps these tests from restating its
+    naming scheme.
+    """
+    tree = ast.parse(Path(ast_analyzer.__file__).read_text(encoding="utf-8"))
+    (func,) = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == function
+    ]
+    dicts = []
+    for node in ast.walk(func):
+        if isinstance(node, ast.Dict):
+            keys = {
+                k.value: v
+                for k, v in zip(node.keys, node.values)
+                if isinstance(k, ast.Constant)
+            }
+            if "id" in keys and "rule_id" in keys:
+                dicts.append(keys)
+    assert len(dicts) == 1, f"{function}: expected one finding dict, found {len(dicts)}"
+
+    def render(template: ast.AST):
+        assert isinstance(template, ast.JoinedStr), ast.dump(template)
+        for part in template.values:
+            assert isinstance(part, ast.Constant) or (
+                isinstance(part, ast.FormattedValue)
+                and isinstance(part.value, ast.Name)
+                and part.value.id == "pat_id"
+                and part.format_spec is None
+            ), f"{function}: unexpected template part {ast.dump(part)}"
+        return lambda pat_id: "".join(
+            part.value if isinstance(part, ast.Constant) else pat_id
+            for part in template.values
+        )
+
+    return render(dicts[0]["id"]), render(dicts[0]["rule_id"])
+
+
+PY_FINDING_ID, PY_RULE_ID = _emitted_identity("_emit_finding")
+JS_FINDING_ID, JS_RULE_ID = _emitted_identity("_analyze_js_heuristic")
+
+
 def test_every_emitted_check_is_registered():
     emitted = {site["id"] for site in _emit_sites()}
     emitted |= {pattern[0] for pattern in _JS_PATTERNS}
@@ -121,7 +168,8 @@ def test_python_checks_match_their_emit_sites():
         assert check.category == site["category"], where
         assert check.default_severity == site["severity"], where
         assert check.languages == ("python",), where
-        assert check.rule_id == f"python.ast/{check.id}", where
+        assert check.rule_id == PY_RULE_ID(check.id), where
+        assert check.finding_id == PY_FINDING_ID(check.id), where
 
     for check in CHECKS:
         titles = {s["title"] for s in sites if s["id"] == check.id}
@@ -142,7 +190,27 @@ def test_javascript_checks_match_their_patterns():
         assert check.cwe == cwe, pat_id
         assert check.category == "injection", pat_id
         assert check.languages == ("javascript", "typescript"), pat_id
-        assert check.rule_id == f"SEC-{pat_id}", pat_id
+        assert check.rule_id == JS_RULE_ID(pat_id), pat_id
+        assert check.finding_id == JS_FINDING_ID(pat_id), pat_id
+
+
+def test_catalog_names_each_check_by_the_rule_id_its_findings_carry():
+    """Every catalog id is the analyzer's emitted rule_id, and every
+    finding_id its emitted finding id, as for every other analyzer.
+
+    Expected values come from the emitters' own f-strings and their emitted
+    pattern ids, not from the registry, so this checks the whole chain:
+    analyzer -> registry -> Go copy -> published contract.
+    """
+    expected = {PY_RULE_ID(s["id"]): PY_FINDING_ID(s["id"]) for s in _emit_sites()}
+    expected.update({JS_RULE_ID(p[0]): JS_FINDING_ID(p[0]) for p in _JS_PATTERNS})
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+    published = {
+        c["id"]: c.get("finding_id")
+        for c in contract["checks"]
+        if c["analyzer"] == CATALOG_ANALYZER
+    }
+    assert published == expected
 
 
 _PY_SOURCE = """
@@ -162,7 +230,7 @@ def test_registry_matches_what_the_analyzer_actually_emits():
     """The emit-site tests read source; this one runs the analyzer.
 
     Both emitters (Python _emit_finding and the JS pattern loop) must produce
-    the rule_id, category and severity the registry publishes.
+    the id, rule_id, category and severity the registry publishes.
     """
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "repo.py").write_text(_PY_SOURCE)
@@ -170,12 +238,12 @@ def test_registry_matches_what_the_analyzer_actually_emits():
         findings: list[dict] = []
         ASTAnalyzer(td).run(findings.append)
 
-    checks = _by_id()
+    by_rule_id = {c.rule_id: c for c in CHECKS}
     fired = {}
     for finding in findings:
-        check = checks[finding["id"].removeprefix("SEC-")]
+        check = by_rule_id[finding["rule_id"]]
         fired[check.id] = finding
-        assert finding["rule_id"] == check.rule_id, check.id
+        assert finding["id"] == check.finding_id, check.id
         assert finding["category"] == check.category, check.id
         assert finding["severity"] == check.default_severity, check.id
         assert finding["references"] == [check.cwe], check.id

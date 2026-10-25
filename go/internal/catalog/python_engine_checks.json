@@ -8,7 +8,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_AUTH_HEADER_TRUST"
+    "rule_id": "python.ast/PY_AUTH_HEADER_TRUST",
+    "finding_id": "SEC-PY_AUTH_HEADER_TRUST"
   },
   {
     "id": "PY_EVAL",
@@ -19,7 +20,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_EVAL"
+    "rule_id": "python.ast/PY_EVAL",
+    "finding_id": "SEC-PY_EVAL"
   },
   {
     "id": "PY_JWT_WEAK",
@@ -30,7 +32,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_JWT_WEAK"
+    "rule_id": "python.ast/PY_JWT_WEAK",
+    "finding_id": "SEC-PY_JWT_WEAK"
   },
   {
     "id": "PY_LLM_PROMPT_INJECTION",
@@ -41,7 +44,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_LLM_PROMPT_INJECTION"
+    "rule_id": "python.ast/PY_LLM_PROMPT_INJECTION",
+    "finding_id": "SEC-PY_LLM_PROMPT_INJECTION"
   },
   {
     "id": "PY_OPEN_REDIRECT",
@@ -52,7 +56,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_OPEN_REDIRECT"
+    "rule_id": "python.ast/PY_OPEN_REDIRECT",
+    "finding_id": "SEC-PY_OPEN_REDIRECT"
   },
   {
     "id": "PY_OS_POPEN",
@@ -63,7 +68,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_OS_POPEN"
+    "rule_id": "python.ast/PY_OS_POPEN",
+    "finding_id": "SEC-PY_OS_POPEN"
   },
   {
     "id": "PY_OS_SYSTEM",
@@ -74,7 +80,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_OS_SYSTEM"
+    "rule_id": "python.ast/PY_OS_SYSTEM",
+    "finding_id": "SEC-PY_OS_SYSTEM"
   },
   {
     "id": "PY_PATH_TRAVERSAL",
@@ -85,7 +92,8 @@
       "python"
     ],
     "default_severity": "MEDIUM",
-    "rule_id": "python.ast/PY_PATH_TRAVERSAL"
+    "rule_id": "python.ast/PY_PATH_TRAVERSAL",
+    "finding_id": "SEC-PY_PATH_TRAVERSAL"
   },
   {
     "id": "PY_PICKLE_LOAD",
@@ -96,7 +104,8 @@
       "python"
     ],
     "default_severity": "CRITICAL",
-    "rule_id": "python.ast/PY_PICKLE_LOAD"
+    "rule_id": "python.ast/PY_PICKLE_LOAD",
+    "finding_id": "SEC-PY_PICKLE_LOAD"
   },
   {
     "id": "PY_SECRET_IN_LOG",
@@ -107,7 +116,8 @@
       "python"
     ],
     "default_severity": "MEDIUM",
-    "rule_id": "python.ast/PY_SECRET_IN_LOG"
+    "rule_id": "python.ast/PY_SECRET_IN_LOG",
+    "finding_id": "SEC-PY_SECRET_IN_LOG"
   },
   {
     "id": "PY_SQL_INJECTION",
@@ -118,7 +128,8 @@
       "python"
     ],
     "default_severity": "CRITICAL",
-    "rule_id": "python.ast/PY_SQL_INJECTION"
+    "rule_id": "python.ast/PY_SQL_INJECTION",
+    "finding_id": "SEC-PY_SQL_INJECTION"
   },
   {
     "id": "PY_SSRF",
@@ -129,7 +140,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_SSRF"
+    "rule_id": "python.ast/PY_SSRF",
+    "finding_id": "SEC-PY_SSRF"
   },
   {
     "id": "PY_SUBPROCESS_SHELL",
@@ -140,7 +152,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_SUBPROCESS_SHELL"
+    "rule_id": "python.ast/PY_SUBPROCESS_SHELL",
+    "finding_id": "SEC-PY_SUBPROCESS_SHELL"
   },
   {
     "id": "PY_WEAK_CRYPTO_PASSWORD",
@@ -151,7 +164,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_WEAK_CRYPTO_PASSWORD"
+    "rule_id": "python.ast/PY_WEAK_CRYPTO_PASSWORD",
+    "finding_id": "SEC-PY_WEAK_CRYPTO_PASSWORD"
   },
   {
     "id": "PY_XSS_HTML_SINK",
@@ -162,7 +176,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_XSS_HTML_SINK"
+    "rule_id": "python.ast/PY_XSS_HTML_SINK",
+    "finding_id": "SEC-PY_XSS_HTML_SINK"
   },
   {
     "id": "PY_YAML_UNSAFE_LOAD",
@@ -173,7 +188,8 @@
       "python"
     ],
     "default_severity": "HIGH",
-    "rule_id": "python.ast/PY_YAML_UNSAFE_LOAD"
+    "rule_id": "python.ast/PY_YAML_UNSAFE_LOAD",
+    "finding_id": "SEC-PY_YAML_UNSAFE_LOAD"
   },
   {
     "id": "JS_DOCUMENT_WRITE",
@@ -185,7 +201,8 @@
       "typescript"
     ],
     "default_severity": "MEDIUM",
-    "rule_id": "SEC-JS_DOCUMENT_WRITE"
+    "rule_id": "SEC-JS_DOCUMENT_WRITE",
+    "finding_id": "SEC-JS_DOCUMENT_WRITE"
   },
   {
     "id": "JS_EVAL",
@@ -197,7 +214,8 @@
       "typescript"
     ],
     "default_severity": "HIGH",
-    "rule_id": "SEC-JS_EVAL"
+    "rule_id": "SEC-JS_EVAL",
+    "finding_id": "SEC-JS_EVAL"
   },
   {
     "id": "JS_INNER_HTML",
@@ -209,7 +227,8 @@
       "typescript"
     ],
     "default_severity": "HIGH",
-    "rule_id": "SEC-JS_INNER_HTML"
+    "rule_id": "SEC-JS_INNER_HTML",
+    "finding_id": "SEC-JS_INNER_HTML"
   },
   {
     "id": "JS_SQL_TEMPLATE",
@@ -221,6 +240,7 @@
       "typescript"
     ],
     "default_severity": "HIGH",
-    "rule_id": "SEC-JS_SQL_TEMPLATE"
+    "rule_id": "SEC-JS_SQL_TEMPLATE",
+    "finding_id": "SEC-JS_SQL_TEMPLATE"
   }
 ]

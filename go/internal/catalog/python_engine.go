@@ -18,6 +18,8 @@ import (
 var pythonEngineChecksJSON []byte
 
 type pythonEngineCheck struct {
+	// ID is the bare pattern id (PY_SQL_INJECTION). The catalog does not
+	// publish it: checks are named by RuleID.
 	ID              string   `json:"id"`
 	Title           string   `json:"title"`
 	CWE             string   `json:"cwe"`
@@ -25,19 +27,14 @@ type pythonEngineCheck struct {
 	Languages       []string `json:"languages"`
 	DefaultSeverity string   `json:"default_severity"`
 	RuleID          string   `json:"rule_id"`
+	FindingID       string   `json:"finding_id"`
 }
 
-// pythonEngineCatalogIDs renames a Python-engine check whose bare pattern ID
-// already names another analyzer's check. The catalog is keyed by ID and the
-// docs site routes one page per ID, so two checks cannot share one. textscan
-// has its own JS_DOCUMENT_WRITE (category xss, a different pattern).
-var pythonEngineCatalogIDs = map[string]string{
-	"JS_DOCUMENT_WRITE": engine.AnalyzerPythonEngine + "/JS_DOCUMENT_WRITE",
-}
-
-// pythonEngineChecks lists the Python engine's AST (PY_*) and JavaScript
-// pattern (JS_*) checks. All of them run in the engine's injection pass,
-// which the scan reports as the python-engine/injection analyzer.
+// pythonEngineChecks lists the Python engine's AST (python.ast/PY_*) and
+// JavaScript pattern (SEC-JS_*) checks. Like every other analyzer's, each is
+// named by the rule_id its findings carry, with the finding's own id as
+// finding_id. All of them run in the engine's injection pass, which the scan
+// reports as the python-engine/injection analyzer.
 func pythonEngineChecks() ([]Check, error) {
 	decoder := json.NewDecoder(bytes.NewReader(pythonEngineChecksJSON))
 	decoder.DisallowUnknownFields()
@@ -47,12 +44,8 @@ func pythonEngineChecks() ([]Check, error) {
 	}
 	out := make([]Check, 0, len(rows))
 	for _, row := range rows {
-		id := row.ID
-		if renamed, ok := pythonEngineCatalogIDs[id]; ok {
-			id = renamed
-		}
 		out = append(out, Check{
-			ID: id, FindingID: row.RuleID, Title: row.Title,
+			ID: row.RuleID, FindingID: row.FindingID, Title: row.Title,
 			Analyzer: engine.AnalyzerPythonInjection, Category: row.Category,
 			DefaultSeverity: row.DefaultSeverity, CWEs: compactStrings([]string{row.CWE}),
 			ExecutionMode: "passive", AuthRequirement: "none",

@@ -1496,8 +1496,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_AUTH_HEADER_TRUST",
-      "finding_id": "python.ast/PY_AUTH_HEADER_TRUST",
+      "id": "python.ast/PY_AUTH_HEADER_TRUST",
+      "finding_id": "SEC-PY_AUTH_HEADER_TRUST",
       "title": "Auth decision based on a client-controllable header",
       "analyzer": "python-engine/injection",
       "category": "auth_bypass",
@@ -1513,8 +1513,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_EVAL",
-      "finding_id": "python.ast/PY_EVAL",
+      "id": "python.ast/PY_EVAL",
+      "finding_id": "SEC-PY_EVAL",
       "title": "Unsafe eval() or exec() with a dynamic argument",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1530,8 +1530,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_JWT_WEAK",
-      "finding_id": "python.ast/PY_JWT_WEAK",
+      "id": "python.ast/PY_JWT_WEAK",
+      "finding_id": "SEC-PY_JWT_WEAK",
       "title": "Weak JWT verification — decode with verify=False or unpinned algorithm",
       "analyzer": "python-engine/injection",
       "category": "auth_bypass",
@@ -1547,8 +1547,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_LLM_PROMPT_INJECTION",
-      "finding_id": "python.ast/PY_LLM_PROMPT_INJECTION",
+      "id": "python.ast/PY_LLM_PROMPT_INJECTION",
+      "finding_id": "SEC-PY_LLM_PROMPT_INJECTION",
       "title": "Prompt injection — untrusted input flows into an LLM prompt",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1564,8 +1564,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_OPEN_REDIRECT",
-      "finding_id": "python.ast/PY_OPEN_REDIRECT",
+      "id": "python.ast/PY_OPEN_REDIRECT",
+      "finding_id": "SEC-PY_OPEN_REDIRECT",
       "title": "Potential open redirect — dynamic redirect target",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1581,8 +1581,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_OS_POPEN",
-      "finding_id": "python.ast/PY_OS_POPEN",
+      "id": "python.ast/PY_OS_POPEN",
+      "finding_id": "SEC-PY_OS_POPEN",
       "title": "Unsafe os.popen() family call — command injection risk",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1598,8 +1598,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_OS_SYSTEM",
-      "finding_id": "python.ast/PY_OS_SYSTEM",
+      "id": "python.ast/PY_OS_SYSTEM",
+      "finding_id": "SEC-PY_OS_SYSTEM",
       "title": "Unsafe os.system() call — command injection risk",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1615,8 +1615,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_PATH_TRAVERSAL",
-      "finding_id": "python.ast/PY_PATH_TRAVERSAL",
+      "id": "python.ast/PY_PATH_TRAVERSAL",
+      "finding_id": "SEC-PY_PATH_TRAVERSAL",
       "title": "Potential unsafe dynamic filesystem path",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1632,8 +1632,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_PICKLE_LOAD",
-      "finding_id": "python.ast/PY_PICKLE_LOAD",
+      "id": "python.ast/PY_PICKLE_LOAD",
+      "finding_id": "SEC-PY_PICKLE_LOAD",
       "title": "Unsafe pickle deserialization — RCE risk",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1649,8 +1649,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_SECRET_IN_LOG",
-      "finding_id": "python.ast/PY_SECRET_IN_LOG",
+      "id": "python.ast/PY_SECRET_IN_LOG",
+      "finding_id": "SEC-PY_SECRET_IN_LOG",
       "title": "Secret written to logs — credential exposure",
       "analyzer": "python-engine/injection",
       "category": "secrets",
@@ -1666,8 +1666,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_SQL_INJECTION",
-      "finding_id": "python.ast/PY_SQL_INJECTION",
+      "id": "python.ast/PY_SQL_INJECTION",
+      "finding_id": "SEC-PY_SQL_INJECTION",
       "title": "SQL query built via string formatting — injection risk",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1683,8 +1683,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_SSRF",
-      "finding_id": "python.ast/PY_SSRF",
+      "id": "python.ast/PY_SSRF",
+      "finding_id": "SEC-PY_SSRF",
       "title": "Potential SSRF — dynamic URL passed to HTTP client",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1700,8 +1700,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_SUBPROCESS_SHELL",
-      "finding_id": "python.ast/PY_SUBPROCESS_SHELL",
+      "id": "python.ast/PY_SUBPROCESS_SHELL",
+      "finding_id": "SEC-PY_SUBPROCESS_SHELL",
       "title": "subprocess called with shell=True — command injection risk",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1717,8 +1717,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_WEAK_CRYPTO_PASSWORD",
-      "finding_id": "python.ast/PY_WEAK_CRYPTO_PASSWORD",
+      "id": "python.ast/PY_WEAK_CRYPTO_PASSWORD",
+      "finding_id": "SEC-PY_WEAK_CRYPTO_PASSWORD",
       "title": "Weak hash (MD5/SHA1) used for password — credential exposure risk",
       "analyzer": "python-engine/injection",
       "category": "secrets",
@@ -1734,8 +1734,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_XSS_HTML_SINK",
-      "finding_id": "python.ast/PY_XSS_HTML_SINK",
+      "id": "python.ast/PY_XSS_HTML_SINK",
+      "finding_id": "SEC-PY_XSS_HTML_SINK",
       "title": "Reflected XSS — user input passed to HTML render sink",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1751,8 +1751,8 @@
       "availability": "stable"
     },
     {
-      "id": "PY_YAML_UNSAFE_LOAD",
-      "finding_id": "python.ast/PY_YAML_UNSAFE_LOAD",
+      "id": "python.ast/PY_YAML_UNSAFE_LOAD",
+      "finding_id": "SEC-PY_YAML_UNSAFE_LOAD",
       "title": "Unsafe yaml.load() — RCE risk",
       "analyzer": "python-engine/injection",
       "category": "injection",
@@ -1768,7 +1768,7 @@
       "availability": "stable"
     },
     {
-      "id": "python-engine/JS_DOCUMENT_WRITE",
+      "id": "SEC-JS_DOCUMENT_WRITE",
       "finding_id": "SEC-JS_DOCUMENT_WRITE",
       "title": "Unsafe use of document.write() — XSS risk",
       "analyzer": "python-engine/injection",
@@ -1786,7 +1786,7 @@
       "availability": "stable"
     },
     {
-      "id": "JS_EVAL",
+      "id": "SEC-JS_EVAL",
       "finding_id": "SEC-JS_EVAL",
       "title": "Unsafe use of eval() in JavaScript",
       "analyzer": "python-engine/injection",
@@ -1804,7 +1804,7 @@
       "availability": "stable"
     },
     {
-      "id": "JS_INNER_HTML",
+      "id": "SEC-JS_INNER_HTML",
       "finding_id": "SEC-JS_INNER_HTML",
       "title": "Unsafe assignment to innerHTML — XSS risk",
       "analyzer": "python-engine/injection",
@@ -1822,7 +1822,7 @@
       "availability": "stable"
     },
     {
-      "id": "JS_SQL_TEMPLATE",
+      "id": "SEC-JS_SQL_TEMPLATE",
       "finding_id": "SEC-JS_SQL_TEMPLATE",
       "title": "SQL query built via template literal — injection risk",
       "analyzer": "python-engine/injection",

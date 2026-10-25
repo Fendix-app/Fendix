@@ -100,6 +100,8 @@ func compareFields(t *testing.T, kind, id string, published, executable any) {
 	}
 }
 
+// Python-engine checks are named by the rule_id their findings carry, like
+// every other analyzer's; finding_id is the finding's own id.
 func TestCatalogIncludesPythonEngineChecks(t *testing.T) {
 	contract, err := Build()
 	if err != nil {
@@ -111,12 +113,12 @@ func TestCatalogIncludesPythonEngineChecks(t *testing.T) {
 	}
 	for _, want := range []Check{
 		{
-			ID: "PY_SQL_INJECTION", FindingID: "python.ast/PY_SQL_INJECTION",
+			ID: "python.ast/PY_SQL_INJECTION", FindingID: "SEC-PY_SQL_INJECTION",
 			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "CRITICAL",
 			CWEs: []string{"CWE-89"}, Applicability: []string{"python"},
 		},
 		{
-			ID: "JS_SQL_TEMPLATE", FindingID: "SEC-JS_SQL_TEMPLATE",
+			ID: "SEC-JS_SQL_TEMPLATE", FindingID: "SEC-JS_SQL_TEMPLATE",
 			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "HIGH",
 			CWEs: []string{"CWE-89"}, Applicability: []string{"javascript", "typescript"},
 		},
