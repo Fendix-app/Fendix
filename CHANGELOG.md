@@ -59,17 +59,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The JSON report's `rule_id` field, and the `rule_id` of a managed-CI evidence
   submission (which fell back to the category, `injection`), now carry the id
   too.
-- **A URL host allowlist now counts as an SSRF and open-redirect guard in
-  Python.** `python.ast/PY_SSRF` and `python.ast/PY_OPEN_REDIRECT` no longer
-  report a request or redirect that follows an early exit on the URL's parsed
-  host, such as `if urlparse(url).hostname not in ALLOWED_HOSTS: return ...`.
-  The host may be read as `.hostname` or `.netloc`, from `urlparse` or
-  `urlsplit`, inline or through a local (`p = urlparse(url)`), and the check
-  may be joined to others with `or`
-  (`if p.scheme != "https" or p.hostname not in ALLOWED_HOSTS:`). The guard
+- **A `urlparse(...).netloc` allowlist now counts as an SSRF and
+  open-redirect guard in Python.** `python.ast/PY_SSRF` and
+  `python.ast/PY_OPEN_REDIRECT` no longer report a request or redirect that
+  follows an early exit on the URL's parsed authority, such as
+  `if urlparse(url).netloc not in ALLOWED_HOSTS: return ...`. The parse may be
+  `urlparse` or `urlsplit`, inline or through a local (`p = urlparse(url)`),
+  and the check may be joined to others with `or`
+  (`if p.scheme != "https" or p.netloc not in ALLOWED_HOSTS:`). The guard
   counts only when it is a top-level statement of the function, comes before
   the sink, returns, raises or aborts, and checks a literal set, list, tuple
   or dict. These are still reported:
+  - a `.hostname` allowlist, because a backslash in the authority makes
+    urllib3/requests and browsers connect to a different host than the one
+    `urlparse` reports (`https://169.254.169.254\@api.example.com/` has
+    hostname `api.example.com`, but requests connects to `169.254.169.254`);
   - a check joined with `and`, which can skip the host test;
   - an allowlist read from the environment or built by a call;
   - a guard that only logs, or that comes after the sink;

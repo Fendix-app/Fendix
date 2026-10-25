@@ -85,7 +85,9 @@ For `hardcoded_secret`, "request input" doesn't apply. The variants are:
 
 Version 2 of the corpus adds **30 cases per framework**, for 58 in total. The
 original 28 cases are **frozen**: never edit, rename or remove them, or their
-manifest entries.
+manifest entries. The only exception is a case whose label is wrong, for
+example a `safe` case that can be exploited. Such a case is corrected in place
+and recorded under [Corrections](#corrections).
 
 ### New classes (4 classes × the same 4 variants = 16 cases)
 
@@ -142,3 +144,27 @@ Write it verbatim, like the other placeholders.
 - A `cross_file` case adds `"entry_file": "<handler file>"`.
 - The manifest lists exactly 58 cases: the 28 original cases, unchanged, plus the 30 from Extension 1.
 - Each case file contains exactly one line with `EVAL-SINK` (vulnerable) or `EVAL-SAFE` (safe).
+
+## Corrections
+
+Changes to frozen cases, newest first. Each keeps the case's id, label, file
+and marker line.
+
+- **2026-10-25: `django-ssrf-safe`, `flask-ssrf-safe`, `fastapi-ssrf-safe`.**
+  - **What was wrong:** these `safe` cases could be exploited. Their guard was
+    `parsed.hostname not in ALLOWED_FETCH_HOSTS`, and a `urlparse` hostname
+    allowlist can be bypassed with a backslash in the authority. For
+    `https://169.254.169.254\@api.example.com/`, `urlparse(...).hostname` is
+    `api.example.com`, but requests (through urllib3) connects to
+    `169.254.169.254`. Browsers read `\` as `/` and do the same with a
+    redirect.
+  - **The fix:** the guard line now checks `parsed.netloc`, the whole
+    authority. An exact match against a set of bare hosts leaves no room for
+    userinfo, a backslash or a port. Nothing else in the files changed.
+  - **Comparability:** results for these three cases before and after this date
+    are not comparable.
+  - **Provenance:** the correction was made during engine work by someone who
+    had read the analyzers, against ground rule 1. The new guard is the form
+    the Python engine recognises.
+  - **For authors:** to write a host allowlist in Python, compare `netloc` (or
+    the host after rejecting `\` and `@`), not `hostname`.

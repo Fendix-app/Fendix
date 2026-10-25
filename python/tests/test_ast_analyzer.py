@@ -1613,16 +1613,16 @@ class TestUnprovenDataflowConfidence:
 
 
 class TestUrlHostAllowlistGuard:
-    """A dominating ``urlparse(url).hostname not in ALLOWED`` early exit is an
+    """A dominating ``urlparse(url).netloc not in ALLOWED`` early exit is an
     SSRF / open-redirect guard.
 
-    Falling through ``if p.hostname not in ALLOWED: return`` means the host IS
-    in a literal allowlist, so the request or redirect that follows cannot reach
-    an attacker-chosen host. The recognition is held to the same dominance
-    discipline as the other guards: a top-level ``if`` before the sink whose
-    body ends control flow, over a literal collection. Only ``or`` may combine
-    the host check with other conditions; with ``and`` the host check can be
-    skipped.
+    Falling through ``if p.netloc not in ALLOWED: return`` means the URL's
+    whole authority IS in a literal allowlist, so the request or redirect that
+    follows cannot reach an attacker-chosen host. The recognition is held to
+    the same dominance discipline as the other guards: a top-level ``if``
+    before the sink whose body ends control flow, over a literal collection.
+    Only ``or`` may combine the host check with other conditions; with ``and``
+    the host check can be skipped. A ``.hostname`` check does not count.
     """
 
     _PREFIX = (
@@ -1638,7 +1638,8 @@ class TestUrlHostAllowlistGuard:
         findings = _collect_src((self._PREFIX if prefix is None else prefix) + body)
         return [f for f in findings if f["id"] == "SEC-PY_SSRF"]
 
-    def test_ssrf_hostname_allowlist_guard_is_sanitiser(self) -> None:
+    def test_ssrf_hostname_allowlist_guard_does_not_sanitise(self) -> None:
+        # Backslash differential: urlparse's hostname of `http://10.0.0.1\@api.example.com` is api.example.com; requests goes to 10.0.0.1.
         ssrf = self._ssrf(
             "def fetch():\n"
             '    url = request.args.get("url")\n'
@@ -1647,13 +1648,13 @@ class TestUrlHostAllowlistGuard:
             '        return "host not allowed", 400\n'
             "    return requests.get(url, timeout=5).text\n"
         )
-        assert not ssrf, f"hostname allowlist guard not honoured: {ssrf}"
+        assert ssrf, "a urlparse hostname allowlist is bypassable and must not sanitise"
 
     def test_ssrf_inline_urlparse_guard_is_sanitiser(self) -> None:
         ssrf = self._ssrf(
             "def fetch():\n"
             '    url = request.args.get("url")\n'
-            "    if urlparse(url).hostname not in ALLOWED:\n"
+            "    if urlparse(url).netloc not in ALLOWED:\n"
             "        abort(400)\n"
             "    return requests.get(url, timeout=5).text\n"
         )
@@ -1675,7 +1676,7 @@ class TestUrlHostAllowlistGuard:
             "def fetch():\n"
             '    url = request.args.get("url")\n'
             "    resp = requests.get(url, timeout=5)\n"
-            "    if urlparse(url).hostname not in ALLOWED:\n"
+            "    if urlparse(url).netloc not in ALLOWED:\n"
             '        return "host not allowed", 400\n'
             "    return resp.text\n"
         )
@@ -1685,7 +1686,7 @@ class TestUrlHostAllowlistGuard:
         ssrf = self._ssrf(
             "def fetch():\n"
             '    url = request.args.get("url")\n'
-            "    if urlparse(url).hostname not in ALLOWED:\n"
+            "    if urlparse(url).netloc not in ALLOWED:\n"
             '        logging.warning("unexpected host %s", url)\n'
             "    return requests.get(url, timeout=5).text\n"
         )
@@ -1710,7 +1711,7 @@ class TestUrlHostAllowlistGuard:
         ssrf = self._ssrf(
             "def fetch():\n"
             '    url = request.args.get("url")\n'
-            "    if urlparse(url).hostname not in ALLOWED:\n"
+            "    if urlparse(url).netloc not in ALLOWED:\n"
             '        return "host not allowed", 400\n'
             "    return requests.get(url, timeout=5).text\n",
             prefix=prefix,
@@ -1725,7 +1726,7 @@ class TestUrlHostAllowlistGuard:
             "def fetch():\n"
             '    url = request.args.get("url")\n'
             "    p = urlparse(url)\n"
-            '    if p.scheme != "https" and p.hostname not in ALLOWED:\n'
+            '    if p.scheme != "https" and p.netloc not in ALLOWED:\n'
             '        return "host not allowed", 400\n'
             "    return requests.get(url, timeout=5).text\n"
         )
@@ -1749,7 +1750,7 @@ class TestUrlHostAllowlistGuard:
             self._PREFIX + "from django.utils.safestring import mark_safe\n"
             "def render_link():\n"
             '    url = request.args.get("url")\n'
-            "    if urlparse(url).hostname not in ALLOWED:\n"
+            "    if urlparse(url).netloc not in ALLOWED:\n"
             "        abort(400)\n"
             "    return mark_safe(url)\n"
         )

@@ -120,7 +120,11 @@ The `direct` and `indirect` columns include the new classes.
 - **Correct fixes still block (4 cases).**
   - The cases are a `urlparse(url).hostname` allowlist for SSRF, and a `realpath` + `commonpath` check for path traversal, in Django and Flask.
   - The engine recognises only a membership check on the tainted name itself. The request-to-sink flow inside the handler proves, the guard is not recognised, so the fixed code blocks on its own, with no sibling involved (confirmed under `--isolate`).
-  - Closed after v3.6.3 for SSRF: a dominating `urlparse(url).hostname` or `.netloc` allowlist now counts as an SSRF and open-redirect guard, so the Django, Flask and FastAPI `ssrf-safe` cases score TN. The two path-traversal cases still block. See `CHANGELOG.md`, `[Unreleased]`.
+  - Closed after v3.6.3 for SSRF, partly by correcting the cases. Their `hostname` allowlist could itself be bypassed with a backslash in the authority, so the three `ssrf-safe` cases now check `netloc` instead (see [Corrections](SPEC.md#corrections) in SPEC.md).
+    - The engine now counts a dominating `urlparse(url).netloc` allowlist as an SSRF and open-redirect guard, and the corrected Django, Flask and FastAPI cases score TN.
+    - A `hostname` allowlist is still reported.
+    - The two path-traversal cases still block.
+    - See `CHANGELOG.md`, `[Unreleased]`.
 - **Weak password hashing and unverified JWTs are found, but only warn,** even when the token comes from the request and the claims are trusted.
 - **Route-auth noise:** every one of the 58 Flask routes gets two "missing auth" findings (`flask-route-no-auth-decorator` and `flask-missing-login-required`). Every FastAPI route gets one. Django gets none.
 

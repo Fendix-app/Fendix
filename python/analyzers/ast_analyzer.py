@@ -849,31 +849,39 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # URL-host allowlist guard (SSRF / open redirect only):
     #
     #     p = urlparse(url)
-    #     if p.scheme != "https" or p.hostname not in ALLOWED_HOSTS:
+    #     if p.scheme != "https" or p.netloc not in ALLOWED_HOSTS:
     #         return ...
     #     requests.get(url)                                       # SAFE
     #
-    # Falling through the guard means the URL's host is one of a literal set,
-    # so the request or redirect cannot reach a host the attacker chose. This
-    # bounds the HOST and nothing else (the path and query stay free-form), so
-    # it is honoured only for sinks whose risk is the destination host; an XSS
-    # or path sink given the same value is still reported. The parse call is
-    # matched on its terminal name, covering `urllib.parse.urlparse(x)`,
-    # `from urllib.parse import urlparse` and `urlsplit` in either form.
+    # Falling through the guard means the URL's authority is exactly one of a
+    # literal set, so the request or redirect cannot reach a host the attacker
+    # chose. This bounds the HOST and nothing else (the path and query stay
+    # free-form), so it is honoured only for sinks whose risk is the
+    # destination host; an XSS or path sink given the same value is still
+    # reported. The parse call is matched on its terminal name, covering
+    # `urllib.parse.urlparse(x)`, `from urllib.parse import urlparse` and
+    # `urlsplit` in either form.
+    #
+    # DELIBERATELY ABSENT: `.hostname`. urlparse and the clients disagree on
+    # the host of an authority holding a backslash:
+    # `http://169.254.169.254\@api.example.com/` has urlparse hostname
+    # `api.example.com`, but urllib3/requests and browsers (which read `\` as
+    # `/`) go to 169.254.169.254. `.netloc` is the whole authority, so an exact
+    # match against a set of bare hosts leaves no room for userinfo, a
+    # backslash or a port.
     _URL_PARSE_CALL_NAMES = frozenset({"urlparse", "urlsplit"})
-    _URL_HOST_ATTRS = frozenset({"hostname", "netloc"})
 
     def _url_host_is_allowlisted(self, name: str, sink_line: int) -> bool:
         """Return True if the innermost enclosing function body contains a
-        DOMINATING early-exit guard that rejects `name` unless its parsed host
-        is in a literal collection::
+        DOMINATING early-exit guard that rejects `name` unless its parsed
+        authority is in a literal collection::
 
-            if urlparse(name).hostname not in ALLOWED:   # or .netloc
+            if urlparse(name).netloc not in ALLOWED:
                 return / raise / abort(...)
 
         The parsed value may be written inline or bound to a local first
         (`p = urlparse(name)`). The host check may be one operand of an `or`
-        (`if p.scheme != "https" or p.hostname not in ALLOWED:`): falling
+        (`if p.scheme != "https" or p.netloc not in ALLOWED:`): falling
         through an `or` means every operand was False, so the host is in the
         allowlist. It must NOT sit under an `and`, where a False first operand
         skips the host check entirely.
@@ -897,9 +905,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         return False
 
     def _test_rejects_unlisted_host(self, test: ast.AST, name: str) -> bool:
-        """True when `test` is True whenever `name`'s parsed host is outside a
-        literal collection: the `not in` comparison itself, or an `or` with that
-        comparison among its operands."""
+        """True when `test` is True whenever `name`'s parsed netloc is outside
+        a literal collection: the `not in` comparison itself, or an `or` with
+        that comparison among its operands."""
         if isinstance(test, ast.BoolOp):
             return isinstance(test.op, ast.Or) and any(
                 self._test_rejects_unlisted_host(v, name) for v in test.values
@@ -912,7 +920,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         ):
             return False
         host = test.left
-        if not (isinstance(host, ast.Attribute) and host.attr in self._URL_HOST_ATTRS):
+        if not (isinstance(host, ast.Attribute) and host.attr == "netloc"):
             return False
         if not self._is_url_parse_of(host.value, name):
             return False
