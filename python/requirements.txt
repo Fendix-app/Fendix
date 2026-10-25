@@ -1,15 +1,16 @@
-semgrep>=1.45.0
+semgrep>=1.182.1
 bandit>=1.9.4
 pyyaml>=6.0.3
-openapi-spec-validator>=0.9.0
 detect-secrets>=1.5.0
 packaging>=26.2
 jsonschema>=4.25.1,<5
-# Semgrep's MCP 1.16.x imports eval_type_backport, removed in Pydantic 2.14.
-# Keep that API available until the Semgrep/MCP dependency line is upgraded.
+# Semgrep 1.182.1's MCP 1.29.0 no longer imports eval_type_backport, the API
+# Pydantic 2.14 removed (MCP 1.16 did). The bound now only holds the validated
+# Pydantic 2.13 line until the 2.14 line is validated with Semgrep (#111).
 pydantic<2.14
 # certifi before 2026.10.19 trusts emSign roots whose intermediate CA keys
 # were compromised (GHSA-6q48-6c7w-9gw2). requests and httpx verify TLS
-# against its bundle, and the Dockerfiles install this file unlocked, so the
-# floor keeps an image build from resolving an affected bundle.
+# against its bundle. The images install python/requirements.lock; CI and
+# caller-managed trees install this file unlocked, and the floor keeps them
+# from resolving an affected bundle.
 certifi>=2026.10.19
