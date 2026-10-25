@@ -96,11 +96,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `os.path.join(base, "")` work too);
   - `full = <pathlib path>.resolve()`, then
     `if not full.is_relative_to(base):`, or `full.relative_to(base)` in a
-    `try` with an `except ValueError` (or `Exception`, or a bare `except`).
+    `try` with an `except ValueError` (or `Exception`, `BaseException`, or a
+    bare `except`).
 
   The base must be a string constant, `os.path.realpath` of one, or
   `Path(...)` or `Path(...).resolve()` of one, inline or through a name. It
-  must not be the filesystem root. The resolved path must be assigned once, in
+  must not be the filesystem root. A module-level name must be assigned once
+  in the module and declared `global` by no function. Inside a method the
+  name is the module's, never a class attribute of the same name, so the
+  module's value is the one checked. The resolved path must be assigned once, in
   a top-level statement of the function. The check must be a top-level
   statement between that assignment and the sink, and it must return, raise or
   abort; in the `try` form, every `except` clause must. These are still
@@ -117,23 +121,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a resolved path that is never checked;
   - a base read from the request, the environment, a function parameter or
     any other call, and a base of `/`;
+  - a module-level base that is assigned again anywhere in the module, or
+    that a function declares `global`;
   - a path assigned more than once in the function, or on a branch, and the
     same for a name it is copied to (`p = full`);
+  - a lambda or nested function with a parameter of the same name
+    (`lambda full: open(full)`), which opens its own argument, not the checked
+    path;
   - `startswith` with a start offset and `relative_to(base, walk_up=True)`;
   - a check that only logs, a `try` with an `except` clause that falls
     through, a sink inside the branch that rejects the path, and a check that
     comes after the sink.
 
-  **One duplicate finding goes away.** An `os.path.join(...)` written
-  directly inside `os.path.realpath(...)`, `os.path.abspath(...)` or
-  `Path(...).resolve()` is no longer reported on its own line. Without a
-  guard, the same flow is still reported where the resolved path reaches
-  `open`, `send_file` or another file sink, and an `os.path.abspath(...)` call
-  is still reported on its own line. A function that only resolves the joined
-  path and returns it no longer reports it; the code that opens the returned
-  path is reported as before. A baseline entry for the old
-  `os.path.join(...)` finding no longer matches anything. No new finding
-  replaces it.
+  **The join line is no longer reported when the check covers it.** An
+  `os.path.join(...)` written directly inside `os.path.realpath(...)` was
+  reported on its own line, above any check, so a correctly checked handler
+  was still reported there. That join is now skipped only when all of these
+  hold:
+  - the `realpath(...)` or `Path(...).resolve()` around it is assigned once,
+    to a name, in a top-level statement;
+  - an accepted check on that name follows;
+  - every other use of the name comes after the check.
+
+  Otherwise the join is reported on its own line as before. That includes:
+  - a join under `os.path.abspath(...)`;
+  - a resolved path passed straight to a call, as in
+    `os.remove(os.path.realpath(os.path.join(...)))`;
+  - a resolved path that reaches a file operation the engine does not model
+    as a sink (`os.remove`, `shutil.copy`, Starlette's `FileResponse`) before
+    or without a check;
+  - a resolved path returned to the caller;
+  - a resolved path used in the branch that rejects it.
+
+  In a checked handler, a baseline entry for that `os.path.join(...)` finding
+  no longer matches anything, and no new finding replaces it.
 
 ## [3.6.4] - 2026-10-24
 

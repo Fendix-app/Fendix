@@ -2017,14 +2017,19 @@ class TestPathContainmentAssertion:
         assert self._at(pt, 10), "resolving a path without asserting containment is not a guard"
 
     def test_join_consumed_only_by_realpath_is_not_its_own_sink(self) -> None:
+        # The corpus shape: the resolved join is bound once and every use of it
+        # sits behind the containment guard.
         pt = self._pt(
             "def read_report():\n"
             '    f = request.args["f"]\n'
-            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    base = os.path.realpath(REPORTS_DIR)\n"
+            "    full = os.path.realpath(os.path.join(base, f))\n"
+            "    if os.path.commonpath([base, full]) != base:\n"
+            '        return "invalid filename", 400\n'
             "    return open(full).read()\n"
         )
-        assert not self._at(pt, 9), (
-            f"a join resolved in place is checked where it is used, not at the join: {pt}"
+        assert not self._at(pt, 10), (
+            f"a guarded resolved join is checked where it is used, not at the join: {pt}"
         )
 
     # -- pinned by the plan's decisions -----------------------------------------
@@ -2054,24 +2059,107 @@ class TestPathContainmentAssertion:
         )
         assert self._at(pt, 13), "abspath does not resolve symlinks, so it does not contain"
 
-    # -- the join is dropped only where it is resolved in place ------------------
+    # -- the join is dropped only when a containment guard checks it (R-pf24) ----
 
-    @pytest.mark.parametrize(
-        "resolved",
-        [
-            "os.path.abspath(os.path.join(REPORTS_DIR, f))",
-            "Path(os.path.join(REPORTS_DIR, f)).resolve()",
-        ],
-    )
-    def test_join_wrapped_in_resolution_is_not_its_own_sink(self, resolved: str) -> None:
+    @staticmethod
+    def _joins(findings: list[dict], line: int) -> list[dict]:
+        return [
+            f
+            for f in findings
+            if f["line"] == f"mod.py:{line}" and f.get("sink", "").startswith("os.path.join(")
+        ]
+
+    def test_join_inside_path_resolve_not_its_own_sink_when_guarded(self) -> None:
         pt = self._pt(
             "def read_report():\n"
             '    f = request.args["f"]\n'
-            f"    full = {resolved}\n"
+            "    full = Path(os.path.join(REPORTS_DIR, f)).resolve()\n"
+            "    if not full.is_relative_to(BASE):\n"
+            "        abort(400)\n"
             "    return open(full).read()\n"
         )
-        assert not [f for f in pt if f.get("sink", "").startswith("os.path.join(")], pt
-        assert self._at(pt, 10), f"the unguarded open is still reported: {pt}"
+        assert not self._joins(pt, 9), pt
+        assert not self._at(pt, 12), f"the guarded open is contained: {pt}"
+
+    def test_unguarded_resolved_join_is_still_its_own_sink(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    return open(full).read()\n"
+        )
+        assert self._joins(pt, 9), f"no guard checks the resolved join: {pt}"
+
+    def test_join_inside_abspath_is_still_its_own_sink(self) -> None:
+        # abspath is not a resolution, so no guard can make its join safe.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    base = os.path.realpath(REPORTS_DIR)\n"
+            "    full = os.path.abspath(os.path.join(base, f))\n"
+            "    if os.path.commonpath([base, full]) != base:\n"
+            '        return "invalid filename", 400\n'
+            "    return open(full).read()\n"
+        )
+        assert self._joins(pt, 10), pt
+
+    def test_join_inside_realpath_reaching_unmodelled_consumer_is_reported(self) -> None:
+        # os.remove is not a modelled sink: the join is the only place left to
+        # report the flow.
+        pt = self._pt(
+            "def delete_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    os.remove(full)\n"
+            '    return "ok"\n'
+        )
+        joins = self._joins(pt, 9)
+        assert joins, f"a resolved join that reaches os.remove unchecked is traversal: {pt}"
+        assert joins[0].get("reachable") is True
+
+    def test_inline_realpath_join_reaching_unmodelled_consumer_is_reported(self) -> None:
+        pt = self._pt(
+            "def delete_report():\n"
+            '    os.remove(os.path.realpath(os.path.join(REPORTS_DIR, request.args["f"])))\n'
+            '    return "ok"\n'
+        )
+        joins = self._joins(pt, 8)
+        assert joins, f"an inline resolved join is checked nowhere: {pt}"
+        assert joins[0].get("reachable") is True
+
+    def test_helper_returning_resolved_join_is_reported(self) -> None:
+        pt = self._pt(
+            "def report_path():\n"
+            '    f = request.args["f"]\n'
+            "    return os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+        )
+        joins = self._joins(pt, 9)
+        assert joins, f"a resolved join returned to the caller is checked nowhere: {pt}"
+        assert joins[0].get("reachable") is True
+
+    def test_resolved_join_used_before_its_guard_is_reported(self) -> None:
+        pt = self._pt(
+            "def delete_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    os.remove(full)\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._joins(pt, 9), f"os.remove runs before the guard: {pt}"
+
+    def test_resolved_join_used_in_rejecting_branch_is_reported(self) -> None:
+        pt = self._pt(
+            "def delete_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        os.remove(full)\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._joins(pt, 9), f"the rejecting branch uses the uncontained path: {pt}"
 
     def test_unresolved_join_is_still_its_own_sink(self) -> None:
         pt = self._pt(
@@ -2141,19 +2229,27 @@ class TestPathContainmentAssertion:
         )
         assert not pt, f"a resolved pathlib base not honoured: {pt}"
 
-    @pytest.mark.parametrize("caught", ["(TypeError, ValueError)", "Exception"])
-    def test_relative_to_with_broader_handler_contains(self, caught: str) -> None:
+    @pytest.mark.parametrize(
+        "clause",
+        [
+            "except (TypeError, ValueError):",
+            "except Exception:",
+            "except BaseException:",
+            "except:",
+        ],
+    )
+    def test_relative_to_with_broader_handler_contains(self, clause: str) -> None:
         pt = self._pt(
             "def read_report():\n"
             '    f = request.args["f"]\n'
             "    full = (BASE / f).resolve()\n"
             "    try:\n"
             "        full.relative_to(BASE)\n"
-            f"    except {caught}:\n"
+            f"    {clause}\n"
             "        abort(400)\n"
             "    return open(full).read()\n"
         )
-        assert not pt, f"`except {caught}` not honoured: {pt}"
+        assert not pt, f"`{clause}` not honoured: {pt}"
 
     def test_sink_in_else_of_guard_contains(self) -> None:
         # The else branch runs only when the containment test passed.
@@ -2457,3 +2553,87 @@ class TestPathContainmentAssertion:
             "    return open(p).read()\n"
         )
         assert not pt, f"an alias bound once to the checked path is contained: {pt}"
+
+    # -- module-level bases (R-pf25a) -------------------------------------------
+
+    def test_module_base_rebound_through_global_does_not_contain(self) -> None:
+        pt = self._pt(
+            'RD = "/srv/reports"\n'
+            "def setrd():\n"
+            "    global RD\n"
+            '    RD = request.args["r"]\n'
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(RD, f))\n"
+            "    if os.path.commonpath([RD, full]) != RD:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 16), "a base another function rebinds through `global` is not fixed"
+
+    def test_module_base_reassigned_after_handler_does_not_contain(self) -> None:
+        pt = self._pt(
+            'RD = "/srv/reports"\n'
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(RD, f))\n"
+            "    if os.path.commonpath([RD, full]) != RD:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+            'RD = os.environ.get("REPORTS_DIR", "/")\n'
+        )
+        assert self._at(pt, 13), "the handler runs with the module's last binding of the base"
+
+    def test_class_attribute_does_not_stand_for_module_base(self) -> None:
+        # A method reads the module global REPORTS_ROOT ("/"), never the class
+        # attribute of the same name.
+        pt = self._pt(
+            'REPORTS_ROOT = "/"\n'
+            "class Reports:\n"
+            '    REPORTS_ROOT = "/srv/reports"\n'
+            "    def get(self):\n"
+            '        f = request.args["f"]\n'
+            "        full = os.path.realpath(os.path.join(REPORTS_ROOT, f))\n"
+            "        if os.path.commonpath([REPORTS_ROOT, full]) != REPORTS_ROOT:\n"
+            "            abort(400)\n"
+            "        return open(full).read()\n"
+        )
+        assert self._at(pt, 15), "a class attribute is not the name a method reads"
+
+    # -- inner parameters shadowing the checked path (R-pf25b) ------------------
+
+    def test_lambda_parameter_shadowing_checked_path_is_reported(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            '    return (lambda full: open(full).read())(request.args["g"])\n'
+        )
+        assert self._at(pt, 12), "the lambda's `full` is its argument, not the checked path"
+
+    def test_lambda_default_shadowing_checked_path_is_reported(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            '    rd = lambda full=request.args["g"]: open(full).read()\n'
+            "    return rd()\n"
+        )
+        assert self._at(pt, 12), "the lambda's default is raw input, not the checked path"
+
+    def test_nested_def_parameter_shadowing_checked_path_is_reported(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            "    def rd(full):\n"
+            "        return open(full).read()\n"
+            '    return rd(request.args["g"])\n'
+        )
+        assert self._at(pt, 13), "the nested function's `full` is its parameter"

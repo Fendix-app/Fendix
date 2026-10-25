@@ -16,7 +16,7 @@ import posixpath
 import re
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 # Skip directories (same as secrets analyzer)
 _SKIP_DIRS: frozenset[str] = frozenset(
@@ -344,10 +344,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # pickle.loads despite the call being a bare ast.Name (audit #8-13).
         self._from_imports: dict[str, tuple[str, str]] = {}
         # `os.path.join(...)` calls written as the direct argument of a path
-        # resolution (`realpath(join(...))`, `abspath(join(...))`,
-        # `Path(join(...)).resolve()`), noted by `_note_resolved_join` when the
-        # enclosing call is visited, which is always before the join itself.
-        self._resolved_joins: set[ast.Call] = set()
+        # resolution (`realpath(join(...))`, `Path(join(...)).resolve()`),
+        # mapped to that resolving call. `_note_resolved_join` records them
+        # when the enclosing call is visited, which is always before the join.
+        self._resolved_joins: dict[ast.Call, ast.Call] = {}
 
     def _line_text(self, lineno: int) -> str:
         """Return the source line (1-indexed), or empty string."""
@@ -911,7 +911,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         return self._has_dominating_exit_guard(
             sink_line,
             lambda test: self._test_rejects_unlisted_host(test, name),
-            require_end_before_sink=True,
+            before_sink="ends",
         )
 
     def _test_rejects_unlisted_host(self, test: ast.AST, name: str) -> bool:
@@ -1187,9 +1187,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # The base must be fixed by the code: a string constant narrower than the
     # filesystem root, `os.path.realpath` of one, or `Path(...)` /
     # `Path(...).resolve()` of one, inline or through a Name (a constant may
-    # itself be a Name bound to one). A base from the request, the environment
-    # or any other call cannot be shown to bound anything, and `/` bounds
-    # nothing.
+    # itself be a Name bound to one). A module-level Name counts only when the
+    # module binds it once and no function declares it `global`. A base from
+    # the request, the environment, a parameter or any other call cannot be
+    # shown to bound anything, and `/` bounds nothing.
     #
     # Accepted guards, each a top-level statement of the function placed after
     # the path's binding and before the sink:
@@ -1216,14 +1217,19 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         that branch runs only when the containment test passed. The `try`
         form must end before the sink.
         """
+        return self._path_containment_guard(name, sink_line) is not None
+
+    def _path_containment_guard(self, name: str, sink_line: int) -> ast.stmt | None:
+        """The first guard `_path_containment_asserted` accepts for `name`
+        before `sink_line` (an `if` or a `try`), or None."""
         if not self._func_stack:
-            return False
+            return None
         bound = self._resolve_binding(ast.Name(id=name, ctx=ast.Load()))
         if bound is None or not self._is_resolved_path(bound):
-            return False
+            return None
         binding = self._sole_top_level_assign(self._func_stack[-1], name)
         if binding is None or binding.value is not bound:
-            return False
+            return None
         after = binding.end_lineno
 
         def rejects_uncontained(test: ast.AST) -> bool:
@@ -1232,11 +1238,64 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         def asserts_relative(stmt: ast.Try) -> bool:
             return stmt.lineno > after and self._try_asserts_relative(stmt, name)
 
-        return self._has_dominating_exit_guard(
+        return self._dominating_exit_guard(
             sink_line,
             rejects_uncontained,
-            require_body_before_sink=True,
+            before_sink="body_ends",
             try_pred=asserts_relative,
+        )
+
+    def _resolved_join_is_guarded(self, join: ast.Call) -> bool:
+        """True when the `os.path.join(...)` sink `join` is resolved in place
+        and a containment guard checks the result before anything uses it.
+
+        That holds only when the resolving call (`realpath(join(...))` or
+        `Path(join(...)).resolve()`) is the sole top-level binding of a name,
+        `_path_containment_guard` accepts a guard on that name, and every
+        other use of the name comes after the guard's rejecting body (or after
+        the whole `try`). Otherwise the join stays a sink. The resolved value
+        may go where no sink is modelled (`os.remove`, `shutil.copy`,
+        Starlette's `FileResponse`), inline or returned to the caller, so the
+        join can be the only place the flow is reported.
+        """
+        resolved = self._resolved_joins.get(join)
+        if resolved is None or not self._func_stack:
+            return False
+        func = self._func_stack[-1]
+        name = next(
+            (
+                stmt.targets[0].id
+                for stmt in func.body
+                if isinstance(stmt, ast.Assign)
+                and stmt.value is resolved
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+            ),
+            None,
+        )
+        if name is None:
+            return False
+        guard = self._path_containment_guard(name, func.end_lineno + 1)
+        if guard is None:
+            return False
+        if isinstance(guard, ast.If):
+            checking = [guard.test]
+            unchecked_until = guard.body[-1].end_lineno
+        else:
+            checking = [
+                stmt
+                for stmt in guard.body
+                if self._is_relative_to_call(stmt, name, guard.lineno)
+            ]
+            unchecked_until = guard.end_lineno
+        checked_uses = {id(n) for part in checking for n in ast.walk(part)}
+        return all(
+            id(use) in checked_uses or use.lineno > unchecked_until
+            for stmt in func.body
+            for use in ast.walk(stmt)
+            if isinstance(use, ast.Name)
+            and use.id == name
+            and isinstance(use.ctx, ast.Load)
         )
 
     def _test_rejects_uncontained(self, test: ast.AST, name: str) -> bool:
@@ -1386,11 +1445,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         A name the function stores must be stored exactly once, by a top-level
         assignment before the guard; otherwise the value the guard compares
         against is not the one the scope chain records. A name the function
-        never stores is a module-level name, resolved through the scope chain,
-        unless it is a parameter of this or an enclosing function, or a local
-        of an enclosing one. The scope chain records neither of those (a
-        parameter is never bound in it, so a same-named module constant would
-        answer for it), and the caller chooses a parameter."""
+        never stores is a module-level name (`_module_binding`), unless it is
+        a parameter of this or an enclosing function, or a local of an
+        enclosing one: the caller chooses a parameter, and a same-named module
+        constant would otherwise answer for it."""
         func = self._func_stack[-1]
         if _stores_of(func, name):
             binding = self._sole_top_level_assign(func, name)
@@ -1402,7 +1460,39 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return None
             if enclosing is not func and _stores_of(enclosing, name):
                 return None
-        return self._resolve_binding(ast.Name(id=name, ctx=ast.Load()))
+        return self._module_binding(name)
+
+    def _module_binding(self, name: str) -> ast.AST | None:
+        """The value of the module-level `name`, when the module binds it
+        exactly once, by a top-level `name = <value>`, and no function in the
+        module declares it `global`.
+
+        The scope chain cannot answer this. It holds the module's bindings
+        seen so far, so a reassignment after the function, or one made through
+        `global` in another function, is missing from it, and it holds class
+        scopes, which a method never reads a bare name from: inside a method,
+        `REPORTS_ROOT` is the module global even when the class has an
+        attribute of that name."""
+        module = self._module_root
+        if module is None:
+            return None
+        if any(
+            isinstance(n, ast.Global) and name in n.names for n in ast.walk(module)
+        ):
+            return None
+        stores = [
+            n for stmt in module.body for n in _same_scope_nodes(stmt) if _binds_name(n, name)
+        ]
+        if len(stores) != 1:
+            return None
+        for stmt in module.body:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and stmt.targets[0] is stores[0]
+            ):
+                return stmt.value
+        return None
 
     def _is_sole_binding(self, name: str, value: ast.AST) -> bool:
         """True when `name = value` is the only binding of `name` in the
@@ -1492,28 +1582,17 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         fn = expr.func
         if isinstance(fn, ast.Name):
             return self._from_imports.get(fn.id) == ("os.path", attr)
-        return (
-            isinstance(fn, ast.Attribute)
-            and fn.attr == attr
-            and isinstance(fn.value, ast.Attribute)
-            and fn.value.attr == "path"
-            and isinstance(fn.value.value, ast.Name)
-            and fn.value.value.id == "os"
-        )
+        return _os_path_attr(fn) == attr
 
     def _note_resolved_join(self, node: ast.Call) -> None:
         """Remember an `os.path.join(...)` that is the direct argument of
-        `os.path.realpath(...)`, `os.path.abspath(...)` or
-        `Path(...).resolve()`, for `_is_path_traversal_sink` to skip.
+        `os.path.realpath(...)` or `Path(...).resolve()`, with the resolving
+        call, for `_resolved_join_is_guarded`.
 
-        The join's result reaches the filesystem only resolved, so the sink
-        that consumes the resolved value reports it, and that sink is the one a
-        containment guard can dominate. Reported at the join line too, the
-        same flow was found twice, and the first finding sat above any guard.
+        `abspath` is not recorded: it follows no symlink, so no containment
+        guard can make the join under it safe.
         """
-        if self._is_os_path_call(node, "realpath") or self._is_os_path_call(
-            node, "abspath"
-        ):
+        if self._is_os_path_call(node, "realpath"):
             inner = node.args[0] if node.args else None
         elif (
             isinstance(node.func, ast.Attribute)
@@ -1525,51 +1604,68 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         else:
             return
         if inner is not None and self._is_os_path_call(inner, "join"):
-            self._resolved_joins.add(inner)
+            self._resolved_joins[inner] = node
 
     def _has_dominating_exit_guard(
         self,
         sink_line: int,
         test_pred: Callable[[ast.AST], bool],
         *,
-        require_end_before_sink: bool = False,
-        require_body_before_sink: bool = False,
+        before_sink: _GuardExtent = "starts",
         try_pred: Callable[[ast.Try], bool] | None = None,
     ) -> bool:
-        """True when a top-level `if` of the innermost function body starts
+        """True when `_dominating_exit_guard` finds a guard."""
+        return (
+            self._dominating_exit_guard(
+                sink_line, test_pred, before_sink=before_sink, try_pred=try_pred
+            )
+            is not None
+        )
+
+    def _dominating_exit_guard(
+        self,
+        sink_line: int,
+        test_pred: Callable[[ast.AST], bool],
+        *,
+        before_sink: _GuardExtent = "starts",
+        try_pred: Callable[[ast.Try], bool] | None = None,
+    ) -> ast.stmt | None:
+        """The first top-level `if` of the innermost function body that starts
         before `sink_line`, has a test `test_pred` accepts, and has a body that
-        ends control flow. A nested `if` never appears in the body-only loop,
-        so a guard inside a branch that may not run cannot count.
+        ends control flow; None when there is none. A nested `if` never
+        appears in the body-only loop, so a guard inside a branch that may not
+        run cannot count.
 
-        `require_end_before_sink` also requires the whole `if` to end before
-        the sink, so a sink inside the guard's own branch is not covered.
-
-        `require_body_before_sink` is the narrower form: only the rejecting
-        body must end before the sink. A sink in the guard's `else` / `elif`
-        is covered, since those run only when the test was False.
+        `before_sink` says how much of the `if` must lie before the sink:
+          * "starts": the `if` starts before it;
+          * "ends": the whole `if`, `else`/`elif` included, ends before it, so
+            a sink inside the guard's own branch is not covered;
+          * "body_ends": the rejecting body ends before it. A sink in the
+            guard's `else`/`elif` is covered, since those run only when the
+            test was False.
 
         `try_pred`, when given, also accepts a top-level `try` that ends before
         the sink and that `try_pred` accepts.
         """
         if not self._func_stack:
-            return False
+            return None
         func = self._func_stack[-1]
         for stmt in func.body:
             if stmt.lineno >= sink_line:
                 continue
             if isinstance(stmt, ast.Try):
                 if try_pred is not None and stmt.end_lineno < sink_line and try_pred(stmt):
-                    return True
+                    return stmt
                 continue
             if not isinstance(stmt, ast.If):
                 continue
-            if require_end_before_sink and stmt.end_lineno >= sink_line:
+            if before_sink == "ends" and stmt.end_lineno >= sink_line:
                 continue
-            if require_body_before_sink and stmt.body[-1].end_lineno >= sink_line:
+            if before_sink == "body_ends" and stmt.body[-1].end_lineno >= sink_line:
                 continue
             if test_pred(stmt.test) and self._body_ends_control_flow(stmt.body):
-                return True
-        return False
+                return stmt
+        return None
 
     @staticmethod
     def _body_ends_control_flow(body: list) -> bool:
@@ -1710,15 +1806,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return True
         if isinstance(expr, ast.Call):
             f = expr.func
-            is_ospath = (
-                isinstance(f, ast.Attribute)
-                and f.attr in self._CONST_PATH_FUNCS
-                and isinstance(f.value, ast.Attribute)
-                and f.value.attr == "path"
-                and isinstance(f.value.value, ast.Name)
-                and f.value.value.id == "os"
-            )
-            if is_ospath:
+            if _os_path_attr(f) in self._CONST_PATH_FUNCS:
                 return all(
                     self._expr_is_constant_path(a, _depth + 1) for a in expr.args
                 )
@@ -3588,10 +3676,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return False
         if not node.args:
             return False
-        # A join resolved in place never reaches the filesystem unresolved; the
-        # resolved value is checked at the sink that consumes it, which is the
-        # only place a containment guard can dominate.
-        if sink_name == "os.path.join" and node in self._resolved_joins:
+        # A join resolved in place and checked by a containment guard before
+        # any use is safe; the guard sits below the join's line, so it could
+        # never dominate the join itself (`_resolved_join_is_guarded`).
+        if sink_name == "os.path.join" and self._resolved_join_is_guarded(node):
             return False
         arg_idx = self._path_traversal_arg_index(node)
         if arg_idx >= len(node.args):
@@ -3772,14 +3860,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return node.func.id
         elif isinstance(node.func, ast.Attribute):
             # Double-attribute form: os.path.join / os.path.abspath etc.
-            if (
-                node.func.attr in _OS_PATH_SINK_ATTRS
-                and isinstance(node.func.value, ast.Attribute)
-                and node.func.value.attr == "path"
-                and isinstance(node.func.value.value, ast.Name)
-                and node.func.value.value.id == "os"
-            ):
-                return f"os.path.{node.func.attr}"
+            os_path_attr = _os_path_attr(node.func)
+            if os_path_attr in _OS_PATH_SINK_ATTRS:
+                return f"os.path.{os_path_attr}"
             # Attribute-form sink — audit #14: scope `open`/`Path` to a
             # filesystem-receiver allow-list so `webbrowser.open`, `driver.open`,
             # selenium/zipfile/socket `.open` etc. don't masquerade as CWE-22.
@@ -3871,6 +3954,24 @@ _OS_PATH_SINK_ATTRS: frozenset[str] = frozenset(
 )
 
 
+# How much of a guarding `if` must lie before the sink it protects; see
+# `_PythonSecurityVisitor._dominating_exit_guard`.
+_GuardExtent = Literal["starts", "ends", "body_ends"]
+
+
+def _os_path_attr(func: ast.AST) -> str:
+    """Return `X` when `func` is the double attribute `os.path.X`, else ""."""
+    if (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr == "path"
+        and isinstance(func.value.value, ast.Name)
+        and func.value.value.id == "os"
+    ):
+        return func.attr
+    return ""
+
+
 def _is_bounding_dir(value: object) -> bool:
     """True when the constant `value` names a directory narrower than the
     filesystem root. Empty, `/`, `.`, a bare drive and a path whose `..`
@@ -3912,9 +4013,16 @@ def _handler_catches_value_error(exc_type: ast.AST | None) -> bool:
 def _binds_name(node: ast.AST, name: str) -> bool:
     """True when `node` binds, deletes or declares `name`: an assignment,
     loop, `with`, walrus or `del` target, `global`/`nonlocal`, a def or class
-    of that name, `except ... as name`, an import alias, or a match capture."""
+    of that name, a parameter of a lambda or def, `except ... as name`, an
+    import alias, or a match capture.
+
+    A lambda or nested-def parameter binds the name in its own scope, so a
+    `full` read inside `lambda full: open(full)` is not the outer `full`.
+    Callers searching a function pass its body, never its own parameters."""
     if isinstance(node, ast.Name):
         return node.id == name and not isinstance(node.ctx, ast.Load)
+    if isinstance(node, ast.arg):
+        return node.arg == name
     if isinstance(node, (ast.Global, ast.Nonlocal)):
         return name in node.names
     if isinstance(
@@ -3937,6 +4045,19 @@ def _param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     params = [*a.posonlyargs, *a.args, *a.kwonlyargs]
     params += [p for p in (a.vararg, a.kwarg) if p is not None]
     return {p.arg for p in params}
+
+
+def _same_scope_nodes(node: ast.AST):
+    """Yield `node` and its descendants that run in the same scope. A def,
+    lambda or class is yielded (its name binds here) but not entered."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        if not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            stack.extend(ast.iter_child_nodes(current))
 
 
 def _stores_of(func: ast.AST, name: str) -> list[ast.AST]:
