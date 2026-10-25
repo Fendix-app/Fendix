@@ -392,6 +392,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # mapped to that resolving call. `_note_resolved_join` records them
         # when the enclosing call is visited, which is always before the join.
         self._resolved_joins: dict[ast.Call, ast.Call] = {}
+        # Task 3.2: each call whose result an assignment binds to a single name
+        # (`resp = make_response(...)`), recorded by visit_Assign before the
+        # call is visited, so the HTML response sink can find a content type
+        # assigned to the response afterwards; and the names the file defines
+        # with def/class, collected on first need.
+        self._call_targets: dict[ast.Call, str] = {}
+        self._defined_names: frozenset[str] | None = None
         # Task 3.1: each def → the parameters that carry request data because
         # it is a route handler bound to this file (`_route_param_sources`),
         # and the module's `_ModuleFacts`, collected once, on first need.
@@ -1352,10 +1359,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # Escaping/encoding neutralizers that make a value safe to render (#24).
     _ESCAPE_FUNCS = frozenset({"escape", "clean", "quote", "quote_plus", "escapejs"})
 
-    def _is_escaped_call(self, expr: ast.AST) -> bool:
+    def _is_escaped_call(
+        self, expr: ast.AST, _resolving: frozenset[str] = frozenset()
+    ) -> bool:
         """True if `expr` is a call to a recognized escaping/encoding function
         (html.escape, markupsafe.escape, bleach.clean, urllib.parse.quote,
-        django escape/escapejs), or a Name bound to such a call (#24)."""
+        django escape/escapejs), or a Name bound to such a call (#24).
+
+        ``_resolving`` holds the Names being followed, so a binding that reads
+        its own name (``html = html``) ends instead of recursing until the
+        file is skipped at the recursion limit."""
         if isinstance(expr, ast.Call):
             f = expr.func
             name = (
@@ -1365,9 +1378,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             )
             return name in self._ESCAPE_FUNCS
         if isinstance(expr, ast.Name):
+            if expr.id in _resolving:
+                return False
             for scope in reversed(self._scopes):
                 if expr.id in scope:
-                    return self._is_escaped_call(scope[expr.id])
+                    return self._is_escaped_call(
+                        scope[expr.id], _resolving | {expr.id}
+                    )
         return False
 
     def _expr_is_fully_escaped(self, expr: ast.AST, _depth: int = 0) -> bool:
@@ -2524,10 +2541,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 )
             self._emit_finding(
                 "PY_XSS_HTML_SINK",
-                "Reflected XSS — user input passed to HTML render sink",
-                "HIGH",
-                "MEDIUM",
-                "CWE-79",
+                _XSS_HTML_SINK_TITLE,
+                _XSS_HTML_SINK_SEVERITY,
+                _XSS_HTML_SINK_CONFIDENCE,
+                _XSS_HTML_SINK_CWE,
                 (
                     "Sanitize user input before passing to Markup/mark_safe/"
                     "render_template_string. Prefer template auto-escaping "
@@ -2545,15 +2562,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # declares another content type, so request input written into it
         # unescaped is reflected XSS: the same weakness, so the same rule.
         elif self._is_html_response_sink(node):
-            body = self._html_response_body(node)
-            sink_expr = f"{self._html_response_ctor(node)}({_ast_expr_text(body)})"
+            ctor = self._html_response_ctor(node)
+            body = self._html_response_body(node, ctor)
+            sink_expr = f"{ctor}({_ast_expr_text(body)})"
             chain = self._collect_taint_chain(body, node.lineno, sink_expr)
             self._emit_finding(
                 "PY_XSS_HTML_SINK",
-                "Reflected XSS — user input passed to HTML render sink",
-                "HIGH",
-                "MEDIUM",
-                "CWE-79",
+                _XSS_HTML_SINK_TITLE,
+                _XSS_HTML_SINK_SEVERITY,
+                _XSS_HTML_SINK_CONFIDENCE,
+                _XSS_HTML_SINK_CWE,
                 (
                     "Escape the value (html.escape, django.utils.html.escape or "
                     "markupsafe.escape) before writing it into the response, or "
@@ -2956,6 +2974,12 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         subscript (`d['k'] = ...`), and tuple/list unpacking. For tuple
         unpacking from a tuple/list RHS we bind element-wise; otherwise each
         target is bound to the whole RHS (conservative — preserves taint)."""
+        if (
+            isinstance(node.value, ast.Call)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            self._call_targets[node.value] = node.targets[0].id
         if not self._scopes:
             self.generic_visit(node)
             return
@@ -4072,31 +4096,35 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     #
     # `HttpResponse(f"<h1>{name}</h1>")` is the most common way request input
     # reaches a page unescaped: no template, so no autoescape. The sink is the
-    # constructor's body, judged in four steps by `_is_html_response_sink`:
-    #   1. the constructor is one of _HTML_RESPONSE_CTORS (`Response` only from
-    #      a web framework, see `_html_response_ctor`);
-    #   2. the response is HTML: no content type is declared, or a declared one
-    #      is not a provably non-markup constant (`_response_is_non_html`);
+    # constructor's body, judged by `_is_html_response_sink`:
+    #   1. the call is a framework's HTML response constructor
+    #      (`_resolve_html_response`): imported from its framework, or called
+    #      by a bare name the file neither imports nor defines;
+    #   2. the response has a body the browser renders: not a 204/304 status,
+    #      and no declared content type that is provably not markup, at
+    #      construction or assigned afterwards (`_response_is_non_html`);
     #   3. the body is not constant, escaped or sanitised;
     #   4. some part of the body can carry text verbatim
-    #      (`_html_body_carries_text`). The engine has no return values, so it
-    #      cannot see what a helper or renderer did to its input: a body that is
-    #      the result of an opaque function is not claimed.
+    #      (`_html_body_carries_text`). The engine has no return values, so a
+    #      body that is, as a whole, the result of a helper function is not
+    #      claimed: the helper may have escaped or rendered it.
 
     def _is_html_response_sink(self, node: ast.Call) -> bool:
         """True when ``node`` builds an HTML response whose body can hold
         request text unescaped. The body's taint chain then decides whether the
         flow is proven, exactly as for Markup/mark_safe."""
-        ctor = self._html_response_ctor(node)
+        ctor, package = self._resolve_html_response(node)
         if not ctor:
             return False
-        body = self._html_response_body(node)
+        body = self._html_response_body(node, ctor)
         if body is None or isinstance(body, ast.Constant):
             return False
         # Flask serialises a dict or list body to JSON.
         if ctor == "make_response" and isinstance(body, (ast.Dict, ast.List)):
             return False
-        if self._response_is_non_html(node, ctor):
+        if self._response_drops_body(node, ctor, package):
+            return False
+        if self._response_is_non_html(node, ctor, package):
             return False
         if self._expr_is_fully_escaped(body) or self._arg_is_sanitised(
             body, node.lineno
@@ -4112,32 +4140,75 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         )
 
     def _html_response_ctor(self, node: ast.Call) -> str:
-        """The name of the HTML response constructor ``node`` calls, or "".
+        """The name of the HTML response constructor ``node`` calls, or ""."""
+        return self._resolve_html_response(node)[0]
 
-        An imported name resolves to the symbol it imports, so
-        ``from flask import make_response as mk; mk(x)`` is ``make_response``.
-        ``Response`` must come from Flask, Werkzeug, Starlette or FastAPI
-        through the file's imports (``from flask import Response``,
-        ``flask.Response``, ``from fastapi import responses;
-        responses.Response``); any other ``Response`` is not this sink."""
+    def _resolve_html_response(self, node: ast.Call) -> tuple[str, str]:
+        """``(constructor, package)`` for a call to an HTML response
+        constructor, else ``("", "")``.
+
+        An imported name resolves to the symbol it imports, and must come from
+        that constructor's framework (`_HTML_RESPONSE_PACKAGES`):
+        ``from flask import make_response as mk; mk(x)`` is one,
+        ``from .utils import make_response`` is not. A name the file defines
+        itself (``def make_response(...)``) is never one, and neither is a
+        method on ``self``/``cls``. A bare name that is neither imported nor
+        defined, or a method on another value (Flask's ``app.make_response``),
+        counts by its name, except ``Response``, which must be imported."""
         func = node.func
         if isinstance(func, ast.Name):
+            if func.id in self._file_defined_names():
+                return "", ""
+            imported = func.id in self._from_imports
             module, name = self._from_imports.get(func.id, ("", func.id))
         elif isinstance(func, ast.Attribute):
+            if _dotted(func.value) in _OWN_RECEIVERS:
+                return "", ""
             module, name = self._import_origin(func.value), func.attr
+            imported = bool(module)
         else:
-            return ""
+            return "", ""
         if name not in _HTML_RESPONSE_CTORS:
-            return ""
-        if name == "Response" and module.split(".")[0] not in _HTML_RESPONSE_PACKAGES:
-            return ""
-        return name
+            return "", ""
+        package = module.split(".")[0]
+        if (imported or name == "Response") and package not in _HTML_RESPONSE_PACKAGES[
+            name
+        ]:
+            return "", ""
+        return name, package
+
+    def _file_defined_names(self) -> frozenset[str]:
+        """Names the file binds with ``def`` or ``class``, methods excluded
+        (a method never shadows a bare name)."""
+        if self._defined_names is None:
+            root = self._module_root
+            nodes = list(ast.walk(root)) if root is not None else []
+            methods = {
+                id(child)
+                for n in nodes
+                if isinstance(n, ast.ClassDef)
+                for child in n.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            self._defined_names = frozenset(
+                n.name
+                for n in nodes
+                if isinstance(n, ast.ClassDef)
+                or (
+                    isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and id(n) not in methods
+                )
+            )
+        return self._defined_names
 
     def _import_origin(self, expr: ast.AST) -> str:
         """The dotted import path a Name/Attribute chain stands for, through the
         file's imports (``flask``, ``fastapi.responses``), or "" when its head
-        is not an imported name."""
+        is not an imported name, or is shadowed by a local binding
+        (``import html`` then ``html = f"<p>{x}</p>"``)."""
         head, _, rest = _dotted(expr).partition(".")
+        if not head or self._scope_binding(head) is not None:
+            return ""
         if head in self._module_aliases:
             base = self._module_aliases[head]
         elif head in self._from_imports:
@@ -4148,48 +4219,128 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         return f"{base}.{rest}" if rest else base
 
     @staticmethod
-    def _html_response_body(node: ast.Call) -> ast.AST | None:
+    def _response_args(node: ast.Call, ctor: str) -> list[ast.AST]:
+        """The constructor's positional arguments. Flask's
+        ``make_response((body, status, headers))`` passes them as one tuple."""
+        args = list(node.args)
+        if (
+            ctor == "make_response"
+            and len(args) == 1
+            and isinstance(args[0], ast.Tuple)
+            and args[0].elts
+        ):
+            return list(args[0].elts)
+        return args
+
+    def _html_response_body(self, node: ast.Call, ctor: str) -> ast.AST | None:
         """The body a response constructor sends: its first positional
         argument, else its ``content=``/``response=`` keyword."""
-        if node.args:
-            first = node.args[0]
-            return None if isinstance(first, ast.Starred) else first
+        args = self._response_args(node, ctor)
+        if args:
+            return None if isinstance(args[0], ast.Starred) else args[0]
         for kw in node.keywords:
             if kw.arg in _RESPONSE_BODY_KEYWORDS:
                 return kw.value
         return None
 
-    def _response_is_non_html(self, node: ast.Call, ctor: str) -> bool:
-        """True when the response declares a content type and every type it
-        declares is a constant the browser does not render as markup.
+    @staticmethod
+    def _response_layout(ctor: str, package: str) -> tuple[int, int | None, tuple[int, ...]]:
+        """Positions of the status, the headers and the content type among a
+        constructor's positional arguments. Django
+        ``HttpResponse(content, content_type, status, reason, charset, headers)``;
+        Flask/Werkzeug ``Response(response, status, headers, mimetype,
+        content_type)``; Starlette ``Response(content, status_code, headers,
+        media_type, background)``; Flask ``make_response(body, status, headers)``,
+        whose headers `_response_is_non_html` looks for in any position."""
+        if ctor == "HttpResponse":
+            return 2, 5, (1,)
+        if ctor == "make_response":
+            return 1, None, ()
+        if package in ("flask", "werkzeug"):
+            return 1, 2, (3, 4)
+        return 1, 2, (3,)
 
-        A type is declared by the ``content_type``/``mimetype``/``media_type``
-        keyword, by Django's second positional argument, or by a
-        ``Content-Type`` entry in a literal headers dict (``headers=`` or Flask's
-        ``make_response(body, status, headers)``). With none, the response is
-        HTML: Django and Flask default to text/html, and a Starlette
-        ``Response`` sends no Content-Type, so the browser sniffs the body.
-        ``HTMLResponse`` is always HTML."""
+    def _response_drops_body(self, node: ast.Call, ctor: str, package: str) -> bool:
+        """True for a 204 No Content or 304 Not Modified response: the browser
+        renders no body (Werkzeug drops it)."""
+        args = self._response_args(node, ctor)
+        status_index = self._response_layout(ctor, package)[0]
+        statuses = [kw.value for kw in node.keywords if kw.arg in ("status", "status_code")]
+        if status_index < len(args):
+            statuses.append(args[status_index])
+        for value in statuses:
+            if isinstance(value, ast.Constant) and not isinstance(value.value, bool):
+                if value.value in _BODYLESS_STATUSES:
+                    return True
+            elif _terminal_name(value).endswith(("NO_CONTENT", "NOT_MODIFIED")):
+                return True
+        return False
+
+    def _response_is_non_html(self, node: ast.Call, ctor: str, package: str) -> bool:
+        """True when the response's content type is provably not markup.
+
+        Declared at construction by the ``content_type``/``mimetype``/
+        ``media_type`` keyword, by its position (`_response_layout`), or by a
+        ``Content-Type`` entry in a literal headers dict or list of pairs
+        (``headers=``, or Flask's ``make_response(body, status, headers)``):
+        every declared type must be a non-markup constant (``None`` is a type
+        not given). With none, the response is HTML: Django and Flask default to text/html, and a
+        Starlette ``Response`` sends no Content-Type, so the browser sniffs the
+        body. ``HTMLResponse`` is always HTML.
+
+        A type assigned after construction (`_late_content_types`) also
+        counts: when every such assignment is a non-markup constant, the
+        response is not HTML; otherwise the construction decides."""
         if ctor == "HTMLResponse":
             return False
+        late = self._late_content_types(node)
+        if late and all(self._is_non_markup_media_type(v) for v in late):
+            return True
+        args = self._response_args(node, ctor)
+        _, headers_index, type_indexes = self._response_layout(ctor, package)
         declared = [
             kw.value for kw in node.keywords if kw.arg in _RESPONSE_CONTENT_TYPE_KEYWORDS
         ]
-        if ctor == "HttpResponse" and len(node.args) > 1:
-            declared.append(node.args[1])  # HttpResponse(content, content_type)
+        declared.extend(args[i] for i in type_indexes if i < len(args))
         headers = [kw.value for kw in node.keywords if kw.arg == "headers"]
         if ctor == "make_response":
-            headers.extend(node.args[1:])
+            headers.extend(args[1:])
+        elif headers_index is not None and headers_index < len(args):
+            headers.append(args[headers_index])
         for h in headers:
-            if isinstance(h, ast.Dict):
-                declared.extend(
-                    v
-                    for k, v in zip(h.keys, h.values)
-                    if isinstance(k, ast.Constant)
-                    and isinstance(k.value, str)
-                    and k.value.lower() == "content-type"
-                )
+            declared.extend(_header_content_types(h))
+        # `None` is a type not given (`Response(body, 200, None, None, "text/plain")`).
+        declared = [
+            v for v in declared if not (isinstance(v, ast.Constant) and v.value is None)
+        ]
         return bool(declared) and all(self._is_non_markup_media_type(v) for v in declared)
+
+    def _late_content_types(self, node: ast.Call) -> list[ast.AST]:
+        """The values assigned as the content type of the response ``node``
+        builds, after it is built and bound to a name (``resp = ...``):
+        ``resp["Content-Type"] = v`` (Django), ``resp.headers["Content-Type"]
+        = v`` (Flask, Starlette), and ``resp.mimetype``/``.content_type``/
+        ``.media_type = v``. Searched in the rest of the enclosing function
+        (or module), not in nested functions or classes."""
+        name = self._call_targets.get(node)
+        scope = self._func_stack[-1] if self._func_stack else self._module_root
+        if name is None or scope is None:
+            return []
+        after = getattr(node, "end_lineno", None) or node.lineno
+        found: list[ast.AST] = []
+        stack: list[ast.AST] = list(scope.body)
+        while stack:
+            stmt = stack.pop()
+            if isinstance(stmt, _SCOPE_NODES):
+                continue
+            if (
+                isinstance(stmt, ast.Assign)
+                and stmt.lineno > after
+                and any(_is_content_type_target(t, name) for t in stmt.targets)
+            ):
+                found.append(stmt.value)
+            stack.extend(ast.iter_child_nodes(stmt))
+        return found
 
     def _is_non_markup_media_type(self, value: ast.AST) -> bool:
         """True for a constant media type (or a Name bound to one) that is not
@@ -4202,44 +4353,90 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         media = value.value.split(";")[0].strip().lower()
         return bool(media) and not any(m in media for m in _MARKUP_MEDIA_TYPE_MARKERS)
 
+    def _renderer_verdict(self, call: ast.Call) -> str:
+        """``"safe"`` for a renderer that escapes what it renders (or Flask's
+        ``jsonify``), called through an import from its framework
+        (`_HTML_RESPONSE_SAFE_BODIES`); ``"text"`` for Flask's
+        ``render_template`` of a template whose constant name Flask does not
+        autoescape (``"x.txt"``); "" for anything else, including a
+        ``<template>.render(...)`` method and a same-file ``def render``
+        (R-pf40)."""
+        func = call.func
+        if isinstance(func, ast.Name):
+            module, name = self._from_imports.get(func.id, ("", ""))
+        elif isinstance(func, ast.Attribute):
+            module, name = self._import_origin(func.value), func.attr
+        else:
+            return ""
+        packages = _HTML_RESPONSE_SAFE_BODIES.get(name)
+        if not packages or module.split(".")[0] not in packages:
+            return ""
+        if name == "render_template":
+            template = call.args[0] if call.args else next(
+                (kw.value for kw in call.keywords if kw.arg == "template_name_or_list"),
+                None,
+            )
+            if (
+                isinstance(template, ast.Constant)
+                and isinstance(template.value, str)
+                and not template.value.lower().endswith(_AUTOESCAPED_TEMPLATE_SUFFIXES)
+            ):
+                return "text"
+        return "safe"
+
     def _html_body_carries_text(
         self,
         expr: ast.AST,
         sink_line: int,
+        whole: bool = True,
         _seen: frozenset[str] = frozenset(),
         _depth: int = 0,
     ) -> bool:
         """True when some part of a response body can hold text from outside
         the code verbatim: a parameter, a request read, or a value derived from
-        one by string building, string methods or `_TEXT_PASSTHROUGH_FUNCS`.
+        one.
 
         False for constants, parts `_arg_is_sanitised` accepts (escaped,
-        allowlisted, membership-guarded), `_HTML_RESPONSE_SAFE_BODIES`, and the
-        result of any other function, bare or reached through an import.
-        The engine propagates taint through any call's arguments, but it
-        cannot see what the function returns. For a response body that guess
-        is usually wrong, because a function that returns page content is a
-        renderer: `HTMLResponse(content=email_data.html_content)` with
-        `email_data = generate_reset_password_email(email=email)` renders a
-        template. A shape this does not model counts as carrying text."""
+        allowlisted, membership-guarded), `_renderer_verdict`'s safe renderers,
+        `_NON_TEXT_FUNCS`, and, when it is the WHOLE body (``whole``), the
+        result of a helper function or ``self``/``cls`` method (R-pf41). The
+        engine cannot see what a function returns, and a function whose result
+        is the whole page is a renderer: `HTMLResponse(content=
+        email_data.html_content)` with `email_data =
+        generate_reset_password_email(email=email)` renders a template. The
+        whole body is followed through bindings, attribute and subscript
+        reads, conditionals, methods on a value and `_TEXT_PASSTHROUGH_FUNCS`.
+
+        Inside an interpolated part (an f-string value, a ``+`` or ``%``
+        operand, a ``.format``/``.join`` argument, a collection element) any
+        call carries its arguments' text, as does a class constructor
+        (``NameForm(request.POST)``) anywhere. A shape this does not model
+        counts as carrying text."""
         if _depth >= _MAX_TAINT_HOPS:
             return True
 
-        def carries(sub: ast.AST) -> bool:
-            return self._html_body_carries_text(sub, sink_line, _seen, _depth + 1)
+        def same(sub: ast.AST) -> bool:
+            return self._html_body_carries_text(sub, sink_line, whole, _seen, _depth + 1)
+
+        def part(sub: ast.AST) -> bool:
+            return self._html_body_carries_text(sub, sink_line, False, _seen, _depth + 1)
 
         if isinstance(expr, ast.Constant):
             return False
         if isinstance(expr, ast.JoinedStr):
-            return any(
-                carries(v.value) for v in expr.values if isinstance(v, ast.FormattedValue)
-            )
+            return any(part(v.value) for v in expr.values if isinstance(v, ast.FormattedValue))
         if isinstance(expr, ast.BinOp):
-            return carries(expr.left) or carries(expr.right)
-        if isinstance(expr, (ast.Tuple, ast.List)):
-            return any(carries(e) for e in expr.elts)
+            return part(expr.left) or part(expr.right)
+        if isinstance(expr, (ast.Tuple, ast.List, ast.Set)):
+            return any(part(e) for e in expr.elts)
+        if isinstance(expr, ast.Dict):
+            return any(part(e) for e in (*expr.keys, *expr.values) if e is not None)
         if isinstance(expr, ast.IfExp):
-            return carries(expr.body) or carries(expr.orelse)
+            return same(expr.body) or same(expr.orelse)
+        if isinstance(expr, ast.BoolOp):
+            return any(same(v) for v in expr.values)
+        if isinstance(expr, ast.Starred):
+            return part(expr.value)
         if self._arg_is_sanitised(expr, sink_line):
             return False
         if isinstance(expr, (ast.Name, ast.Attribute, ast.Subscript)):
@@ -4253,18 +4450,24 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 bound = self._scope_binding(key)
                 if bound is not None:
                     return self._html_body_carries_text(
-                        bound, sink_line, _seen | {key}, _depth + 1
+                        bound, sink_line, whole, _seen | {key}, _depth + 1
                     )
             if isinstance(expr, ast.Name):
                 return True  # a parameter or a global: whatever was passed in
-            return carries(expr.value)
+            return same(expr.value)
         if isinstance(expr, ast.Call):
-            func = expr.func
-            if _terminal_name(func) in _HTML_RESPONSE_SAFE_BODIES:
+            verdict = self._renderer_verdict(expr)
+            if verdict == "safe":
                 return False
+            func = expr.func
+            name = _terminal_name(func)
             args = [*expr.args, *(kw.value for kw in expr.keywords)]
+            if verdict == "text":
+                return any(part(a) for a in args)
             if _dotted(func).partition(".")[0] in _REQUEST_NAMES:
                 return True  # request.GET.get(...), request.get_json()
+            if isinstance(func, ast.Name) and name in _NON_TEXT_FUNCS:
+                return False
             if (
                 isinstance(func, ast.Attribute)
                 and not self._import_origin(func.value)
@@ -4273,9 +4476,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 # A method on a value ("<p>{}</p>".format(x), ", ".join(xs),
                 # x.strip(), data.get("k")): its text is the receiver's and the
                 # arguments'. `self.helper(...)` is a helper function instead.
-                return carries(func.value) or any(carries(a) for a in args)
-            if _terminal_name(func) in _TEXT_PASSTHROUGH_FUNCS:
-                return any(carries(a) for a in args)
+                return same(func.value) or any(part(a) for a in args)
+            if name in _TEXT_PASSTHROUGH_FUNCS:
+                return any(same(a) for a in (args[1:] if name == "map" else args))
+            if not whole or name[:1].isupper():
+                return any(part(a) for a in args)
             return False
         return True
 
@@ -4561,6 +4766,13 @@ _CODE_EVAL_RECEIVERS: frozenset[str] = frozenset(
 )
 
 
+# What both PY_XSS_HTML_SINK branches report: the Markup/mark_safe/
+# render_template_string sinks and the HTML response constructors.
+_XSS_HTML_SINK_TITLE = "Reflected XSS — user input passed to HTML render sink"
+_XSS_HTML_SINK_SEVERITY = "HIGH"
+_XSS_HTML_SINK_CONFIDENCE = "MEDIUM"
+_XSS_HTML_SINK_CWE = "CWE-79"
+
 _XSS_HTML_SINK_NAMES: frozenset[str] = frozenset(
     {
         "Markup",
@@ -4570,18 +4782,22 @@ _XSS_HTML_SINK_NAMES: frozenset[str] = frozenset(
 )
 
 
-# HTML response constructors recognised by `_is_html_response_sink` (Task 3.2):
-# Django `HttpResponse`, Flask `make_response` and `Response`, Starlette and
-# FastAPI `HTMLResponse` and `Response`. Each sends its body to the browser,
-# which renders it as HTML unless the response declares another content type.
-# A `Response` counts only when it is imported from _HTML_RESPONSE_PACKAGES,
-# which keeps DRF's JSON `Response` and a project's own class out.
+# HTML response constructors recognised by `_is_html_response_sink` (Task 3.2),
+# each with the framework packages it must be imported from when the file
+# imports it: Django `HttpResponse`, Flask `make_response`, Starlette and
+# FastAPI `HTMLResponse`, and the Flask/Werkzeug and Starlette/FastAPI
+# `Response`. Each sends its body to the browser, which renders it as HTML
+# unless the response declares another content type. A `Response` must be
+# imported, which keeps DRF's JSON `Response` and a project's own class out.
 _HTML_RESPONSE_CTORS: frozenset[str] = frozenset(
     {"HttpResponse", "make_response", "Response", "HTMLResponse"}
 )
-_HTML_RESPONSE_PACKAGES: frozenset[str] = frozenset(
-    {"flask", "werkzeug", "starlette", "fastapi"}
-)
+_HTML_RESPONSE_PACKAGES: dict[str, frozenset[str]] = {
+    "HttpResponse": frozenset({"django"}),
+    "make_response": frozenset({"flask"}),
+    "HTMLResponse": frozenset({"starlette", "fastapi"}),
+    "Response": frozenset({"flask", "werkzeug", "starlette", "fastapi"}),
+}
 # Where a response constructor takes its body and its content type by keyword:
 # `content` (Django, Starlette) or `response` (Flask) for the body;
 # `content_type` (Django, Flask), `mimetype` (Flask) or `media_type`
@@ -4590,25 +4806,99 @@ _RESPONSE_BODY_KEYWORDS: tuple[str, ...] = ("content", "response")
 _RESPONSE_CONTENT_TYPE_KEYWORDS: frozenset[str] = frozenset(
     {"content_type", "mimetype", "media_type"}
 )
+# Attributes a built response's content type is assigned through:
+# `resp.mimetype` / `resp.content_type` (Flask), `resp.media_type` (Starlette).
+_RESPONSE_CONTENT_TYPE_ATTRS: frozenset[str] = _RESPONSE_CONTENT_TYPE_KEYWORDS
+# Statuses whose body the browser never renders: 204 No Content and 304 Not
+# Modified (Werkzeug drops the body of both).
+_BODYLESS_STATUSES: frozenset[int] = frozenset({204, 304})
 # A declared media type containing one of these is rendered as a document that
 # can run script: text/html, application/xhtml+xml, image/svg+xml, text/xml.
 _MARKUP_MEDIA_TYPE_MARKERS: tuple[str, ...] = ("html", "xml")
-# Calls whose result is JSON or an autoescaped template, whatever their
-# arguments hold: Flask `jsonify` and `render_template`, Django
-# `render_to_string`, and `render` (Django's shortcut, `template.render(...)`).
-# A response body built from one carries no raw markup.
-_HTML_RESPONSE_SAFE_BODIES: frozenset[str] = frozenset(
-    {"jsonify", "render_template", "render", "render_to_string"}
-)
-# Plain functions that hand their argument's text to their result unchanged,
-# so request text in the argument is request text in a response body.
-# `json.dumps` is one: it does not escape `<` (R-pf38).
+# Renderers whose result is safe as a response body, each with the package it
+# must be imported from (R-pf40): Django `render` and `render_to_string`
+# (autoescaped templates), Flask `render_template` (autoescaped for the
+# template names in _AUTOESCAPED_TEMPLATE_SUFFIXES, or a non-constant name) and
+# Flask `jsonify` (JSON). A `<template>.render(...)` method is not one: Jinja2's
+# `Template` and `Environment.from_string` do not autoescape by default.
+_HTML_RESPONSE_SAFE_BODIES: dict[str, frozenset[str]] = {
+    "render": frozenset({"django"}),
+    "render_to_string": frozenset({"django"}),
+    "render_template": frozenset({"flask"}),
+    "jsonify": frozenset({"flask"}),
+}
+_AUTOESCAPED_TEMPLATE_SUFFIXES: tuple[str, ...] = (".html", ".htm", ".xml", ".xhtml", ".svg")
+# Functions that hand their argument's text to their result unchanged, so
+# request text in the argument is request text in a response body:
+# `json.dumps` (it does not escape `<`; R-pf38), `json.loads`,
+# `textwrap.dedent`, `urllib.parse.unquote`/`unquote_plus`, `html.unescape`,
+# and `map` over its iterable.
 _TEXT_PASSTHROUGH_FUNCS: frozenset[str] = frozenset(
-    {"str", "repr", "format", "dumps", "loads"}
+    {
+        "str",
+        "repr",
+        "format",
+        "dumps",
+        "loads",
+        "dedent",
+        "unquote",
+        "unquote_plus",
+        "unescape",
+        "map",
+    }
 )
+# Builtins whose result holds no text from their argument.
+_NON_TEXT_FUNCS: frozenset[str] = frozenset({"int", "float", "bool", "len"})
 # Receivers whose methods are the class's own helpers, not operations on a
 # value: `self.render_page(name)` is opaque like `render_page(name)`.
 _OWN_RECEIVERS: frozenset[str] = frozenset({"self", "cls"})
+
+
+def _header_content_types(headers: ast.AST) -> list[ast.AST]:
+    """The values of the ``Content-Type`` entries (any case) in a literal
+    headers dict or list/tuple of ``(name, value)`` pairs."""
+    if isinstance(headers, ast.Dict):
+        pairs = list(zip(headers.keys, headers.values))
+    elif isinstance(headers, (ast.List, ast.Tuple)):
+        pairs = [
+            (e.elts[0], e.elts[1])
+            for e in headers.elts
+            if isinstance(e, (ast.Tuple, ast.List)) and len(e.elts) == 2
+        ]
+    else:
+        return []
+    return [
+        value
+        for key, value in pairs
+        if isinstance(key, ast.Constant)
+        and isinstance(key.value, str)
+        and key.value.lower() == "content-type"
+    ]
+
+
+def _is_content_type_target(target: ast.AST, name: str) -> bool:
+    """True when an assignment target sets the content type of the response
+    bound to ``name``: ``name["Content-Type"]``, ``name.headers["Content-Type"]``
+    or ``name.mimetype``/``.content_type``/``.media_type``."""
+    if isinstance(target, ast.Attribute):
+        return (
+            isinstance(target.value, ast.Name)
+            and target.value.id == name
+            and target.attr in _RESPONSE_CONTENT_TYPE_ATTRS
+        )
+    if isinstance(target, ast.Subscript):
+        key = target.slice
+        if not (
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and key.value.lower() == "content-type"
+        ):
+            return False
+        holder = target.value
+        if isinstance(holder, ast.Attribute) and holder.attr == "headers":
+            holder = holder.value
+        return isinstance(holder, ast.Name) and holder.id == name
+    return False
 
 
 # Path-traversal sinks recognised by `_is_path_traversal_sink` (TASK-134).

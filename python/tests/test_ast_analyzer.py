@@ -728,10 +728,11 @@ class TestHTMLResponseSink:
             '    html = "<ul>"\n    html += f"<li>{name}</li>"\n    return HttpResponse(html)\n',
             '    return HttpResponse(request.GET["name"])\n',
             '    return HttpResponse(content=f"<p>{name}</p>")\n',
+            '    return HttpResponse(name or "anonymous")\n',
         ],
         ids=[
             "format", "percent", "join", "str", "method", "ifexp", "accumulator",
-            "inline-source", "content-keyword",
+            "inline-source", "content-keyword", "boolop",
         ],
     )
     def test_body_shapes_that_carry_request_text_are_xss(self, lines: str) -> None:
@@ -843,6 +844,99 @@ class TestHTMLResponseSink:
             '    return HTMLResponse(f"<p>{name}</p>", media_type="text/plain")\n',
             "name",
         )
+
+    @pytest.mark.parametrize(
+        "view, build, late",
+        [
+            (_FLASK_VIEW, "make_response", 'resp.headers["Content-Type"] = "application/json"'),
+            (_FLASK_VIEW, "make_response", 'resp.mimetype = "application/json"'),
+            (_FLASK_VIEW, "Response", 'resp.content_type = "text/plain; charset=utf-8"'),
+            (_DJANGO_VIEW, "HttpResponse", 'resp["Content-Type"] = "application/json"'),
+            (_DJANGO_VIEW, "HttpResponse", 'resp["content-type"] = JSON'),
+            (_STARLETTE_VIEW, "Response", 'resp.media_type = "application/json"'),
+        ],
+        ids=["flask-headers", "flask-mimetype", "flask-content_type", "django", "django-name", "starlette"],
+    )
+    def test_content_type_set_after_construction_is_not_xss(
+        self, view: str, build: str, late: str
+    ) -> None:
+        self._clean(
+            'import json\nJSON = "application/json"\n'
+            + view
+            + f'    resp = {build}(json.dumps({{"n": name}}))\n'
+            + '    resp.headers["X-Frame-Options"] = "DENY"\n'
+            + f"    {late}\n"
+            + "    return resp\n"
+        )
+
+    @pytest.mark.parametrize(
+        "late",
+        [
+            'resp["Content-Type"] = "text/html"',
+            'resp["Content-Type"] = kind',
+            'resp["Content-Type"] = "application/json"\n    resp["Content-Type"] = "text/html"',
+            'other = HttpResponse("")\n    other["Content-Type"] = "application/json"',
+        ],
+        ids=["html", "variable", "html-later", "another-response"],
+    )
+    def test_late_html_or_unknown_content_type_is_xss(self, late: str) -> None:
+        self._proven(
+            _DJANGO_VIEW
+            + "    kind = pick_type()\n"
+            + '    resp = HttpResponse(f"<p>{name}</p>")\n'
+            + f"    {late}\n"
+            + "    return resp\n",
+            "request.GET",
+        )
+
+    def test_content_type_set_before_construction_does_not_count(self) -> None:
+        self._proven(
+            _DJANGO_VIEW
+            + '    resp = HttpResponse("")\n'
+            + '    resp["Content-Type"] = "application/json"\n'
+            + '    resp = HttpResponse(f"<p>{name}</p>")\n'
+            + "    return resp\n",
+            "request.GET",
+        )
+
+    @pytest.mark.parametrize(
+        "view, call",
+        [
+            (_FLASK_VIEW, "Response(name, status=204)"),
+            (_FLASK_VIEW, "Response(name, 304)"),
+            (_FLASK_VIEW, "make_response(name, 204)"),
+            (_DJANGO_VIEW, "HttpResponse(name, status=HTTPStatus.NO_CONTENT)"),
+            (_STARLETTE_VIEW, "Response(name, status_code=204)"),
+        ],
+        ids=["flask-kw", "flask-304", "make_response", "django-httpstatus", "starlette"],
+    )
+    def test_bodyless_status_is_not_xss(self, view: str, call: str) -> None:
+        # The browser renders no body for 204 or 304 (Werkzeug drops it).
+        self._clean("from http import HTTPStatus\n" + view + f"    return {call}\n")
+
+    @pytest.mark.parametrize(
+        "view, call",
+        [
+            (_FLASK_VIEW, 'Response(json.dumps({"n": name}), 200, None, "application/json")'),
+            (_FLASK_VIEW, 'Response(json.dumps({"n": name}), 200, None, None, "text/plain")'),
+            (_STARLETTE_VIEW, 'Response(json.dumps({"n": name}), 200, None, "application/json")'),
+            (
+                _FLASK_VIEW,
+                'Response(json.dumps({"n": name}), headers=[("Content-Type", "application/json")])',
+            ),
+            (_FLASK_VIEW, 'Response(json.dumps({"n": name}), 200, [("content-type", "text/csv")])'),
+            (
+                _FLASK_VIEW,
+                'make_response((json.dumps({"n": name}), 200, {"Content-Type": "application/json"}))',
+            ),
+        ],
+        ids=[
+            "flask-mimetype", "flask-content_type", "starlette-media_type",
+            "headers-list", "headers-positional", "make_response-tuple",
+        ],
+    )
+    def test_positional_and_list_content_types_are_not_xss(self, view: str, call: str) -> None:
+        self._clean("import json\n" + view + f"    return {call}\n")
 
     def test_svg_content_type_is_xss(self) -> None:
         # SVG documents run <script>, so image/svg+xml is HTML-capable.
@@ -956,12 +1050,9 @@ class TestHTMLResponseSink:
         [
             '    return HttpResponse(render_to_string("x.html", {"n": name}))\n',
             '    return HttpResponse(loader.render_to_string("x.html", {"n": name}))\n',
-            (
-                '    html = loader.get_template("x.html").render({"n": name}, request)\n'
-                "    return HttpResponse(html)\n"
-            ),
+            '    return HttpResponse(f"<div>{render_to_string(\'x.html\', {\'n\': name})}</div>")\n',
         ],
-        ids=["render_to_string", "loader.render_to_string", "template.render"],
+        ids=["render_to_string", "loader.render_to_string", "interpolated"],
     )
     def test_django_template_render_is_not_xss(self, lines: str) -> None:
         self._clean(
@@ -969,6 +1060,75 @@ class TestHTMLResponseSink:
             "from django.template.loader import render_to_string\n"
             + _DJANGO_VIEW
             + lines
+        )
+
+    @pytest.mark.parametrize(
+        "imports, ret",
+        [
+            ("from jinja2 import Template", "HttpResponse(Template(src).render(name=name))"),
+            (
+                "from jinja2 import Environment",
+                "HttpResponse(Environment().from_string(src).render(name=name))",
+            ),
+            (
+                "from django.template import loader",
+                'HttpResponse(loader.get_template("x.html").render({"n": name}, request))',
+            ),
+        ],
+        ids=["jinja2-Template", "jinja2-from_string", "django-get_template"],
+    )
+    def test_template_render_method_is_xss(self, imports: str, ret: str) -> None:
+        # R-pf40: a `<template>.render(...)` method is not a sanitiser. Jinja2's
+        # Template and Environment do not autoescape by default.
+        self._proven(
+            imports + "\n" + _DJANGO_VIEW + '    src = "<p>{{ name }}</p>"\n' + f"    return {ret}\n",
+            "request.GET",
+        )
+
+    @pytest.mark.parametrize(
+        "template",
+        ['"x.txt"', '"emails/body.md"', '"x"'],
+    )
+    def test_flask_template_flask_does_not_autoescape_is_xss(self, template: str) -> None:
+        # Flask autoescapes only .html/.htm/.xml/.xhtml/.svg templates.
+        self._proven(
+            "from flask import render_template\n"
+            + _FLASK_VIEW
+            + f"    return make_response(render_template({template}, name=name))\n",
+            "request.args",
+        )
+
+    @pytest.mark.parametrize(
+        "template",
+        ['"x.HTML"', '"x.htm"', '"feed.xml"', '"x.xhtml"', '"icon.svg"', "page", '["a.html", "b.txt"]'],
+    )
+    def test_flask_template_flask_autoescapes_is_not_xss(self, template: str) -> None:
+        # An HTML/XML template name, or one the engine cannot read.
+        self._clean(
+            "from flask import render_template\n"
+            + _FLASK_VIEW
+            + '    page = request.args.get("page", "x.html")\n'
+            + f"    return make_response(render_template({template}, name=name))\n"
+        )
+
+    @pytest.mark.parametrize(
+        "defined",
+        [
+            "def render_to_string(template, context):\n    return template + str(context)\n",
+            "def jsonify(**kw):\n    return str(kw)\n",
+        ],
+        ids=["render_to_string", "jsonify"],
+    )
+    def test_renderer_must_come_from_its_framework(self, defined: str) -> None:
+        # A same-file function that shares a renderer's name is not one.
+        call = (
+            "render_to_string('x.html', {'n': name})"
+            if "render_to_string" in defined
+            else "jsonify(n=name)"
+        )
+        self._proven(
+            defined + _DJANGO_VIEW + f'    return HttpResponse(f"<div>{{{call}}}</div>")\n',
+            "request.GET",
         )
 
     def test_helper_output_is_not_claimed(self) -> None:
@@ -986,6 +1146,101 @@ class TestHTMLResponseSink:
             "    return HTMLResponse(\n"
             '        content=email_data.html_content, headers={"subject:": email_data.subject}\n'
             "    )\n"
+        )
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            '    return HttpResponse(f"<div>{build(name)}</div>")\n',
+            '    return HttpResponse("<div>%s</div>" % build(name))\n',
+            '    return HttpResponse("<div>{}</div>".format(build(name)))\n',
+            '    return HttpResponse("<div>" + build(name) + "</div>")\n',
+            '    html = f"<div>{build(name)}</div>"\n    return HttpResponse(html)\n',
+        ],
+        ids=["fstring", "percent", "format", "concat", "bound-fstring"],
+    )
+    def test_helper_call_inside_an_interpolated_part_is_xss(self, lines: str) -> None:
+        # R-pf41: only a helper whose result IS the body is opaque. Inside an
+        # interpolated part a call carries its arguments' text.
+        self._proven(_DJANGO_VIEW + lines, "request.GET")
+
+    @pytest.mark.parametrize(
+        "lines, source",
+        [
+            (
+                (
+                    "    form = NameForm(request.POST)\n"
+                    "    if form.is_valid():\n"
+                    '        n = form.cleaned_data["name"]\n'
+                    '        return HttpResponse(f"<p>{n}</p>")\n'
+                ),
+                "request.POST",
+            ),
+            (
+                (
+                    "    form = NameForm(request.POST)\n"
+                    '    return HttpResponse(form.cleaned_data["name"])\n'
+                ),
+                "request.POST",
+            ),
+            (
+                (
+                    "    form = NameForm(request.POST)\n"
+                    '    return HttpResponse(f"<p>{form.name.data}</p>")\n'
+                ),
+                "request.POST",
+            ),
+            (
+                '    m = Model(**request.POST)\n    return HttpResponse(f"<p>{m.name}</p>")\n',
+                "request.POST",
+            ),
+        ],
+        ids=["django-form", "django-form-whole-body", "flask-wtf", "pydantic"],
+    )
+    def test_class_constructor_carries_its_arguments(self, lines: str, source: str) -> None:
+        # A capitalised callee builds an object from its arguments.
+        self._proven(_DJANGO_VIEW + lines, source)
+
+    @pytest.mark.parametrize(
+        "imports, ret",
+        [
+            ("import textwrap", 'HttpResponse(textwrap.dedent(f"<p>{name}</p>"))'),
+            ("from urllib.parse import unquote", "HttpResponse(unquote(name))"),
+            ("from urllib.parse import unquote_plus", "HttpResponse(unquote_plus(name))"),
+            ("import html", "HttpResponse(html.unescape(name))"),
+            ("", 'HttpResponse(", ".join(map(str, request.GET.getlist("n"))))'),
+        ],
+        ids=["dedent", "unquote", "unquote_plus", "html.unescape", "map"],
+    )
+    def test_text_passthrough_functions_carry_text(self, imports: str, ret: str) -> None:
+        # Whole-body results that hand their argument's text through.
+        self._proven(imports + "\n" + _DJANGO_VIEW + f"    return {ret}\n", "request.GET")
+
+    @pytest.mark.parametrize(
+        "ret",
+        [
+            "HttpResponse(int(name))",
+            'HttpResponse(f"<p>{int(name)} items, {len(name)} chars</p>")',
+        ],
+    )
+    def test_numbers_hold_no_text(self, ret: str) -> None:
+        self._clean(_DJANGO_VIEW + f"    return {ret}\n")
+
+    def test_map_carries_its_iterable_not_its_function(self) -> None:
+        self._clean(
+            'LABELS = ("a", "b")\n'
+            + _DJANGO_VIEW
+            + '    return HttpResponse(", ".join(map(str.upper, LABELS)))\n'
+        )
+
+    def test_shadowed_module_name_is_a_local_value(self) -> None:
+        # `import html` does not make the local `html` a module.
+        self._proven(
+            "import html\n"
+            + _DJANGO_VIEW
+            + '    html = f"<p>{name}</p>"\n'
+            + "    return HttpResponse(html.encode())\n",
+            "request.GET",
         )
 
     def test_helper_method_output_is_not_claimed(self) -> None:
@@ -1069,6 +1324,70 @@ class TestHTMLResponseSink:
             "def greet(request):\n"
             '    name = request.GET.get("name", "")\n'
             "    return Response(name)\n"
+        )
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            (
+                "from django.http import JsonResponse\n"
+                "def make_response(message, status=200):\n"
+                '    return JsonResponse({"message": message}, status=status)\n'
+            ),
+            "from .utils import make_response\n",
+            "from . import make_response\n",
+            "from app.http import HttpResponse\n",
+            "from mylib.responses import HTMLResponse\n",
+            "from flask import HTMLResponse\n",
+            "class HttpResponse:\n    def __init__(self, body):\n        self.body = body\n",
+        ],
+        ids=[
+            "same-file-def", "relative-import", "package-import", "project-HttpResponse",
+            "project-HTMLResponse", "wrong-framework", "same-file-class",
+        ],
+    )
+    def test_project_constructors_are_not_xss(self, header: str) -> None:
+        ctor = next(c for c in ("make_response", "HTMLResponse", "HttpResponse") if c in header)
+        self._clean(
+            header
+            + "def greet(request):\n"
+            + '    name = request.GET.get("name", "")\n'
+            + f'    return {ctor}(f"Hello {{name}}")\n'
+        )
+
+    def test_own_method_named_like_a_constructor_is_not_xss(self) -> None:
+        self._clean(
+            "class View:\n"
+            "    def make_response(self, body):\n"
+            "        return body\n"
+            "    def get(self, request):\n"
+            '        name = request.GET.get("name", "")\n'
+            '        return self.make_response(f"<p>{name}</p>")\n'
+        )
+
+    def test_method_named_like_a_constructor_does_not_shadow_the_import(self) -> None:
+        # A method never shadows a bare name: `make_response(...)` below is
+        # still Flask's.
+        self._proven(
+            "from flask import make_response, request\n"
+            "class Cache:\n"
+            "    def make_response(self, body):\n"
+            "        return body\n"
+            "def greet():\n"
+            '    name = request.args.get("name", "")\n'
+            '    return make_response(f"<p>{name}</p>")\n',
+            "request.args",
+        )
+
+    def test_flask_app_make_response_is_xss(self) -> None:
+        # Flask's `app.make_response(rv)` builds a text/html response from a str.
+        self._proven(
+            "from flask import Flask, request\n"
+            "app = Flask(__name__)\n"
+            "def greet():\n"
+            '    name = request.args.get("name", "")\n'
+            '    return app.make_response(f"<p>{name}</p>")\n',
+            "request.args",
         )
 
     def test_user_defined_response_class_is_not_xss(self) -> None:
@@ -1565,6 +1884,25 @@ class TestEdgeCases:
             ("SEC-PY_SSRF", "mod.py:5"),
             ("SEC-PY_XSS_HTML_SINK", "mod.py:8"),
             ("SEC-PY_XSS_HTML_SINK", "mod.py:11"),
+        ]
+
+    def test_self_assignment_does_not_skip_the_file(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `html = html` binds `html` to itself; the escape check followed it
+        # without end and the rest of the file was lost.
+        findings = _collect_src(
+            "from markupsafe import Markup\n"
+            "def f(html):\n"
+            "    html = html\n"
+            "    return Markup(html)\n"
+            "def g(request):\n"
+            "    return Markup(request.args['x'])\n"
+        )
+        assert "recursion limit" not in capsys.readouterr().err
+        assert [(f["id"], f["line"], f.get("reachable")) for f in findings] == [
+            ("SEC-PY_XSS_HTML_SINK", "mod.py:4", None),
+            ("SEC-PY_XSS_HTML_SINK", "mod.py:6", True),
         ]
 
 

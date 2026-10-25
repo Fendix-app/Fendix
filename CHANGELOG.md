@@ -192,35 +192,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Response`. As for `Markup` and `mark_safe`, a proven flow is marked
   reachable, carries a taint chain and may block; an unproven one is reported
   and does not block.
-  - **Only an HTML response.** A response that declares a content type the
-    browser does not render as a document is not a sink. The type can be
-    declared with `content_type=`, `mimetype=` or `media_type=`, as Django's
-    second positional argument, or as a `Content-Type` entry in a literal
-    headers dict, including Flask's `make_response(body, status, headers)`.
+  - **Only an HTML response.** A response whose content type is provably not
+    a document the browser renders is not a sink.
+    - The type can be declared with `content_type=`, `mimetype=` or
+      `media_type=`, by position (Django's `HttpResponse(body, "text/plain")`,
+      Flask's and Starlette's `Response(body, 200, None, "application/json")`),
+      or as a `Content-Type` entry in a literal headers dict or list of pairs,
+      including Flask's `make_response(body, status, headers)` and
+      `make_response((body, status, headers))`.
+    - It can also be assigned after construction, when the response is bound
+      to a name: `resp["Content-Type"] = ...` (Django),
+      `resp.headers["Content-Type"] = ...` (Flask, Starlette), or
+      `resp.mimetype`, `resp.content_type` or `resp.media_type`. When every
+      such assignment later in the function is a non-HTML constant, the
+      response is not a sink. Otherwise the construction decides.
     - A type containing `html` or `xml` (`text/html; charset=utf-8`,
       `application/xhtml+xml`, `image/svg+xml`) is HTML. So is a type held in
-      a variable, an empty type and `None`.
+      a variable, and an empty type. `None` is a type not given.
     - With no type declared, Django and Flask send `text/html`, and a
       Starlette `Response` sends no `Content-Type`, so the browser sniffs the
       body. All three are sinks. `HTMLResponse` is always one.
-  - **Only a framework's `Response`.** A bare `Response` counts only when the
-    file imports it from Flask, Werkzeug, Starlette or FastAPI. Django REST
-    framework's `Response`, which renders JSON, and a project's own `Response`
-    class are not sinks. An imported alias resolves to what it imports, so
-    `from flask import make_response as mk` makes `mk(...)` a sink.
+    - A 204 or 304 response is not a sink, because the browser renders no
+      body for it (Werkzeug drops it).
+  - **Only a framework's constructor.** An imported constructor must come
+    from its framework: `HttpResponse` from Django, `make_response` from
+    Flask, `HTMLResponse` from Starlette or FastAPI, and `Response` from
+    Flask, Werkzeug, Starlette or FastAPI.
+    - An imported alias resolves to what it imports, so
+      `from flask import make_response as mk` makes `mk(...)` a sink.
+    - A project's own function or class is not a sink, even when it shares
+      the name:
+      - one the file defines (`def make_response(message): ...`);
+      - one it imports from the project (`from .utils import make_response`);
+      - a method on `self` or `cls`.
+    - A `Response` must be imported, so Django REST framework's `Response`,
+      which renders JSON, is not a sink either.
+    - A constructor called by a bare name the file neither imports nor
+      defines still counts, and so does Flask's `app.make_response(...)`.
   - **Not reported:**
     - an escaped, allowlisted or membership-guarded value, as for `Markup`;
-    - `jsonify(...)`, `render_template(...)`, `render(...)` and
-      `render_to_string(...)`, which produce JSON or an autoescaped template;
+    - Django's `render(...)` and `render_to_string(...)` and Flask's
+      `render_template(...)`, imported from their frameworks, which render
+      autoescaped templates, and Flask's `jsonify(...)`, which sends JSON.
+      - Flask's `render_template` of a template whose constant name does not
+        end in `.html`, `.htm`, `.xml`, `.xhtml` or `.svg` (`"mail.txt"`) is
+        not autoescaped, so it is reported.
+      - A function of the same name that the file defines is not a renderer.
+      - Neither is a `<template>.render(...)` method: Jinja2's `Template` and
+        `Environment.from_string` do not autoescape by default. So
+        `HttpResponse(Template(src).render(name=name))` is reported, and so is
+        Django's `get_template(...).render(...)`;
     - Flask's `make_response({...})` or `make_response([...])`, which Flask
       sends as JSON;
-    - the result of any other function or `self`/`cls` method, such as
-      `build_page(name)` or `email_data.html_content` with
+    - a body that is, as a whole, the result of a helper function or of a
+      `self`/`cls` method, such as `build_page(name)`, or
+      `email_data.html_content` with
       `email_data = generate_reset_password_email(email=email)`. The engine
-      cannot see what a function returns, and a function that returns page
-      content is usually a renderer that escapes. String methods (`.format`,
-      `.join`, `.strip`), `str()`, `json.dumps` and `json.loads` pass text
-      through, so they are followed.
+      cannot see what a function returns, and a function that returns the
+      whole page is usually a renderer that escapes.
+      - Inside an interpolated part, a call carries its arguments' text, so
+        `f"<div>{build(name)}</div>"` is reported. An interpolated part is an
+        f-string value, a `+` or `%` operand, or a `.format` or `.join`
+        argument.
+      - A class constructor carries its arguments' text anywhere, so
+        `form = NameForm(request.POST)` then `form.cleaned_data["name"]` is
+        reported.
+      - String methods (`.format`, `.join`, `.strip`), `str()`, `json.dumps`,
+        `json.loads`, `textwrap.dedent`, `urllib.parse.unquote` and
+        `unquote_plus`, `html.unescape` and `map` pass text through.
+        `int()`, `float()`, `bool()` and `len()` hold none.
   - **`json.dumps` is not an escape.** `HttpResponse(json.dumps(data))` with
     no content type is `text/html`, and `json.dumps` leaves `<` as it is, so
     request data in it is reported. With `content_type="application/json"` it
@@ -231,12 +271,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     fingerprints. The new findings are new. Their sink is the constructor and
     its body, as in `HttpResponse(f'<h1>{name}</h1>')`.
   - **Not covered:**
-    - a helper function that builds the HTML, as in
-      `HttpResponse(build_page(name))`;
+    - a helper function whose result is the whole body and that builds the
+      HTML unescaped, as in `HttpResponse(build_page(name))`;
     - Django's other response classes, such as `HttpResponseBadRequest(...)`;
-    - a content type set after construction
-      (`response["Content-Type"] = "text/plain"`), so such a response is
-      still reported;
+    - a content type set after construction other than by assigning to the
+      bound name (`resp.headers.update(...)`, `resp.headers.set(...)`), so
+      such a response is still reported. A later assignment counts wherever
+      it sits in the function, even inside a branch;
     - a media type passed to `HTMLResponse`, which is ignored.
   - **Framework parity:** the Django, Flask and FastAPI `direct` and
     `indirect` XSS cases are now detected and block, and their `cross_file`
@@ -560,12 +601,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     injection, command injection, SSRF, path traversal and open redirect, and
     Flask's `ssti` `indirect` case, now block. No safe case blocks.
 - **A Python file is no longer skipped when a variable is rebound from
-  itself.** `url += "/x"` on a parameter binds `url` to `url + "/x"`, and
+  itself.** `url += "/x"` on a parameter binds `url` to `url + "/x"`,
   `desc = "<p>" + desc + "</p>"` binds `desc` to an expression that reads
-  `desc`. The sanitiser check that the SSRF, open-redirect, path-traversal and
-  XSS sinks run followed such a binding back into itself until it hit Python's
-  recursion limit. The engine then skipped the rest of the file, with every
-  finding after that point. Such a value is now not sanitised, so its sink is
+  `desc`, and `html = html` binds `html` to itself. The sanitiser and escape
+  checks that the SSRF, open-redirect, path-traversal and XSS sinks run
+  followed such a binding back into itself until it hit Python's recursion
+  limit. The engine then skipped the rest of the file, with every finding after
+  that point. Such a value is now not sanitised or escaped, so its sink is
   reported and the file is analysed to the end. Findings this restores are
   new.
 

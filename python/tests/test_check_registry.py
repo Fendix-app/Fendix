@@ -36,13 +36,34 @@ _DEFAULT_CATEGORY = _EMIT_SIGNATURE.parameters["category"].default
 _FSTRING_TITLE_TERMS = {"PY_EVAL": "eval", "PY_OS_POPEN": "os.popen"}
 
 
-def _literal(args: dict, key: str, default=None):
+def _literal(args: dict, key: str, default=None, constants: dict | None = None):
     """The argument's literal value, the default when it is not passed, or None
-    when it is passed as an expression the test cannot evaluate."""
+    when it is passed as an expression the test cannot evaluate. A name bound
+    to a constant at the analyzer's module level (``_XSS_HTML_SINK_TITLE``, which
+    two emit sites share) counts as that constant."""
     value = args.get(key)
     if value is None:
         return default
+    if isinstance(value, ast.Name) and constants and value.id in constants:
+        return constants[value.id]
     return value.value if isinstance(value, ast.Constant) else None
+
+
+def _module_constants(tree: ast.Module) -> dict:
+    """Module-level names the analyzer binds to a constant."""
+    constants = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    constants[target.id] = stmt.value.value
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and isinstance(stmt.value, ast.Constant)
+        ):
+            constants[stmt.target.id] = stmt.value.value
+    return constants
 
 
 def _emit_sites() -> list[dict]:
@@ -52,6 +73,7 @@ def _emit_sites() -> list[dict]:
     skipped: a check the registry cannot see is a check the catalog omits.
     """
     tree = ast.parse(Path(ast_analyzer.__file__).read_text(encoding="utf-8"))
+    constants = _module_constants(tree)
     sites = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -74,13 +96,14 @@ def _emit_sites() -> list[dict]:
             {
                 "line": node.lineno,
                 "id": pat_id.value,
-                "title": _literal(args, "title"),  # None for an f-string title
-                "severity": _literal(args, "severity"),
-                "confidence": _literal(args, "confidence"),
+                # None for an f-string title
+                "title": _literal(args, "title", None, constants),
+                "severity": _literal(args, "severity", None, constants),
+                "confidence": _literal(args, "confidence", None, constants),
                 # Passing taint_chain= at all means a chain was attempted.
                 "chain_attempted": "taint_chain" in args,
-                "cwe": _literal(args, "cwe"),
-                "category": _literal(args, "category", _DEFAULT_CATEGORY),
+                "cwe": _literal(args, "cwe", None, constants),
+                "category": _literal(args, "category", _DEFAULT_CATEGORY, constants),
             }
         )
     assert sites, "found no _emit_finding calls; has the analyzer been renamed?"
