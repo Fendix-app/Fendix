@@ -101,9 +101,13 @@ var ruleBehaviourFixtures = []ruleFixture{
 	{"flask-route-no-auth-decorator", "flask_login_required_above_other_between.py", true, "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@login_required\n@limiter.limit(\"5/minute\")\n@app.route(\"/admin\")\ndef admin_view():\n    return \"secret\"\n"},
 	{"flask-route-no-auth-decorator", "flask_login_required_above_multiline_route.py", true, "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@login_required\n@app.route(\n    \"/admin\",\n    methods=[\"GET\"],\n)\ndef admin_view():\n    return \"secret\"\n"},
 	// Protected by the decorator below the route; the one above is redundant.
+	// Below the route, any arguments and a module prefix count as auth.
 	{"flask-route-no-auth-decorator", "flask_auth_above_and_below.py", false, "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@login_required\n@app.route(\"/admin\")\n@requires_auth\ndef admin_view():\n    return \"secret\"\n"},
-	// Only the route with its decorator above it is reported, once.
-	{"flask-route-no-auth-decorator", "flask_mixed_routes.py", true, "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@app.route(\"/a\")\n@login_required\ndef a_view():\n    return \"a\"\n\n@login_required\n@app.route(\"/b\")\ndef b_view():\n    return \"b\"\n"},
+	{"flask-route-no-auth-decorator", "flask_above_and_requires_auth_args_below.py", false, "from flask import Flask\napp = Flask(__name__)\n\n@login_required\n@app.route(\"/admin\")\n@requires_auth(\"admin\")\ndef admin_view():\n    return \"secret\"\n"},
+	{"flask-route-no-auth-decorator", "flask_above_and_qualified_below.py", false, "import flask_login\nfrom flask import Flask\napp = Flask(__name__)\n\n@login_required\n@app.route(\"/admin\")\n@flask_login.login_required\ndef admin_view():\n    return \"secret\"\n"},
+	// Spacing Python allows: a space before route's parenthesis, after the @.
+	{"flask-route-no-auth-decorator", "flask_above_route_space_paren.py", true, "from flask import Flask\napp = Flask(__name__)\n\n@requires_auth\n@app.route (\"/admin\")\ndef admin_view():\n    return \"secret\"\n"},
+	{"flask-route-no-auth-decorator", "flask_above_space_after_at.py", true, "from flask import Flask\napp = Flask(__name__)\n\n@ requires_auth\n@app.route(\"/admin\")\ndef admin_view():\n    return \"secret\"\n"},
 }
 
 // requireSemgrep returns the semgrep binary, or skips the test when it is not

@@ -61,12 +61,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order, so the rule treated `@login_required` above the route like
   `@login_required` below it, and neither Flask rule reported it.
   `@requires_auth`, `@jwt_required(...)` and `@auth.login_required` above the
-  route were reported only by the removed `flask-missing-login-required`. The
-  rule now reports all four when no auth decorator sits below the route, also
-  when other decorators sit between them or the route call spans several
-  lines. The finding is on the `@app.route(...)` line. A route with an auth
-  decorator below `@app.route(...)` is still not reported, and the rule's
-  existing findings keep their identity.
+  route were reported only by the removed `flask-missing-login-required`.
+  - **Now reported:** a route with one of the rule's four decorators above
+    `@app.route(...)` and no auth decorator below it. The four are
+    `@login_required`, `@requires_auth` and `@auth.login_required`, bare or
+    with empty parentheses, and `@jwt_required` with or without arguments.
+    Other decorators may sit between the two, and the route call may span
+    several lines. The finding is on the `@app.route(...)` line, once per
+    route.
+  - **What counts as an auth decorator below the route** when one of the four
+    sits above it: a decorator line between `@app.route(...)` and the `def`
+    that names `login_required`, `requires_auth` or `jwt_required`, with or
+    without a module prefix and with any arguments. So `@login_required`
+    above with `@requires_auth("admin")` or `@flask_login.login_required`
+    below is not reported. A commented-out decorator does not count.
+  - **Unchanged:** a route with none of the four decorators is reported as
+    before, including one whose only auth decorator is
+    `@requires_auth("admin")` or `@flask_login.login_required` below the
+    route, because the rule's list of decorators is unchanged. The rule's
+    existing findings keep their identity.
 - **The Python engine's JavaScript/TypeScript pattern findings now carry a
   `rule_id`.** `JS_EVAL`, `JS_INNER_HTML`, `JS_DOCUMENT_WRITE` and
   `JS_SQL_TEMPLATE` reached the report with `rule_id` empty, unlike the Python

@@ -69,11 +69,25 @@ Keep `flask-route-no-auth-decorator` and delete `flask-missing-login-required`.
   route, and at MEDIUM the route's finding is below a `--fail-on HIGH`
   threshold. Neither finding blocked a build on its own: without
   corroboration, the confidence gate held both at WARN.
+- One blocking path is lost. The gate's confidence band comes from the
+  evidence score (`confidence.Score`), not from a rule's declared
+  confidence, so both findings scored the same MEDIUM band and both needed
+  an independent signal to block (`decision.applyConfidenceGate`). Under
+  `--fail-on HIGH`, a route that another tool corroborates through SARIF
+  import (`CrossToolCorroborated`) could block through the removed HIGH
+  finding; the kept MEDIUM finding is below that threshold and blocks only
+  under `--fail-on MEDIUM`. A route that correlates with a DAST finding is
+  unaffected: `engine.mergeFindings` escalates the merged finding one
+  severity level and gives it HIGH confidence, so it reaches HIGH from the
+  kept rule too.
 - The security catalog (`docs/security-catalog-contract.json`) lists one
   check fewer, and `fendix_frontend` needs a `npm run docs:contracts:sync`
   follow-up.
 
 **Mitigations:**
+- The kept rule's two branches are disjoint by construction: the branch for a
+  decorator above the route requires, as `pattern-inside`, one of the exact
+  decorators the first branch excludes.
 - `TestFlaskRouteReportedOnce` (`scanner_rulepack_test.go`) fails if any rule
   reports one unprotected route twice.
 - `rule_behaviour_test.go` pins which decorator orders and spellings the kept

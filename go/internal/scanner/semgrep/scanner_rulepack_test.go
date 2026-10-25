@@ -287,6 +287,18 @@ func TestFlaskRouteReportedOnce(t *testing.T) {
 			line: "views.py:9",
 		},
 		{
+			// The regex can start on the docstring's "@login_required" line;
+			// only the first branch may report this public route.
+			name: "after a module docstring that names a decorator",
+			body: "\"\"\"Admin views.\n\nEvery admin view must put\n\n    @login_required\n\nbelow its route.\n\"\"\"\nfrom flask import Flask\napp = Flask(__name__)\n\n@app.route(\"/health\")\ndef health():\n    return \"ok\"\n",
+			line: "views.py:12",
+		},
+		{
+			name: "beside a protected route, decorator above",
+			body: "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@app.route(\"/a\")\n@login_required\ndef a_view():\n    return \"a\"\n\n@login_required\n@app.route(\"/b\")\ndef b_view():\n    return \"b\"\n",
+			line: "views.py:11",
+		},
+		{
 			name: "beside a protected route",
 			body: "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@app.route(\"/account\")\n@login_required\ndef account():\n    return \"mine\"\n\n@app.route(\"/admin\")\ndef admin_view():\n    return \"secret\"\n",
 			line: "views.py:10",

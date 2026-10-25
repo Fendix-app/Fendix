@@ -214,24 +214,48 @@ rules:
       # A route whose auth decorator sits above @app.route(...), with none
       # below it. Decorators apply bottom-up: route() registers the function
       # beneath it, so a decorator above it wraps a copy the URL never calls.
-      # Only the source text shows the order, hence the regex. It starts at
-      # the auth decorator, may pass other lines but never a def or class
-      # line, so it stays in one decorator block. \K starts the finding at the
-      # @...route( line, which keeps the route path in its identity. The run
-      # from route( to the def line fails on an auth decorator below the route.
-      # The FUNC group binds $FUNC to the function that def line defines, so a
-      # route defined inside another route's body is not also reported as the
-      # outer one. Both places spell the auth decorator the way the exclusions
-      # above match it: @login_required, @requires_auth and
-      # @auth.login_required bare or with empty parentheses, @jwt_required
-      # with or without arguments. So the two branches never both fire on one
-      # route.
+      #
+      # The pattern-either is the four exclusions above, as pattern-inside:
+      # this branch only reports a route the first branch dropped, so the two
+      # never both report one route, whatever the regex matches.
+      #
+      # Only the source text shows the order, hence the regex. It starts on a
+      # line that is an auth decorator, may pass other lines but never a def
+      # or class line, and \K starts the finding at the @...route( line, which
+      # keeps the route path in its identity. The run from route( to the def
+      # line fails on an auth decorator below the route, so a route protected
+      # there is not reported. In both places an auth decorator is
+      # login_required, requires_auth or jwt_required, with or without a
+      # module prefix (auth.login_required, flask_login.login_required) and
+      # with any arguments. Being lenient below the route only suppresses, and
+      # being lenient above it cannot add a route: the pattern-either still
+      # requires one of the four exact decorators on the function. The FUNC
+      # group binds $FUNC to the function that def line defines, so a route
+      # defined inside another route's body is not also reported as the outer
+      # one.
       - patterns:
-          - pattern-inside: |
-              @$APP.route(...)
-              def $FUNC(...):
-                  ...
-          - pattern-regex: '(?m)^[ \t]*@(?:(?:login_required|requires_auth|auth\.login_required)(?:[ \t]*\([ \t]*\))?[ \t]*(?:#.*)?\r?$|jwt_required[ \t]*(?:\(|(?:#.*)?\r?$)).*\n(?:(?![ \t]*(?:async[ \t]+)?def\b|[ \t]*class\b).*\n)*?[ \t]*\K@[\w.]+\.route\((?:(?!^[ \t]*@(?:(?:login_required|requires_auth|auth\.login_required)(?:[ \t]*\([ \t]*\))?[ \t]*(?:#.*)?\r?$|jwt_required[ \t]*(?:\(|(?:#.*)?\r?$)))[\s\S])*?^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<FUNC>\w+)'
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @login_required
+                  def $FUNC(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @requires_auth
+                  def $FUNC(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @jwt_required(...)
+                  def $FUNC(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @auth.login_required
+                  def $FUNC(...):
+                      ...
+          - pattern-regex: '(?m)^[ \t]*@[ \t]*(?:[\w.]*\.)?(?:login_required|requires_auth|jwt_required)\b.*\n(?:(?![ \t]*(?:async[ \t]+)?def\b|[ \t]*class\b).*\n)*?[ \t]*\K@[ \t]*[\w.]+\.route[ \t]*\((?:(?!^[ \t]*@[ \t]*(?:[\w.]*\.)?(?:login_required|requires_auth|jwt_required)\b)[\s\S])*?^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<FUNC>\w+)'
     # The runtime Title is the first 120 bytes of this message, so everything up
     # to "directly " must stay byte-identical: the v3.6.3 correction (the auth
     # decorator belongs BELOW @app.route; above it, it does not protect the
