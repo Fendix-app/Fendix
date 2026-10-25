@@ -2,12 +2,24 @@ rules:
   # Rule 1: SQL injection via string formatting / concatenation
   # The alternatives must sit under pattern-either: as sibling `pattern:` entries
   # of `patterns:` Semgrep ANDs them, so the rule could never match (v3.6.3).
+  # The f-string alternative fires only on an interpolation that Semgrep's
+  # flow-sensitive constant propagation cannot resolve to a string literal, so
+  # a module or local string constant is not reported. Input beside it, and a
+  # rebinding or a parameter that shadows it, still are. A rule-level
+  # `pattern-not-inside: $VAR = "..." ...` would also hide the other
+  # alternatives and a local rebound from input (v3.7.0).
   - id: python-sql-injection-string-format
     patterns:
       - pattern-either:
           - pattern: $CURSOR.execute("..." % ..., ...)
           - pattern: $CURSOR.execute("..." + ..., ...)
-          - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+          - patterns:
+              - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+              - metavariable-pattern:
+                  metavariable: $VAR
+                  patterns:
+                    - pattern: $PART
+                    - pattern-not: '"..."'
           - pattern: $CURSOR.execute("...".format(...), ...)
       - pattern-not: $CURSOR.execute("..." % "...", ...)
       - pattern-not: $CURSOR.execute("..." + "...", ...)

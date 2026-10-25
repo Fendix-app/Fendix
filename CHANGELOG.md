@@ -155,6 +155,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   In a checked handler, a baseline entry for that `os.path.join(...)` finding
   no longer matches anything, and no new finding replaces it.
+- **The Semgrep rule `python-sql-injection-string-format` no longer reports
+  an f-string query that interpolates only string constants.**
+  `cursor.execute(f"SELECT id FROM {USERS_TABLE}")`, with
+  `USERS_TABLE = "users"` at module level, builds no injectable query. The
+  rule now skips an interpolation that Semgrep's constant propagation
+  resolves to a string literal: a module-level name assigned once, to a
+  literal, and a local that holds a literal on every path to the call
+  (`table = "users"`, or `"users"` and then `"admins"` on a branch). Each
+  interpolation is checked on its own. These are still reported:
+  - an f-string with any interpolation that is not such a constant, as in
+    `f"SELECT {COLS} FROM users WHERE n = '{name}'"`;
+  - a name rebound from input before the call, including a function-local
+    or `global` rebinding of a module constant, and
+    `where = ""` followed by `if name: where = f"... {name} ..."`;
+  - a parameter that shadows a module constant, even with a literal default;
+  - a module constant assigned more than once in the module, or assigned in
+    any function that declares it `global`;
+  - a class attribute (`self.TABLE`), an imported name, an annotated
+    assignment (`TABLE: Final = "users"`), a subscript (`TABLES[key]`), an
+    inline expression (`{PREFIX + "users"}`) and a non-string constant
+    (`LIMIT = 10`);
+  - queries built with `%`, `+` or `.format(...)`, which are unchanged.
+
+  Where the rule reported such a query, a baseline entry for that finding no
+  longer matches anything, and no new finding replaces it.
 
 ## [3.6.4] - 2026-10-24
 

@@ -48,6 +48,17 @@ var ruleBehaviourFixtures = []ruleFixture{
 	{"python-sql-injection-string-format", "sql_format_method.py", true, "def q(cursor, uid):\n    cursor.execute(\"SELECT * FROM users WHERE id = {}\".format(uid))\n"},
 	{"python-sql-injection-string-format", "sql_parameterised.py", false, "def q(cursor, uid):\n    cursor.execute(\"SELECT * FROM users WHERE id = %s\", (uid,))\n"},
 	{"python-sql-injection-string-format", "sql_literal_concat.py", false, "def q(cursor):\n    cursor.execute(\"SELECT * FROM users \" + \"WHERE active = 1\")\n"},
+	// An f-string whose interpolations are all string constants builds no
+	// injectable query; a constant must not hide a value from input beside
+	// it, a local that rebinds it, or a query built another way.
+	{"python-sql-injection-string-format", "sql_const_table.py", false, "USERS_TABLE = \"users\"\ndef h(cur):\n    cur.execute(f\"SELECT id FROM {USERS_TABLE}\")\n"},
+	{"python-sql-injection-string-format", "sql_local_const.py", false, "def h(cur):\n    table = \"users\"\n    cur.execute(f\"SELECT id FROM {table}\")\n"},
+	{"python-sql-injection-string-format", "sql_var.py", true, "def h(cur, name):\n    cur.execute(f\"SELECT id FROM users WHERE n = '{name}'\")\n"},
+	{"python-sql-injection-string-format", "sql_upper_tainted.py", true, "from flask import request\ndef h(cur):\n    QUERY = request.args[\"q\"]\n    cur.execute(f\"SELECT id FROM users WHERE n = '{QUERY}'\")\n"},
+	{"python-sql-injection-string-format", "sql_mixed_const_and_var.py", true, "COLS = \"id, name\"\ndef h(cur, name):\n    cur.execute(f\"SELECT {COLS} FROM users WHERE n = '{name}'\")\n"},
+	{"python-sql-injection-string-format", "sql_const_shadowed_by_local.py", true, "from flask import request\nTABLE = \"users\"\ndef h(cur):\n    TABLE = request.args[\"t\"]\n    cur.execute(f\"SELECT id FROM {TABLE}\")\n"},
+	{"python-sql-injection-string-format", "sql_const_rebound_conditionally.py", true, "def h(cur, name):\n    where = \"\"\n    if name:\n        where = f\"WHERE n = '{name}'\"\n    cur.execute(f\"SELECT id FROM users {where}\")\n"},
+	{"python-sql-injection-string-format", "sql_percent_beside_const.py", true, "TABLE = \"users\"\ndef h(cur, name):\n    cur.execute(\"SELECT id FROM users WHERE n = '%s'\" % name)\n"},
 
 	// python-command-injection-shell-true: os.system / os.popen with a non-literal command.
 	{"python-command-injection-shell-true", "os_system_var.py", true, "import os\ndef go(cmd):\n    os.system(cmd)\n"},

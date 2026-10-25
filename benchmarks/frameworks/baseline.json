@@ -134,7 +134,7 @@
       "blocks": false
     },
     "django-sqli-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "django-ssrf-alt_api": {
@@ -598,7 +598,7 @@
       "blocks": false
     },
     "fastapi-sqli-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "fastapi-ssrf-alt_api": {
@@ -830,7 +830,7 @@
       "blocks": false
     },
     "flask-sqli-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "flask-ssrf-alt_api": {

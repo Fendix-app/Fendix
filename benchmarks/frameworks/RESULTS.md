@@ -127,6 +127,11 @@ The `direct` and `indirect` columns include the new classes.
   - Closed after v3.6.3 for path traversal. The engine now treats it as a guard when the handler resolves the path (`os.path.realpath` or `Path.resolve()`), checks that it is under a fixed base directory, and exits when it is not. The check can be `commonpath`, `startswith` with a trailing separator, `is_relative_to` or `relative_to`. The Django, Flask and FastAPI `path_traversal-safe` cases now score TN.
     - A `startswith` without a separator, and a path that is only joined or `abspath`-ed, are still reported.
     - See `CHANGELOG.md`, `[Unreleased]`.
+- **SQLi false positives on a constant table name (3 cases).**
+  - The Django, Flask and FastAPI `sqli-safe_lookalike` cases put a module constant into an f-string query: `cursor.execute(f"SELECT ... FROM {USERS_TABLE} ...")`. The Semgrep rule `python-sql-injection-string-format` reported them. They are the SQLi `+1` in the Python rows of the coverage table.
+  - Closed after v3.6.3. The rule now skips an f-string interpolation that Semgrep's constant propagation resolves to a string literal, and the three cases score TN.
+    - An f-string with any other interpolation, and a constant rebound from input before the call, are still reported.
+    - See `CHANGELOG.md`, `[Unreleased]`.
 - **Weak password hashing and unverified JWTs are found, but only warn,** even when the token comes from the request and the claims are trusted.
 - **Route-auth noise:** every one of the 58 Flask routes gets two "missing auth" findings (`flask-route-no-auth-decorator` and `flask-missing-login-required`). Every FastAPI route gets one. Django gets none.
 

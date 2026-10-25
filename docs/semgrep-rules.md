@@ -188,12 +188,19 @@ Source: [`go/internal/scanner/semgrep/rules/injection.yaml`](../go/internal/scan
 ```yaml
 - id: python-sql-injection-string-format
   patterns:
-    - pattern: |
-        $CURSOR.execute("..." % ...)
-    - pattern: |
-        $CURSOR.execute("..." + ...)
-    - pattern: |
-        $CURSOR.execute(f"...{$VAR}...")
+    - pattern-either:
+        - pattern: $CURSOR.execute("..." % ..., ...)
+        - pattern: $CURSOR.execute("..." + ..., ...)
+        - patterns:
+            - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+            - metavariable-pattern:
+                metavariable: $VAR
+                patterns:
+                  - pattern: $PART
+                  - pattern-not: '"..."'
+        - pattern: $CURSOR.execute("...".format(...), ...)
+    - pattern-not: $CURSOR.execute("..." % "...", ...)
+    - pattern-not: $CURSOR.execute("..." + "...", ...)
   message: >
     SQL query built via string formatting — SQL injection risk.
     Use parameterized queries: cursor.execute("SELECT ... WHERE x = %s", (value,))
@@ -205,6 +212,16 @@ Source: [`go/internal/scanner/semgrep/rules/injection.yaml`](../go/internal/scan
     confidence: HIGH
     fendix_severity: CRITICAL
 ```
+
+The alternatives sit under `pattern-either`: sibling `pattern:` entries
+under `patterns:` must all match at once, so they never fire. The f-string
+branch fires only on an interpolation that is not a string constant.
+Semgrep's constant propagation lets `"..."` match a name whose value is a
+known string literal, so `f"SELECT id FROM {USERS_TABLE}"` with
+`USERS_TABLE = "users"` at module level is not reported. The propagation
+follows reassignment, so a constant rebound from input before the call still
+fires. Each interpolation is checked on its own, so
+`f"SELECT {COLS} FROM users WHERE n = '{name}'"` fires on `name`.
 
 ### Secrets — hardcoded password / key assignment
 
