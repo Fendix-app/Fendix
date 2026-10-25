@@ -122,7 +122,12 @@ plumbing without network access or a real engine.
   `v3.6.4.json` predates that change, so its `(no rule_id)` counts include these
   checks. Against it, a drop in `(no rule_id)` with a matching rise in the `SEC-JS_*`
   buckets is a relabel of the same findings. The sampling step under Noise budget
-  must not count `SEC-JS_*` as new on that account.
+  must not count `SEC-JS_*` as new on that account. The Semgrep rule
+  `flask-missing-login-required` was removed after v3.6.4 because
+  `flask-route-no-auth-decorator` reports the same routes, so against
+  `v3.6.4.json` its count drops to zero (64 in `pygoat`). From the same change,
+  `flask-route-no-auth-decorator` also reports a route whose auth decorator
+  sits above `@app.route(...)`, which can raise its count.
 - **per_kloc** is `findings / kloc` computed before rounding; `kloc` and `per_kloc`
   are rounded to three decimals.
 

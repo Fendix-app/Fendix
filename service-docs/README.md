@@ -476,17 +476,16 @@ orchestrator logs an install hint and continues.
 > deleted in TASK-118. A rule added there never runs. See `CONTRIBUTING.md` →
 > "Adding a Semgrep rule".
 
-**23 rules** across four files.
+**22 rules** across four files.
 
-### auth.yaml (5 rules)
+### auth.yaml (4 rules)
 
 | Rule ID | Severity | CWE | What It Catches |
 |---------|----------|-----|-----------------|
-| `flask-missing-login-required` | HIGH | CWE-306 | Flask `@app.route()` without `@login_required` |
 | `django-view-missing-login-required` | MEDIUM | CWE-306 | Django view class without `LoginRequiredMixin` |
 | `fastapi-route-missing-auth-dependency` | MEDIUM | CWE-306 | FastAPI route without `Depends(...)` |
 | `python-jwt-decode-no-verification` | CRITICAL | CWE-347 | `jwt.decode()` with `verify_signature=False` or `algorithms=["none"]` |
-| `flask-route-no-auth-decorator` | MEDIUM | CWE-306 | Flask route with no auth-style decorator at all (`@login_required`, `@requires_auth`, `@jwt_required`, …) |
+| `flask-route-no-auth-decorator` | MEDIUM | CWE-306 | Flask route with no auth-style decorator (`@login_required`, `@requires_auth`, `@jwt_required`, …) below `@app.route()`; one placed above it does not protect the route |
 
 ### crypto.yaml (4 rules)
 

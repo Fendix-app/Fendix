@@ -1118,24 +1118,6 @@
       "availability": "stable"
     },
     {
-      "id": "flask-missing-login-required",
-      "title": "Flask route is missing @login_required decorator.",
-      "analyzer": "semgrep",
-      "category": "auth",
-      "default_severity": "HIGH",
-      "confidence": "MEDIUM",
-      "cwes": [
-        "CWE-306"
-      ],
-      "execution_mode": "passive",
-      "auth_requirement": "none",
-      "applicability": [
-        "python"
-      ],
-      "remediation": "Flask route is missing @login_required decorator. Any user can access this endpoint without authentication. Add @login_required directly below @app.route(...); route() must stay the outermost decorator.",
-      "availability": "stable"
-    },
-    {
       "id": "flask-route-no-auth-decorator",
       "title": "Flask route has no auth-style decorator (@login_required, @requires_auth, @jwt_required, or @auth.login_required) directly below the @app.route(...) line.",
       "analyzer": "semgrep",

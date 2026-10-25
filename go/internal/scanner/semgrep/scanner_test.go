@@ -36,18 +36,18 @@ var sqlResult = semgrepResult{
 }
 
 var authResult = semgrepResult{
-	CheckID: "flask-missing-login-required",
+	CheckID: "python-jwt-decode-no-verification",
 	Path:    "/code/views.py",
-	Start:   semgrepLineCol{Line: 10, Col: 1},
+	Start:   semgrepLineCol{Line: 10, Col: 5},
 	Extra: semgrepExtra{
-		Message:  "Flask route 'admin_view' is missing @login_required decorator.",
+		Message:  "JWT decoded with signature verification disabled. This allows an attacker to forge tokens. Remove options={\"verify_signature\": False} and specify a strong algorithm.",
 		Severity: "ERROR",
-		Lines:    "@app.route('/admin')\ndef admin_view():",
+		Lines:    "    claims = jwt.decode(token, options={'verify_signature': False})",
 		Metadata: map[string]interface{}{
 			"category":        "auth",
-			"cwe":             "CWE-306",
-			"confidence":      "MEDIUM",
-			"fendix_severity": "HIGH",
+			"cwe":             "CWE-347",
+			"confidence":      "HIGH",
+			"fendix_severity": "CRITICAL",
 		},
 	},
 }
@@ -266,8 +266,9 @@ func TestMapResult_Auth(t *testing.T) {
 	if !ok {
 		t.Fatal("expected mapping to succeed")
 	}
-	if f.Severity != models.SeverityHigh {
-		t.Errorf("severity = %q; want HIGH", f.Severity)
+	// fendix_severity wins over the semgrep severity (ERROR would map to HIGH).
+	if f.Severity != models.SeverityCritical {
+		t.Errorf("severity = %q; want CRITICAL", f.Severity)
 	}
 	if f.Category != "auth" {
 		t.Errorf("category = %q; want auth", f.Category)

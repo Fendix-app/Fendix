@@ -11,20 +11,19 @@ Security-relevant code patterns using custom Semgrep rules. Semgrep performs pat
 
 ## Built-in Rules
 
-**23 rules across four files**, embedded into the Go binary from
+**22 rules across four files**, embedded into the Go binary from
 `go/internal/scanner/semgrep/rules/` via `//go:embed rules/*.yaml`. The count is
 pinned by `rulepackTotalCount` in `scanner_rulepack_test.go` — that test is the
 authority if this page and the pack ever disagree.
 
-### auth.yaml — Missing Authentication (5 rules)
+### auth.yaml — Missing Authentication (4 rules)
 
 | Rule ID | Pattern | Languages |
 |---|---|---|
-| `flask-missing-login-required` | Flask routes without `@login_required` | Python |
 | `django-view-missing-login-required` | Django views without `LoginRequiredMixin` | Python |
 | `fastapi-route-missing-auth-dependency` | FastAPI routes without `Depends()` auth | Python |
 | `python-jwt-decode-no-verification` | `jwt.decode()` with verification disabled / `alg:none` | Python |
-| `flask-route-no-auth-decorator` | Flask route with no auth-style decorator at all | Python |
+| `flask-route-no-auth-decorator` | Flask route with no auth-style decorator below `@app.route(...)`; one placed above it does not protect the route | Python |
 
 ### crypto.yaml — Weak Cryptography (4 rules)
 

@@ -1,7 +1,9 @@
 package semgrep
 
 import (
+	"context"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -15,8 +17,10 @@ import (
 // rulepackTotalCount is the count of bundled rules. When you add or
 // remove a rule, update this constant in the same commit so the
 // catalog test catches accidental rule deletion. v0.13.1 dropped the
-// broken django-fbv-missing-auth-decorator rule (Sprint 18 review).
-const rulepackTotalCount = 23
+// broken django-fbv-missing-auth-decorator rule (Sprint 18 review), and
+// flask-missing-login-required went after v3.6.4 because it duplicated
+// flask-route-no-auth-decorator on every Flask route (ADR-012).
+const rulepackTotalCount = 22
 
 // rulepackFiles is the canonical list of embedded YAML rule files. The
 // extraction tests (TestEnsureRules_ExtractsAllBundledFiles) assert this
@@ -245,6 +249,68 @@ func TestRulepack_ValidatesViaSemgrepCLI(t *testing.T) {
 			if err != nil {
 				t.Errorf("semgrep --validate %s failed: %v\noutput:\n%s",
 					name, err, string(out))
+			}
+		})
+	}
+}
+
+// TestFlaskRouteReportedOnce pins that an unprotected Flask route yields one
+// missing-auth finding. flask-missing-login-required and
+// flask-route-no-auth-decorator both fired on every such route, so each one
+// was reported twice; the first was removed (ADR-012). It runs the real
+// pipeline (bundled rule pack, semgrep, mapResult) and counts every auth
+// finding, so any rule that reports the same route again fails it.
+func TestFlaskRouteReportedOnce(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+
+	cases := []struct {
+		name string
+		body string
+		line string // where the finding is reported: the @app.route(...) line
+	}{
+		{
+			name: "no auth decorator",
+			body: "from flask import Flask\napp = Flask(__name__)\n\n@app.route(\"/admin\")\ndef admin_view():\n    return \"secret\"\n",
+			line: "views.py:4",
+		},
+		{
+			name: "auth decorator above the route",
+			body: "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@login_required\n@app.route(\"/admin\")\ndef admin_view():\n    return \"secret\"\n",
+			line: "views.py:6",
+		},
+		{
+			// The pattern-inside matches both functions; only the inner
+			// one's decorator sits above its route.
+			name: "inside a protected route",
+			body: "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@app.route(\"/outer\")\n@login_required\ndef outer():\n    @login_required\n    @app.route(\"/inner\")\n    def inner():\n        return \"x\"\n    return \"y\"\n",
+			line: "views.py:9",
+		},
+		{
+			name: "beside a protected route",
+			body: "from flask import Flask\nfrom flask_login import login_required\napp = Flask(__name__)\n\n@app.route(\"/account\")\n@login_required\ndef account():\n    return \"mine\"\n\n@app.route(\"/admin\")\ndef admin_view():\n    return \"secret\"\n",
+			line: "views.py:10",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "views.py"), []byte(tc.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Scan(context.Background(), dir)
+			if err != nil {
+				t.Fatalf("Scan: %v", err)
+			}
+			var auth []string
+			for _, f := range got {
+				if f.Category == "auth" {
+					auth = append(auth, f.RuleID+" at "+f.Endpoint)
+				}
+			}
+			want := "flask-route-no-auth-decorator at " + tc.line
+			if len(auth) != 1 || auth[0] != want {
+				t.Errorf("auth findings = %v; want exactly [%s]", auth, want)
 			}
 		})
 	}

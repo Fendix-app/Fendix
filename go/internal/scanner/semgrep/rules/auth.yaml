@@ -1,36 +1,9 @@
 rules:
-  # Rule 1: Flask route missing @login_required
-  - id: flask-missing-login-required
-    patterns:
-      - pattern: |
-          @$APP.route(...)
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @login_required
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @login_required
-          def $FUNC(...):
-              ...
-    message: >
-      Flask route '$FUNC' is missing @login_required decorator.
-      Any user can access this endpoint without authentication.
-    languages: [python]
-    severity: ERROR
-    metadata:
-      category: auth
-      cwe: CWE-306
-      confidence: MEDIUM
-      fendix_severity: HIGH
-      fendix_title: >-
-        Flask route is missing @login_required decorator.
-      fendix_remediation: >-
-        Flask route is missing @login_required decorator. Any user can access this
-        endpoint without authentication. Add @login_required directly below
-        @app.route(...); route() must stay the outermost decorator.
+  # (Rule 1 — flask-missing-login-required — was removed after v3.6.4,
+  # ADR-012. It matched the same routes as Rule 6, so every unprotected Flask
+  # route was reported twice. It also reported a route protected by
+  # @requires_auth, @jwt_required(...) or @auth.login_required below
+  # @app.route(...). Rule 6 is the one missing-auth rule for a Flask route.)
 
   # Rule 2: Django class-based view missing login_required mixin
   - id: django-view-missing-login-required
@@ -201,43 +174,64 @@ rules:
   # that pattern-matches "view function whose first arg is `request`
   # and which has no auth-style decorator anywhere above it.")
 
-  # Rule 6 (Sprint 18): Flask route with no auth decorator above it.
+  # Rule 6 (Sprint 18): Flask route with no auth decorator below @app.route(...).
+  # The one missing-auth rule for a Flask route since Rule 1 was removed.
   # FP class: views that authenticate via Flask-Login's session loading + manual
   # `current_user.is_authenticated` check inside the handler body will be flagged.
   # FN class: a project-specific decorator whose name doesn't match the
   # pattern-not list will be flagged. Confidence: LOW for the same reasons.
   - id: flask-route-no-auth-decorator
-    patterns:
-      - pattern: |
-          @$APP.route(...)
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @login_required
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @requires_auth
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @jwt_required(...)
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @auth.login_required
-          def $FUNC(...):
-              ...
-      # Skip the rule when login_required is the @app.route()-level decorator —
-      # rule 1 (flask-missing-login-required) already handles that shape.
-      - pattern-not: |
-          @login_required
-          def $FUNC(...):
-              ...
+    pattern-either:
+      # A route with none of the four auth decorators. Semgrep matches a
+      # function's decorators in any order, so these exclusions also drop a
+      # route whose auth decorator sits ABOVE @app.route(...); the next branch
+      # reports that shape.
+      - patterns:
+          - pattern: |
+              @$APP.route(...)
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @login_required
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @requires_auth
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @jwt_required(...)
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @auth.login_required
+              def $FUNC(...):
+                  ...
+      # A route whose auth decorator sits above @app.route(...), with none
+      # below it. Decorators apply bottom-up: route() registers the function
+      # beneath it, so a decorator above it wraps a copy the URL never calls.
+      # Only the source text shows the order, hence the regex. It starts at
+      # the auth decorator, may pass other lines but never a def or class
+      # line, so it stays in one decorator block. \K starts the finding at the
+      # @...route( line, which keeps the route path in its identity. The run
+      # from route( to the def line fails on an auth decorator below the route.
+      # The FUNC group binds $FUNC to the function that def line defines, so a
+      # route defined inside another route's body is not also reported as the
+      # outer one. Both places spell the auth decorator the way the exclusions
+      # above match it: @login_required, @requires_auth and
+      # @auth.login_required bare or with empty parentheses, @jwt_required
+      # with or without arguments. So the two branches never both fire on one
+      # route.
+      - patterns:
+          - pattern-inside: |
+              @$APP.route(...)
+              def $FUNC(...):
+                  ...
+          - pattern-regex: '(?m)^[ \t]*@(?:(?:login_required|requires_auth|auth\.login_required)(?:[ \t]*\([ \t]*\))?[ \t]*(?:#.*)?\r?$|jwt_required[ \t]*(?:\(|(?:#.*)?\r?$)).*\n(?:(?![ \t]*(?:async[ \t]+)?def\b|[ \t]*class\b).*\n)*?[ \t]*\K@[\w.]+\.route\((?:(?!^[ \t]*@(?:(?:login_required|requires_auth|auth\.login_required)(?:[ \t]*\([ \t]*\))?[ \t]*(?:#.*)?\r?$|jwt_required[ \t]*(?:\(|(?:#.*)?\r?$)))[\s\S])*?^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<FUNC>\w+)'
     # The runtime Title is the first 120 bytes of this message, so everything up
     # to "directly " must stay byte-identical: the v3.6.3 correction (the auth
     # decorator belongs BELOW @app.route; above it, it does not protect the

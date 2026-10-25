@@ -135,6 +135,7 @@ The `direct` and `indirect` columns include the new classes.
     - See `CHANGELOG.md`, `[Unreleased]`.
 - **Weak password hashing and unverified JWTs are found, but only warn,** even when the token comes from the request and the claims are trusted.
 - **Route-auth noise:** every one of the 58 Flask routes gets two "missing auth" findings (`flask-route-no-auth-decorator` and `flask-missing-login-required`). Every FastAPI route gets one. Django gets none.
+  - Closed after v3.6.3. `flask-missing-login-required` is removed (ADR-012), so each Flask route gets one, from `flask-route-no-auth-decorator`. See `CHANGELOG.md`, `[Unreleased]`.
 
 ### JavaScript/TypeScript catches template-literal SQL and secrets, nothing else
 
@@ -175,7 +176,7 @@ Regex-tier findings never reach the corroboration needed to block, by design. Fo
 - At v3.6.3, `docs/security-catalog-contract.json` lists 85 checks.
 - It omits the Python engine's own rules, which produce most Python detections: `PY_SQL_INJECTION`, `PY_SSRF`, `PY_PATH_TRAVERSAL`, `PY_OPEN_REDIRECT`, `PY_XSS_HTML_SINK`, `PY_WEAK_CRYPTO_PASSWORD`, `PY_JWT_WEAK` and others.
 - It also omits the four JS pattern checks.
-- Closed after v3.6.3: the catalog lists the Python engine's 16 AST checks and its four JS pattern checks, 105 checks in all. They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
+- Closed after v3.6.3: the catalog lists the Python engine's 16 AST checks and its four JS pattern checks, 105 checks in all (104 since `flask-missing-login-required` was removed). They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
 
 ## Speed
 

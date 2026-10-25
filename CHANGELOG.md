@@ -15,11 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `python.ast/PY_PATH_TRAVERSAL` and the rest) and the four
   JavaScript/TypeScript pattern checks (`SEC-JS_EVAL`, `SEC-JS_INNER_HTML`,
   `SEC-JS_DOCUMENT_WRITE`, `SEC-JS_SQL_TEMPLATE`), under the
-  `python-engine/injection` analyzer: 105 checks, up from 85. The engine's
-  spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. As for every
-  other analyzer, each check's `id` is the `rule_id` its findings carry, and
-  its `finding_id` is the finding's own id (`SEC-PY_SQL_INJECTION`,
-  `SEC-JS_SQL_TEMPLATE`).
+  `python-engine/injection` analyzer: 20 checks more than the 85 of v3.6.4.
+  The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. As
+  for every other analyzer, each check's `id` is the `rule_id` its findings
+  carry, and its `finding_id` is the finding's own id
+  (`SEC-PY_SQL_INJECTION`, `SEC-JS_SQL_TEMPLATE`).
   - **Severity and confidence.** `default_severity` is the severity the
     analyzer declares for an unproven finding, before any escalation on a
     proven flow (`python.ast/PY_PATH_TRAVERSAL`: MEDIUM, HIGH when proven).
@@ -30,8 +30,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reports HIGH.
   - Detection does not change.
 
+### Changed
+
+- **A Flask route without authentication now gets one missing-auth finding
+  instead of two.** The Semgrep rules `flask-missing-login-required` and
+  `flask-route-no-auth-decorator` both reported every unprotected Flask route.
+  `flask-missing-login-required` is removed (ADR-012), and
+  `flask-route-no-auth-decorator` reports the route as before, under the same
+  identity.
+  - **Severity.** The finding that remains is MEDIUM severity with LOW
+    confidence. The removed rule's finding was HIGH with MEDIUM confidence, so
+    reports show one HIGH finding fewer per unprotected route, and at MEDIUM
+    the route's finding is below a `--fail-on HIGH` threshold. Without
+    corroboration, the confidence gate held both findings at WARN.
+  - **Protected routes.** A route protected by `@requires_auth`,
+    `@jwt_required(...)` or `@auth.login_required` below `@app.route(...)` is
+    no longer reported. The removed rule knew only `@login_required`.
+  - **Baselines.** Baselines and `.fendix-ignore` entries that pinned
+    `flask-missing-login-required` stop matching, and its GitHub Code Scanning
+    alerts close on the next upload. The route stays reported by
+    `flask-route-no-auth-decorator`.
+  - The security catalog lists 104 checks, one fewer.
+
 ### Fixed
 
+- **`flask-route-no-auth-decorator` now reports an auth decorator placed
+  above `@app.route(...)`.** Such a decorator does not protect the route:
+  `route()` registers the function below it, so a decorator above it wraps a
+  copy the URL never calls. Semgrep matches a function's decorators in any
+  order, so the rule treated `@login_required` above the route like
+  `@login_required` below it, and neither Flask rule reported it.
+  `@requires_auth`, `@jwt_required(...)` and `@auth.login_required` above the
+  route were reported only by the removed `flask-missing-login-required`. The
+  rule now reports all four when no auth decorator sits below the route, also
+  when other decorators sit between them or the route call spans several
+  lines. The finding is on the `@app.route(...)` line. A route with an auth
+  decorator below `@app.route(...)` is still not reported, and the rule's
+  existing findings keep their identity.
 - **The Python engine's JavaScript/TypeScript pattern findings now carry a
   `rule_id`.** `JS_EVAL`, `JS_INNER_HTML`, `JS_DOCUMENT_WRITE` and
   `JS_SQL_TEMPLATE` reached the report with `rule_id` empty, unlike the Python
