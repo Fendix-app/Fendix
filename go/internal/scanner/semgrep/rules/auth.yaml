@@ -44,17 +44,27 @@ rules:
   # "unauthenticated FastAPI routes" (the TwiScope FP class, v0.18.x).
   #
   # A route counts as authenticated when a Depends()/Security() is wired either
-  # in the decorator (dependencies=[...]) or in a parameter — default,
-  # annotated default, or PEP-593 Annotated[...] (the modern idiom).
+  # in the decorator (dependencies=[...]) or in a parameter: a default, an
+  # annotated default, or PEP-593 Annotated[...] (the modern idiom), written
+  # inline or through a type alias. The alias is recognised when it is
+  # assigned at module level in the same file
+  # (CurrentUser = Annotated[User, Depends(...)]), or when it is imported from
+  # a module named deps or dependencies (from app.api.deps import
+  # CurrentUser), the layout of FastAPI's own docs and project template.
   #
   # Known confidence-LOW limitations (intentionally NOT handled; each needs
   # type/semantic resolution beyond single-file AST matching):
   #   * a Depends() injecting a non-auth value (DB session, pagination,
   #     settings) is treated as auth, so a route whose ONLY dependency is
-  #     non-auth is not flagged (false negative);
-  #   * an auth dependency hidden behind a type alias
-  #     (CurrentUser = Annotated[User, Depends(...)]) cannot be followed, so
-  #     such a route may be flagged (false positive);
+  #     non-auth is not flagged (false negative). The alias forms keep this:
+  #     SessionDep = Annotated[Session, Depends(get_db)] counts too;
+  #   * a name imported from a deps/dependencies module and used as a
+  #     parameter annotation is assumed to be such an alias without seeing
+  #     its definition, so a route whose only such parameter is a plain type
+  #     from that module is not flagged (false negative);
+  #   * an alias imported from any other module, or used as deps.CurrentUser,
+  #     cannot be followed, so such a route is still flagged (false
+  #     positive);
   #   * a verb-named decorator on a non-FastAPI object (e.g. a homegrown
   #     dispatcher @bus.post) in a file that also imports fastapi may be
   #     flagged (false positive).
@@ -100,7 +110,8 @@ rules:
           def $F2(...):
               ...
       # auth wired as a parameter dependency (Depends or Security; plain
-      # default, annotated default, or PEP-593 Annotated[...]). The exclusions
+      # default, annotated default, or PEP-593 Annotated[...] with the
+      # Depends/Security in any metadata position). The exclusions
       # deliberately omit the decorator line and use independent metavars — a
       # pattern-not that repeats `@$ROUTER.$METHOD(...)` with the matched rule's
       # metavars mis-evaluates and suppresses every route.
@@ -111,7 +122,7 @@ rules:
           def $F2(..., $P: $T = Depends(...), ...):
               ...
       - pattern-not: |
-          def $F2(..., $P: Annotated[$T, Depends(...)], ...):
+          def $F2(..., $P: Annotated[$T, ..., Depends(...), ...], ...):
               ...
       - pattern-not: |
           def $F2(..., $P = Security(...), ...):
@@ -120,8 +131,41 @@ rules:
           def $F2(..., $P: $T = Security(...), ...):
               ...
       - pattern-not: |
-          def $F2(..., $P: Annotated[$T, Security(...)], ...):
+          def $F2(..., $P: Annotated[$T, ..., Security(...), ...], ...):
               ...
+      # The same Annotated[...] through a module-level alias in this file:
+      # CurrentUser = Annotated[User, Depends(...)], then
+      # `current_user: CurrentUser`. The alias must come before the route, in
+      # the block that holds it; an alias assigned inside a function does not
+      # count.
+      - pattern-not:
+          patterns:
+            - pattern: |
+                def $F2(..., $P: $ALIAS, ...):
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    $ALIAS = Annotated[$T, ..., Depends(...), ...]
+                    ...
+                - pattern-inside: |
+                    $ALIAS = Annotated[$T, ..., Security(...), ...]
+                    ...
+      # An alias imported from a module named deps or dependencies (absolute
+      # or relative), whose definition this file cannot see. Only a bare
+      # annotation counts, and only for a name imported from such a module: a
+      # model from app.models or fastapi's Request is still an ordinary
+      # parameter. metavariable-regex is anchored at the start.
+      - pattern-not:
+          patterns:
+            - pattern: |
+                def $F2(..., $P: $ALIAS, ...):
+                    ...
+            - pattern-inside: |
+                from $MOD import $ALIAS
+                ...
+            - metavariable-regex:
+                metavariable: $MOD
+                regex: '^(.*\.)?(deps|dependencies)$'
     message: >
       FastAPI route '$FUNC' has no authentication dependency (Depends(...)).
       Inject a dependency such as Depends(get_current_user) to enforce auth.

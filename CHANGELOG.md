@@ -80,6 +80,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `@requires_auth("admin")` or `@flask_login.login_required` below the
     route, because the rule's list of decorators is unchanged. The rule's
     existing findings keep their identity.
+- **`fastapi-route-missing-auth-dependency` now recognises a dependency
+  declared through an `Annotated` alias.** The rule already treated
+  `user = Depends(...)`, `user: User = Depends(...)` and
+  `user: Annotated[User, Depends(...)]` (and the same with `Security(...)`) as
+  a route's authentication, but it reported a route whose parameter used an
+  alias, the idiom of FastAPI's own docs and project template:
+  `CurrentUser = Annotated[User, Depends(get_current_user)]`, then
+  `current_user: CurrentUser`. On `full-stack-fastapi-template` it reported 16
+  routes, 15 of them authenticated or given a database session this way. It
+  now reports only the `health-check` route, which has no dependency at all.
+  What counts as a dependency is unchanged: any `Depends(...)` or
+  `Security(...)` counts, as before, so a database-session alias such as
+  `SessionDep = Annotated[Session, Depends(get_db)]` counts too.
+  - **Now recognised:**
+    - an alias assigned at module level in the same file, before the route;
+    - an alias imported from a module named `deps` or `dependencies`
+      (`from app.api.deps import CurrentUser`,
+      `from ..dependencies import CurrentUser`). The rule cannot see that
+      alias's definition, so any name imported from such a module and used as
+      a parameter annotation counts;
+    - `Depends(...)` or `Security(...)` in any position of `Annotated[...]`,
+      inline or in an alias (`Annotated[User, "doc", Depends(...)]`).
+  - **Still reported:**
+    - a route that does not use the alias, even in the same file;
+    - a parameter typed with a model or `Request` imported from anywhere
+      else, or with an `Annotated[..., Query(...)]` alias;
+    - an alias assigned inside a function;
+    - `Alias | None`;
+    - an alias imported from a module with another name, or used as
+      `deps.CurrentUser`;
+    - a dependency set only on `APIRouter(dependencies=[...])`.
+  - The rule's existing findings keep their identity.
 - **The Python engine's JavaScript/TypeScript pattern findings now carry a
   `rule_id`.** `JS_EVAL`, `JS_INNER_HTML`, `JS_DOCUMENT_WRITE` and
   `JS_SQL_TEMPLATE` reached the report with `rule_id` empty, unlike the Python
