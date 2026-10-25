@@ -241,7 +241,7 @@ cosign verify-blob \
 Verify the Docker image (signs the multi-arch manifest digest):
 
 ```bash
-cosign verify fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef \
+cosign verify fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015 \
   --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```

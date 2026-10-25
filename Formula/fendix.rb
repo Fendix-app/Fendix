@@ -18,21 +18,21 @@ class Fendix < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/Fendix-app/Fendix/releases/download/v3.6.5/fendix-v3.6.5-darwin-arm64"
-      sha256 "4e391d883382f1d3d490d5291237202ff1a0d0f69bcf485d2cd0bdac1a9d90ac"
+      url "https://github.com/Fendix-app/Fendix/releases/download/v3.7.0/fendix-v3.7.0-darwin-arm64"
+      sha256 "c16f38619814e431b27aaed2875a11ee437ff7201b671a6da0c96ece84d38f0e"
     else
-      url "https://github.com/Fendix-app/Fendix/releases/download/v3.6.5/fendix-v3.6.5-darwin-amd64"
-      sha256 "19a583058816014f5c819858c77eebf28c38cc8d1bb9960093b02c26a0abae76"
+      url "https://github.com/Fendix-app/Fendix/releases/download/v3.7.0/fendix-v3.7.0-darwin-amd64"
+      sha256 "7d4b76cf258361eda735f7fbd751e0a6852d43b37772a7604c798b383b233ce9"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/Fendix-app/Fendix/releases/download/v3.6.5/fendix-v3.6.5-linux-arm64"
-      sha256 "ab0734877d5b57dfb0664b6ca3b316cf2a68918bdb226cc174b2b15b99fb48ab"
+      url "https://github.com/Fendix-app/Fendix/releases/download/v3.7.0/fendix-v3.7.0-linux-arm64"
+      sha256 "b661ea54897757432abe4943d4ff54be5f2b3762f5a9503d3b5916bba5bbf6a2"
     else
-      url "https://github.com/Fendix-app/Fendix/releases/download/v3.6.5/fendix-v3.6.5-linux-amd64"
-      sha256 "a693593d976fdafee2b594596e54b9b3d7a34bc86888168fb0a3ed4ee2e0aa51"
+      url "https://github.com/Fendix-app/Fendix/releases/download/v3.7.0/fendix-v3.7.0-linux-amd64"
+      sha256 "300493f26f4580434336d218fc0bdbf9f15c6e64260fd11bc99dcc7b3f26688e"
     end
   end
 
