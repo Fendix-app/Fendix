@@ -85,6 +85,43 @@ class EnforceTests(unittest.TestCase):
                 self.assertIn(complete, result.stdout)
                 self.assertNotIn("✓", result.stdout)
 
+    def test_opt_out_says_enforcement_is_off_in_every_outcome(self):
+        # Until v3.7.0 only a pass said so; a BLOCK or an error did not.
+        for code, want_exit, first in (("", 2, "::error title=Fendix did not run::"),
+                                       ("1", 1, "::error title=Fendix policy BLOCK::"),
+                                       ("2", 2, "::error title=Fendix scan error::"),
+                                       ("3", 2, "::error title=Fendix gate::")):
+            with self.subTest(code=code):
+                result = self.enforce(code, REQUIRE_INPUT="none", REQUIRED="", COVERAGE="incomplete (semgrep)")
+                self.assertEqual(result.returncode, want_exit)
+                lines = result.stdout.splitlines()
+                self.assertTrue(lines[0].startswith(first), result.stdout)
+                warnings = [line for line in lines if line.startswith("::warning title=Fendix coverage not enforced::")]
+                self.assertEqual(len(warnings), 1, result.stdout)
+                self.assertIn("require-analyzers is none, so required-analyzer enforcement is off", warnings[0])
+                self.assertIn("incomplete (semgrep)", warnings[0])
+
+    def test_enforced_runs_never_say_not_enforced(self):
+        for code in ("", "0", "1", "2", "3"):
+            with self.subTest(code=code):
+                result = self.enforce(code, REQUIRE_INPUT="auto", REQUIRED="semgrep", COVERAGE="complete")
+                self.assertNotIn("not enforced", result.stdout)
+
+    def test_a_required_gap_qualifies_complete_coverage(self):
+        # Under --fast the engine prints "coverage: complete" (disabled is not
+        # an engine gap) and "required: not delivered (semgrep)".
+        overrides = dict(REQUIRED="semgrep", REQUIRED_RESULT="not delivered (semgrep)",
+                         REQUIRED_DETAIL="required analyzer semgrep was disabled by --fast", COVERAGE="complete")
+        result = self.enforce("2", **overrides)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Coverage: complete for the analyzers configured to run, but required not delivered (semgrep).",
+                      result.stdout)
+        text = self.summary("2", **overrides)
+        self.assertIn("| Coverage | complete for the analyzers configured to run, but required not delivered (semgrep) |", text)
+        self.assertNotIn("| Coverage | complete |", text)
+        result = self.enforce("2", **dict(overrides, COVERAGE="incomplete (semgrep)"))
+        self.assertIn("Coverage: incomplete (semgrep); required not delivered (semgrep).", result.stdout)
+
     def test_required_analyzer_not_delivered_names_it(self):
         result = self.enforce("2", REQUIRED="semgrep", REQUIRED_RESULT="not delivered (semgrep)",
                               REQUIRED_DETAIL="semgrep: failed (execution_error)", COVERAGE="incomplete (semgrep)")

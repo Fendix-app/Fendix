@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Action says enforcement was off in every outcome.** With
+  `require-analyzers: none`, the gate warned "Fendix coverage not enforced"
+  only on a pass. A BLOCK (exit 1), a scan error (exit 2) or a setup failure
+  printed its error without saying that required-analyzer enforcement was
+  off. The job was already red, but its output did not show that coverage was
+  never enforced. Now every outcome adds the warning when the requirement is
+  `none`. Found by the v3.7.0 Action end-to-end run.
+- **A required analyzer disabled by another flag no longer reads as complete
+  coverage in the gate.** Under `extra-args: --fast`, the engine prints
+  `coverage: complete` next to `required: not delivered (semgrep)`, and
+  the gate's job summary showed "Coverage: complete" for the failed run. The
+  engine line stays as it is, because it is `coverage.configured_complete`,
+  which by contract (`docs/schema.md`) never counts a disabled analyzer as a
+  gap and is not changed by `--require-analyzers`, and a test pins it. The
+  gate now words it "complete for the analyzers configured to run, but
+  required not delivered (semgrep)", in its message and its job summary.
+
 ## [3.7.0] - 2026-10-25
 
 The GitHub Action now fails closed when an analyzer it requires cannot run,
