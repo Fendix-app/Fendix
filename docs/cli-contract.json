@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "stable_version": "v3.6.4",
+  "stable_version": "v3.6.5",
   "source": "go/cmd/fendix Cobra registration",
   "commands": [
     {

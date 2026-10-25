@@ -105,7 +105,7 @@ release is verified:
 
 ## Versioning rules of thumb
 
-Fendix is post-1.0 (current release **v3.6.4**), so SemVer applies
+Fendix is post-1.0 (current release **v3.6.5**), so SemVer applies
 at full strength — the pre-1.0 "minor bump = breaking is fine" latitude is gone.
 
 | Bump | When | Examples from history |

@@ -15,7 +15,7 @@ Fendix can combine runtime probes and static analyzers in one scan. When both en
 
 Reproducible numbers from the last published capture (`v2.0.1`, 2026-08-24).
 They remain historical measurement evidence and are not relabeled as a
-v3.6.4 run:
+v3.6.5 run:
 
 | Track | P / R / F1 | Reproduce |
 |---|---|---|
@@ -141,7 +141,7 @@ whole tap. A Homebrew without the `brew trust` command does not need that line.
 curl -fsSL https://get.fendix.dev/install.sh | sh
 ```
 
-Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.6.4`.
+Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.6.5`.
 
 `get.fendix.dev` is served from the official [`homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix) repository through GitHub Pages. To inspect the script before piping to a shell:
 
@@ -155,7 +155,7 @@ If `get.fendix.dev` is ever unreachable, the `raw.githubusercontent.com` URL is 
 
 ```bash
 ARCH=$(dpkg --print-architecture)   # amd64 or arm64
-VERSION=v3.6.4
+VERSION=v3.6.5
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${ARCH}.deb"
 curl -fsSL -o fendix.deb "${URL}"
 sudo dpkg -i fendix.deb && sudo apt-get install -f
@@ -171,7 +171,7 @@ case "$(uname -m)" in
   x86_64)  PKG_ARCH=amd64 ;;
   aarch64) PKG_ARCH=arm64 ;;
 esac
-VERSION=v3.6.4
+VERSION=v3.6.5
 sudo dnf install \
   "https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
 ```
@@ -179,8 +179,8 @@ sudo dnf install \
 ### Docker
 
 ```bash
-docker pull fendixapp/fendix:3.6.4
-docker run --rm fendixapp/fendix:3.6.4 scan --url https://api.example.com
+docker pull fendixapp/fendix:3.6.5
+docker run --rm fendixapp/fendix:3.6.5 scan --url https://api.example.com
 ```
 
 The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and includes Python and the static-analysis dependencies, so hybrid mode works out of the box. Pin a version or digest for reproducible use.
@@ -190,7 +190,7 @@ The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and inc
 Pick a binary for your platform from the [latest official engine release](https://github.com/Fendix-app/Fendix/releases/latest) (`linux/amd64`, `linux/arm64`, `darwin/amd64`, or `darwin/arm64`), verify the matching `.sha256` file, and place it on your PATH:
 
 ```bash
-curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.6.4/fendix-v3.6.4-darwin-arm64
+curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.6.5/fendix-v3.6.5-darwin-arm64
 shasum -a 256 fendix  # compare against the .sha256 alongside the binary
 chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 ```
@@ -221,7 +221,7 @@ Every release artifact (binary, `.deb`, `.rpm`, multi-arch Docker manifest) ship
 Verify a binary:
 
 ```bash
-VERSION=v3.6.4
+VERSION=v3.6.5
 ASSET=fendix-${VERSION}-linux-amd64
 BASE="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}"
 
@@ -433,7 +433,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix version` | Print version, OS, and architecture information |
 | `fendix managed` | **Preview (ADR-010), new in v3.5.0:** create context and submit evidence under the managed-CI contract |
 
-The published stable release is v3.6.4. `managed` and its two hidden producer
+The published stable release is v3.6.5. `managed` and its two hidden producer
 flags ship in it as a preview under ADR-010: they sit outside the stable
 compatibility contract and are not a product availability claim. No command defines a Cobra alias. Run
 `fendix <command> --help` for the executable flag contract.
@@ -502,7 +502,7 @@ Machine-readable findings with scan metadata.
     "target": "https://api.example.com",
     "started_at": "2026-09-07T10:30:00Z",
     "duration": "4.521s",
-    "version": "3.6.4",
+    "version": "3.6.5",
     "mode": "hybrid",
     "endpoints_scanned": 1,
     "active_probes": false,
@@ -736,7 +736,7 @@ external-user end-to-end matrix in public and private repositories.
           cosign-release: "v2.4.1"
       - name: Install Fendix (signature required)
         env:
-          FENDIX_VERSION: v3.6.4
+          FENDIX_VERSION: v3.6.5
           FENDIX_REQUIRE_SIGNATURE: "1"
         run: curl -fsSL https://get.fendix.dev/install.sh | sh
       - name: Run scan

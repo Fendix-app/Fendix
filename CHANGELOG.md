@@ -7,6 +7,152 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.6.5] - 2026-10-25
+
+A security patch on v3.6.4. It fixes the two HIGH vulnerability sets left in
+the official image:
+- golang.org/x/mod in the `fendix` binary;
+- MCP in the image's Python environment and the Action's hash-locked install.
+
+Fixing MCP moves Semgrep from 1.141.0 to 1.182.1. The image now installs its
+Python packages from the same hash-locked file the Action installs, and its
+build applies the Debian security updates. One engine change goes with the
+upgrade: Fendix now runs Semgrep without Semgrep's version check (see Fixed).
+
+Report schema, SARIF structure, fingerprints, finding identity, decision
+policy, exit codes and the Action's inputs and outputs are unchanged.
+
+### Security
+
+- **golang.org/x/mod 0.40.0** (was 0.35.0). It is linked into the `fendix`
+  binary through golang.org/x/vuln, so every release artifact carries it:
+  standalone binaries, `.deb`/`.rpm`, Homebrew and the official image. It
+  fixes:
+  - GO-2026-6180 (CVE-2026-56864): `sumdb` accepted unrelated,
+    unauthenticated hashes in `Lookup`, so a coordinating GOPROXY and GOSUMDB
+    could serve module content that is not in the transparency log.
+  - GO-2026-6179 (CVE-2026-56865): a `sumdb/tlog` tile verification bypass
+    let a malicious GOPROXY forge tiles and get module content past the
+    GOSUMDB check.
+
+  Minimal version selection also moves golang.org/x/tools 0.44.0 to 0.49.0,
+  x/sync 0.20.0 to 0.22.0, x/sys 0.43.0 to 0.47.0 and x/telemetry, because
+  x/mod 0.40.0 requires them. x/vuln stays at 1.3.0.
+- **MCP 1.29.0** (was 1.16.0), through Semgrep 1.182.1. Semgrep pins MCP
+  exactly, and 1.173.0 is the first Semgrep release on 1.29.0. It fixes:
+  - CVE-2025-66416 (GHSA-9h52-p55h-vw2f, fixed in 1.23.0): DNS rebinding
+    protection was not enabled by default.
+  - CVE-2026-52869 (GHSA-jpw9-pfvf-9f58, fixed in 1.27.2): the HTTP
+    transports served session requests without verifying the authenticated
+    principal.
+  - CVE-2026-59950 (GHSA-vj7q-gjh5-988w, fixed in 1.28.1): the WebSocket
+    server transport did not support Host/Origin validation.
+
+  Fendix runs `semgrep scan` and never starts Semgrep's MCP server. The
+  package still shipped in the image and in the Action's environment, and it
+  is upgraded in both.
+- **Debian security updates in the image.** The image build now runs
+  `apt-get upgrade`, so the image carries the Debian 13 security updates
+  published after its base image digest (see Changed).
+- **Image scan.** A linux/amd64 candidate built from this tree on 2026-10-25,
+  against the published v3.6.4 image, scanned with Trivy 0.75.0 (`--severity
+  HIGH,CRITICAL --scanners vuln`, one database, updated 2026-10-25T01:20Z):
+  - CRITICAL: 0 in both.
+  - HIGH: 102 in v3.6.4, 44 in the candidate. No row was added.
+  - The 58 rows that go are the two x/mod rows, the three MCP rows and 53
+    Debian rows in util-linux and its libraries (CVE-2026-53612 to
+    CVE-2026-53615), OpenSSL (CVE-2026-14456, CVE-2026-45447,
+    CVE-2026-84782), PCRE2, SQLite, gzip and libcap2.
+  - The 44 that remain are Debian packages with no fixed version published:
+    util-linux (CVE-2026-76642, CVE-2026-78408 to CVE-2026-78410), ncurses
+    (CVE-2025-69720), systemd's libsystemd0 and libudev1 (CVE-2026-16742),
+    libacl1 (CVE-2026-54369) and perl-base (CVE-2026-9538, fix deferred).
+  - A release build applies the updates published on its own build day, so
+    its Debian rows can differ from this candidate's.
+
+### Fixed
+
+- **Semgrep no longer contacts semgrep.dev on every scan.** Fendix now runs
+  Semgrep with `--disable-version-check`. Before, every run first asked
+  semgrep.dev whether a newer Semgrep existed. That held for every scan that
+  ran Semgrep, `--offline` included, although the README says Semgrep runs
+  locally and that Fendix does not phone home.
+  - With no route out, the check waited before the scan started: about 25 s
+    with Semgrep 1.141.0 and 96 s with 1.182.1.
+  - With 1.182.1 that wait was enough to push an offline scan of a mid-size
+    repository past Semgrep's 120 s limit. A candidate without this fix
+    recorded `semgrep` failed/timeout and incomplete coverage on a
+    repository of about 760 Python files, where v3.6.4 recorded `semgrep` ok.
+  - With the flag, an offline Semgrep run over an empty directory takes
+    about 1 s with either Semgrep, and the accuracy benchmark's four offline
+    runs took 39 s instead of v3.6.4's 2 min 6 s.
+
+### Changed
+
+- **Semgrep 1.182.1** (was 1.141.0) in the official image and in the
+  Action's hash-locked install. `python/requirements.txt` now requires
+  `semgrep>=1.182.1`.
+  - **The rule pack.** All 23 bundled rules load under 1.182.1 with no error,
+    skipped rule or warning, as under 1.141.0. `semgrep --validate` reports 0
+    configuration errors with both versions.
+  - **Detection, titles and fingerprints: no change measured.** On the
+    accuracy corpus, Semgrep 1.182.1 reports the same 11 matches as 1.141.0,
+    with the same rule, location, message and metadata. The accuracy
+    benchmark (`scripts/accuracy`, run as for the v3.6.3 measurement: linux/amd64,
+    `--network none`, three runs with `--python-engine` and one without)
+    gives 38 TP, 0 FP, 0 FN and 18 TN, F1 1.000. All four raw outputs are
+    byte-identical to v3.6.3's and v3.6.4's.
+  - **Finding by finding.** Compared with v3.6.4, nothing differs in rule id,
+    title, severity, status, confidence, fix text, fingerprint, `fingerprint_v1`
+    or occurrence fingerprints. The scans compared are the benchmark scan, the
+    Semgrep-only corpus scan, the deterministic and online coverage smokes
+    (govulncheck, pip and npm findings included) and an offline scan of a
+    real Django repository. The four Semgrep finding groups and nine
+    occurrences of the published v3.6.3 Semgrep-only measurement are
+    reproduced exactly.
+- **The image installs the hash-locked Python dependencies.** `Dockerfile`
+  and `Dockerfile.app` install `python/requirements.lock` with
+  `--require-hashes --only-binary=:all:`, then run `pip check`. Until v3.6.4
+  they installed `requirements.txt` without the lock, so the image got
+  whatever versions the package index served on its build day, and these
+  could differ from the Action's. The image and the Action now install the
+  same Python package versions. The interpreters still differ: the image
+  runs CPython 3.14, and the Action's venv runs 3.11.
+  - The lock moves only where Semgrep 1.182.1 requires it: click 8.4.2,
+    glom 25.12.0, jsonschema 4.25.1 (was 4.26.0), ruamel-yaml-clib 0.2.15
+    and tomli 2.4.1. It adds pyjwt 2.15.1 with cryptography 50.0.2, cffi and
+    pycparser, `opentelemetry-instrumentation-threading` and
+    `semantic-version`. Pydantic stays at 2.13.5, and certifi at 2026.10.23.
+  - `openapi-spec-validator` is removed from `requirements.txt`, together
+    with the six packages only it needed. Its 0.9.0 requires
+    `jsonschema>=4.26.0`, Semgrep 1.182.1 requires `jsonschema~=4.25.1`, and
+    nothing in Fendix imports it.
+  - ruamel-yaml-clib 0.2.15 ships CPython 3.14 wheels, so the image build no
+    longer compiles it and no longer installs `build-essential`. In v3.6.4
+    that toolchain's purge left `binutils`, `cpp`, `dpkg-dev`,
+    `libcrypt-dev` and `perl` in the image. They are gone.
+- **The image build applies Debian security updates.** The base image is
+  pinned by digest, so its packages are as old as that digest. Until v3.6.4
+  only the transient `build-essential` install upgraded some of them, as a
+  side effect (`libc6`, `perl-base`, `liblzma5`). An explicit `apt-get
+  upgrade` now applies every published update. The Python interpreter and
+  pip are the base image's, unchanged.
+
+### Upgrading
+
+- **Nothing to migrate.** No configuration, baseline or `.fendix-ignore`
+  change is needed, and finding identity is unchanged.
+- **Your own Semgrep.** A standalone binary runs the `semgrep` on the
+  host's `PATH` and now passes it `--disable-version-check`. Semgrep 1.45.0,
+  1.141.0 and 1.182.1 all accept the flag (checked).
+- **Installing `python/requirements.txt` yourself** now resolves Semgrep
+  1.182.1 or later, and no longer installs `openapi-spec-validator`.
+- **The GitHub Action is unchanged,** and `@v1` still points to the v3.6.2
+  release commit. To install this release, set `version: v3.6.5`, or leave
+  `version` unset to install the latest release. Either way, the Action
+  installs this release's lock, so its Python environment moves to Semgrep
+  1.182.1 and MCP 1.29.0 too.
+
 ## [3.6.4] - 2026-10-24
 
 A security rebuild of v3.6.3. The scanner source is unchanged; what changes
