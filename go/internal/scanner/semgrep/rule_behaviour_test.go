@@ -59,6 +59,15 @@ var ruleBehaviourFixtures = []ruleFixture{
 	{"python-sql-injection-string-format", "sql_const_shadowed_by_local.py", true, "from flask import request\nTABLE = \"users\"\ndef h(cur):\n    TABLE = request.args[\"t\"]\n    cur.execute(f\"SELECT id FROM {TABLE}\")\n"},
 	{"python-sql-injection-string-format", "sql_const_rebound_conditionally.py", true, "def h(cur, name):\n    where = \"\"\n    if name:\n        where = f\"WHERE n = '{name}'\"\n    cur.execute(f\"SELECT id FROM users {where}\")\n"},
 	{"python-sql-injection-string-format", "sql_percent_beside_const.py", true, "TABLE = \"users\"\ndef h(cur, name):\n    cur.execute(\"SELECT id FROM users WHERE n = '%s'\" % name)\n"},
+	// Constant propagation is per function: a rebinding through nonlocal or
+	// after a lambda's definition is invisible to it, so the rule must still
+	// fire there. A global write elsewhere and a module-level reassignment
+	// are visible to it; these pin that.
+	{"python-sql-injection-string-format", "sql_const_rebound_nonlocal.py", true, "def h(cur, s):\n    t = \"users\"\n    def setit():\n        nonlocal t\n        t = s\n    setit()\n    cur.execute(f\"SELECT id FROM {t}\")\n"},
+	{"python-sql-injection-string-format", "sql_const_rebound_lambda.py", true, "from flask import request\ndef h(cur):\n    table = \"users\"\n    run = lambda: cur.execute(f\"SELECT id FROM {table}\")\n    table = request.args[\"t\"]\n    run()\n"},
+	{"python-sql-injection-string-format", "sql_const_rebound_lambda_param.py", true, "from flask import request\ndef h(conn):\n    table = \"users\"\n    run = lambda c: c.execute(f\"SELECT id FROM {table}\")\n    table = request.args[\"t\"]\n    run(conn.cursor())\n"},
+	{"python-sql-injection-string-format", "sql_const_global_rebound.py", true, "TABLE = \"users\"\ndef set_table(v):\n    global TABLE\n    TABLE = v\ndef h(cur):\n    cur.execute(f\"SELECT id FROM {TABLE}\")\n"},
+	{"python-sql-injection-string-format", "sql_const_module_reassigned.py", true, "import sys\nTABLE = \"users\"\nTABLE = sys.argv[1]\ndef h(cur):\n    cur.execute(f\"SELECT id FROM {TABLE}\")\n"},
 
 	// python-command-injection-shell-true: os.system / os.popen with a non-literal command.
 	{"python-command-injection-shell-true", "os_system_var.py", true, "import os\ndef go(cmd):\n    os.system(cmd)\n"},

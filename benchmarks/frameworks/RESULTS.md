@@ -130,7 +130,8 @@ The `direct` and `indirect` columns include the new classes.
 - **SQLi false positives on a constant table name (3 cases).**
   - The Django, Flask and FastAPI `sqli-safe_lookalike` cases put a module constant into an f-string query: `cursor.execute(f"SELECT ... FROM {USERS_TABLE} ...")`. The Semgrep rule `python-sql-injection-string-format` reported them. They are the SQLi `+1` in the Python rows of the coverage table.
   - Closed after v3.6.3. The rule now skips an f-string interpolation that Semgrep's constant propagation resolves to a string literal, and the three cases score TN.
-    - An f-string with any other interpolation, and a constant rebound from input before the call, are still reported.
+    - An f-string with any other interpolation is still reported. So is a constant rebound from input before the call: in the function, at module level, by a `global` write, through `nonlocal`, or after a lambda that reads it is defined.
+    - A module constant that an import of the same name replaces is no longer reported.
     - See `CHANGELOG.md`, `[Unreleased]`.
 - **Weak password hashing and unverified JWTs are found, but only warn,** even when the token comes from the request and the claims are trusted.
 - **Route-auth noise:** every one of the 58 Flask routes gets two "missing auth" findings (`flask-route-no-auth-decorator` and `flask-missing-login-required`). Every FastAPI route gets one. Django gets none.

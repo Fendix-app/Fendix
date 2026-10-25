@@ -198,6 +198,17 @@ Source: [`go/internal/scanner/semgrep/rules/injection.yaml`](../go/internal/scan
                 patterns:
                   - pattern: $PART
                   - pattern-not: '"..."'
+        - patterns:
+            - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+            - pattern-either:
+                - pattern-inside: |
+                    def $INNER(...):
+                      ...
+                      nonlocal $VAR
+                      ...
+                    ...
+                - pattern-inside: |
+                    lambda $...PARAMS: $BODY
         - pattern: $CURSOR.execute("...".format(...), ...)
     - pattern-not: $CURSOR.execute("..." % "...", ...)
     - pattern-not: $CURSOR.execute("..." + "...", ...)
@@ -214,14 +225,23 @@ Source: [`go/internal/scanner/semgrep/rules/injection.yaml`](../go/internal/scan
 ```
 
 The alternatives sit under `pattern-either`: sibling `pattern:` entries
-under `patterns:` must all match at once, so they never fire. The f-string
-branch fires only on an interpolation that is not a string constant.
-Semgrep's constant propagation lets `"..."` match a name whose value is a
-known string literal, so `f"SELECT id FROM {USERS_TABLE}"` with
-`USERS_TABLE = "users"` at module level is not reported. The propagation
-follows reassignment, so a constant rebound from input before the call still
-fires. Each interpolation is checked on its own, so
-`f"SELECT {COLS} FROM users WHERE n = '{name}'"` fires on `name`.
+under `patterns:` must all match at once, so they never fire. The first
+f-string branch fires only on an interpolation that is not a string
+constant. Semgrep's constant propagation lets `"..."` match a name whose
+value is a known string literal, so `f"SELECT id FROM {USERS_TABLE}"` with
+`USERS_TABLE = "users"` at module level is not reported. Each interpolation
+is checked on its own, so `f"SELECT {COLS} FROM users WHERE n = '{name}'"`
+fires on `name`. The propagation follows a rebinding in the same function,
+at module level and by a `global` write, so a constant rebound from input
+there still fires.
+
+It works one function at a time, so it misses a rebinding through
+`nonlocal` and one made after a lambda is defined. The second f-string
+branch covers both: it fires on a name that a nested function declares
+`nonlocal`, and on every f-string inside a lambda. One gap remains: a module
+literal replaced by an import of the same name (`TABLE = "users"`, then
+`from settings import TABLE`, or the import inside the function) keeps the
+literal's value and is not reported.
 
 ### Secrets — hardcoded password / key assignment
 

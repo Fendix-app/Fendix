@@ -2,12 +2,17 @@ rules:
   # Rule 1: SQL injection via string formatting / concatenation
   # The alternatives must sit under pattern-either: as sibling `pattern:` entries
   # of `patterns:` Semgrep ANDs them, so the rule could never match (v3.6.3).
-  # The f-string alternative fires only on an interpolation that Semgrep's
-  # flow-sensitive constant propagation cannot resolve to a string literal, so
-  # a module or local string constant is not reported. Input beside it, and a
-  # rebinding or a parameter that shadows it, still are. A rule-level
-  # `pattern-not-inside: $VAR = "..." ...` would also hide the other
-  # alternatives and a local rebound from input (v3.7.0).
+  # The first f-string alternative fires only on an interpolation that
+  # Semgrep's constant propagation cannot resolve to a string literal, so a
+  # module or local string constant is not reported; input beside it, a
+  # parameter that shadows it, and a rebinding in the same function, at module
+  # level or by a `global` write still are. The propagation is per function and
+  # misses a rebinding through `nonlocal` or after a lambda is defined, so the
+  # second alternative fires on a name a nested def declares nonlocal and on
+  # any f-string inside a lambda. Still missed: a name imported over a
+  # same-named module literal. A rule-level `pattern-not-inside: $VAR = "..."`
+  # would also hide the other alternatives and a local rebound from input
+  # (v3.7.0).
   - id: python-sql-injection-string-format
     patterns:
       - pattern-either:
@@ -20,6 +25,17 @@ rules:
                   patterns:
                     - pattern: $PART
                     - pattern-not: '"..."'
+          - patterns:
+              - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+              - pattern-either:
+                  - pattern-inside: |
+                      def $INNER(...):
+                        ...
+                        nonlocal $VAR
+                        ...
+                      ...
+                  - pattern-inside: |
+                      lambda $...PARAMS: $BODY
           - pattern: $CURSOR.execute("...".format(...), ...)
       - pattern-not: $CURSOR.execute("..." % "...", ...)
       - pattern-not: $CURSOR.execute("..." + "...", ...)

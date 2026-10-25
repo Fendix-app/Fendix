@@ -166,17 +166,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interpolation is checked on its own. These are still reported:
   - an f-string with any interpolation that is not such a constant, as in
     `f"SELECT {COLS} FROM users WHERE n = '{name}'"`;
-  - a name rebound from input before the call, including a function-local
-    or `global` rebinding of a module constant, and
+  - a name rebound from input before the call in the same function,
+    including a function-local rebinding of a module constant and
     `where = ""` followed by `if name: where = f"... {name} ..."`;
-  - a parameter that shadows a module constant, even with a literal default;
   - a module constant assigned more than once in the module, or assigned in
     any function that declares it `global`;
-  - a class attribute (`self.TABLE`), an imported name, an annotated
-    assignment (`TABLE: Final = "users"`), a subscript (`TABLES[key]`), an
-    inline expression (`{PREFIX + "users"}`) and a non-string constant
-    (`LIMIT = 10`);
+  - a name that a nested function declares `nonlocal`, as in
+    `def add(cond): nonlocal where; where += cond`. Constant propagation
+    works one function at a time and does not see that rebinding;
+  - every f-string query inside a lambda, constant or not, for the same
+    reason: the lambda can run after the name it reads is rebound;
+  - a parameter that shadows a module constant, even with a literal default;
+  - a class attribute (`self.TABLE`), a name that is only imported, an
+    annotated assignment (`TABLE: Final = "users"`), a subscript
+    (`TABLES[key]`), an inline expression (`{PREFIX + "users"}`) and a
+    non-string constant (`LIMIT = 10`);
   - queries built with `%`, `+` or `.format(...)`, which are unchanged.
+
+  One shape is no longer reported although the value comes from elsewhere: a
+  module literal replaced by an import of the same name, at module level
+  (`TABLE = "users"`, then `from settings import TABLE`) or inside the
+  function (`from userinput import TABLE`). Constant propagation keeps the
+  literal's value there.
 
   Where the rule reported such a query, a baseline entry for that finding no
   longer matches anything, and no new finding replaces it.
