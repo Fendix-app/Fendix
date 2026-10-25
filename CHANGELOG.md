@@ -88,8 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alias, the idiom of FastAPI's own docs and project template:
   `CurrentUser = Annotated[User, Depends(get_current_user)]`, then
   `current_user: CurrentUser`. On `full-stack-fastapi-template` it reported 16
-  routes, 15 of them authenticated or given a database session this way. It
-  now reports only the `health-check` route, which has no dependency at all.
+  routes. 15 of them take `CurrentUser` or `SessionDep` imported from
+  `app.api.deps`: 11 are authenticated, and 4 public routes have only the
+  database session. It now reports only the `health-check` route, which has
+  no dependency at all.
   What counts as a dependency is unchanged: any `Depends(...)` or
   `Security(...)` counts, as before, so a database-session alias such as
   `SessionDep = Annotated[Session, Depends(get_db)]` counts too.
@@ -97,20 +99,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - an alias assigned at module level in the same file, before the route;
     - an alias imported from a module named `deps` or `dependencies`
       (`from app.api.deps import CurrentUser`,
-      `from ..dependencies import CurrentUser`). The rule cannot see that
-      alias's definition, so any name imported from such a module and used as
-      a parameter annotation counts;
+      `from ..dependencies import CurrentUser`), under the name the import
+      binds in the file (`from app.api.deps import CurrentUser as CU`, then
+      `c: CU`). The rule cannot see that alias's definition, so a
+      dependency-free route whose parameter is any name imported from such a
+      module is not reported (a false negative);
     - `Depends(...)` or `Security(...)` in any position of `Annotated[...]`,
       inline or in an alias (`Annotated[User, "doc", Depends(...)]`).
   - **Still reported:**
     - a route that does not use the alias, even in the same file;
     - a parameter typed with a model or `Request` imported from anywhere
-      else, or with an `Annotated[..., Query(...)]` alias;
+      else, with an inline `Annotated[str, Query()]`, or with an
+      `Annotated[..., Query(...)]` alias;
+    - the original name of a renamed deps import:
+      `from app.dependencies import Settings as SettingsDep` does not make
+      `s: Settings` a dependency;
+    - a name imported from a module whose name only contains `deps`
+      (`app.mydeps`, `app.api.depsutil`, `app.deps.models`);
     - an alias assigned inside a function;
     - `Alias | None`;
     - an alias imported from a module with another name, or used as
       `deps.CurrentUser`;
     - a dependency set only on `APIRouter(dependencies=[...])`.
+  - **Not tracked:** rebinding after the alias or the deps import. An alias
+    reassigned to another type, a local class of the same name, or the same
+    name imported again from another module still counts as a dependency.
   - The rule's existing findings keep their identity.
 - **The Python engine's JavaScript/TypeScript pattern findings now carry a
   `rule_id`.** `JS_EVAL`, `JS_INNER_HTML`, `JS_DOCUMENT_WRITE` and

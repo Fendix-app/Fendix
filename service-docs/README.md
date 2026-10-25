@@ -483,7 +483,7 @@ orchestrator logs an install hint and continues.
 | Rule ID | Severity | CWE | What It Catches |
 |---------|----------|-----|-----------------|
 | `django-view-missing-login-required` | MEDIUM | CWE-306 | Django view class without `LoginRequiredMixin` |
-| `fastapi-route-missing-auth-dependency` | MEDIUM | CWE-306 | FastAPI route without `Depends(...)`/`Security(...)` (default, inline `Annotated[...]`, same-file `Annotated` alias, or an alias imported from a `deps`/`dependencies` module) |
+| `fastapi-route-missing-auth-dependency` | MEDIUM | CWE-306 | FastAPI route without `Depends(...)`/`Security(...)` (default, inline `Annotated[...]`, same-file `Annotated` alias, or an alias imported from a `deps`/`dependencies` module); a dependency-free route whose parameter is any name imported from such a module is not reported (false negative) |
 | `python-jwt-decode-no-verification` | CRITICAL | CWE-347 | `jwt.decode()` with `verify_signature=False` or `algorithms=["none"]` |
 | `flask-route-no-auth-decorator` | MEDIUM | CWE-306 | Flask route with no auth-style decorator (`@login_required`, `@requires_auth`, `@jwt_required`, …) below `@app.route()`; one placed above it does not protect the route |
 

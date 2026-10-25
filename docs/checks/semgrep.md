@@ -21,7 +21,7 @@ authority if this page and the pack ever disagree.
 | Rule ID | Pattern | Languages |
 |---|---|---|
 | `django-view-missing-login-required` | Django views without `LoginRequiredMixin` | Python |
-| `fastapi-route-missing-auth-dependency` | FastAPI routes without a `Depends()`/`Security()` parameter or `dependencies=[...]`, written as a default, inline `Annotated[...]`, a same-file `Annotated` alias, or an alias imported from a `deps`/`dependencies` module | Python |
+| `fastapi-route-missing-auth-dependency` | FastAPI routes without a `Depends()`/`Security()` parameter or `dependencies=[...]`, written as a default, inline `Annotated[...]`, a same-file `Annotated` alias, or an alias imported from a `deps`/`dependencies` module. A dependency-free route whose parameter is any name imported from such a module is not reported (false negative) | Python |
 | `python-jwt-decode-no-verification` | `jwt.decode()` with verification disabled / `alg:none` | Python |
 | `flask-route-no-auth-decorator` | Flask route with no auth-style decorator below `@app.route(...)`; one placed above it does not protect the route | Python |
 

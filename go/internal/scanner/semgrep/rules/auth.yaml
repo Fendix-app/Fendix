@@ -60,11 +60,14 @@ rules:
   #     SessionDep = Annotated[Session, Depends(get_db)] counts too;
   #   * a name imported from a deps/dependencies module and used as a
   #     parameter annotation is assumed to be such an alias without seeing
-  #     its definition, so a route whose only such parameter is a plain type
-  #     from that module is not flagged (false negative);
+  #     its definition, so a dependency-free route whose parameter is any
+  #     name imported from such a module is not flagged (false negative);
   #   * an alias imported from any other module, or used as deps.CurrentUser,
   #     cannot be followed, so such a route is still flagged (false
   #     positive);
+  #   * rebinding after the alias or the deps import is not tracked: an alias
+  #     reassigned to another type, a local class of the same name, or the
+  #     same name imported again from another module still counts;
   #   * a verb-named decorator on a non-FastAPI object (e.g. a homegrown
   #     dispatcher @bus.post) in a file that also imports fastapi may be
   #     flagged (false positive).
@@ -154,15 +157,28 @@ rules:
       # or relative), whose definition this file cannot see. Only a bare
       # annotation counts, and only for a name imported from such a module: a
       # model from app.models or fastapi's Request is still an ordinary
-      # parameter. metavariable-regex is anchored at the start.
+      # parameter. $ALIAS must be the name the import binds in this file.
+      # `from $MOD import $ALIAS` also matches `from M import Name as Local`
+      # with $ALIAS bound to Name, so the plain form excludes an import that
+      # renames, and the second form binds the local name. metavariable-regex
+      # is anchored at the start; it also matches fastapi.dependencies, which
+      # exports nothing used as a route parameter's type.
       - pattern-not:
           patterns:
             - pattern: |
                 def $F2(..., $P: $ALIAS, ...):
                     ...
-            - pattern-inside: |
-                from $MOD import $ALIAS
-                ...
+            - pattern-either:
+                - patterns:
+                    - pattern-inside: |
+                        from $MOD import $ALIAS
+                        ...
+                    - pattern-not-inside: |
+                        from $MOD import $ALIAS as $LOCAL
+                        ...
+                - pattern-inside: |
+                    from $MOD import $NAME as $ALIAS
+                    ...
             - metavariable-regex:
                 metavariable: $MOD
                 regex: '^(.*\.)?(deps|dependencies)$'

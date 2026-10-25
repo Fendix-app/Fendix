@@ -128,9 +128,12 @@ plumbing without network access or a real engine.
   `v3.6.4.json` its count drops to zero (64 in `pygoat`). From the same change,
   `flask-route-no-auth-decorator` also reports a route whose auth decorator
   sits above `@app.route(...)`, which can raise its count. After v3.6.4,
-  `fastapi-route-missing-auth-dependency` also recognises `Annotated[...,
-  Depends(...)]` aliases, which drops its count on
-  `full-stack-fastapi-template` from 16 to 1 (the `health-check` route).
+  `fastapi-route-missing-auth-dependency` also counts a parameter typed with
+  a name imported from a `deps` or `dependencies` module as a dependency.
+  That drops its count on `full-stack-fastapi-template` from 16 to 1: the 15
+  routes that take `CurrentUser` or `SessionDep` from `app.api.deps` are no
+  longer reported. 11 of them are authenticated; 4 are public routes with
+  only a database session. The one left is the `health-check` route.
 - **per_kloc** is `findings / kloc` computed before rounding; `kloc` and `per_kloc`
   are rounded to three decimals.
 
