@@ -603,6 +603,527 @@ class TestXSSHTMLSink:
                 assert set(link.keys()) >= {"file", "line", "expr"}
 
 
+_DJANGO_VIEW = (
+    "from django.http import HttpResponse\n"
+    "def greet(request):\n"
+    '    name = request.GET.get("name", "")\n'
+)
+_FLASK_VIEW = (
+    "from flask import Response, make_response, request\n"
+    "def greet():\n"
+    '    name = request.args.get("name", "")\n'
+)
+_STARLETTE_VIEW = (
+    "from fastapi import FastAPI\n"
+    "from starlette.responses import Response\n"
+    "app = FastAPI()\n"
+    '@app.get("/greet")\n'
+    'def greet(name: str = ""):\n'
+)
+
+
+class TestHTMLResponseSink:
+    """Task 3.2: an HTML response constructor is an XSS sink.
+
+    Django ``HttpResponse``, Flask ``make_response`` and ``Response``, and
+    Starlette/FastAPI ``HTMLResponse`` and ``Response`` send their body to the
+    browser, which renders it as HTML unless the response declares a non-HTML
+    content type. Request text reaching that body unescaped is reflected XSS,
+    reported under the existing PY_XSS_HTML_SINK rule (no new rule id).
+    """
+
+    @staticmethod
+    def _xss(src: str) -> list[dict]:
+        return [f for f in _collect_src(src) if f["id"] == "SEC-PY_XSS_HTML_SINK"]
+
+    def _proven(self, src: str, source: str) -> dict:
+        found = self._xss(src)
+        assert len(found) == 1, found
+        f = found[0]
+        assert f.get("reachable") is True, f
+        assert any(source in link["expr"] for link in f["taint_chain"]), f["taint_chain"]
+        return f
+
+    def _clean(self, src: str) -> None:
+        found = self._xss(src)
+        assert found == [], found
+
+    # -- the three framework shapes -------------------------------------------
+
+    def test_django_httpresponse_fstring_is_xss(self) -> None:
+        f = self._proven(
+            _DJANGO_VIEW + '    return HttpResponse(f"<h1>{name}</h1>")\n', "request.GET"
+        )
+        assert f["line"] == "mod.py:4"
+        assert f["sink"] == "HttpResponse(f'<h1>{name}</h1>')"
+        assert f["severity"] == "HIGH"
+        assert "CWE-79" in f["references"]
+
+    def test_flask_make_response_is_xss(self) -> None:
+        f = self._proven(
+            _FLASK_VIEW + '    return make_response(f"<h1>{name}</h1>")\n', "request.args"
+        )
+        assert f["sink"] == "make_response(f'<h1>{name}</h1>')"
+
+    def test_fastapi_htmlresponse_is_xss(self) -> None:
+        # `name` is a route parameter, which Task 3.1 made a request source.
+        f = self._proven(
+            "from fastapi import FastAPI\n"
+            "from fastapi.responses import HTMLResponse\n"
+            "app = FastAPI()\n"
+            '@app.get("/greet")\n'
+            'def greet(name: str = ""):\n'
+            '    return HTMLResponse(f"<h1>{name}</h1>")\n',
+            "name",
+        )
+        assert f["taint_chain"][0] == {"file": "mod.py", "line": 5, "expr": "name"}
+        assert f["sink"] == "HTMLResponse(f'<h1>{name}</h1>')"
+
+    def test_body_passed_by_keyword_is_xss(self) -> None:
+        # FastAPI's own docs write `HTMLResponse(content=html, status_code=200)`.
+        self._proven(
+            "from fastapi import FastAPI\n"
+            "from fastapi.responses import HTMLResponse\n"
+            "app = FastAPI()\n"
+            '@app.get("/greet")\n'
+            'def greet(name: str = ""):\n'
+            '    html = "<h1>" + name + "</h1>"\n'
+            "    return HTMLResponse(content=html, status_code=200)\n",
+            "name",
+        )
+
+    def test_same_file_helper_is_proven_through_the_caller(self) -> None:
+        # The parity corpus's `indirect` shape: the sink sits in a helper.
+        f = self._proven(
+            "from django.http import HttpResponse\n"
+            "def _render_greeting(name):\n"
+            '    return HttpResponse(f"<h1>Hello, {name}!</h1>")\n'
+            "def greet(request):\n"
+            '    name = request.GET.get("name", "")\n'
+            "    return _render_greeting(name)\n",
+            "request.GET",
+        )
+        assert f["line"] == "mod.py:3"
+
+    def test_helper_with_no_caller_is_reported_unproven(self) -> None:
+        # The `cross_file` shape: the caller lives in another file.
+        found = self._xss(
+            "from django.http import HttpResponse\n"
+            "def render_greeting(name: str):\n"
+            '    return HttpResponse(f"<h1>Hello, {name}!</h1>")\n'
+        )
+        assert len(found) == 1, found
+        assert found[0].get("reachable") is None
+        assert found[0]["sink"] == "HttpResponse(f'<h1>Hello, {name}!</h1>')"
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            '    return HttpResponse("<p>{}</p>".format(name))\n',
+            '    return HttpResponse("<p>%s</p>" % name)\n',
+            '    return HttpResponse("".join(["<p>", name, "</p>"]))\n',
+            "    return HttpResponse(str(name))\n",
+            "    return HttpResponse(name.strip())\n",
+            '    return HttpResponse(name if name else "-")\n',
+            '    html = "<ul>"\n    html += f"<li>{name}</li>"\n    return HttpResponse(html)\n',
+            '    return HttpResponse(request.GET["name"])\n',
+            '    return HttpResponse(content=f"<p>{name}</p>")\n',
+        ],
+        ids=[
+            "format", "percent", "join", "str", "method", "ifexp", "accumulator",
+            "inline-source", "content-keyword",
+        ],
+    )
+    def test_body_shapes_that_carry_request_text_are_xss(self, lines: str) -> None:
+        self._proven(_DJANGO_VIEW + lines, "request.GET")
+
+    def test_parameter_accumulated_into_a_body_is_reported(self) -> None:
+        # `html += ...` with no earlier binding still holds the parameter.
+        found = self._xss(
+            "from django.http import HttpResponse\n"
+            "def page(html):\n"
+            '    html += "</p>"\n'
+            "    return HttpResponse(html)\n"
+        )
+        assert len(found) == 1, found
+
+    @pytest.mark.parametrize(
+        "ret",
+        [
+            "HttpResponse(name)",
+            'HttpResponse(f"<p>{name}</p>")',
+            'HttpResponse("<p>" + LABELS[name] + "</p>")',
+        ],
+        ids=["bare", "fstring", "allowlist-lookup"],
+    )
+    def test_allowlisted_value_is_not_xss(self, ret: str) -> None:
+        self._clean(
+            'ALLOWED = {"en", "fr"}\n'
+            'LABELS = {"en": "English", "fr": "French"}\n'
+            + _DJANGO_VIEW
+            + "    if name not in ALLOWED:\n"
+            + "        return HttpResponse(status=400)\n"
+            + f"    return {ret}\n"
+        )
+
+    # -- content type ---------------------------------------------------------
+
+    def test_httpresponse_with_json_content_type_is_not_xss(self) -> None:
+        self._clean(
+            _DJANGO_VIEW + '    return HttpResponse(name, content_type="application/json")\n'
+        )
+
+    def test_starlette_response_plain_media_type_is_not_xss(self) -> None:
+        self._clean(_STARLETTE_VIEW + '    return Response(name, media_type="text/plain")\n')
+
+    def test_starlette_response_without_media_type_is_xss(self) -> None:
+        # No media type means no Content-Type header, and the browser sniffs
+        # the body as HTML.
+        self._proven(_STARLETTE_VIEW + "    return Response(name)\n", "name")
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'HttpResponse(f"<p>{name}</p>", content_type="text/plain")',
+            'HttpResponse(f"<p>{name}</p>", content_type="application/json")',
+            'HttpResponse(f"{name}", content_type="text/csv")',
+            'HttpResponse(f"<p>{name}</p>", "text/plain")',
+            'HttpResponse(f"<p>{name}</p>", headers={"Content-Type": "text/plain"})',
+        ],
+    )
+    def test_non_html_content_types_are_not_xss(self, call: str) -> None:
+        self._clean(_DJANGO_VIEW + f"    return {call}\n")
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'HttpResponse(f"<p>{name}</p>", content_type="text/html; charset=utf-8")',
+            'HttpResponse(f"<p>{name}</p>", content_type="TEXT/HTML")',
+            'HttpResponse(f"<p>{name}</p>", content_type="application/xhtml+xml")',
+            'HttpResponse(f"<p>{name}</p>", content_type=None)',
+            'HttpResponse(f"<p>{name}</p>", content_type="")',
+            'HttpResponse(f"<p>{name}</p>", headers={"content-type": "text/html"})',
+        ],
+    )
+    def test_html_content_types_are_xss(self, call: str) -> None:
+        self._proven(_DJANGO_VIEW + f"    return {call}\n", "request.GET")
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'make_response(f"<p>{name}</p>", 200, {"Content-Type": "text/plain"})',
+            'make_response(f"<p>{name}</p>", {"Content-Type": "application/json"})',
+            'Response(f"<p>{name}</p>", mimetype="application/json")',
+            'Response(response=f"<p>{name}</p>", content_type="text/plain")',
+        ],
+    )
+    def test_flask_non_html_responses_are_not_xss(self, call: str) -> None:
+        self._clean(_FLASK_VIEW + f"    return {call}\n")
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'make_response(f"<p>{name}</p>", 200, {"X-Frame-Options": "DENY"})',
+            'Response(response=f"<p>{name}</p>")',
+            'Response(f"<p>{name}</p>", mimetype="text/html")',
+        ],
+    )
+    def test_flask_html_responses_are_xss(self, call: str) -> None:
+        self._proven(_FLASK_VIEW + f"    return {call}\n", "request.args")
+
+    def test_htmlresponse_is_html_whatever_it_declares(self) -> None:
+        # The brief's rule: HTMLResponse is HTML. Overriding its media type is
+        # an odd call, and reporting it fails toward the safe side.
+        self._proven(
+            "from fastapi import FastAPI\n"
+            "from fastapi.responses import HTMLResponse\n"
+            "app = FastAPI()\n"
+            '@app.get("/greet")\n'
+            'def greet(name: str = ""):\n'
+            '    return HTMLResponse(f"<p>{name}</p>", media_type="text/plain")\n',
+            "name",
+        )
+
+    def test_svg_content_type_is_xss(self) -> None:
+        # SVG documents run <script>, so image/svg+xml is HTML-capable.
+        self._proven(
+            _DJANGO_VIEW
+            + '    return HttpResponse(f"<svg>{name}</svg>", content_type="image/svg+xml")\n',
+            "request.GET",
+        )
+
+    @pytest.mark.parametrize(
+        "view, call",
+        [
+            (_DJANGO_VIEW, "HttpResponse(name, content_type=kind)"),
+            (_FLASK_VIEW, "Response(name, mimetype=kind)"),
+            (_FLASK_VIEW, "Response(name, content_type=kind)"),
+            (_STARLETTE_VIEW, "Response(name, media_type=kind)"),
+        ],
+        ids=["django-content_type", "flask-mimetype", "flask-content_type", "starlette-media_type"],
+    )
+    def test_variable_content_type_is_xss(self, view: str, call: str) -> None:
+        # A content type the engine cannot read might be text/html.
+        f = self._xss(view + "    kind = pick_type()\n" + f"    return {call}\n")
+        assert len(f) == 1, f
+        assert f[0].get("reachable") is True, f
+
+    def test_content_type_constant_is_resolved(self) -> None:
+        self._clean(
+            'JSON = "application/json"\n'
+            + _DJANGO_VIEW
+            + "    return HttpResponse(name, content_type=JSON)\n"
+        )
+
+    # -- sanitised and non-HTML bodies ----------------------------------------
+
+    def test_escaped_value_is_not_xss(self) -> None:
+        self._clean(
+            "from django.utils.html import escape\n"
+            + _DJANGO_VIEW
+            + '    return HttpResponse(f"<h1>{escape(name)}</h1>")\n'
+        )
+
+    def test_repeated_constant_is_not_xss(self) -> None:
+        # `_expr_is_fully_escaped`: a constant repeated any number of times
+        # holds only its own characters.
+        self._clean(
+            "from django.http import HttpResponse\n"
+            "def indent(request, depth):\n"
+            '    return HttpResponse("&nbsp;" * depth)\n'
+        )
+
+    def test_jsonresponse_is_not_xss(self) -> None:
+        self._clean(
+            "from django.http import JsonResponse\n"
+            "def greet(request):\n"
+            '    name = request.GET.get("name", "")\n'
+            '    return JsonResponse({"n": name})\n'
+        )
+
+    def test_make_response_jsonify_is_not_xss(self) -> None:
+        self._clean(
+            "from flask import jsonify\n"
+            + _FLASK_VIEW
+            + "    return make_response(jsonify(user=name))\n"
+        )
+
+    def test_make_response_of_a_dict_is_not_xss(self) -> None:
+        # Flask serialises a dict or list body to JSON.
+        self._clean(_FLASK_VIEW + '    return make_response({"error": name}, 400)\n')
+
+    def test_httpresponse_json_dumps_is_not_xss(self) -> None:
+        # R-pf38: json.dumps is safe here only because the response is JSON.
+        self._clean(
+            "import json\n"
+            + _DJANGO_VIEW
+            + '    return HttpResponse(json.dumps({"n": name}), content_type="application/json")\n'
+        )
+
+    @pytest.mark.parametrize(
+        "view, call, source",
+        [
+            (_DJANGO_VIEW, 'HttpResponse(json.dumps({"n": name}))', "request.GET"),
+            (_FLASK_VIEW, 'make_response(json.dumps({"n": name}))', "request.args"),
+            (_FLASK_VIEW, 'Response(json.dumps({"n": name}))', "request.args"),
+            (_DJANGO_VIEW, 'HttpResponse(json.dumps({"n": name}).encode())', "request.GET"),
+        ],
+        ids=["django", "flask-make_response", "flask-Response", "django-encoded"],
+    )
+    def test_httpresponse_json_dumps_default_content_type_is_xss(
+        self, view: str, call: str, source: str
+    ) -> None:
+        # R-pf38: with no content type these responses are text/html, and
+        # json.dumps does not escape `<`.
+        self._proven("import json\n" + view + f"    return {call}\n", source)
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'make_response(render_template("x.html", name=name))',
+            'make_response(render_template("x.html", name=name).encode("utf-8"))',
+            'Response(render_template("x.html", name=name))',
+        ],
+    )
+    def test_response_of_render_template_is_not_xss(self, call: str) -> None:
+        # An autoescaped template wraps the value.
+        self._clean(
+            "from flask import render_template\n" + _FLASK_VIEW + f"    return {call}\n"
+        )
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            '    return HttpResponse(render_to_string("x.html", {"n": name}))\n',
+            '    return HttpResponse(loader.render_to_string("x.html", {"n": name}))\n',
+            (
+                '    html = loader.get_template("x.html").render({"n": name}, request)\n'
+                "    return HttpResponse(html)\n"
+            ),
+        ],
+        ids=["render_to_string", "loader.render_to_string", "template.render"],
+    )
+    def test_django_template_render_is_not_xss(self, lines: str) -> None:
+        self._clean(
+            "from django.template import loader\n"
+            "from django.template.loader import render_to_string\n"
+            + _DJANGO_VIEW
+            + lines
+        )
+
+    def test_helper_output_is_not_claimed(self) -> None:
+        # The engine sees no return values: an opaque helper (here the
+        # full-stack-fastapi-template's password-recovery page) is the
+        # renderer, and its escaping is out of sight.
+        self._clean(
+            "from fastapi import APIRouter\n"
+            "from fastapi.responses import HTMLResponse\n"
+            "from app.utils import generate_reset_password_email\n"
+            "router = APIRouter()\n"
+            '@router.post("/password-recovery-html-content/{email}")\n'
+            "def recover_password_html_content(email: str):\n"
+            "    email_data = generate_reset_password_email(email=email)\n"
+            "    return HTMLResponse(\n"
+            '        content=email_data.html_content, headers={"subject:": email_data.subject}\n'
+            "    )\n"
+        )
+
+    def test_helper_method_output_is_not_claimed(self) -> None:
+        # `self.render_page(...)` is a helper like `render_page(...)`; a method
+        # on a value (`name.strip()`) still carries the value's text.
+        self._clean(
+            "from django.http import HttpResponse\n"
+            "class Greeting:\n"
+            "    def get(self, request):\n"
+            '        name = request.GET.get("name", "")\n'
+            "        html = self.render_page(name)\n"
+            "        return HttpResponse(html)\n"
+        )
+
+    def test_flask_response_wrapping_a_redirect_is_not_xss(self) -> None:
+        # make_response(redirect(...)) only adds a cookie to the redirect.
+        self._clean(
+            "from flask import redirect\n"
+            + _FLASK_VIEW
+            + "    resp = make_response(redirect(name))\n"
+            + '    resp.set_cookie("seen", "1")\n'
+            + "    return resp\n"
+        )
+
+    def test_constant_bodies_are_not_xss(self) -> None:
+        # The parity corpus's `safe_lookalike` shape.
+        self._clean(
+            "from django.http import HttpResponse\n"
+            'SERVICE_NAME = "Inventory Service"\n'
+            "def about_page(request):\n"
+            '    HttpResponse("OK", status=200)\n'
+            "    HttpResponse(status=204)\n"
+            '    return HttpResponse(f"<h1>{SERVICE_NAME}</h1><p>All systems operational.</p>")\n'
+        )
+
+    def test_unpacked_arguments_are_not_judged(self) -> None:
+        # make_response(*rv): which argument is the body is out of sight.
+        self._clean(_FLASK_VIEW + "    rv = (name, 200)\n    return make_response(*rv)\n")
+
+    # -- which Response ---------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "imports, call",
+        [
+            ("from flask import Response", "Response(name)"),
+            ("from werkzeug.wrappers import Response", "Response(name)"),
+            ("from werkzeug import Response", "Response(name)"),
+            ("from starlette.responses import Response", "Response(name)"),
+            ("from fastapi import Response", "Response(name)"),
+            ("from fastapi.responses import Response", "Response(name)"),
+            ("import flask", "flask.Response(name)"),
+            ("from fastapi import responses", "responses.Response(name)"),
+            ("from flask import Response as R", "R(name)"),
+            ("from flask import make_response as mk", "mk(name)"),
+        ],
+    )
+    def test_framework_response_resolves_through_imports(
+        self, imports: str, call: str
+    ) -> None:
+        self._proven(
+            imports + "\n"
+            "def greet(request):\n"
+            '    name = request.GET.get("name", "")\n'
+            f"    return {call}\n",
+            "request.GET",
+        )
+
+    @pytest.mark.parametrize(
+        "imports",
+        [
+            "from rest_framework.response import Response",
+            "from aiohttp.web import Response",
+            "",
+        ],
+    )
+    def test_other_response_classes_are_not_xss(self, imports: str) -> None:
+        # DRF renders its data as JSON; a Response the file never imports from
+        # a web framework is not one this sink knows.
+        self._clean(
+            imports + "\n"
+            "def greet(request):\n"
+            '    name = request.GET.get("name", "")\n'
+            "    return Response(name)\n"
+        )
+
+    def test_user_defined_response_class_is_not_xss(self) -> None:
+        self._clean(
+            "class Response:\n"
+            "    def __init__(self, body):\n"
+            "        self.body = body\n"
+            "def greet(request):\n"
+            '    name = request.GET.get("name", "")\n'
+            '    return Response(f"<h1>{name}</h1>")\n'
+        )
+
+    # -- one finding per flow ---------------------------------------------------
+
+    def test_make_response_of_markup_reports_once(self) -> None:
+        # The existing Markup branch already reports this flow; the response
+        # constructor around it must not add a second finding, and the
+        # existing finding keeps its sink (its fingerprint).
+        found = self._xss(
+            "from markupsafe import Markup\n"
+            + _FLASK_VIEW
+            + '    return make_response(Markup(f"<b>{name}</b>"))\n'
+        )
+        assert len(found) == 1, found
+        assert found[0]["sink"] == "Markup(f'<b>{name}</b>')"
+        assert found[0].get("reachable") is True
+
+    def test_markup_inside_an_fstring_body_reports_once(self) -> None:
+        found = self._xss(
+            "from markupsafe import Markup\n"
+            + _DJANGO_VIEW
+            + '    return HttpResponse(f"<div>{Markup(name)}</div>")\n'
+        )
+        assert len(found) == 1, found
+        assert found[0]["sink"] == "Markup(name)"
+
+    def test_markup_beside_raw_text_reports_once(self) -> None:
+        # The body holds a second, raw use of `name`, but the line already
+        # carries the Markup finding for this flow.
+        found = self._xss(
+            "from markupsafe import Markup\n"
+            + _DJANGO_VIEW
+            + '    return HttpResponse(f"{Markup(name)}<p>{name}</p>")\n'
+        )
+        assert len(found) == 1, found
+        assert found[0]["sink"] == "Markup(name)"
+
+    def test_escaped_markup_body_is_not_xss(self) -> None:
+        self._clean(
+            "from markupsafe import Markup, escape\n"
+            + _FLASK_VIEW
+            + "    return make_response(Markup(escape(name)))\n"
+        )
+
+
 class TestCmdInjectionReachable:
     """TASK-121 — reachable command-injection taint chains.
 
@@ -1018,6 +1539,33 @@ class TestEdgeCases:
             nm.mkdir(parents=True)
             (nm / "index.js").write_text("eval(userInput);\n")
             assert _collect(tmpdir) == []
+
+    def test_self_referencing_binding_does_not_skip_the_file(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `url += "/x"` on a parameter binds `url` to `url + "/x"`, and
+        # `desc = "<p>" + desc` reads `desc` too. The sanitiser check followed
+        # such a binding without end, hit the recursion limit, and every later
+        # finding in the file was lost.
+        findings = _collect_src(
+            "import requests\n"
+            "from markupsafe import Markup\n"
+            "def f(url):\n"
+            '    url += "/x"\n'
+            "    return requests.get(url)\n"
+            "def g(html):\n"
+            '    html += "</p>"\n'
+            "    return Markup(html)\n"
+            "def h(desc):\n"
+            '    desc = "<p>" + desc + "</p>"\n'
+            "    return Markup(desc)\n"
+        )
+        assert "recursion limit" not in capsys.readouterr().err
+        assert [(f["id"], f["line"]) for f in findings] == [
+            ("SEC-PY_SSRF", "mod.py:5"),
+            ("SEC-PY_XSS_HTML_SINK", "mod.py:8"),
+            ("SEC-PY_XSS_HTML_SINK", "mod.py:11"),
+        ]
 
 
 class TestPathTraversalReachable:

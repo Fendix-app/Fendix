@@ -183,6 +183,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `indirect` path-traversal cases and its `alt_api` XSS case now block, and
     its `alt_api` path-traversal case is detected and blocks. FastAPI blocks on
     17 of 36 vulnerable cases, up from 4. No safe case is flagged or blocks.
+- **Python HTML responses are now XSS sinks.** `HttpResponse(f"<h1>{name}</h1>")`
+  writes request input into a page with no template, so nothing escapes it,
+  and it was not reported. The engine now reports request text reaching the
+  body of an HTML response constructor, under the existing
+  `python.ast/PY_XSS_HTML_SINK` rule: Django `HttpResponse`, Flask
+  `make_response` and `Response`, and Starlette and FastAPI `HTMLResponse` and
+  `Response`. As for `Markup` and `mark_safe`, a proven flow is marked
+  reachable, carries a taint chain and may block; an unproven one is reported
+  and does not block.
+  - **Only an HTML response.** A response that declares a content type the
+    browser does not render as a document is not a sink. The type can be
+    declared with `content_type=`, `mimetype=` or `media_type=`, as Django's
+    second positional argument, or as a `Content-Type` entry in a literal
+    headers dict, including Flask's `make_response(body, status, headers)`.
+    - A type containing `html` or `xml` (`text/html; charset=utf-8`,
+      `application/xhtml+xml`, `image/svg+xml`) is HTML. So is a type held in
+      a variable, an empty type and `None`.
+    - With no type declared, Django and Flask send `text/html`, and a
+      Starlette `Response` sends no `Content-Type`, so the browser sniffs the
+      body. All three are sinks. `HTMLResponse` is always one.
+  - **Only a framework's `Response`.** A bare `Response` counts only when the
+    file imports it from Flask, Werkzeug, Starlette or FastAPI. Django REST
+    framework's `Response`, which renders JSON, and a project's own `Response`
+    class are not sinks. An imported alias resolves to what it imports, so
+    `from flask import make_response as mk` makes `mk(...)` a sink.
+  - **Not reported:**
+    - an escaped, allowlisted or membership-guarded value, as for `Markup`;
+    - `jsonify(...)`, `render_template(...)`, `render(...)` and
+      `render_to_string(...)`, which produce JSON or an autoescaped template;
+    - Flask's `make_response({...})` or `make_response([...])`, which Flask
+      sends as JSON;
+    - the result of any other function or `self`/`cls` method, such as
+      `build_page(name)` or `email_data.html_content` with
+      `email_data = generate_reset_password_email(email=email)`. The engine
+      cannot see what a function returns, and a function that returns page
+      content is usually a renderer that escapes. String methods (`.format`,
+      `.join`, `.strip`), `str()`, `json.dumps` and `json.loads` pass text
+      through, so they are followed.
+  - **`json.dumps` is not an escape.** `HttpResponse(json.dumps(data))` with
+    no content type is `text/html`, and `json.dumps` leaves `<` as it is, so
+    request data in it is reported. With `content_type="application/json"` it
+    is not.
+  - **One finding per flow.** `make_response(Markup(x))` is reported once, by
+    the `Markup` finding it already had.
+  - **Identity.** Existing `python.ast/PY_XSS_HTML_SINK` findings keep their
+    fingerprints. The new findings are new. Their sink is the constructor and
+    its body, as in `HttpResponse(f'<h1>{name}</h1>')`.
+  - **Not covered:**
+    - a helper function that builds the HTML, as in
+      `HttpResponse(build_page(name))`;
+    - Django's other response classes, such as `HttpResponseBadRequest(...)`;
+    - a content type set after construction
+      (`response["Content-Type"] = "text/plain"`), so such a response is
+      still reported;
+    - a media type passed to `HTMLResponse`, which is ignored.
+  - **Framework parity:** the Django, Flask and FastAPI `direct` and
+    `indirect` XSS cases are now detected and block, and their `cross_file`
+    cases are detected and warn. No safe case is flagged. The Python
+    frameworks detect 93 of 108 vulnerable cases, up from 84, and block on
+    64, up from 58.
 
 ### Changed
 
@@ -499,6 +559,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Framework parity:** the Django and Flask `indirect` cases for SQL
     injection, command injection, SSRF, path traversal and open redirect, and
     Flask's `ssti` `indirect` case, now block. No safe case blocks.
+- **A Python file is no longer skipped when a variable is rebound from
+  itself.** `url += "/x"` on a parameter binds `url` to `url + "/x"`, and
+  `desc = "<p>" + desc + "</p>"` binds `desc` to an expression that reads
+  `desc`. The sanitiser check that the SSRF, open-redirect, path-traversal and
+  XSS sinks run followed such a binding back into itself until it hit Python's
+  recursion limit. The engine then skipped the rest of the file, with every
+  finding after that point. Such a value is now not sanitised, so its sink is
+  reported and the file is analysed to the end. Findings this restores are
+  new.
 
 ## [3.6.4] - 2026-10-24
 

@@ -214,16 +214,16 @@
       "blocks": true
     },
     "django-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "django-xss-direct": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "django-xss-indirect": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "django-xss-safe": {
       "outcome": "TN",
@@ -678,16 +678,16 @@
       "blocks": true
     },
     "fastapi-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "fastapi-xss-direct": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-xss-indirect": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-xss-safe": {
       "outcome": "TN",
@@ -910,16 +910,16 @@
       "blocks": true
     },
     "flask-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "flask-xss-direct": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "flask-xss-indirect": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "flask-xss-safe": {
       "outcome": "TN",

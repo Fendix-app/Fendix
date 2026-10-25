@@ -120,6 +120,10 @@ The `direct` and `indirect` columns include the new classes.
 ### Python is deep but incomplete
 
 - **XSS through ordinary HTML responses is missed in all three frameworks.** `HttpResponse(f"<h1>{name}</h1>")`, `make_response` and `HTMLResponse` are not modelled. Only `Markup`, `mark_safe` and `render_template_string` are, and those cases are caught.
+  - Closed after v3.6.3. The body of an HTML response is now an XSS sink: Django `HttpResponse`, Flask `make_response` and `Response`, and Starlette and FastAPI `HTMLResponse` and `Response`, unless the response declares a non-HTML content type.
+    - The `direct` and `indirect` XSS cases block in all three frameworks, and the `cross_file` cases are detected and warn. No safe case is flagged.
+    - The Python frameworks detect 93 of 108 vulnerable cases, up from 84, and block on 64, up from 58. FastAPI blocks on 19, Django on 22 and Flask on 23.
+    - See `CHANGELOG.md`, `[Unreleased]`.
 - **Template injection is found only in Flask.** `render_template_string` is modelled. Django `Template(src)` and `jinja2.Template(src)` are not.
 - **Weak random tokens are missed everywhere.** The bundled rule lists `random.choice`, but not `random.choices`, the most common token idiom.
 - **FastAPI findings almost never block.** Typed handler parameters are not proven reachable. The same SQLi scores 90 (HIGH, BLOCK) in Flask and 50 (MEDIUM, WARN) in FastAPI. FastAPI's `RedirectResponse` and manual `Location` headers are not redirect sinks.
