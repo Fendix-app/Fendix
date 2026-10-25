@@ -22,6 +22,12 @@ upgrade: Fendix now runs Semgrep without Semgrep's version check (see Fixed).
 Report schema, SARIF structure, fingerprints, finding identity, decision
 policy, exit codes and the Action's inputs and outputs are unchanged.
 
+> **Addendum, 2026-10-25.** As first published, this entry did not mention a
+> new platform requirement: Semgrep 1.182.1 runs only on Linux with glibc
+> 2.34 or later. That affects the Action and other installs of this
+> release's Python dependencies on older self-hosted runners. See the new
+> item under Upgrading. The v3.6.5 tag message keeps the original wording.
+
 ### Security
 
 - **golang.org/x/mod 0.40.0** (was 0.35.0). It is linked into the `fendix`
@@ -152,6 +158,37 @@ policy, exit codes and the Action's inputs and outputs are unchanged.
   `version` unset to install the latest release. Either way, the Action
   installs this release's lock, so its Python environment moves to Semgrep
   1.182.1 and MCP 1.29.0 too.
+- **Self-hosted Linux runners need glibc 2.34 or later for Semgrep.** No
+  Semgrep release with the MCP fix supports an older glibc. Semgrep 1.173.0
+  to 1.182.1 publish Linux wheels only for glibc 2.34 or later
+  (`manylinux_2_34`) and musl 1.2 or later (`musllinux_1_2`). Semgrep 1.141.0
+  published `manylinux2014` wheels, which need only glibc 2.17. On an older
+  glibc, pip builds Semgrep 1.182.1 from its source distribution, and that
+  build has no `semgrep-core`.
+  - **Affected:** the Action on a self-hosted Linux runner with glibc older
+    than 2.34, and any other install of this release's
+    `python/requirements.lock` or `requirements.txt` on such a host,
+    including a caller-managed `engine_path`. Examples are Ubuntu 20.04 and
+    Debian 11 (glibc 2.31), RHEL, Rocky Linux and AlmaLinux 8 (2.28), and
+    Amazon Linux 2 (2.26).
+  - **Not affected:** GitHub-hosted runners, the official image (Debian 13,
+    glibc 2.41), hosts with glibc 2.34 or later (Ubuntu 22.04, Debian 12,
+    RHEL 9, Amazon Linux 2023), and scans that do not run Semgrep.
+  - **What happens:** the install succeeds and the scan runs. The scan
+    records `semgrep` as `failed` (`execution_error`: "Failed to find
+    semgrep-core in PATH or in the semgrep package.") and coverage as
+    incomplete. It does not fail because of this: the exit code, and so the
+    Action's gate, is decided by the analyzers that ran. This was reproduced
+    on Debian 11 with the Action's install command. With v3.6.4's lock,
+    Semgrep 1.141.0 installs from its wheel and runs.
+  - **What to do:** run the official container image, or move the runner to
+    a distribution with glibc 2.34 or later. Setting `version: v3.6.4` also
+    works, but it gives up this release's fixes: v3.6.4 keeps MCP 1.16.0 with
+    its three HIGH advisories (Fendix never starts Semgrep's MCP server),
+    golang.org/x/mod 0.35.0 in the binary, and the semgrep.dev version check
+    on every Semgrep run. To make the job fail when Semgrep does not run, add
+    `extra-args: --require-analyzers semgrep`. The scan then exits 2 when
+    Semgrep is not delivered.
 
 ## [3.6.4] - 2026-10-24
 

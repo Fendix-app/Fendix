@@ -243,7 +243,7 @@ Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity. Binar
 For the current Docker image, use `cosign verify` against the immutable digest and the official workflow identity:
 
 ```bash
-cosign verify fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529 \
+cosign verify fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef \
   --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com"
 ```
@@ -710,6 +710,14 @@ external-user end-to-end matrix in public and private repositories.
   Both use an isolated Python 3.11 venv. `setup-python` does not change the
   rest of the job's environment, but the venv's `bin/` and `FENDIX_ENGINE`
   stay available to later steps.
+- **Self-hosted Linux runners.** From v3.6.5, Semgrep needs glibc 2.34 or
+  later, or musl 1.2 or later. Ubuntu 20.04, Debian 11, RHEL 8 and Amazon
+  Linux 2 have an older glibc. On those runners the scan still runs, but it
+  records `semgrep` as failed and coverage as incomplete, and the gate is
+  decided by the analyzers that ran. GitHub-hosted runners and the official
+  image are not affected. The v3.6.5 Upgrading notes in
+  [CHANGELOG.md](CHANGELOG.md) list the options, including
+  `extra-args: --require-analyzers semgrep` to fail the job instead.
 - **Diff mode.** On `pull_request` events (`diff: auto`) the native secrets,
   text and Semgrep scanners read only the changed files, whole files, so
   existing issues in them are reported; dependency checks run when a manifest

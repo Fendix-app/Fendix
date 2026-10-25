@@ -464,6 +464,7 @@ A **composite** action. Its steps, in order:
 
 - **Signed releases only.** Only releases published with a cosign signature can be installed. Automatic Python preparation needs a signed build record, published from v3.5.0.
 - **Network.** Outbound HTTPS to GitHub (release downloads, and the API for `latest`) and to Sigstore (its TUF root and Rekor) for the signature check; the Python engine also needs `codeload.github.com` and PyPI. Without Sigstore access the install fails. Proxies work through the standard `HTTPS_PROXY` and `NO_PROXY` variables; a `~/.curlrc` is ignored.
+- **Linux runners: glibc 2.34 or later for Semgrep, from v3.6.5.** The Semgrep that v3.6.5 locks (1.182.1) publishes Linux wheels only for glibc 2.34 or later and musl 1.2 or later. Older glibc includes Ubuntu 20.04, Debian 11, RHEL 8 and its rebuilds, and Amazon Linux 2. There, pip builds Semgrep from source without `semgrep-core`. Engine preparation succeeds, but the scan records `semgrep` as `failed` (`execution_error`) and coverage as incomplete, and the gate is decided by the analyzers that ran. GitHub-hosted runners and the official image are not affected. On an older runner, use the container path (§3.2, §3.4) or a newer distribution. `version: v3.6.4` keeps Semgrep 1.141.0 but gives up v3.6.5's fixes; the v3.6.5 Upgrading notes in [`CHANGELOG.md`](../CHANGELOG.md) list what it keeps. Add `extra-args: --require-analyzers semgrep` to fail the job, with exit 2, when Semgrep does not run.
 - **Permissions.**
 
   | Repository | `permissions:` |
@@ -603,7 +604,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Pin by digest for reproducibility / supply-chain integrity
-      image: fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529
+      image: fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef
     steps:
       - uses: actions/checkout@v4
         with:
@@ -627,11 +628,11 @@ Or as a one-shot `docker run` step (e.g. from a non-container job):
 
 ```bash
 docker run --rm -v "$PWD:/src" -w /src \
-  fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529 \
+  fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef \
   scan --code . --format json --output findings.json --fail-on HIGH
 ```
 
-- **Version v3.6.2 image digest:** `sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529` (public, anonymously pullable; multi-arch `linux/amd64` + `linux/arm64`).
+- **Version v3.6.5 image digest:** `sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef` (public, anonymously pullable; multi-arch `linux/amd64` + `linux/arm64`).
 - **Pin by digest** (not a floating tag) for reproducible, tamper-evident builds — this is the form the release workflow itself signs and references.
 
 ### 3.5 `--fail-on` gating and exit codes
@@ -881,7 +882,7 @@ These inputs belong to the composite Action (§3.1).
 | `extra-args` | `""` | Raw args appended to `fendix scan` |
 | `engine_path` | `""` | Caller-managed Python engine dir; empty uses the release's own source and, from v3.6.1, its hash lock |
 
-**Pinned image (v3.6.2):** `fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529`
+**Pinned image (v3.6.5):** `fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef`
 
 ---
 
