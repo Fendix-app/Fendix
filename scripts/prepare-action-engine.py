@@ -4,10 +4,19 @@
 The automatic path uses a signed build record to bind the installed binary to
 an immutable source commit, and installs that release's own hash-locked
 dependency set. An explicit engine_path remains caller-managed.
+
+Either way, dependencies install from wheels only (--only-binary=:all:): a
+package with no wheel for the runner stops preparation with exit 2 and names
+the package and the runner's platform. Nothing is built from source, because
+a Semgrep built from its source distribution has no semgrep-core and cannot
+scan. The one exception is a Semgrep that no requirement needs
+(require-analyzers none, or a list without it): it is left out with a
+warning, and the scan records it unavailable.
 """
 import argparse
 import hashlib
 import http.client
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -31,10 +40,27 @@ LAST_LOCKLESS = (3, 6, 0)
 PYDANTIC_BOUND = "pydantic<2.14"
 DOWNLOAD_ATTEMPTS = 3
 TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+WHEELS_ONLY = "--only-binary=:all:"
+
+
+def _load_preflight():
+    path = Path(__file__).resolve().parent / "action" / "analyzer_preflight.py"
+    spec = importlib.util.spec_from_file_location("analyzer_preflight", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+preflight = _load_preflight()
 
 
 class PrepareError(Exception):
-    """A preparation failure, worded for the workflow log."""
+    """A preparation failure, worded for the workflow log. A title, when set,
+    becomes the annotation title (for example the analyzer it costs)."""
+
+    def __init__(self, message, title=None):
+        super().__init__(message)
+        self.title = title
 
 
 class DownloadError(PrepareError):
@@ -210,14 +236,71 @@ def install_plan(tree, release_version):
 
 def error_line(error):
     """One workflow-command line, whatever the message contains."""
+    title = getattr(error, "title", None)
+    if title:
+        return preflight.error_command(title, str(error))
     message = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     return f"::error::Python engine preparation failed: {message}"
+
+
+def warning_line(title, message):
+    return f"::warning title={title}::{preflight.workflow_value(message)}"
+
+
+MISSING = re.compile(r"No matching distribution found for ([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\S*)")
+
+
+def missing_distribution(log):
+    """(name, requirement) of the package pip found no installable file for."""
+    try:
+        text = Path(log).read_text(errors="replace")
+    except OSError:
+        return None
+    match = MISSING.search(text)
+    if not match:
+        return None
+    name = match.group(1)
+    return re.sub(r"[-_.]+", "-", name).lower(), (name + match.group(2)).strip()
+
+
+def without_package(pip_args, package, work):
+    """pip_args with the named package removed from its requirements file.
+
+    Drops the requirement line and its continuation lines (the --hash lines of
+    a lock), so --require-hashes still covers every other pinned package.
+    """
+    args = list(pip_args)
+    index = args.index("-r") + 1
+    source = Path(args[index])
+    kept, skipping = [], False
+    pattern = re.compile(rf"^{re.escape(package)}\s*(?:[<>=!~;\[]|\\|$)", re.IGNORECASE)
+    for line in source.read_text().splitlines():
+        normalised = re.sub(r"^([A-Za-z0-9][A-Za-z0-9._-]*)", lambda m: re.sub(r"[-_.]+", "-", m.group(1)), line)
+        if skipping or pattern.match(normalised):
+            skipping = line.rstrip().endswith("\\")
+            continue
+        kept.append(line)
+    target = Path(work) / f"without-{package}-{source.name}"
+    target.write_text("\n".join(kept) + "\n")
+    args[index] = str(target)
+    return args
+
+
+def resolve_requirement():
+    """The required analyzers from the Action inputs (see analyzer_preflight)."""
+    try:
+        return preflight.resolve_required(os.environ.get("REQUIRE_ANALYZERS", "auto"),
+                                          os.environ.get("CODE", ""), os.environ.get("MODE", "local"))
+    except preflight.RequirementError as error:
+        raise PrepareError(str(error), title="Fendix require-analyzers") from error
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--engine-path", default=os.environ.get("ENGINE_PATH", ""))
     args = parser.parse_args()
+    # Before anything is downloaded: an invalid input fails at once.
+    required, kind = resolve_requirement()
     import shutil
     binary = shutil.which("fendix")
     if not binary:
@@ -230,20 +313,62 @@ def main():
         release_version = None
     else:
         tree, release_version = automatic_tree(Path(binary).resolve(), work)
-    prepare(binary, tree, release_version, work)
+    prepare(binary, tree, release_version, work, required=required)
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a") as handle:
+            handle.write(f"required-analyzers={','.join(required)}\n")
+            handle.write(f"requirement={kind}\n")
 
 
-def prepare(binary, tree, release_version, work):
+def install(venv, pip_args, source, work, attempt):
+    """pip install, wheels only. Returns the pip log path on failure, None on success."""
+    log = Path(work) / f"pip-{attempt}.log"
+    command = [str(venv / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check",
+               WHEELS_ONLY, "--log", str(log), *pip_args]
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as error:
+        return log, error.returncode
+    except FileNotFoundError as error:
+        raise PrepareError(f"installing the Python engine's dependencies failed ({source}): {command[0]} was not found") from error
+    return None, 0
+
+
+def prepare(binary, tree, release_version, work, required=()):
     """Install the tree's dependencies in a venv under work, sync the engine to
     the tree, then publish both for the rest of the job. release_version is
-    None for a caller-managed engine_path (see install_plan)."""
+    None for a caller-managed engine_path (see install_plan). required names
+    the analyzers the Action requires: a dependency they need must install."""
     pip_args, note = install_plan(tree, release_version)
     venv = work / "venv"
     run([sys.executable, "-m", "venv", str(venv)], "creating the Python virtual environment failed")
     print(note, flush=True)
+    print(f"Wheels only ({WHEELS_ONLY}): no dependency is built from source", flush=True)
     source = "requirements.lock" if "--require-hashes" in pip_args else f"requirements.txt with {PYDANTIC_BOUND}"
-    run([str(venv / "bin/python"), "-m", "pip", "install", "--disable-pip-version-check", *pip_args],
-        f"installing the Python engine's dependencies failed ({source})")
+    log, code = install(venv, pip_args, source, work, 1)
+    if log is not None:
+        missing = missing_distribution(log)
+        facts = preflight.platform_facts()
+        if missing and missing[0] == "semgrep" and "semgrep" not in required:
+            # Nothing requires Semgrep: leave it out rather than fail, and say
+            # so. The scan records it unavailable and coverage incomplete.
+            print(warning_line("Fendix scans without Semgrep",
+                               preflight.no_wheel_message("semgrep", missing[1], facts, required=False)
+                               + " No requirement needs Semgrep, so it is left out: the scan records semgrep "
+                                 "unavailable and its coverage as incomplete."), flush=True)
+            log, code = install(venv, without_package(pip_args, "semgrep", work), source, work, 2)
+            missing = missing_distribution(log) if log is not None else None
+        if log is not None:
+            if missing:
+                package, requirement = missing
+                title = (f"Fendix required analyzer {package} is unavailable" if package == "semgrep"
+                         else f"Fendix engine dependency {package} is unavailable")
+                prefix = "Required analyzer semgrep cannot run. " if package == "semgrep" else ""
+                raise PrepareError(prefix + preflight.no_wheel_message(package, requirement, facts, required=True),
+                                   title=title)
+            raise PrepareError(f"installing the Python engine's dependencies failed ({source}) "
+                               f"(exit {code}; see the output above)")
     # Publish only after dependency installation and sync both succeed.
     run([str(binary), "engine", "sync", "--dir", str(tree)], f"fendix engine sync --dir {tree} failed")
     with open(os.environ["GITHUB_ENV"], "a") as handle:
@@ -257,4 +382,5 @@ if __name__ == "__main__":
         main()
     except Exception as error:  # noqa: BLE001 - every failure becomes one clear line
         print(error_line(error), file=sys.stderr)
-        sys.exit(1)
+        # 2, the engine's setup-failure code: nothing was prepared or published.
+        sys.exit(2)

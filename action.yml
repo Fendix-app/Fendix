@@ -15,6 +15,14 @@
 # outbound access to GitHub releases and to Sigstore (proxies through the
 # standard HTTPS_PROXY variables; a ~/.curlrc is ignored).
 #
+# Required analyzers fail closed. A code scan requires Semgrep by default
+# (require-analyzers: auto): its dependencies install from wheels only, and
+# before the scan Semgrep must report a known match on a bundled probe, so a
+# runner where Semgrep cannot run fails at setup with exit 2 and never reaches
+# a green gate. The engine is also passed --require-analyzers, so a Semgrep
+# that fails during the scan exits 2 as well. require-analyzers: none is the
+# explicit opt-out; the gate then warns that coverage is not enforced.
+#
 # Usage: `@v1` follows compatible stable releases of the v1 Action; set
 # `version` to the Fendix release to install.
 #
@@ -88,9 +96,13 @@ inputs:
     required: false
     default: "latest"
   extra-args:
-    description: "Additional raw arguments appended to the fendix scan command."
+    description: "Additional raw arguments appended to the fendix scan command. They cannot cancel a required analyzer: a repeated --require-analyzers only adds names, and a flag that disables a required analyzer (such as --fast for semgrep) makes the scan exit 2."
     required: false
     default: ""
+  require-analyzers:
+    description: "Analyzers that must run for the gate to pass, in local and managed mode. 'auto' (default) requires semgrep whenever code is set; a URL-only scan requires none. Or a comma-separated list of engine analyzer names (dast, spec, active-probes, secrets, textscan, semgrep, govulncheck, pip, npm, python-engine, python-engine/auth, python-engine/injection, python-engine/deps, plugins). A required semgrep must install from a wheel and pass a functional preflight before the scan, or setup fails with exit 2; every required analyzer is passed to the engine as --require-analyzers, so one not delivered during the scan exits 2 (ok or not_applicable satisfies it). 'none' is the explicit opt-out: nothing is required, a Semgrep with no wheel for the runner is left out, and the gate warns that coverage is not enforced. Managed mode takes only 'auto'."
+    required: false
+    default: "auto"
   # --- Managed mode (ADR-010 preview; new in v3.5.0, absent from v3.4.1) ---
   # Managed mode submits sanitized evidence to the Fendix backend, which
   # DECIDES. The runner never computes, infers or falls back to a local
@@ -158,6 +170,7 @@ runs:
         ASSET: ${{ inputs.asset-id }}
         ENVIRONMENT: ${{ inputs.environment }}
         API_BASE: ${{ inputs.api-base }}
+        REQUIRE_ANALYZERS: ${{ inputs.require-analyzers }}
       run: |
         set -euo pipefail
         # Mask first, before any later step can echo it. GitHub masks secrets
@@ -189,6 +202,9 @@ runs:
         # attribute.
         [ -z "$URL" ] || fail "managed mode does not scan a URL in the pilot"
         [ -z "$SPEC" ] || fail "managed mode does not take a spec in the pilot"
+        # The binding's backend policy owns what is required; the runner may
+        # not narrow it. auto still makes Semgrep pass its preflight.
+        [ "$REQUIRE_ANALYZERS" = auto ] || fail "managed mode does not accept 'require-analyzers'; the binding's backend policy decides what is required"
 
     # cosign first, for every caller: the Fendix binary is always verified by
     # its release signature before it first runs (engine_path changes only the
@@ -224,13 +240,33 @@ runs:
     # install its dependencies in an isolated venv (the release's hash lock
     # when it ships one), then pin it for all scans. Run with setup-python's
     # own interpreter, never whichever python3 is first on the caller's PATH.
+    # Wheels only: a dependency with no wheel for this runner stops
+    # preparation with exit 2, naming it and the runner's platform. It also
+    # resolves require-analyzers (an invalid value fails here).
     - name: Prepare Fendix Python engine
+      id: prepare
       shell: bash
       env:
         ENGINE_PATH: ${{ inputs.engine_path }}
         ACTION_PATH: ${{ github.action_path }}
         PYTHON: ${{ steps.python.outputs.python-path }}
+        REQUIRE_ANALYZERS: ${{ inputs.require-analyzers }}
+        CODE: ${{ inputs.code }}
+        MODE: ${{ inputs.mode }}
       run: '"$PYTHON" "$ACTION_PATH/scripts/prepare-action-engine.py"'
+
+    # scripts/action/analyzer_preflight.py: each required analyzer with a
+    # probe must work before the scan. Semgrep runs from the prepared
+    # environment on a bundled rule and file and must report their one match;
+    # anything else fails setup with exit 2 and an error naming it.
+    - name: Preflight required analyzers
+      shell: bash
+      env:
+        REQUIRED: ${{ steps.prepare.outputs.required-analyzers }}
+        REQUIREMENT: ${{ steps.prepare.outputs.requirement }}
+        ACTION_PATH: ${{ github.action_path }}
+        PYTHON: ${{ steps.python.outputs.python-path }}
+      run: '"$PYTHON" "$ACTION_PATH/scripts/action/analyzer_preflight.py"'
 
     - name: Run Fendix scan
       id: scan
@@ -247,8 +283,11 @@ runs:
         OUTPUT: ${{ inputs.output }}
         DIFF: ${{ inputs.diff }}
         EXTRA_ARGS: ${{ inputs.extra-args }}
+        REQUIRED: ${{ steps.prepare.outputs.required-analyzers }}
         ACTION_PATH: ${{ github.action_path }}
-      # scripts/action/scan.sh records report-present, report and exit-code.
+      # scripts/action/scan.sh records report-present (a finished scan's report,
+      # fit to upload), report-written, report, exit-code and the engine's
+      # coverage verdict.
       run: bash "$ACTION_PATH/scripts/action/scan.sh"
 
     # Managed scan: full-head SAST/SCA, no diff scoping, no local gate. The
@@ -335,9 +374,11 @@ runs:
           exit "$code"
         fi
 
-    # Only a report this scan actually wrote is uploaded. After a setup or scan
-    # failure there is nothing to upload, and trying would bury the real error
-    # under an unrelated one.
+    # Only a report this scan actually wrote, and finished (exit 0 or 1), is
+    # uploaded. After a setup failure there is nothing to upload, and trying
+    # would bury the real error under an unrelated one. A partial report from
+    # a failed scan is not uploaded either: code scanning would close every
+    # alert missing from it.
     - name: Upload SARIF to code scanning
       id: upload
       if: ${{ inputs.mode != 'managed' && inputs.upload-sarif == 'true' && inputs.format == 'sarif' && steps.scan.outputs.report-present == 'true' && always() }}
@@ -356,9 +397,16 @@ runs:
         EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
         FAIL_ON: ${{ inputs.fail-on }}
         REPORT: ${{ inputs.output }}
-        REPORT_PRESENT: ${{ steps.scan.outputs.report-present }}
+        REPORT_PRESENT: ${{ steps.scan.outputs.report-written }}
         SARIF_UPLOAD: ${{ steps.upload.outcome }}
+        REQUIRE_INPUT: ${{ inputs.require-analyzers }}
+        REQUIRED: ${{ steps.prepare.outputs.required-analyzers }}
+        COVERAGE: ${{ steps.scan.outputs.coverage }}
+        REQUIRED_RESULT: ${{ steps.scan.outputs.required-result }}
+        REQUIRED_DETAIL: ${{ steps.scan.outputs.required-detail }}
         ACTION_PATH: ${{ github.action_path }}
       # scripts/action/enforce.sh: empty -> setup failure (2), 0 pass, 1 BLOCK,
-      # 2 scan error, anything else fails closed (2).
+      # 2 scan error or required analyzer not delivered, anything else fails
+      # closed (2). A pass with coverage incomplete or not enforced is a
+      # warning, never a clean-scan line.
       run: bash "$ACTION_PATH/scripts/action/enforce.sh"

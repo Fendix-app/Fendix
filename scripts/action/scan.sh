@@ -2,13 +2,27 @@
 # Local-mode scan step of the composite Action (action.yml "Run Fendix scan").
 #
 # Inputs arrive as environment variables and are never interpolated into this
-# script: CODE URL SPEC FAIL_ON FORMAT OUTPUT DIFF EXTRA_ARGS.
+# script: CODE URL SPEC FAIL_ON FORMAT OUTPUT DIFF EXTRA_ARGS, and REQUIRED,
+# the analyzers engine preparation resolved from require-analyzers
+# (comma-separated, empty for none).
 #
 # Writes to $GITHUB_OUTPUT:
 #   report-present  false before the scan starts; true only when OUTPUT then
-#                   exists and is non-empty. Never inferred from the exit code.
+#                   exists and is non-empty AND the scan finished (exit 0 or
+#                   1): the report the SARIF upload may publish. A partial
+#                   report a failed scan left (exit 2, for example a required
+#                   analyzer not delivered) is never uploaded, because code
+#                   scanning would close every alert missing from it.
+#   report-written  true when OUTPUT exists and is non-empty, whatever the
+#                   exit code; the gate words its result with it
 #   report          the OUTPUT path
 #   exit-code       the fendix exit code (2 when the scan could not start)
+#   coverage        the engine's coverage verdict ("complete", or
+#                   "incomplete (<analyzers>)"); empty when none was printed
+#   required-result the engine's verdict on REQUIRED ("satisfied", or
+#                   "not delivered (<analyzers>)"); empty when none was printed
+#   required-detail why a required analyzer was not delivered, as the engine
+#                   words it; empty otherwise
 #
 # Always exits 0. The job is decided by the gate step (enforce.sh), which runs
 # after the SARIF upload so findings are visible even when the gate fails.
@@ -48,6 +62,20 @@ if [ "$DIFF" = "true" ] || { [ "$DIFF" = "auto" ] && [ "${GITHUB_EVENT_NAME:-}" 
   fi
 fi
 
+# Required analyzers go to the engine too, so one that passed the preflight
+# and then fails during the scan still exits 2. They come before EXTRA_ARGS:
+# a repeated --require-analyzers only adds names, and a flag there that
+# disables a required analyzer is a contradiction the engine exits 2 on.
+required=${REQUIRED:-}
+if [ -n "$required" ]; then
+  if ! [[ $required =~ ^[a-z][a-z0-9/-]*(,[a-z][a-z0-9/-]*)*$ ]]; then
+    echo "::error title=Fendix require-analyzers::The resolved required analyzers are not a list of analyzer names."
+    echo "exit-code=2" >>"$GITHUB_OUTPUT"
+    exit 0
+  fi
+  args+=(--require-analyzers "$required")
+fi
+
 # shellcheck disable=SC2206  # intentional word-split into multiple flags
 [ -n "$EXTRA_ARGS" ] && args+=($EXTRA_ARGS)
 
@@ -58,14 +86,35 @@ rm -f -- "$OUTPUT"
 printf 'fendix scan'
 printf ' %q' "${args[@]}"
 printf '\n'
-fendix scan "${args[@]}"
-code=$?
+# The output is kept as well as shown, so the gate can state the engine's own
+# coverage verdict. The exit code alone still decides the job.
+log=$(mktemp "${RUNNER_TEMP:-/tmp}/fendix-scan.XXXXXXXX")
+fendix scan "${args[@]}" 2>&1 | tee "$log"
+code=${PIPESTATUS[0]}
 
+written=false
+[ -s "$OUTPUT" ] && written=true
 present=false
-[ -s "$OUTPUT" ] && present=true
+if [ "$written" = true ] && { [ "$code" = 0 ] || [ "$code" = 1 ]; }; then present=true; fi
+
+# The engine prints these at the end of every scan. The last match wins, so a
+# line some analyzer echoed earlier cannot stand in for the verdict.
+verdict() {
+  local line last=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case "$line" in "$1"*) last=${line#"$1"} ;; esac
+  done <"$log"
+  printf '%s' "$last"
+}
 {
   echo "report=$OUTPUT"
   echo "exit-code=$code"
   echo "report-present=$present"
+  echo "report-written=$written"
+  echo "coverage=$(verdict 'coverage: ')"
+  echo "required-result=$(verdict 'required: ')"
+  echo "required-detail=$(verdict 'fendix: required analyzer(s) not delivered: ')"
 } >>"$GITHUB_OUTPUT"
+rm -f -- "$log"
 exit 0
