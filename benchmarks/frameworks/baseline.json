@@ -154,8 +154,8 @@
       "blocks": false
     },
     "django-ssrf-safe": {
-      "outcome": "FP",
-      "blocks": true
+      "outcome": "TN",
+      "blocks": false
     },
     "django-ssrf-safe_lookalike": {
       "outcome": "TN",
@@ -618,7 +618,7 @@
       "blocks": false
     },
     "fastapi-ssrf-safe": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "fastapi-ssrf-safe_lookalike": {
@@ -850,8 +850,8 @@
       "blocks": false
     },
     "flask-ssrf-safe": {
-      "outcome": "FP",
-      "blocks": true
+      "outcome": "TN",
+      "blocks": false
     },
     "flask-ssrf-safe_lookalike": {
       "outcome": "TN",

@@ -1610,3 +1610,149 @@ class TestUnprovenDataflowConfidence:
         assert pk[0]["confidence"] == "HIGH", (
             f"unconditional sink downgraded to {pk[0]['confidence']}"
         )
+
+
+class TestUrlHostAllowlistGuard:
+    """A dominating ``urlparse(url).hostname not in ALLOWED`` early exit is an
+    SSRF / open-redirect guard.
+
+    Falling through ``if p.hostname not in ALLOWED: return`` means the host IS
+    in a literal allowlist, so the request or redirect that follows cannot reach
+    an attacker-chosen host. The recognition is held to the same dominance
+    discipline as the other guards: a top-level ``if`` before the sink whose
+    body ends control flow, over a literal collection. Only ``or`` may combine
+    the host check with other conditions; with ``and`` the host check can be
+    skipped.
+    """
+
+    _PREFIX = (
+        "import os\n"
+        "import logging\n"
+        "from urllib.parse import urlparse\n"
+        "import requests\n"
+        "from flask import abort, redirect, request\n"
+        'ALLOWED = {"api.example.com", "cdn.example.com"}\n'
+    )
+
+    def _ssrf(self, body: str, prefix: str | None = None) -> list[dict]:
+        findings = _collect_src((self._PREFIX if prefix is None else prefix) + body)
+        return [f for f in findings if f["id"] == "SEC-PY_SSRF"]
+
+    def test_ssrf_hostname_allowlist_guard_is_sanitiser(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    p = urlparse(url)\n"
+            '    if p.scheme != "https" or p.hostname not in ALLOWED:\n'
+            '        return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert not ssrf, f"hostname allowlist guard not honoured: {ssrf}"
+
+    def test_ssrf_inline_urlparse_guard_is_sanitiser(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).hostname not in ALLOWED:\n"
+            "        abort(400)\n"
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert not ssrf, f"inline urlparse guard not honoured: {ssrf}"
+
+    def test_ssrf_netloc_guard_is_sanitiser(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    p = urlparse(url)\n"
+            "    if p.netloc not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert not ssrf, f"netloc allowlist guard not honoured: {ssrf}"
+
+    def test_ssrf_guard_after_sink_does_not_sanitise(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    resp = requests.get(url, timeout=5)\n"
+            "    if urlparse(url).hostname not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            "    return resp.text\n"
+        )
+        assert ssrf, "a guard after the sink cannot protect it"
+
+    def test_ssrf_guard_without_exit_does_not_sanitise(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).hostname not in ALLOWED:\n"
+            '        logging.warning("unexpected host %s", url)\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert ssrf, "a guard that only logs and falls through protects nothing"
+
+    def test_ssrf_guard_on_scheme_only_does_not_sanitise(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    p = urlparse(url)\n"
+            '    if p.scheme != "https":\n'
+            '        return "https only", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert ssrf, "a scheme check does not bound the host"
+
+    def test_ssrf_guard_against_env_list_does_not_sanitise(self) -> None:
+        prefix = self._PREFIX.replace(
+            'ALLOWED = {"api.example.com", "cdn.example.com"}\n',
+            'ALLOWED = os.environ["ALLOWED_HOSTS"].split(",")\n',
+        )
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).hostname not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n",
+            prefix=prefix,
+        )
+        assert ssrf, "an allowlist read from the environment is not provably bounded"
+
+    def test_ssrf_guard_joined_with_and_does_not_sanitise(self) -> None:
+        # With `and`, `http://evil.example` fails the first operand, the whole
+        # test is False, and the request goes out without the host ever being
+        # checked against the allowlist.
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    p = urlparse(url)\n"
+            '    if p.scheme != "https" and p.hostname not in ALLOWED:\n'
+            '        return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert ssrf, "a host check joined with `and` can be skipped"
+
+    def test_redirect_netloc_allowlist_guard_is_sanitiser(self) -> None:
+        findings = _collect_src(
+            self._PREFIX + "def login_redirect():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).netloc not in ALLOWED:\n"
+            '        return redirect("/")\n'
+            "    return redirect(url)\n"
+        )
+        redir = [f for f in findings if f["id"] == "SEC-PY_OPEN_REDIRECT"]
+        assert not redir, f"netloc allowlist guard not honoured for redirect: {redir}"
+
+    def test_host_allowlist_guard_does_not_sanitise_xss(self) -> None:
+        # The guard bounds the host only: `https://api.example.com/<script>`
+        # passes it, so the same value rendered unescaped is still XSS.
+        findings = _collect_src(
+            self._PREFIX + "from django.utils.safestring import mark_safe\n"
+            "def render_link():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).hostname not in ALLOWED:\n"
+            "        abort(400)\n"
+            "    return mark_safe(url)\n"
+        )
+        assert [f for f in findings if f["id"] == "SEC-PY_XSS_HTML_SINK"], (
+            f"a host allowlist must not count as an XSS sanitiser: {_ids(findings)}"
+        )

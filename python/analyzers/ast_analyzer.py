@@ -846,6 +846,97 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return True
         return False
 
+    # URL-host allowlist guard (SSRF / open redirect only):
+    #
+    #     p = urlparse(url)
+    #     if p.scheme != "https" or p.hostname not in ALLOWED_HOSTS:
+    #         return ...
+    #     requests.get(url)                                       # SAFE
+    #
+    # Falling through the guard means the URL's host is one of a literal set,
+    # so the request or redirect cannot reach a host the attacker chose. This
+    # bounds the HOST and nothing else (the path and query stay free-form), so
+    # it is honoured only for sinks whose risk is the destination host; an XSS
+    # or path sink given the same value is still reported. The parse call is
+    # matched on its terminal name, covering `urllib.parse.urlparse(x)`,
+    # `from urllib.parse import urlparse` and `urlsplit` in either form.
+    _URL_PARSE_CALL_NAMES = frozenset({"urlparse", "urlsplit"})
+    _URL_HOST_ATTRS = frozenset({"hostname", "netloc"})
+
+    def _url_host_is_allowlisted(self, name: str, sink_line: int) -> bool:
+        """Return True if the innermost enclosing function body contains a
+        DOMINATING early-exit guard that rejects `name` unless its parsed host
+        is in a literal collection::
+
+            if urlparse(name).hostname not in ALLOWED:   # or .netloc
+                return / raise / abort(...)
+
+        The parsed value may be written inline or bound to a local first
+        (`p = urlparse(name)`). The host check may be one operand of an `or`
+        (`if p.scheme != "https" or p.hostname not in ALLOWED:`): falling
+        through an `or` means every operand was False, so the host is in the
+        allowlist. It must NOT sit under an `and`, where a False first operand
+        skips the host check entirely.
+
+        Dominance is enforced exactly as `_name_is_membership_guarded` does it
+        (top-level statements of the function body only, `lineno` strictly
+        before the sink, a body that ends control flow), and the collection
+        must be literal for the same reason: an allowlist read from the
+        environment or a call cannot be proven bounded.
+        """
+        if not self._func_stack:
+            return False
+        func = self._func_stack[-1]
+        for stmt in func.body:
+            if not isinstance(stmt, ast.If) or stmt.lineno >= sink_line:
+                continue
+            if not self._test_rejects_unlisted_host(stmt.test, name):
+                continue
+            if self._body_ends_control_flow(stmt.body):
+                return True
+        return False
+
+    def _test_rejects_unlisted_host(self, test: ast.AST, name: str) -> bool:
+        """True when `test` is True whenever `name`'s parsed host is outside a
+        literal collection: the `not in` comparison itself, or an `or` with that
+        comparison among its operands."""
+        if isinstance(test, ast.BoolOp):
+            return isinstance(test.op, ast.Or) and any(
+                self._test_rejects_unlisted_host(v, name) for v in test.values
+            )
+        if not (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.NotIn)
+            and len(test.comparators) == 1
+        ):
+            return False
+        host = test.left
+        if not (isinstance(host, ast.Attribute) and host.attr in self._URL_HOST_ATTRS):
+            return False
+        if not self._is_url_parse_of(host.value, name):
+            return False
+        return self._collection_is_literal(test.comparators[0])
+
+    def _is_url_parse_of(self, expr: ast.AST, name: str) -> bool:
+        """True when `expr` is `urlparse(name)` / `urlsplit(name)`, inline or
+        through a Name bound to that call in the scope chain."""
+        if isinstance(expr, ast.Name):
+            for scope in reversed(self._scopes):
+                if expr.id in scope:
+                    expr = scope[expr.id]
+                    break
+            else:
+                return False
+        if not (isinstance(expr, ast.Call) and expr.args):
+            return False
+        fn = expr.func
+        called = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+        if called not in self._URL_PARSE_CALL_NAMES:
+            return False
+        first = expr.args[0]
+        return isinstance(first, ast.Name) and first.id == name
+
     def _collection_is_literal(self, expr: ast.AST) -> bool:
         """Return True if `expr` is a literal dict/set/list/tuple, or a
         Name that resolves to one in the scope chain.
@@ -1056,7 +1147,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     return True
         return False
 
-    def _arg_is_sanitised(self, arg: ast.AST, sink_line: int = 1_000_000) -> bool:
+    def _arg_is_sanitised(
+        self, arg: ast.AST, sink_line: int = 1_000_000, *, url_sink: bool = False
+    ) -> bool:
         """Composite check: dict-lookup whitelist OR membership-guarded Name.
 
         Called by the sink predicates (_is_ssrf / _is_open_redirect /
@@ -1068,6 +1161,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         suppress it (B2). Callers that cannot supply a line default to a large
         sentinel (behaviour unchanged for those), but every real sink predicate
         passes ``node.lineno``.
+
+        ``url_sink`` is True for sinks whose risk is the destination host
+        (SSRF, open redirect). It additionally honours a URL-host allowlist
+        guard (`_url_host_is_allowlisted`), which bounds the host and nothing
+        else, so it must not count for XSS or path sinks.
 
         Handles three shapes:
           1. arg IS the dict-lookup or guarded Name itself
@@ -1085,7 +1183,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if self._is_safe_url_builder(arg):
             return True
         if isinstance(arg, ast.Name):
-            if self._name_is_membership_guarded(arg.id, sink_line):
+            if self._name_is_membership_guarded(arg.id, sink_line) or (
+                url_sink and self._url_host_is_allowlisted(arg.id, sink_line)
+            ):
                 return True
             # Resolve through scope and check the assigned expr is sanitised.
             # Recurse through the full sanitiser set (not just whitelist) so an
@@ -1097,7 +1197,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     bound = scope[arg.id]
                     if isinstance(bound, ast.Name) and bound.id == arg.id:
                         return False
-                    return self._arg_is_sanitised(bound, sink_line)
+                    return self._arg_is_sanitised(bound, sink_line, url_sink=url_sink)
             return False
         if isinstance(arg, ast.BinOp):
             # printf-style `"<template>" % (a, b)`: safe iff the template is a
@@ -1117,13 +1217,15 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                         else [rhs]
                     )
                     return all(
-                        isinstance(v, ast.Constant) or self._arg_is_sanitised(v, sink_line)
+                        isinstance(v, ast.Constant)
+                        or self._arg_is_sanitised(v, sink_line, url_sink=url_sink)
                         for v in values
                     )
                 return False
             # Every non-Constant subexpression must itself be sanitised.
             return all(
-                isinstance(sub, ast.Constant) or self._arg_is_sanitised(sub, sink_line)
+                isinstance(sub, ast.Constant)
+                or self._arg_is_sanitised(sub, sink_line, url_sink=url_sink)
                 for sub in (arg.left, arg.right)
             )
         # audit #16: a fully-constant f-string or an os.path.* / known dunder
@@ -2567,8 +2669,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     if isinstance(scope[first.id], ast.Constant):
                         return False
                     break  # innermost binding wins (audit #17)
-        # Whitelisted dict lookup / set-membership guard → sanitised.
-        if self._arg_is_sanitised(first, node.lineno):
+        # Whitelisted dict lookup / set-membership / URL-host allowlist guard
+        # → sanitised.
+        if self._arg_is_sanitised(first, node.lineno, url_sink=True):
             return False
         # Framework URL builders produce safe internal URLs from a route NAME,
         # not user input: Flask url_for(...), Django reverse(...). A redirect to
@@ -2791,7 +2894,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     if isinstance(scope[first.id], ast.Constant):
                         return False
                     break  # innermost binding wins (audit #17)
-        if self._arg_is_sanitised(first, node.lineno):
+        if self._arg_is_sanitised(first, node.lineno, url_sink=True):
             return False
         # TwiScope FP-1/FP-2: constant scheme+host with taint only in path/query
         # is not SSRF.
