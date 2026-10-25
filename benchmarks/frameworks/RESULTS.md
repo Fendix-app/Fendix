@@ -159,9 +159,10 @@ Regex-tier findings never reach the corroboration needed to block, by design. Fo
 
 ### Catalog gaps
 
-- `docs/security-catalog-contract.json` lists 85 checks.
+- At v3.6.3, `docs/security-catalog-contract.json` lists 85 checks.
 - It omits the Python engine's own rules, which produce most Python detections: `PY_SQL_INJECTION`, `PY_SSRF`, `PY_PATH_TRAVERSAL`, `PY_OPEN_REDIRECT`, `PY_XSS_HTML_SINK`, `PY_WEAK_CRYPTO_PASSWORD`, `PY_JWT_WEAK` and others.
 - It also omits the four JS pattern checks.
+- Closed after v3.6.3: the catalog lists all 16 Python-engine checks and the four JS pattern checks, 105 checks in all. See `CHANGELOG.md`, `[Unreleased]`.
 
 ## Speed
 

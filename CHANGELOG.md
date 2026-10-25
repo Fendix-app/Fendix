@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The security catalog now lists the Python engine's own checks.**
+  `docs/security-catalog-contract.json` gains the 16 Python AST checks
+  (`PY_SQL_INJECTION`, `PY_SSRF`, `PY_PATH_TRAVERSAL` and the rest) and the
+  four JavaScript/TypeScript pattern checks (`JS_EVAL`, `JS_INNER_HTML`,
+  `JS_DOCUMENT_WRITE`, `JS_SQL_TEMPLATE`), under the
+  `python-engine/injection` analyzer: 105 checks, up from 85. Each entry's
+  `finding_id` is the `rule_id` its findings carry (`python.ast/PY_…`,
+  `SEC-JS_…`). The Python engine's `JS_DOCUMENT_WRITE` is listed as
+  `python-engine/JS_DOCUMENT_WRITE`, because textscan already has a
+  `JS_DOCUMENT_WRITE` check. A check whose severity rises when the taint flow
+  is proven (`PY_PATH_TRAVERSAL`: MEDIUM, HIGH when proven) lists the unproven
+  severity. Detection does not change.
+
 ### Fixed
 
 - **The Python engine's JavaScript/TypeScript pattern findings now carry a

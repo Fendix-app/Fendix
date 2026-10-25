@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+
+	"github.com/Fendix-app/Fendix/go/internal/engine"
 )
 
 func TestPublishedSecurityContractMatchesExecutableRegistries(t *testing.T) {
@@ -95,5 +97,56 @@ func compareFields(t *testing.T, kind, id string, published, executable any) {
 		if _, ok := executableFields[field]; !ok {
 			t.Errorf("%s %q has stale published field %q", kind, id, field)
 		}
+	}
+}
+
+func TestCatalogIncludesPythonEngineChecks(t *testing.T) {
+	contract, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]Check{}
+	for _, check := range contract.Checks {
+		byID[check.ID] = check
+	}
+	for _, want := range []Check{
+		{
+			ID: "PY_SQL_INJECTION", FindingID: "python.ast/PY_SQL_INJECTION",
+			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "CRITICAL",
+			CWEs: []string{"CWE-89"}, Applicability: []string{"python"},
+		},
+		{
+			ID: "JS_SQL_TEMPLATE", FindingID: "SEC-JS_SQL_TEMPLATE",
+			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "HIGH",
+			CWEs: []string{"CWE-89"}, Applicability: []string{"javascript", "typescript"},
+		},
+	} {
+		got, ok := byID[want.ID]
+		if !ok {
+			t.Errorf("catalog has no %s check", want.ID)
+			continue
+		}
+		if got.FindingID != want.FindingID || got.Analyzer != want.Analyzer || got.Category != want.Category ||
+			got.DefaultSeverity != want.DefaultSeverity || !reflect.DeepEqual(got.CWEs, want.CWEs) ||
+			!reflect.DeepEqual(got.Applicability, want.Applicability) {
+			t.Errorf("%s = %+v, want %+v", want.ID, got, want)
+		}
+	}
+}
+
+// Check IDs are the catalog's primary key: the stale-contract test above
+// compares by ID, and the docs site routes one page per ID. A duplicate would
+// silently hide one of the two checks.
+func TestCatalogCheckIDsAreUnique(t *testing.T) {
+	contract, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, check := range contract.Checks {
+		if analyzer, dup := seen[check.ID]; dup {
+			t.Errorf("check ID %q is used by both %s and %s", check.ID, analyzer, check.Analyzer)
+		}
+		seen[check.ID] = check.Analyzer
 	}
 }

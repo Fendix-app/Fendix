@@ -79,6 +79,11 @@ func Build() (Contract, error) {
 		return Contract{}, err
 	}
 	checks = append(checks, semgrepChecks...)
+	pythonChecks, err := pythonEngineChecks()
+	if err != nil {
+		return Contract{}, err
+	}
+	checks = append(checks, pythonChecks...)
 	return Contract{
 		SchemaVersion: SchemaVersion,
 		EngineVersion: StableEngineVersion,

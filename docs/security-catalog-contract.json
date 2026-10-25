@@ -1494,6 +1494,350 @@
       ],
       "remediation": "Slack incoming-webhook URL hardcoded in a variable assignment. Anyone with this URL can post into the bound channel. Rotate the webhook in Slack's app config and store the new URL in an env var (e.g. SLACK_WEBHOOK_URL).",
       "availability": "stable"
+    },
+    {
+      "id": "PY_AUTH_HEADER_TRUST",
+      "finding_id": "python.ast/PY_AUTH_HEADER_TRUST",
+      "title": "Auth decision based on a client-controllable header",
+      "analyzer": "python-engine/injection",
+      "category": "auth_bypass",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-290"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_EVAL",
+      "finding_id": "python.ast/PY_EVAL",
+      "title": "Unsafe eval() or exec() with a dynamic argument",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-95"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_JWT_WEAK",
+      "finding_id": "python.ast/PY_JWT_WEAK",
+      "title": "Weak JWT verification — decode with verify=False or unpinned algorithm",
+      "analyzer": "python-engine/injection",
+      "category": "auth_bypass",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_LLM_PROMPT_INJECTION",
+      "finding_id": "python.ast/PY_LLM_PROMPT_INJECTION",
+      "title": "Prompt injection — untrusted input flows into an LLM prompt",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-77"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_OPEN_REDIRECT",
+      "finding_id": "python.ast/PY_OPEN_REDIRECT",
+      "title": "Potential open redirect — dynamic redirect target",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_OS_POPEN",
+      "finding_id": "python.ast/PY_OS_POPEN",
+      "title": "Unsafe os.popen() family call — command injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_OS_SYSTEM",
+      "finding_id": "python.ast/PY_OS_SYSTEM",
+      "title": "Unsafe os.system() call — command injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_PATH_TRAVERSAL",
+      "finding_id": "python.ast/PY_PATH_TRAVERSAL",
+      "title": "Potential unsafe dynamic filesystem path",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_PICKLE_LOAD",
+      "finding_id": "python.ast/PY_PICKLE_LOAD",
+      "title": "Unsafe pickle deserialization — RCE risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "cwes": [
+        "CWE-502"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_SECRET_IN_LOG",
+      "finding_id": "python.ast/PY_SECRET_IN_LOG",
+      "title": "Secret written to logs — credential exposure",
+      "analyzer": "python-engine/injection",
+      "category": "secrets",
+      "default_severity": "MEDIUM",
+      "cwes": [
+        "CWE-532"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_SQL_INJECTION",
+      "finding_id": "python.ast/PY_SQL_INJECTION",
+      "title": "SQL query built via string formatting — injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_SSRF",
+      "finding_id": "python.ast/PY_SSRF",
+      "title": "Potential SSRF — dynamic URL passed to HTTP client",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_SUBPROCESS_SHELL",
+      "finding_id": "python.ast/PY_SUBPROCESS_SHELL",
+      "title": "subprocess called with shell=True — command injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_WEAK_CRYPTO_PASSWORD",
+      "finding_id": "python.ast/PY_WEAK_CRYPTO_PASSWORD",
+      "title": "Weak hash (MD5/SHA1) used for password — credential exposure risk",
+      "analyzer": "python-engine/injection",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_XSS_HTML_SINK",
+      "finding_id": "python.ast/PY_XSS_HTML_SINK",
+      "title": "Reflected XSS — user input passed to HTML render sink",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "PY_YAML_UNSAFE_LOAD",
+      "finding_id": "python.ast/PY_YAML_UNSAFE_LOAD",
+      "title": "Unsafe yaml.load() — RCE risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-502"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python-engine/JS_DOCUMENT_WRITE",
+      "finding_id": "SEC-JS_DOCUMENT_WRITE",
+      "title": "Unsafe use of document.write() — XSS risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "JS_EVAL",
+      "finding_id": "SEC-JS_EVAL",
+      "title": "Unsafe use of eval() in JavaScript",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-95"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "JS_INNER_HTML",
+      "finding_id": "SEC-JS_INNER_HTML",
+      "title": "Unsafe assignment to innerHTML — XSS risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "JS_SQL_TEMPLATE",
+      "finding_id": "SEC-JS_SQL_TEMPLATE",
+      "title": "SQL query built via template literal — injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "availability": "stable"
     }
   ],
   "analyzers": [
