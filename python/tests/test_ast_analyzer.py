@@ -1638,8 +1638,14 @@ class TestUrlHostAllowlistGuard:
         findings = _collect_src((self._PREFIX if prefix is None else prefix) + body)
         return [f for f in findings if f["id"] == "SEC-PY_SSRF"]
 
+    def _redirect(self, body: str, prefix: str | None = None) -> list[dict]:
+        findings = _collect_src((self._PREFIX if prefix is None else prefix) + body)
+        return [f for f in findings if f["id"] == "SEC-PY_OPEN_REDIRECT"]
+
     def test_ssrf_hostname_allowlist_guard_does_not_sanitise(self) -> None:
-        # Backslash differential: urlparse's hostname of `http://10.0.0.1\@api.example.com` is api.example.com; requests goes to 10.0.0.1.
+        # Backslash differential: urlparse's hostname of
+        # `http://10.0.0.1\@api.example.com` is api.example.com, but requests
+        # connects to 10.0.0.1.
         ssrf = self._ssrf(
             "def fetch():\n"
             '    url = request.args.get("url")\n'
@@ -1757,3 +1763,140 @@ class TestUrlHostAllowlistGuard:
         assert [f for f in findings if f["id"] == "SEC-PY_XSS_HTML_SINK"], (
             f"a host allowlist must not count as an XSS sanitiser: {_ids(findings)}"
         )
+
+    # -- the empty string is not a host (R-pf22) -----------------------------
+
+    def test_redirect_allowlist_with_empty_string_does_not_sanitise(self) -> None:
+        # `/\evil.com` and `https:evil.com` have netloc "", and browsers send
+        # both to evil.com, so an allowlist holding "" admits them.
+        prefix = self._PREFIX.replace(
+            'ALLOWED = {"api.example.com", "cdn.example.com"}\n',
+            'ALLOWED = {"", "api.example.com"}\n',
+        )
+        redir = self._redirect(
+            "def login_redirect():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).netloc not in ALLOWED:\n"
+            '        return redirect("/")\n'
+            "    return redirect(url)\n",
+            prefix=prefix,
+        )
+        assert redir, "an allowlist containing the empty string admits host-less URLs"
+
+    def test_redirect_dict_allowlist_with_empty_key_does_not_sanitise(self) -> None:
+        prefix = self._PREFIX.replace(
+            'ALLOWED = {"api.example.com", "cdn.example.com"}\n',
+            'ALLOWED = {"": "/", "api.example.com": "/home"}\n',
+        )
+        redir = self._redirect(
+            "def login_redirect():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).netloc not in ALLOWED:\n"
+            '        return redirect("/")\n'
+            "    return redirect(url)\n",
+            prefix=prefix,
+        )
+        assert redir, "a dict allowlist keyed by the empty string admits host-less URLs"
+
+    # -- the guard describes the whole URL string (R-pf23) -------------------
+
+    def test_ssrf_guard_does_not_sanitise_non_leftmost_concat(self) -> None:
+        # url=`evil.com://api.example.com/x` has netloc api.example.com, but
+        # requests sends `https://evil.com://api.example.com/x` to evil.com.
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).netloc not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            '    return requests.get("https://" + url, timeout=5).text\n'
+        )
+        assert ssrf, "a guarded URL placed after a prefix no longer fixes the host"
+
+    def test_ssrf_guard_does_not_sanitise_percent_format(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).netloc not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            '    return requests.get("https://%s" % url, timeout=5).text\n'
+        )
+        assert ssrf, "a guarded URL substituted into a template no longer fixes the host"
+
+    def test_ssrf_guard_sanitises_leftmost_concat(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).netloc not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            '    return requests.get(url + "/v1", timeout=5).text\n'
+        )
+        assert not ssrf, f"a suffix after the guarded URL keeps its host: {ssrf}"
+
+    # -- the guard must end before the sink ----------------------------------
+
+    def test_ssrf_sink_inside_rejecting_branch_is_reported(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).netloc not in ALLOWED:\n"
+            "        requests.get(url, timeout=5)\n"
+            '        return "host not allowed", 400\n'
+            '    return "ok"\n'
+        )
+        assert ssrf, "a sink inside the branch that rejects the host is unguarded"
+
+    # -- shapes pinned by review ----------------------------------------------
+
+    def test_ssrf_urlsplit_guard_is_sanitiser(self) -> None:
+        ssrf = self._ssrf(
+            "from urllib.parse import urlsplit\n"
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlsplit(url).netloc not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert not ssrf, f"urlsplit netloc guard not honoured: {ssrf}"
+
+    def test_ssrf_qualified_urlparse_guard_is_sanitiser(self) -> None:
+        ssrf = self._ssrf(
+            "import urllib.parse\n"
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            "    if urllib.parse.urlparse(url).netloc not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert not ssrf, f"qualified urllib.parse.urlparse guard not honoured: {ssrf}"
+
+    def test_ssrf_guard_on_other_name_does_not_sanitise(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch():\n"
+            '    url = request.args.get("url")\n'
+            '    other = request.args.get("other")\n'
+            "    if urlparse(other).netloc not in ALLOWED:\n"
+            '        return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert ssrf, "a guard on a different value says nothing about the sink argument"
+
+    def test_ssrf_guard_nested_in_branch_does_not_sanitise(self) -> None:
+        ssrf = self._ssrf(
+            "def fetch(strict):\n"
+            '    url = request.args.get("url")\n'
+            "    if strict:\n"
+            "        if urlparse(url).netloc not in ALLOWED:\n"
+            '            return "host not allowed", 400\n'
+            "    return requests.get(url, timeout=5).text\n"
+        )
+        assert ssrf, "a guard inside a branch that may not run does not dominate the sink"
+
+    def test_redirect_hostname_allowlist_does_not_sanitise(self) -> None:
+        redir = self._redirect(
+            "def login_redirect():\n"
+            '    url = request.args.get("url")\n'
+            "    if urlparse(url).hostname not in ALLOWED:\n"
+            '        return redirect("/")\n'
+            "    return redirect(url)\n"
+        )
+        assert redir, "browsers read `\\` as `/`, so a hostname allowlist is bypassable"

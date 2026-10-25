@@ -67,16 +67,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `urlparse` or `urlsplit`, inline or through a local (`p = urlparse(url)`),
   and the check may be joined to others with `or`
   (`if p.scheme != "https" or p.netloc not in ALLOWED_HOSTS:`). The guard
-  counts only when it is a top-level statement of the function, comes before
-  the sink, returns, raises or aborts, and checks a literal set, list, tuple
-  or dict. These are still reported:
+  counts only when it is a top-level `if` of the function that ends before
+  the sink, its body returns, raises or aborts, and it checks a literal set,
+  list, tuple or dict. It covers the guarded URL passed as it is, or followed
+  by more text (`requests.get(url + "/v1")`). These are still reported:
   - a `.hostname` allowlist, because a backslash in the authority makes
     urllib3/requests and browsers connect to a different host than the one
     `urlparse` reports (`https://169.254.169.254\@api.example.com/` has
     hostname `api.example.com`, but requests connects to `169.254.169.254`);
+  - an allowlist that contains `""`, because `/\evil.com` and `https:evil.com`
+    have an empty netloc and browsers send both to `evil.com`;
+  - a URL built around the guarded one, as in `"https://" + url` or
+    `"https://%s" % url`: `evil.com://api.example.com/x` passes the guard,
+    and `https://` in front of it sends the request to `evil.com`;
   - a check joined with `and`, which can skip the host test;
   - an allowlist read from the environment or built by a call;
-  - a guard that only logs, or that comes after the sink;
+  - a guard that only logs, a sink inside the branch that rejects the host,
+    and a guard that comes after the sink;
   - the same value passed to an XSS or path sink, because the guard bounds
     the host only.
 

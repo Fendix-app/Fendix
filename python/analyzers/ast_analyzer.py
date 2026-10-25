@@ -869,6 +869,15 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # `/`) go to 169.254.169.254. `.netloc` is the whole authority, so an exact
     # match against a set of bare hosts leaves no room for userinfo, a
     # backslash or a port.
+    #
+    # Two more limits keep the guard honest:
+    #   * An allowlist holding "" is not a host guard: `/\evil.com` and
+    #     `https:evil.com` have netloc "", and browsers send both to evil.com.
+    #   * The guard describes the whole URL string, so `_arg_is_sanitised`
+    #     honours it only for the sink argument itself or the LEFTMOST operand
+    #     of a `+` (`url + "/v1"` keeps the host). A URL built around it
+    #     (`"https://" + url`, `"https://%s" % url`) can name another host:
+    #     `evil.com://api.example.com/x` has netloc api.example.com.
     _URL_PARSE_CALL_NAMES = frozenset({"urlparse", "urlsplit"})
 
     def _url_host_is_allowlisted(self, name: str, sink_line: int) -> bool:
@@ -886,23 +895,18 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         allowlist. It must NOT sit under an `and`, where a False first operand
         skips the host check entirely.
 
-        Dominance is enforced exactly as `_name_is_membership_guarded` does it
-        (top-level statements of the function body only, `lineno` strictly
-        before the sink, a body that ends control flow), and the collection
-        must be literal for the same reason: an allowlist read from the
-        environment or a call cannot be proven bounded.
+        Dominance follows `_name_is_membership_guarded` (top-level statements
+        of the function body only, a body that ends control flow), and is
+        stricter in one way: the whole `if` must END before the sink, so a sink
+        inside the rejecting branch itself is not suppressed. The collection
+        must be literal for the same reason as there: an allowlist read from
+        the environment or a call cannot be proven bounded.
         """
-        if not self._func_stack:
-            return False
-        func = self._func_stack[-1]
-        for stmt in func.body:
-            if not isinstance(stmt, ast.If) or stmt.lineno >= sink_line:
-                continue
-            if not self._test_rejects_unlisted_host(stmt.test, name):
-                continue
-            if self._body_ends_control_flow(stmt.body):
-                return True
-        return False
+        return self._has_dominating_exit_guard(
+            sink_line,
+            lambda test: self._test_rejects_unlisted_host(test, name),
+            require_end_before_sink=True,
+        )
 
     def _test_rejects_unlisted_host(self, test: ast.AST, name: str) -> bool:
         """True when `test` is True whenever `name`'s parsed netloc is outside
@@ -924,18 +928,21 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return False
         if not self._is_url_parse_of(host.value, name):
             return False
-        return self._collection_is_literal(test.comparators[0])
+        allowed = test.comparators[0]
+        if not self._collection_is_literal(allowed):
+            return False
+        # Check the RESOLVED collection (usually a module-level Name): an
+        # allowlist holding "" admits every host-less URL.
+        if isinstance(allowed, ast.Name):
+            allowed = self._resolve_binding(allowed)
+        members = allowed.keys if isinstance(allowed, ast.Dict) else allowed.elts
+        return not any(isinstance(m, ast.Constant) and m.value == "" for m in members)
 
     def _is_url_parse_of(self, expr: ast.AST, name: str) -> bool:
         """True when `expr` is `urlparse(name)` / `urlsplit(name)`, inline or
         through a Name bound to that call in the scope chain."""
         if isinstance(expr, ast.Name):
-            for scope in reversed(self._scopes):
-                if expr.id in scope:
-                    expr = scope[expr.id]
-                    break
-            else:
-                return False
+            expr = self._resolve_binding(expr)
         if not (isinstance(expr, ast.Call) and expr.args):
             return False
         fn = expr.func
@@ -1118,15 +1125,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         does not end control flow is ignored for the same reason: testing for
         '..' and continuing anyway protects nothing.
         """
-        if not self._func_stack:
-            return False
-        func = self._func_stack[-1]
-        for stmt in func.body:
-            if not isinstance(stmt, ast.If) or stmt.lineno >= sink_line:
-                continue
-            test = stmt.test
+
+        def rejects_traversal(test: ast.AST) -> bool:
             # `if ".." in name:` — a traversal sequence being looked for.
-            if not (
+            return bool(
                 isinstance(test, ast.Compare)
                 and len(test.ops) == 1
                 and isinstance(test.ops[0], ast.In)
@@ -1136,9 +1138,34 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 and test.comparators
                 and isinstance(test.comparators[0], ast.Name)
                 and test.comparators[0].id == name
-            ):
+            )
+
+        return self._has_dominating_exit_guard(sink_line, rejects_traversal)
+
+    def _has_dominating_exit_guard(
+        self,
+        sink_line: int,
+        test_pred: Callable[[ast.AST], bool],
+        *,
+        require_end_before_sink: bool = False,
+    ) -> bool:
+        """True when a top-level `if` of the innermost function body starts
+        before `sink_line`, has a test `test_pred` accepts, and has a body that
+        ends control flow. A nested `if` never appears in the body-only loop,
+        so a guard inside a branch that may not run cannot count.
+
+        `require_end_before_sink` also requires the whole `if` to end before
+        the sink, so a sink inside the guard's own branch is not covered.
+        """
+        if not self._func_stack:
+            return False
+        func = self._func_stack[-1]
+        for stmt in func.body:
+            if not isinstance(stmt, ast.If) or stmt.lineno >= sink_line:
                 continue
-            if self._body_ends_control_flow(stmt.body):
+            if require_end_before_sink and stmt.end_lineno >= sink_line:
+                continue
+            if test_pred(stmt.test) and self._body_ends_control_flow(stmt.body):
                 return True
         return False
 
@@ -1173,7 +1200,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         ``url_sink`` is True for sinks whose risk is the destination host
         (SSRF, open redirect). It additionally honours a URL-host allowlist
         guard (`_url_host_is_allowlisted`), which bounds the host and nothing
-        else, so it must not count for XSS or path sinks.
+        else, so it must not count for XSS or path sinks. That guard describes
+        a whole URL string, so ``url_sink`` survives only into a scope-resolved
+        binding of the argument and the LEFTMOST operand of a ``+``; every
+        other operand, and every ``%``-format value, is checked without it.
 
         Handles three shapes:
           1. arg IS the dict-lookup or guarded Name itself
@@ -1225,16 +1255,18 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                         else [rhs]
                     )
                     return all(
-                        isinstance(v, ast.Constant)
-                        or self._arg_is_sanitised(v, sink_line, url_sink=url_sink)
+                        isinstance(v, ast.Constant) or self._arg_is_sanitised(v, sink_line)
                         for v in values
                     )
                 return False
-            # Every non-Constant subexpression must itself be sanitised.
+            # Every non-Constant subexpression must itself be sanitised. Only
+            # the leftmost operand of a `+` can still be the whole URL whose
+            # host a URL-host guard fixed (`url + "/v1"`).
+            left_url_sink = url_sink and isinstance(arg.op, ast.Add)
             return all(
                 isinstance(sub, ast.Constant)
-                or self._arg_is_sanitised(sub, sink_line, url_sink=url_sink)
-                for sub in (arg.left, arg.right)
+                or self._arg_is_sanitised(sub, sink_line, url_sink=sub_url_sink)
+                for sub, sub_url_sink in ((arg.left, left_url_sink), (arg.right, False))
             )
         # audit #16: a fully-constant f-string or an os.path.* / known dunder
         # call over constant args is a safe path (config loaders, __file__-
