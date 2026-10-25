@@ -17,9 +17,9 @@ Never reference `@main`.
 
 ### Alternative — copy the reference workflow
 
-For the container-based path, a complete, digest-pinned v3.6.2 container
+For the container-based path, a complete, digest-pinned v3.7.0 container
 workflow lives at
-[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml).
+[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml).
 Install it from that tested commit, not from `main`, as shown in
 [INTEGRATION_GUIDE §3.2](INTEGRATION_GUIDE.md#32-alternative--the-digest-pinned-reference-workflow).
 Dropped into `.github/workflows/fendix-scan.yml` of your project, it will:

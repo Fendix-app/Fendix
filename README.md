@@ -794,14 +794,15 @@ repositories.
 #### Alternative: the digest-pinned reference workflow
 
 For teams that want the container-based path and to own the workflow file
-directly, the reference workflow runs the official v3.6.2 container by digest,
-pins every third-party Action to a full commit SHA, and was tested end to end
-from fresh repositories. Install it from its tested commit, not from `main`:
+directly, the reference workflow runs the official v3.7.0 container by digest
+and pins every third-party Action to a full commit SHA. Its content was tested
+end to end; the integration guide has the record. Install it from that commit,
+not from `main`:
 
 ```bash
 mkdir -p .github/workflows
 curl -fsSL -o .github/workflows/fendix-scan.yml \
-  https://raw.githubusercontent.com/Fendix-app/Fendix/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml
+  https://raw.githubusercontent.com/Fendix-app/Fendix/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml
 ```
 
 The [integration guide](docs/INTEGRATION_GUIDE.md#32-alternative--the-digest-pinned-reference-workflow)

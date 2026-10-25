@@ -559,15 +559,15 @@ Outside the Action, the same verification is available to any workflow: install 
 
 ### 3.2 Alternative — the digest-pinned reference workflow
 
-[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml) at commit `41da3ae48fc17412893112061175120958b8b91e` is an alternative for teams that want the container-based path and to own the workflow file directly. It runs the official v3.6.2 image by immutable digest and pins every third-party Action to a full commit SHA.
+[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml) at commit `5ddfd88bde0e24d67d23be7f0d0302cfb29789f5` is an alternative for teams that want the container-based path and to own the workflow file directly. It runs the official v3.7.0 image by immutable digest and pins every third-party Action to a full commit SHA.
 
 Install it from that commit, not from `main`:
 
 ```bash
 mkdir -p .github/workflows
 curl -fsSL -o .github/workflows/fendix-scan.yml \
-  https://raw.githubusercontent.com/Fendix-app/Fendix/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml
-echo "5d5cce3bf02f72971d70f7b3dcde4b3a66b7a9fec39ebbba8183a1e53a8f915c  .github/workflows/fendix-scan.yml" | sha256sum -c -
+  https://raw.githubusercontent.com/Fendix-app/Fendix/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml
+echo "1125f8ed0031da3cd2bdce839aacb73e6cc3bb06400ea0dda4ec1d6a9b688ca5  .github/workflows/fendix-scan.yml" | sha256sum -c -
 ```
 
 On macOS, use `shasum -a 256 -c -` in place of `sha256sum -c -`.
@@ -605,7 +605,7 @@ A failing reporting step (SARIF upload, PR comment) still fails the job, but it 
 - **Private repository without Code Security:** the workflow skips the upload and writes a notice. The scan, the PR comment and the gate run as usual, and the comment says that no SARIF was uploaded.
 - **Private repository with Code Security:** set the repository variable `FENDIX_UPLOAD_SARIF` to `true` (Settings → Secrets and variables → Actions → Variables) to upload. This path has not yet been verified end to end.
 
-This file, at commit `41da3ae48fc17412893112061175120958b8b91e` with the v3.6.2 image `sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529`, was tested end to end on 2026-10-16, installed with the commands above in fresh public and private repositories (the private one without Code Security), against scans with no findings, a held `WARN` finding, a `BLOCK` finding and a scan error, on GitHub-hosted `ubuntu-24.04` runners. The scan with no findings uploaded its SARIF as the engine wrote it, with `"rules": []`. The previous version of this file (commit `7cf1960f321c497e0b15da7e5e1f02d87988743e`: the v3.6.0 image and a temporary step that rewrote a `null` rules value) also passed the core scenarios on `ubuntu-26.04`, the image `ubuntu-latest` moves to from 2026-10-19 (public: no findings, `WARN`, `BLOCK`, scan error; private: no findings, `BLOCK`). This version has not yet run there; the workflow stays on `ubuntu-latest`. Not yet tested: a private repository with Code Security, and pull requests from forks.
+This file, at commit `5ddfd88bde0e24d67d23be7f0d0302cfb29789f5`, is the version tested at commit `41da3ae48fc17412893112061175120958b8b91e` with only two lines changed: the image digest, now v3.7.0 `sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015`, and the comment that names it. That content was tested end to end on 2026-10-25 in round r5 of `Fendix-app/fendix-action-e2e-public` (commit `7fe98164e596a9e2f6e5bb62aeee81fe6dea1d55`, a byte-identical copy) in a public repository: a push to `main` and pull requests with a `BLOCK` finding, a scan error, no `pull-requests` permission, no `security-events` permission and a held `WARN` finding, all six matching the previous round on outcome, exit code, SARIF upload, PR comment and findings (runs 40226953419, 40227084070, 40227089397, 40227093383, 40227099121 and 40227105157). The version at commit `41da3ae48fc17412893112061175120958b8b91e`, with the v3.6.2 image `sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529`, was tested end to end on 2026-10-16, installed with the commands of that version in fresh public and private repositories (the private one without Code Security), against scans with no findings, a held `WARN` finding, a `BLOCK` finding and a scan error, on GitHub-hosted `ubuntu-24.04` runners. The scan with no findings uploaded its SARIF as the engine wrote it, with `"rules": []`. The previous version of this file (commit `7cf1960f321c497e0b15da7e5e1f02d87988743e`: the v3.6.0 image and a temporary step that rewrote a `null` rules value) also passed the core scenarios on `ubuntu-26.04`, the image `ubuntu-latest` moves to from 2026-10-19 (public: no findings, `WARN`, `BLOCK`, scan error; private: no findings, `BLOCK`). This version has not yet run there; the workflow stays on `ubuntu-latest`. Not yet tested: a private repository with Code Security, and pull requests from forks.
 
 ### 3.3 Public Action availability
 
