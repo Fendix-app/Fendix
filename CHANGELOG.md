@@ -284,6 +284,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Where the rule reported such a query, a baseline entry for that finding no
   longer matches anything, and no new finding replaces it.
+- **A Python sink in a helper function is now proven reachable when the caller
+  assigns the request value before passing it.** The engine follows a helper's
+  parameter back to the calls of that helper in the same file. It proved the
+  flow only when the request expression was the argument itself, as in
+  `_ping(request.GET.get("host"))`. The common form,
+  `host = request.GET.get("host")` and then `_ping(host)`, was reported but not
+  proven. The argument is now traced through the caller's own assignments.
+  Such findings are marked reachable and carry a taint chain: the caller's
+  request expression first, then the caller's assignments, then the call, then
+  the sink. Like any proven finding, they take the rule's proven title and
+  severity where it has one (`python.ast/PY_PATH_TRAVERSAL` rises from MEDIUM
+  to HIGH), the engine escalates them one level as reachable, and they may now
+  block.
+  - **Identity.** SSRF, open-redirect, path-traversal and XSS findings keep
+    their identity. The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+    `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+    `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+    proven, so a finding of theirs that this change proves is identified by
+    its sink instead of its source line. A baseline entry or a `.fendix-ignore`
+    `fingerprint:` rule for it stops matching, and it is reported as new once.
+  - **Which assignment counts:** for each name, the last one that comes before
+    the call in source order. So `host = request.GET["h"]; host = "localhost";
+    _ping(host)` is not proven, and a constant assigned after the call does not
+    hide the request value assigned before it. A loop or branch is not
+    modelled: only source order decides.
+  - **Followed in the caller:** plain, tuple, annotated and augmented (`+=`)
+    assignments, `for` targets and `with ... as` targets, made in the calling
+    function itself, or at module level for a call made there. An assignment
+    in a nested function, lambda or class does not count for the function
+    around it.
+  - **Not followed:** a call inside a lambda, comprehension or class body,
+    which still proves only with the request expression passed inline; a
+    method call (`self._ping(host)`); a caller in another file; and the
+    caller's own parameters, which are not traced into its callers (one hop
+    only). A helper whose callers all pass constants is not proven.
+  - **Framework parity:** the Django and Flask `indirect` cases for SQL
+    injection, command injection, SSRF, path traversal and open redirect, and
+    Flask's `ssti` `indirect` case, now block. No safe case blocks.
 
 ## [3.6.4] - 2026-10-24
 

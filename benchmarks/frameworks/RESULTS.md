@@ -96,6 +96,9 @@ The `direct` and `indirect` columns include the new classes.
 - **Python follows taint into another module, but cannot prove it.**
   - Detection holds at 81% for `cross_file`, because the sink shape alone is enough to report.
   - Almost nothing in the helper variants proves reachability: 9% block for same-file helpers, 14% for cross-file. The one-hop interprocedural check (`_param_is_tainted_via_caller`) proves only when the request expression is passed inline, as in `helper(request.GET.get("x"))`. The common shape, `x = request.GET.get("x"); helper(x)`, never proves, because the caller's local bindings are not visible while the helper is visited. This is the same defect for every class.
+    - Closed after v3.6.3 for same-file helpers. The check now traces the argument through the caller's own assignments before the call. The Django and Flask `indirect` cases for SQLi, command injection, SSRF, path traversal and open redirect, and Flask's `ssti` `indirect` case, now block.
+    - FastAPI's `indirect` cases still warn: the caller passes a typed handler parameter, which is not a request source. Cross-file helpers are unchanged.
+    - See `CHANGELOG.md`, `[Unreleased]`.
 - **Python handles a second API well.** `os.system`, `Markup`/`mark_safe`, `urllib.request.urlopen`, `send_file`/`FileResponse`, `HttpResponseRedirect` and SQLAlchemy `text(f"...")` are all found, and most block.
   - FastAPI is the exception: its findings warn.
   - Two forms are missed: a raw `Location` header redirect in Flask and FastAPI, and FastAPI `FileResponse(path)`.

@@ -15,8 +15,9 @@ import os
 import posixpath
 import re
 import sys
+from collections import deque
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Iterator, Literal
 
 # Skip directories (same as secrets analyzer)
 _SKIP_DIRS: frozenset[str] = frozenset(
@@ -42,6 +43,20 @@ _MAX_FILE_BYTES = 1_048_576  # 1 MB
 # length) so one hostile file can't abort the whole injection pass. The cap is
 # comfortably above any real-world dataflow depth.
 _MAX_TAINT_HOPS = 50
+
+# Nodes that open a scope of their own. A call inside one runs in that scope,
+# not in the enclosing function's, so the enclosing function's bindings must
+# not resolve its arguments (a lambda or comprehension variable shadows them).
+_SCOPE_NODES = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.Lambda,
+    ast.ClassDef,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
 
 # Sentinel distinguishing "this sink never depends on dataflow" from "this sink
 # tried to prove dataflow and failed". _emit_finding cannot tell those apart
@@ -336,6 +351,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # passes a tainted argument at that parameter's position/keyword. Bounded
         # to a SINGLE hop (we don't recurse into the caller's callers).
         self._callsite_index: dict | None = None
+        # The callers' own bindings for that hop: the module node and each def
+        # node → the bindings made in its scope, in source order (see
+        # `_build_function_bindings`). Keyed by node, so same-named functions
+        # never share bindings. Built lazily, once per file, from _module_root.
+        self._function_bindings: (
+            dict[ast.AST, list[tuple[tuple[int, int], str, ast.AST]]] | None
+        ) = None
         self._interproc_depth: int = 0
         self._module_root = None  # set in _analyze_python before the walk
         # Maps a bare local name → (module, symbol), populated by
@@ -524,9 +546,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # Inline case: the sink's argument is itself a request-input
         # reference (no intermediate variables). The chain is two links:
         # source @ sink-lineno → sink @ sink-lineno.
-        if _references_request_input(sink_arg) or (
-            extra_source is not None and extra_source(sink_arg)
-        ):
+        if _is_taint_source(sink_arg, extra_source):
             return [
                 self._link(sink_lineno, _ast_expr_text(sink_arg)),
                 self._link(sink_lineno, sink_expr),
@@ -559,12 +579,60 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         (F-H5b) so a long linear assignment chain can't drive Python into a
         RecursionError. Returning None just means "no proven source within
         the hop budget" — the sink still emits, only without a taint_chain.
+
+        A Name with no binding in scope may be a parameter of the enclosing
+        function whose taint comes from a caller (audit recall gap; benchmark
+        cmdi-interprocedural): `_param_is_tainted_via_caller` tries one hop.
         """
+        return self._trace_names(
+            expr,
+            self._scope_binding,
+            visited,
+            depth,
+            extra_source,
+            self._param_is_tainted_via_caller,
+        )
+
+    def _trace_in_bindings(
+        self,
+        expr: ast.AST,
+        bindings: dict[str, ast.AST],
+        visited: frozenset[str],
+        depth: int,
+        extra_source=None,
+    ) -> list[dict] | None:
+        """`_trace_to_source` over a caller's ``bindings`` instead of the
+        scopes being visited. A Name the bindings do not hold (a parameter of
+        the caller, a global) ends the trace: that is the single hop, and the
+        caller's own callers are never searched."""
+        return self._trace_names(expr, bindings.get, visited, depth, extra_source, None)
+
+    def _scope_binding(self, key: str) -> ast.AST | None:
+        """The value `key` is bound to in the scopes being visited, innermost
+        first (audit #17), or None."""
+        for scope in reversed(self._scopes):
+            if key in scope:
+                return scope[key]
+        return None
+
+    def _trace_names(
+        self,
+        expr: ast.AST,
+        lookup: Callable[[str], ast.AST | None],
+        visited: frozenset[str],
+        depth: int,
+        extra_source,
+        on_unbound_name: Callable[..., list[dict] | None] | None,
+    ) -> list[dict] | None:
+        """The walk behind `_trace_to_source` and `_trace_in_bindings`: resolve
+        every Name, and attribute/subscript read bound via `_bind_target`
+        (``self.q``, ``d['k']``, audit #26/#27), with ``lookup``, following
+        each binding back until one references a source.
+        ``on_unbound_name(name, extra_source, depth)``, when given, is asked
+        about a bare Name that ``lookup`` does not resolve."""
         if depth >= _MAX_TAINT_HOPS:
             return None
         for n in ast.walk(expr):
-            # Resolve Names, and attribute/subscript reads (self.q, d['k']) that
-            # were bound via _bind_target (audit #26/#27).
             key = None
             if isinstance(n, ast.Name):
                 key = n.id
@@ -572,68 +640,157 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 key = _binding_key(n)
             if key is None or key in visited:
                 continue
-            resolved_locally = False
-            for scope in reversed(self._scopes):
-                if key not in scope:
-                    continue
-                resolved_locally = True
-                assigned = scope[key]
+            assigned = lookup(key)
+            if assigned is not None:
                 lineno = getattr(assigned, "lineno", 0)
                 link = self._link(lineno, _ast_expr_text(assigned))
-                if _references_request_input(assigned) or (
-                    extra_source is not None and extra_source(assigned)
-                ):
+                if _is_taint_source(assigned, extra_source):
                     return [link]
-                deeper = self._trace_to_source(
-                    assigned, visited | {key}, depth + 1, extra_source
+                deeper = self._trace_names(
+                    assigned,
+                    lookup,
+                    visited | {key},
+                    depth + 1,
+                    extra_source,
+                    on_unbound_name,
                 )
                 if deeper is not None:
                     return deeper + [link]
-                # Binding resolved but didn't lead to a source; don't keep
-                # searching siblings — we found the assignment for this key.
-                break
-            # 1-hop interprocedural: a Name with no local binding may be a
-            # function PARAMETER whose taint comes from a caller (audit recall
-            # gap; benchmark cmdi-interprocedural). Try a single hop.
-            if not resolved_locally and isinstance(n, ast.Name):
-                inter = self._param_is_tainted_via_caller(
-                    n.id, extra_source, visited | {key}, depth
-                )
+                # Binding resolved but didn't lead to a source; this key is
+                # settled, move on to the next Name.
+                continue
+            if on_unbound_name is not None and isinstance(n, ast.Name):
+                inter = on_unbound_name(n.id, extra_source, depth)
                 if inter is not None:
                     return inter
         return None
 
-    def _build_callsite_index(self) -> dict:
+    def _build_callsite_index(self) -> dict[str, list[tuple[ast.Call, ast.AST]]]:
         """Index every `name(...)` call in the file by callee name (1-hop
-        interprocedural taint). Built once from the module root captured by the
-        visitor; bare-name callees only (the common helper-call shape)."""
-        index: dict[str, list[ast.Call]] = {}
+        interprocedural taint), each with the scope the call runs in: the
+        innermost enclosing def, lambda, class or comprehension, else the
+        module. Built once from the module root captured by the visitor;
+        bare-name callees only (the common helper-call shape). Call sites keep
+        `ast.walk`'s breadth-first order."""
+        index: dict[str, list[tuple[ast.Call, ast.AST]]] = {}
         root = self._module_root
         if root is None:
             return index
-        for n in ast.walk(root):
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
-                index.setdefault(n.func.id, []).append(n)
+        queue = deque([(root, root)])
+        while queue:
+            node, scope = queue.popleft()
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                index.setdefault(node.func.id, []).append((node, scope))
+            if node is not root and isinstance(node, _SCOPE_NODES):
+                scope = node
+            queue.extend((child, scope) for child in ast.iter_child_nodes(node))
         return index
 
-    def _param_is_tainted_via_caller(
-        self, param_name: str, extra_source, visited, depth
-    ) -> list[dict] | None:
-        """1-hop interprocedural: if `param_name` is a parameter of the enclosing
-        function, return a taint-chain prefix when ANY call site of that function
-        passes a tainted argument at the matching position/keyword. Single hop —
-        we do NOT recurse into the caller's own callers."""
+    def _build_function_bindings(
+        self,
+    ) -> dict[ast.AST, list[tuple[tuple[int, int], str, ast.AST]]]:
+        """Map the module and every def in it to the bindings made directly in
+        its own scope, for the 1-hop caller check.
+
+        Each binding is ``(position, key, value)``, sorted by ``position``: the
+        point after which the binding is visible. That is the end of an
+        assignment, so ``x = f(x)`` still passes the old ``x`` to ``f``, and
+        the end of a ``for`` iterable or a ``with`` context expression, so the
+        loop or block body sees its target. Keyed by node, never by name, so
+        two same-named methods keep separate bindings. An assignment inside a
+        nested def, lambda or class belongs to that scope alone.
+
+        Targets are bound with the visitor's own rules (`_bind_target`, and
+        ``x += v`` as a BinOp over the prior value, located at the ``+=`` so its
+        link keeps the line), plus annotated assignments with a value."""
+        root = self._module_root
+        if root is None:
+            return {}
+        return {
+            scope: self._scope_bindings(scope)
+            for scope in ast.walk(root)
+            if scope is root
+            or isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+    def _scope_bindings(
+        self, scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> list[tuple[tuple[int, int], str, ast.AST]]:
+        """The bindings `_build_function_bindings` records for one scope."""
+        steps: list[tuple[tuple[int, int], ast.AST]] = []
+        for stmt in scope.body:
+            for n in _same_scope_nodes(stmt):
+                if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    steps.append((_end_position(n), n))
+                elif isinstance(n, (ast.For, ast.AsyncFor)):
+                    steps.append((_end_position(n.iter), n))
+                elif isinstance(n, (ast.With, ast.AsyncWith)):
+                    steps.extend(
+                        (_end_position(item.context_expr), item)
+                        for item in n.items
+                        if item.optional_vars is not None
+                    )
+        steps.sort(key=lambda step: step[0])
+        current: dict[str, ast.AST] = {}
+        bindings: list[tuple[tuple[int, int], str, ast.AST]] = []
+        for position, n in steps:
+            bound: dict[str, ast.AST] = {}
+            if isinstance(n, ast.Assign):
+                for target in n.targets:
+                    self._bind_target(target, n.value, bound)
+            elif isinstance(n, ast.AnnAssign):
+                if n.value is not None:
+                    self._bind_target(n.target, n.value, bound)
+            elif isinstance(n, ast.AugAssign):
+                key = _binding_key(n.target)
+                if key is not None:
+                    prior = current.get(key, n.target)
+                    bound[key] = ast.copy_location(
+                        ast.BinOp(left=prior, op=n.op, right=n.value), n
+                    )
+            elif isinstance(n, (ast.For, ast.AsyncFor)):
+                self._bind_target(n.target, n.iter, bound)
+            else:  # ast.withitem
+                self._bind_target(n.optional_vars, n.context_expr, bound)
+            current.update(bound)
+            bindings.extend((position, key, value) for key, value in bound.items())
+        return bindings
+
+    def _bindings_before(self, scope: ast.AST, call: ast.Call) -> dict[str, ast.AST]:
+        """`{key: value}` for `scope` as it stands when `call` runs: for every
+        key, the last binding that takes effect at or before the call's start,
+        in source order. The same rule applies to every name the trace meets,
+        as `self._scopes` does at a sink. A lambda, class or comprehension
+        scope records no bindings, so only an inline source proves there."""
+        if self._function_bindings is None:
+            self._function_bindings = self._build_function_bindings()
+        at = (call.lineno, call.col_offset)
+        bindings: dict[str, ast.AST] = {}
+        for position, key, value in self._function_bindings.get(scope, ()):
+            if position > at:
+                break
+            bindings[key] = value
+        return bindings
+
+    def _caller_args(
+        self, param_name: str
+    ) -> Iterator[tuple[ast.Call, ast.AST, ast.AST]]:
+        """Yield ``(call, scope, arg)`` for every call in this file of the
+        innermost enclosing function that passes an argument for its parameter
+        ``param_name``: the positional argument at the parameter's index, or
+        the keyword of that name. ``scope`` is where the call runs (see
+        `_build_callsite_index`). Yields nothing once a hop is under way
+        (`_interproc_depth`): one hop, never into the caller's callers."""
         if self._interproc_depth >= 1 or not self._func_stack:
-            return None
+            return
         func = self._func_stack[-1]
         params = [a.arg for a in func.args.posonlyargs + func.args.args]
         if param_name not in params:
-            return None
+            return
         idx = params.index(param_name)
         if self._callsite_index is None:
             self._callsite_index = self._build_callsite_index()
-        for call in self._callsite_index.get(func.name, []):
-            # positional arg at the param's index, or a matching keyword.
+        for call, scope in self._callsite_index.get(func.name, []):
             arg = None
             if idx < len(call.args):
                 arg = call.args[idx]
@@ -642,24 +799,39 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     if kw.arg == param_name:
                         arg = kw.value
                         break
-            if arg is None:
-                continue
-            # Is the passed argument tainted? Check directly, then 1 hop back
-            # through the CALLER's scope is out of reach (we're a single-file,
-            # single-hop model) — so we test the arg expression itself.
-            if _references_request_input(arg) or (
-                extra_source is not None and extra_source(arg)
-            ):
-                return [self._link(getattr(call, "lineno", 0), _ast_expr_text(arg))]
-            # one bounded hop: the arg may itself be a Name the caller assigned;
-            # guard recursion with _interproc_depth.
+            if arg is not None:
+                yield call, scope, arg
+
+    def _param_is_tainted_via_caller(
+        self, param_name: str, extra_source, depth: int
+    ) -> list[dict] | None:
+        """1-hop interprocedural: if `param_name` is a parameter of the enclosing
+        function, return a taint-chain prefix when ANY call site of that function
+        in this file passes a tainted argument at the matching position/keyword.
+
+        The argument is tainted when it is request input itself, or when it
+        traces to request input through the CALLER's bindings as they stand at
+        the call (`_bindings_before`). The trace starts with a fresh `visited`:
+        the caller's names are not the helper's. Its prefix runs from the
+        caller's request expression through the caller's assignments to the
+        call. Single hop — the caller's own parameters are not traced into the
+        caller's callers."""
+        for call, scope, arg in self._caller_args(param_name):
+            if _is_taint_source(arg, extra_source):
+                return [self._link(call.lineno, _ast_expr_text(arg))]
             self._interproc_depth += 1
             try:
-                prefix = self._trace_to_source(arg, visited, depth + 1, extra_source)
+                prefix = self._trace_in_bindings(
+                    arg,
+                    self._bindings_before(scope, call),
+                    frozenset(),
+                    depth + 1,
+                    extra_source,
+                )
             finally:
                 self._interproc_depth -= 1
             if prefix is not None:
-                return prefix
+                return prefix + [self._link(call.lineno, _ast_expr_text(call))]
         return None
 
     def _resolve_param_to_caller_arg(self, param_name: str) -> ast.AST | None:
@@ -668,25 +840,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         that argument expression (so shape-based sink predicates can inspect what
         the caller actually passes). Returns None if no caller, or all callers
         pass constants. Single hop; no recursion into callers' callers."""
-        if self._interproc_depth >= 1 or not self._func_stack:
-            return None
-        func = self._func_stack[-1]
-        params = [a.arg for a in func.args.posonlyargs + func.args.args]
-        if param_name not in params:
-            return None
-        idx = params.index(param_name)
-        if self._callsite_index is None:
-            self._callsite_index = self._build_callsite_index()
-        for call in self._callsite_index.get(func.name, []):
-            arg = None
-            if idx < len(call.args):
-                arg = call.args[idx]
-            else:
-                for kw in call.keywords:
-                    if kw.arg == param_name:
-                        arg = kw.value
-                        break
-            if arg is not None and not isinstance(arg, ast.Constant):
+        for _call, _scope, arg in self._caller_args(param_name):
+            if not isinstance(arg, ast.Constant):
                 return arg
         return None
 
@@ -4047,6 +4202,11 @@ def _param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     return {p.arg for p in params}
 
 
+def _end_position(node: ast.AST) -> tuple[int, int]:
+    """Where `node` ends in the source, as a comparable (line, column)."""
+    return (node.end_lineno or 0, node.end_col_offset or 0)
+
+
 def _same_scope_nodes(node: ast.AST):
     """Yield `node` and its descendants that run in the same scope. A def,
     lambda or class is yielded (its name binds here) but not entered."""
@@ -4370,6 +4530,14 @@ _DATASTORE_RESULT_KEYS: frozenset[str] = frozenset(
         "rows",
     }
 )
+
+
+def _is_taint_source(expr: ast.AST, extra_source=None) -> bool:
+    """True when `expr` is a source itself: request input, or what the sink's
+    `extra_source` predicate (e.g. `_references_datastore_read`) accepts."""
+    return _references_request_input(expr) or (
+        extra_source is not None and extra_source(expr)
+    )
 
 
 def _references_datastore_read(arg: ast.AST) -> bool:

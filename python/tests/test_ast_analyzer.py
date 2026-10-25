@@ -2637,3 +2637,282 @@ class TestPathContainmentAssertion:
             '    return rd(request.args["g"])\n'
         )
         assert self._at(pt, 13), "the nested function's `full` is its parameter"
+
+
+# ---------------------------------------------------------------------------
+# One hop into a same-file helper whose caller assigns the value first
+# ---------------------------------------------------------------------------
+
+_SHELL_PRELUDE = "import subprocess\nfrom flask import request\n"
+_PING = 'def _ping(host):\n    subprocess.run(f"ping -c 1 {host}", shell=True)\n'
+_PING_SINK = "subprocess(shell=True, cmd=f'ping -c 1 {host}')"
+
+
+def _link(line: int, expr: str) -> dict:
+    return {"file": "mod.py", "line": line, "expr": expr}
+
+
+class TestHelperTaintThroughCallerAssignment:
+    """A helper's parameter is tainted when a caller in the same file passes a
+    value it assigned from request input, not only when the request expression
+    is written inline as the argument. Lines below count from the two-line
+    prelude, so the first line of each snippet is line 3."""
+
+    @staticmethod
+    def _shell(src: str) -> dict:
+        found = [
+            f
+            for f in _collect_src(_SHELL_PRELUDE + src)
+            if f["id"] == "SEC-PY_SUBPROCESS_SHELL"
+        ]
+        assert len(found) == 1, found
+        return found[0]
+
+    def _proven(self, src: str) -> list[dict]:
+        f = self._shell(src)
+        assert f.get("reachable") is True, f
+        return f["taint_chain"]
+
+    def _unproven(self, src: str) -> None:
+        f = self._shell(src)
+        assert f.get("reachable") is None, f
+        assert "taint_chain" not in f, f
+
+    def test_helper_param_tainted_via_caller_assignment_same_name(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    host = request.GET.get("host")\n'
+            + "    return _ping(host)\n"
+        )
+        assert chain[0] == _link(6, "request.GET.get('host')")
+        assert [(link["line"], link["expr"]) for link in chain[1:]] == [
+            (7, "_ping(host)"),
+            (4, _PING_SINK),
+        ]
+
+    def test_helper_param_tainted_via_caller_assignment_other_name(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    target = request.GET.get("host")\n'
+            + "    return _ping(target)\n"
+        )
+        assert chain[0]["expr"] == "request.GET.get('host')"
+        assert chain[0]["line"] == 6
+
+    def test_helper_param_tainted_via_two_caller_assignments(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    raw = request.GET["h"]\n'
+            + "    host = raw.strip()\n"
+            + "    return _ping(host)\n"
+        )
+        assert [(link["line"], link["expr"]) for link in chain] == [
+            (6, "request.GET['h']"),
+            (7, "raw.strip()"),
+            (8, "_ping(host)"),
+            (4, _PING_SINK),
+        ]
+
+    def test_helper_called_with_constant_everywhere_is_not_reachable(self) -> None:
+        self._unproven(
+            _PING
+            + "def first():\n"
+            + '    return _ping("localhost")\n'
+            + "def second():\n"
+            + '    return _ping("127.0.0.1")\n'
+        )
+
+    def test_helper_defined_after_caller_still_resolves(self) -> None:
+        chain = self._proven(
+            "def view(request):\n"
+            + '    host = request.GET.get("host")\n'
+            + "    return _ping(host)\n"
+            + _PING
+        )
+        assert chain[0] == _link(4, "request.GET.get('host')")
+        assert chain[-1]["line"] == 7
+
+    def test_name_bound_only_to_a_constant_is_not_reachable(self) -> None:
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = "localhost"\n'
+            + "    return _ping(host)\n"
+        )
+
+    def test_one_tainted_caller_among_constant_callers_is_enough(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def health():\n"
+            + '    host = "localhost"\n'
+            + "    return _ping(host)\n"
+            + "def view(request):\n"
+            + '    host = request.GET["h"]\n'
+            + "    return _ping(host)\n"
+        )
+        assert chain[0] == _link(9, "request.GET['h']")
+
+    # -- which assignment counts: the last one before the call ---------------
+
+    def test_constant_reassigned_before_the_call_is_not_reachable(self) -> None:
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = request.GET["h"]\n'
+            + '    host = "localhost"\n'
+            + "    return _ping(host)\n"
+        )
+
+    def test_constant_assigned_after_the_call_keeps_the_proof(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    host = request.GET["h"]\n'
+            + "    out = _ping(host)\n"
+            + '    host = "localhost"\n'
+            + "    return out\n"
+        )
+        assert chain[0]["line"] == 6
+
+    def test_request_assigned_after_the_call_is_not_reachable(self) -> None:
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = "localhost"\n'
+            + "    out = _ping(host)\n"
+            + '    host = request.GET["h"]\n'
+            + "    return out\n"
+        )
+
+    def test_assignment_holding_the_call_does_not_bind_its_argument(self) -> None:
+        # The call runs before `host` is rebound, so it still sees "localhost".
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = "localhost"\n'
+            + '    host = request.GET.get("h", _ping(host))\n'
+        )
+
+    # -- whose bindings a call site reads ------------------------------------
+
+    def test_same_named_functions_do_not_share_bindings(self) -> None:
+        # Pinger.handle is walked first; Reader.handle, which assigns from
+        # request, must not lend its `host` to Pinger.handle's call site.
+        self._unproven(
+            _PING
+            + "class Pinger:\n"
+            + "    def handle(self, host):\n"
+            + "        return _ping(host)\n"
+            + "class Reader:\n"
+            + "    def handle(self, request):\n"
+            + '        host = request.GET["h"]\n'
+            + "        return host\n"
+        )
+
+    def test_module_level_call_resolves_module_bindings(self) -> None:
+        chain = self._proven(
+            _PING + 'host = request.args.get("host")\n' + "_ping(host)\n"
+        )
+        assert chain[0] == _link(5, "request.args.get('host')")
+        assert chain[1] == _link(6, "_ping(host)")
+
+    def test_function_local_does_not_reach_a_module_level_call(self) -> None:
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = request.GET["h"]\n'
+            + "    return host\n"
+            + "_ping(host)\n"
+        )
+
+    def test_nested_function_assignment_does_not_reach_the_enclosing_call(self) -> None:
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = "localhost"\n'
+            + "    def remember():\n"
+            + '        host = request.GET["h"]\n'
+            + "        return host\n"
+            + "    return _ping(host)\n"
+        )
+
+    def test_call_inside_nested_function_reads_its_bindings(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + "    def run():\n"
+            + '        host = request.GET["h"]\n'
+            + "        return _ping(host)\n"
+            + "    return run()\n"
+        )
+        assert chain[0]["line"] == 7
+
+    def test_comprehension_variable_shadows_the_caller_binding(self) -> None:
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = request.GET["h"]\n'
+            + '    return [_ping(host) for host in ("a", "b")]\n'
+        )
+
+    def test_lambda_parameter_shadows_the_caller_binding(self) -> None:
+        self._unproven(
+            _PING
+            + "def view(request):\n"
+            + '    host = request.GET["h"]\n'
+            + "    ping = lambda host: _ping(host)\n"
+            + '    return ping("localhost")\n'
+        )
+
+    def test_caller_parameter_is_not_traced_into_its_own_callers(self) -> None:
+        # Single hop: middle's `h` would need a second hop into view.
+        self._unproven(
+            _PING
+            + "def middle(h):\n"
+            + "    host = h\n"
+            + "    return _ping(host)\n"
+            + "def view(request):\n"
+            + '    return middle(request.GET["h"])\n'
+        )
+
+    # -- binding shapes the caller may use -----------------------------------
+
+    def test_keyword_argument_bound_in_caller(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    target = request.GET["h"]\n'
+            + "    return _ping(host=target)\n"
+        )
+        assert chain[0]["expr"] == "request.GET['h']"
+
+    def test_annotated_assignment_in_caller(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    host: str = request.GET["h"]\n'
+            + "    return _ping(host)\n"
+        )
+        assert chain[0] == _link(6, "request.GET['h']")
+
+    def test_augmented_assignment_in_caller_keeps_its_line(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    host = "10.0.0."\n'
+            + '    host += request.GET["octet"]\n'
+            + "    return _ping(host)\n"
+        )
+        assert chain[0] == _link(7, "'10.0.0.' + request.GET['octet']")
+
+    def test_for_target_in_caller(self) -> None:
+        chain = self._proven(
+            _PING
+            + "def view(request):\n"
+            + '    for host in request.GET.getlist("h"):\n'
+            + "        _ping(host)\n"
+        )
+        assert chain[0] == _link(6, "request.GET.getlist('h')")

@@ -15,7 +15,7 @@
     },
     "django-cmdi-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-cmdi-safe": {
       "outcome": "TN",
@@ -79,7 +79,7 @@
     },
     "django-open_redirect-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-open_redirect-safe": {
       "outcome": "TN",
@@ -103,7 +103,7 @@
     },
     "django-path_traversal-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-path_traversal-safe": {
       "outcome": "TN",
@@ -127,7 +127,7 @@
     },
     "django-sqli-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-sqli-safe": {
       "outcome": "TN",
@@ -151,7 +151,7 @@
     },
     "django-ssrf-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-ssrf-safe": {
       "outcome": "TN",
@@ -711,7 +711,7 @@
     },
     "flask-cmdi-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-cmdi-safe": {
       "outcome": "TN",
@@ -775,7 +775,7 @@
     },
     "flask-open_redirect-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-open_redirect-safe": {
       "outcome": "TN",
@@ -799,7 +799,7 @@
     },
     "flask-path_traversal-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-path_traversal-safe": {
       "outcome": "TN",
@@ -823,7 +823,7 @@
     },
     "flask-sqli-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-sqli-safe": {
       "outcome": "TN",
@@ -847,7 +847,7 @@
     },
     "flask-ssrf-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-ssrf-safe": {
       "outcome": "TN",
@@ -863,7 +863,7 @@
     },
     "flask-ssti-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-ssti-safe": {
       "outcome": "TN",
