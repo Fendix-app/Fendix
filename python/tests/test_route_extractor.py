@@ -159,3 +159,18 @@ urlpatterns = [path("a/", a.search), path("b/", b.search)]
     # for_function keeps its first-wins answer.
     assert table.for_function("search").pattern == "a/"
     assert table.routes_for_function("missing") == []
+
+
+@pytest.mark.parametrize(
+    "imports, view, resolved",
+    [
+        ("from app import views\n", "views.show", True),
+        ("", "show", True),  # bare: defined in the urlconf, or star imported
+        ("", "self.show", False),  # nothing binds `self`
+        ("", "views.show", False),
+    ],
+)
+def test_django_view_head_resolution_is_recorded(imports, view, resolved):
+    src = f'from django.urls import path\n{imports}urlpatterns = [path("s/", {view})]\n'
+    [r] = extract_routes(src, "app/urls.py").routes
+    assert r.handler_resolved is resolved

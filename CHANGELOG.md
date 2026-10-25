@@ -47,29 +47,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       One re-export hop is followed when that module does not define the
       view itself: `from .items import show` (with `as`) or
       `from .items import *` in the module, or in its `__init__.py` for a
-      package. When no scanned file is the resolved module, for example
-      when the scan root is inside the package, the view's name alone
-      binds it.
+      package.
+    - When no scanned file is the resolved module because the scan root is
+      inside the package (scanning `app/` for `app.views`), the scanned
+      module `views` stands in for it. This needs two things: the module it
+      stands in for is a proper trailing suffix, and the prefix that suffix
+      drops (`app`) is the directories the scan root sits in. Nothing stands
+      in for a view whose head no import binds (`self.handler`, a local
+      variable), or for a module of a package outside the scan
+      (`from django.views.static import serve`). Such a route binds no
+      function, so a project function that only shares the view's name is
+      never treated as the view.
     - A decorator route's first argument must start with `/` (or be `""`,
       which FastAPI allows under a prefixed router), and a `unittest.mock`
       or `mock` receiver is never a route, so `@mock.patch("os.getenv")` is
       not a PATCH route.
     - Parameters of any other function are not sources.
-  - **Flask and Django pass only the URL variables their pattern names.** A
-    Flask or Django view's parameter is a source only when one of its routes'
-    patterns names it: `<x>`, `<path:x>`, a regex group `(?P<x>...)`, or,
-    for a Django regex with no named group, the unnamed groups in order
-    after `request`.
-    - A plain default (`def report(fmt="pdf")` on `/report`), a Flask
-      `defaults=` value and a Django urlconf extra-kwargs value are set by
-      the developer. So the request object is never a source, whatever the
-      view names it.
-    - FastAPI reads a parameter its path does not name from the query
-      string, so every FastAPI parameter the rules below leave is a source.
-    - A decorator route's framework comes from the file's imports
-      (`fastapi`/`starlette` or `flask`), then from its pattern (`{x}` or
-      `<x>`), then from `.route(...)`, which is Flask's. A route that none of
-      these places is treated as FastAPI.
+  - **Flask, Quart, Sanic and Django pass only the URL variables their
+    pattern names.** Such a view's parameter is a source only when one of its
+    routes' patterns names it:
+    - `<x>`, or `<path:x>` (Sanic writes `<x:str>`; the word that is a
+      parameter of the handler is the name);
+    - a regex group `(?P<x>...)`;
+    - for a Django regex with no named group, the unnamed groups, in order
+      after `request`.
+
+    Values the developer sets are not sources: a plain default
+    (`def report(fmt="pdf")` on `/report`), a Flask `defaults=` value, and a
+    Django urlconf extra-kwargs value. The request object is never a source
+    either, because no URL pattern names it.
+    - FastAPI and Django Ninja read a parameter the path does not name from
+      the query string, so every parameter of theirs that the rules below
+      leave is a source.
+    - A decorator route's framework is decided in this order:
+      1. the file's imports: `fastapi`, `starlette` or `ninja` mean FastAPI,
+         and `flask`, `quart` or `sanic` mean Flask;
+      2. its pattern: `{x}` means FastAPI, `<x>` means Flask;
+      3. `.route(...)`, which is Flask's;
+      4. the framework most of the project's files import, so a blueprint
+         file that imports only its blueprint takes the project's Flask.
+
+      A route that none of these places, including one in a project whose
+      files import no framework or import two equally often, is treated as
+      FastAPI, as before.
   - **Dependencies and injected objects are not sources:**
     - `self`, and a first positional parameter named `request` or `req`;
     - a parameter annotated `Request`, `Response`, `BackgroundTasks`,

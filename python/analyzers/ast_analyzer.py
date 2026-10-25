@@ -172,9 +172,11 @@ class ASTAnalyzer:
         function-name → Route index. Keyed on the handler function's name so
         a Django urls.py route binds to its view defined elsewhere. Once every
         file is read, each Django route is pointed at the module that defines
-        its view (`RouteTable.resolve_views`: one re-export hop, or the name
-        alone when no scanned file is the module). Returns a RouteTable; on
-        any import/IO failure returns an empty one (binding simply stays
+        its view (`RouteTable.resolve_views`: one re-export hop, or a scanned
+        module standing in for one the scan root sits inside), and a decorator
+        route whose own file does not show its framework takes the project's
+        dominant one (`RouteTable.resolve_frameworks`). Returns a RouteTable;
+        on any import/IO failure returns an empty one (binding simply stays
         off)."""
         try:
             from analyzers.route_extractor import RouteTable, scan_module
@@ -206,7 +208,8 @@ class ASTAnalyzer:
                 if summary is not None:
                     summaries.append(summary)
         try:
-            index.resolve_views(summaries)
+            index.resolve_views(summaries, root.resolve().parts)
+            index.resolve_frameworks(summaries)
         except (RecursionError, Exception) as exc:  # noqa: BLE001 — binding is best-effort
             # The routes keep the modules their urlconf's imports resolved.
             print(
@@ -574,15 +577,14 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         A urlconf route (Django) names its view as `module.func`: `func` must
         be a module-level def of a file one of the route's resolved
         `handler_modules` names. The route pass has already followed one
-        re-export hop and, when no scanned file is the resolved module, left
-        the modules empty: then the name alone binds, as it did before
-        modules were resolved. A decorator route (Flask, FastAPI) is declared
-        on the def itself: same file, and one of `func`'s decorators is the
-        route's."""
+        re-export hop, and put a scanned module in place of one the scan root
+        sits inside. A route with no module binds no def. A decorator route
+        (Flask, FastAPI) is declared on the def itself: same file, and one of
+        `func`'s decorators is the route's."""
         if getattr(route, "framework", "") == "django":
             modules = getattr(route, "handler_modules", ())
-            return self._is_module_level_def(func) and (
-                not modules or any(_module_matches_file(m, self._rel) for m in modules)
+            return self._is_module_level_def(func) and any(
+                _module_matches_file(m, self._rel) for m in modules
             )
         return route.file.replace(os.sep, "/") == self._rel.replace(
             os.sep, "/"
@@ -4814,26 +4816,33 @@ def _route_param_sources_with(
         return frozenset()
     candidates = _signature_sources(func, facts)
     positional = [p.arg for p in (*func.args.posonlyargs, *func.args.args)]
+    params = set(positional) | {p.arg for p in func.args.kwonlyargs}
     sources: set[str] = set()
     for route in routes:
         if getattr(route, "framework", "") in ("flask", "django"):
-            sources |= candidates & _url_text_variables(route, positional)
+            sources |= candidates & _url_text_variables(route, positional, params)
         else:
             sources |= candidates
     return frozenset(sources)
 
 
-def _url_text_variables(route, positional: list[str]) -> frozenset[str]:
-    """The parameters a Flask or Django `route` fills from its URL as text:
-    the variables its pattern names without a coercing converter, and, for a
-    Django regex route with no named group, the positional parameters after
-    the request that its unnamed groups fill."""
+def _url_text_variables(route, positional: list[str], params: set[str]) -> frozenset[str]:
+    """The parameters a Flask-family or Django `route` fills from its URL as
+    text: the variables its pattern names without a coercing converter, and,
+    for a Django regex route with no named group, the positional parameters
+    after the request that its unnamed groups fill.
+
+    Flask, Quart and Django write `<converter:name>`; Sanic writes
+    `<name:type>`. Of the two words, the one that is a parameter of the
+    handler is the name (Flask's order when both or neither are)."""
     pattern = getattr(route, "pattern", "") or ""
-    names = {
-        name
-        for converter, name in _URL_VARIABLE.findall(pattern)
-        if converter not in _COERCING_CONVERTERS
-    }
+    names = set()
+    for first, second in _URL_VARIABLE.findall(pattern):
+        name, converter = second, first
+        if first and second not in params and first in params:
+            name, converter = first, second
+        if converter not in _COERCING_CONVERTERS:
+            names.add(name)
     if getattr(route, "regex", False) and "(?P<" not in pattern:
         names.update(positional[1 : 1 + _unnamed_group_count(pattern)])
     return frozenset(names)

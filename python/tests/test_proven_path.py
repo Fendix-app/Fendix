@@ -1015,12 +1015,175 @@ def test_django_re_export_follows_one_hop_only():
     assert "route" not in f
 
 
-def test_django_scan_root_inside_the_package_falls_back_to_the_name():
-    # urls.py imports `app.views`, but the scan root IS `app/`: no scanned
-    # file is `app/views.py`, so the view's name alone binds, as before.
-    f = _one({"urls.py": _REEXPORT_URLS, "views.py": _REEXPORT_VIEW.format(name="show")})
+def _scan_at(root_name: str, files: dict[str, str]) -> list[dict]:
+    """`_scan` with the scan root a directory named `root_name`, as when a
+    user scans a package directory itself."""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / root_name
+        for name, content in files.items():
+            p = root / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        findings: list[dict] = []
+        ASTAnalyzer(str(root)).run(findings.append)
+        return findings
+
+
+def test_django_scan_root_inside_the_package_falls_back_to_the_scanned_module():
+    # urls.py imports `app.views`, but the scan root IS the `app/` directory:
+    # no scanned file is `app/views.py`, and the scanned module `views`
+    # stands in for it because the prefix it drops, `app`, is the directory
+    # the scan root is.
+    findings = _scan_at(
+        "app", {"urls.py": _REEXPORT_URLS, "views.py": _REEXPORT_VIEW.format(name="show")}
+    )
+    [f] = _rule(findings, "PY_SQL_INJECTION")
     _assert_proven_from(f, "slug")
     assert f["route"]["pattern"] == "r/<str:slug>/"
+    # Also through a package re-export, inside the same scan root.
+    findings = _scan_at(
+        "app",
+        {
+            "urls.py": _REEXPORT_URLS,
+            "views/__init__.py": "from .items import show\n",
+            "views/items.py": _REEXPORT_VIEW.format(name="show"),
+        },
+    )
+    [f] = _rule(findings, "PY_SQL_INJECTION")
+    _assert_proven_from(f, "slug")
+
+
+def test_django_scanned_suffix_does_not_stand_in_when_the_scan_root_is_elsewhere():
+    # The same files under a scan root named `web`: `views.py` is not
+    # `app.views`, so nothing binds.
+    findings = _scan_at(
+        "web", {"urls.py": _REEXPORT_URLS, "views.py": _REEXPORT_VIEW.format(name="show")}
+    )
+    [f] = _rule(findings, "PY_SQL_INJECTION")
+    _assert_unproven(f)
+    assert "route" not in f
+
+
+def test_third_party_view_does_not_bind_a_project_def_of_the_same_name():
+    # `serve` is django.views.static.serve, outside the scan. A project def
+    # named `serve` is not the view, whatever it does with `path`.
+    urls = (
+        "from django.urls import re_path\n"
+        "from django.views.static import serve\n"
+        "urlpatterns = [re_path(r'^media/(?P<path>.*)$', serve, {'document_root': '/srv'})]\n"
+    )
+    helper = (
+        "import os\n"
+        "BASE = '/srv'\n"
+        "def serve(path):\n"
+        "    return open(os.path.join(BASE, path)).read()\n"
+    )
+    findings = _rule(_scan({"proj/urls.py": urls, "proj/files.py": helper}), "PY_PATH_TRAVERSAL")
+    assert findings, "the sink is still reported"
+    for f in findings:
+        _assert_unproven(f)
+        assert "route" not in f
+
+
+def test_third_party_view_does_not_bind_a_scanned_module_matching_its_suffix():
+    # Even a scanned top-level `static.py` is not `django.views.static`: the
+    # prefix it would drop (`django.views`) is not where the scan root is.
+    urls = (
+        "from django.urls import re_path\n"
+        "from django.views.static import serve\n"
+        "urlpatterns = [re_path(r'^media/(?P<path>.*)$', serve)]\n"
+    )
+    helper = (
+        "import os\n"
+        "def serve(request, path):\n"
+        "    return open(os.path.join('/srv', path)).read()\n"
+    )
+    findings = _rule(_scan({"urls.py": urls, "static.py": helper}), "PY_PATH_TRAVERSAL")
+    assert findings
+    for f in findings:
+        _assert_unproven(f)
+        assert "route" not in f
+
+
+def test_view_with_an_unbound_head_does_not_bind_by_name():
+    # `self.path(...)` is not a urlconf entry, and `self.handler` resolves to
+    # nothing: a def named `handler` elsewhere is not its view.
+    router = "class R:\n    def setup(self):\n        self.path('/x/<cmd>', self.handler)\n"
+    handler = "import os\ndef handler(cmd):\n    os.system(cmd)\n"
+    f = _one({"r.py": router, "h.py": handler}, "PY_OS_SYSTEM")
+    _assert_unproven(f)
+    assert "route" not in f
+
+
+# -- fix round 2: Flask-family frameworks, and the project's dominant one ------
+
+_REPORT = 'def report({sig}):\n    os.system(f"gen --fmt {{fmt}}")\n'
+
+
+@pytest.mark.parametrize(
+    "imports, sig",
+    [
+        ("from quart import Quart\napp = Quart(__name__)\n", 'fmt="pdf"'),
+        ("from sanic import Sanic\napp = Sanic('a')\n", 'request, fmt="pdf"'),
+    ],
+)
+def test_quart_and_sanic_plain_default_is_not_a_source(imports, sig):
+    src = f"import os\n{imports}" + '@app.get("/report")\n' + _REPORT.format(sig=sig)
+    [route] = extract_routes(src, "app.py").routes
+    assert route.framework == "flask"
+    _assert_unproven(_one({"app.py": src}, "PY_OS_SYSTEM"))
+
+
+def test_sanic_typed_url_variable_reads_name_first():
+    # Sanic writes `<name:type>`, the reverse of Flask's `<converter:name>`.
+    head = "import os\nfrom sanic import Sanic\napp = Sanic('a')\n"
+    src = head + '@app.get("/r/<fmt:str>")\n' + _REPORT.format(sig="request, fmt")
+    _assert_proven_from(_one({"app.py": src}, "PY_OS_SYSTEM"), "fmt")
+    src = head + '@app.get("/r/<fmt:int>")\n' + _REPORT.format(sig="request, fmt")
+    _assert_unproven(_one({"app.py": src}, "PY_OS_SYSTEM"))
+
+
+def test_ninja_route_reads_query_parameters():
+    src = (
+        "import os\nfrom ninja import NinjaAPI\napi = NinjaAPI()\n"
+        '@api.get("/report")\n' + _REPORT.format(sig='request, fmt: str = "pdf"')
+    )
+    [route] = extract_routes(src, "app.py").routes
+    assert route.framework == "fastapi"
+    _assert_proven_from(_one({"app.py": src}, "PY_OS_SYSTEM"), "fmt")
+
+
+def test_blueprint_file_without_a_framework_import_takes_the_projects_framework():
+    # The views file imports only its blueprint; every other file is Flask.
+    views = "import os\nfrom . import bp\n" + '@bp.get("/report")\n' + _REPORT.format(sig='fmt="pdf"')
+    files = {
+        "app/__init__.py": "from flask import Blueprint, Flask\nbp = Blueprint('r', __name__)\n",
+        "app/auth.py": "from flask import request, session\n",
+        "app/views.py": views,
+    }
+    _assert_unproven(_one(files, "PY_OS_SYSTEM"))
+
+
+def test_unknown_framework_with_no_project_framework_keeps_fastapi_behaviour():
+    # Nothing in the project names a framework: the route stays unknown and
+    # is read like FastAPI, as before.
+    src = (
+        "import os\nfrom myapp.hooks import registry\n"
+        '@registry.get("/report")\n' + _REPORT.format(sig='fmt="pdf"')
+    )
+    [route] = extract_routes(src, "app.py").routes
+    assert route.framework == ""
+    _assert_proven_from(_one({"app.py": src}, "PY_OS_SYSTEM"), "fmt")
+
+
+def test_unknown_framework_tie_keeps_fastapi_behaviour():
+    views = "import os\nfrom . import bp\n" + '@bp.get("/report")\n' + _REPORT.format(sig='fmt="pdf"')
+    files = {
+        "app/a.py": "from flask import Flask\n",
+        "app/b.py": "from fastapi import FastAPI\n",
+        "app/views.py": views,
+    }
+    _assert_proven_from(_one(files, "PY_OS_SYSTEM"), "fmt")
 
 
 # -- route_param_sources: the whole rule set, for Task 3.8 ---------------------
@@ -1046,3 +1209,26 @@ def test_route_param_sources_applies_the_whole_rule_set():
     assert route_param_sources(func, [fastapi_route], module) == {"q", "raw"}
     assert route_param_sources(func, [flask_route], module) == {"raw"}
     assert route_param_sources(func, [], module) == frozenset()
+
+
+def test_unimported_dotted_view_gets_no_stand_in():
+    # `app.views.show` with nothing importing `app`: its head is unbound, so
+    # even inside a scan root named `app`, `views.py` does not stand in.
+    urls = "from django.urls import path\nurlpatterns = [path('r/<str:slug>/', app.views.show)]\n"
+    findings = _scan_at("app", {"urls.py": urls, "views.py": _REEXPORT_VIEW.format(name="show")})
+    [f] = _rule(findings, "PY_SQL_INJECTION")
+    _assert_unproven(f)
+    assert "route" not in f
+
+
+def test_django_route_with_no_module_binds_nothing():
+    # `from . import show` at the scan root names no module for the view, so
+    # a def named `show` elsewhere is not bound by its name.
+    urls = (
+        "from django.urls import path\n"
+        "from . import show\n"
+        "urlpatterns = [path('r/<str:slug>/', show)]\n"
+    )
+    f = _one({"urls.py": urls, "other.py": _REEXPORT_VIEW.format(name="show")})
+    _assert_unproven(f)
+    assert "route" not in f

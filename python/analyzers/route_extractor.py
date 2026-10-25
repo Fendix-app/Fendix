@@ -49,8 +49,10 @@ _DJANGO_ROUTE_FUNCS = {"path", "re_path", "url"}
 # Django callables whose pattern is a regular expression, not route syntax.
 _DJANGO_REGEX_FUNCS = {"re_path", "url"}
 # Import roots that say which framework a decorator route belongs to.
-_FASTAPI_ROOTS = {"fastapi", "starlette"}
-_FLASK_ROOTS = {"flask"}
+# Quart and Sanic share Flask's model: a handler receives only the URL
+# variables its pattern names. Django Ninja reads parameters like FastAPI.
+_FASTAPI_ROOTS = {"fastapi", "starlette", "ninja"}
+_FLASK_ROOTS = {"flask", "quart", "sanic"}
 # `@mock.patch("os.getenv")` looks like a PATCH route decorator: a receiver
 # imported from one of these modules is never a route.
 _MOCK_MODULES = {"mock", "unittest.mock"}
@@ -81,10 +83,16 @@ class Route:
     handler_modules: tuple[str, ...] = ()
     # Which framework declared the route: "django" for a urlconf entry, and
     # "fastapi" or "flask" for a decorator route, from the file's imports,
-    # then the pattern's syntax (`{x}` / `<x>`), then `.route(...)` (Flask).
-    # "" when nothing tells. Flask and Django pass a handler only the URL
-    # variables their pattern names; FastAPI passes query parameters too.
+    # then the pattern's syntax (`{x}` / `<x>`), then `.route(...)` (Flask),
+    # then the project's dominant framework (`resolve_frameworks`). "" when
+    # nothing tells. Flask and Django pass a handler only the URL variables
+    # their pattern names; FastAPI passes query parameters too.
     framework: str = ""
+    # Django only: the view symbol's head resolved through one of the
+    # urlconf's imports, or is a bare name (defined in the urlconf or star
+    # imported). False for a head nothing binds (`self.handler`, a local),
+    # whose module is taken as written and is never widened by a fallback.
+    handler_resolved: bool = False
     # Django only: the pattern is a regular expression (`re_path`, `url`).
     regex: bool = False
 
@@ -127,7 +135,9 @@ class RouteTable:
         route, if any, actually points at it."""
         return self.all_by_func.get(func_name, [])
 
-    def resolve_views(self, summaries: list[ModuleSummary]) -> None:
+    def resolve_views(
+        self, summaries: list[ModuleSummary], scan_root_parts: tuple[str, ...] = ()
+    ) -> None:
         """Point each Django route at the module that defines its view, once
         every file of the project is summarised.
 
@@ -137,39 +147,95 @@ class RouteTable:
           ``__init__.py`` for a package): ``from .items import show`` (with
           ``as`` renaming) or ``from .items import *``. A renamed view is
           indexed under its real name too.
-        - When no scanned file is the resolved module (the scan root sits
-          inside the package, or the import names a module outside the
-          tree), the route falls back to the view's name alone: its
-          `handler_modules` become empty.
+        - When no scanned file is the resolved module, the scan root may sit
+          inside the package: `app.views` is then the scanned module `views`
+          when the scan root is a directory named `app`. A proper trailing
+          suffix of the module that is a scanned module stands in for it, but
+          only when the prefix it drops is the directories the scan root sits
+          in (`scan_root_parts`, the root's absolute path). Nothing stands in
+          for a view whose head nothing imports (`self.handler`), or for a
+          module of a package outside the scan (`django.views.static`): such a
+          route binds no def.
         """
         # Every dotted suffix of each file's module -> the files it names, so
         # `app.views` finds `backend/app/views.py` (module `backend.app.views`)
         # as `_module_matches_file` would.
         by_suffix: dict[str, list[ModuleSummary]] = {}
+        by_module: dict[str, list[ModuleSummary]] = {}
         for summary in summaries:
             parts = summary.module.split(".") if summary.module else []
             for i in range(len(parts)):
                 by_suffix.setdefault(".".join(parts[i:]), []).append(summary)
+            by_module.setdefault(summary.module, []).append(summary)
         for route in list(self.routes):
             if route.framework != "django" or not route.handler_modules:
                 continue
-            matched = False
-            targets: dict[str, list[str]] = {}
-            for module in route.handler_modules:
-                for summary in by_suffix.get(module, []):
-                    matched = True
-                    found = _view_targets(summary, route.handler_func)
-                    for target_module, func in found or [(module, route.handler_func)]:
-                        targets.setdefault(func, []).append(target_module)
-            if not matched:
-                route.handler_modules = ()
+            found = _match_modules(route, route.handler_modules, by_suffix)
+            if found is None and route.handler_resolved:
+                stand_ins = tuple(
+                    suffix
+                    for module in route.handler_modules
+                    for suffix in _stand_in_modules(module, by_module, scan_root_parts)
+                )
+                if stand_ins:
+                    route.handler_modules = stand_ins
+                    found = _match_modules(route, stand_ins, by_module)
+            if found is None:
                 continue
             route.handler_modules = tuple(
-                dict.fromkeys(targets.pop(route.handler_func, route.handler_modules))
+                dict.fromkeys(found.pop(route.handler_func, route.handler_modules))
             )
-            for func, modules in targets.items():
+            for func, modules in found.items():
                 renamed = replace(route, handler_func=func, handler_modules=tuple(dict.fromkeys(modules)))
                 self.all_by_func.setdefault(func, []).append(renamed)
+
+    def resolve_frameworks(self, summaries: list[ModuleSummary]) -> None:
+        """Give each decorator route whose framework its own file does not
+        show the project's dominant framework: the one most scanned files
+        import (`ModuleSummary.framework`). A tie, or a project that imports
+        none, leaves it unknown (treated as FastAPI)."""
+        counts: dict[str, int] = {}
+        for summary in summaries:
+            if summary.framework:
+                counts[summary.framework] = counts.get(summary.framework, 0) + 1
+        ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+        if not ranked or (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
+            return
+        dominant = ranked[0][0]
+        for route in self.routes:
+            if not route.framework:
+                route.framework = dominant
+
+
+def _match_modules(
+    route: Route, modules: tuple[str, ...], index: dict[str, list[ModuleSummary]]
+) -> dict[str, list[str]] | None:
+    """`{function: [modules]}` the route's view is found as in the files
+    `index` maps `modules` to (one re-export hop), or None when no file is
+    one of the modules."""
+    matched = False
+    targets: dict[str, list[str]] = {}
+    for module in modules:
+        for summary in index.get(module, []):
+            matched = True
+            found = _view_targets(summary, route.handler_func)
+            for target_module, func in found or [(module, route.handler_func)]:
+                targets.setdefault(func, []).append(target_module)
+    return targets if matched else None
+
+
+def _stand_in_modules(
+    module: str, by_module: dict[str, list[ModuleSummary]], scan_root_parts: tuple[str, ...]
+) -> list[str]:
+    """The scanned modules that are a proper trailing suffix of `module` and
+    whose dropped prefix is the trailing directories of the scan root."""
+    parts = module.split(".")
+    found = []
+    for k in range(1, len(parts)):
+        prefix, suffix = parts[:k], ".".join(parts[k:])
+        if suffix in by_module and tuple(scan_root_parts[-k:]) == tuple(prefix):
+            found.append(suffix)
+    return found
 
 
 @dataclass(frozen=True)
@@ -181,6 +247,9 @@ class ModuleSummary:
     defs: frozenset[str]
     names: dict[str, str]
     star_modules: tuple[str, ...]
+    # "fastapi", "flask" or "" from the file's imports, for
+    # `RouteTable.resolve_frameworks`.
+    framework: str = ""
 
 
 def _view_targets(summary: ModuleSummary, func: str) -> list[tuple[str, str]]:
@@ -224,6 +293,7 @@ def scan_module(source: str, rel_path: str) -> tuple[RouteTable, ModuleSummary |
             defs=frozenset(_module_level_defs(tree)),
             names=dict(imports.names),
             star_modules=tuple(imports.star_modules),
+            framework=imports.framework(),
         )
     except RecursionError:
         return RouteTable(), None
@@ -314,20 +384,30 @@ class _ImportScope:
         """The top-level package of every module this file imports from."""
         return {t.split(".", 1)[0] for t in (*self.names.values(), *self.star_modules)}
 
-    def resolve_view(self, handler: str) -> tuple[str, tuple[str, ...]]:
-        """`(function name, candidate modules)` for a view symbol written as
-        `handler` in this file. An imported head resolves through its import;
-        a dotted symbol with an unknown head is taken as written; a bare name
-        nothing imports is defined here or comes from a star import."""
+    def framework(self) -> str:
+        """"fastapi" or "flask" when this file imports from one of their
+        families (`_FASTAPI_ROOTS`, `_FLASK_ROOTS`), else ""."""
+        roots = self.roots()
+        if roots & _FASTAPI_ROOTS:
+            return "fastapi"
+        return "flask" if roots & _FLASK_ROOTS else ""
+
+    def resolve_view(self, handler: str) -> tuple[str, tuple[str, ...], bool]:
+        """`(function name, candidate modules, resolved)` for a view symbol
+        written as `handler` in this file. An imported head resolves through
+        its import; a bare name nothing imports is defined here or comes from
+        a star import. A dotted symbol whose head nothing binds
+        (`self.handler`) is taken as written, and `resolved` is False."""
         head, _, rest = handler.partition(".")
         if head in self.names:
             full = self.names[head] + (f".{rest}" if rest else "")
         elif rest:
-            full = handler
+            module, _, func = handler.rpartition(".")
+            return func, (module,), False
         else:
-            return handler, (self.module, *self.star_modules)
+            return handler, (self.module, *self.star_modules), True
         module, _, func = full.rpartition(".")
-        return func, ((module,) if module else ())
+        return func, ((module,) if module else ()), True
 
 
 def _str_const(node: ast.AST) -> str | None:
@@ -355,10 +435,7 @@ class _DecoratorRouteVisitor(ast.NodeVisitor):
         self.table = table
         self.rel = rel_path
         self.imports = imports
-        roots = imports.roots()
-        self.framework = (
-            "fastapi" if roots & _FASTAPI_ROOTS else "flask" if roots & _FLASK_ROOTS else ""
-        )
+        self.framework = imports.framework()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
         self._handle(node)
@@ -457,7 +534,7 @@ class _DjangoUrlpatternsVisitor(ast.NodeVisitor):
             # Skip include() and class-based .as_view() — v1 binds plain
             # function views only (the common case for the ICP).
             if pattern is not None and handler and not _is_include(view):
-                func_name, modules = self.imports.resolve_view(handler)
+                func_name, modules, resolved = self.imports.resolve_view(handler)
                 # Strip a trailing .as_view for CBVs so the label is clean,
                 # though we won't bind a finding to it (no matching def name).
                 self.table.add(
@@ -471,6 +548,7 @@ class _DjangoUrlpatternsVisitor(ast.NodeVisitor):
                         handler_modules=modules,
                         framework="django",
                         regex=name in _DJANGO_REGEX_FUNCS,
+                        handler_resolved=resolved,
                     )
                 )
         self.generic_visit(node)
