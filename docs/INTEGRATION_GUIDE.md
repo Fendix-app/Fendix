@@ -44,7 +44,7 @@ See §5.
 curl -fsSL https://get.fendix.dev/install.sh | sh
 
 # Pin the current stable version
-curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.6.6 sh
+curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.7.0 sh
 
 # Verify
 fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
@@ -53,7 +53,7 @@ fendix version          # → fendix version <Version> (<GOOS>/<GOARCH>)
 Or run the published Docker image (bundles Python + all static-analysis deps, so hybrid mode works out of the box):
 
 ```bash
-docker run --rm fendixapp/fendix:3.6.6 scan --url https://example.com
+docker run --rm fendixapp/fendix:3.7.0 scan --url https://example.com
 ```
 
 > **Note:** `get.fendix.dev` is served from the official `Fendix-app/homebrew-fendix` repository. Its root page redirects clients to the canonical documentation, while `/install.sh` remains the stable installer endpoint.
@@ -332,7 +332,7 @@ when that network boundary matters.
     "target": "https://api.example.com",
     "started_at": "2026-06-20T10:00:00Z",
     "duration": "4.521s",
-    "version": "3.6.6",
+    "version": "3.7.0",
     "mode": "blackbox",
     "endpoints_scanned": 42,
     "active_probes": false,
@@ -392,7 +392,7 @@ Key facts:
 
 - **`metadata.schema_version`** is the contract version, currently `2`, and is present on every report a current build writes. An **absent** key means the report predates the field — treat that as "pre-versioned", not as invalid. An **unrecognised** value means the report is newer than your integration: warn and keep parsing rather than failing automatically; inspect the migration note because a version bump can represent an incompatible field meaning such as the v1 → v2 fingerprint change.
 - **`metadata.mode`** ∈ `blackbox` / `whitebox` / `hybrid` / `import`.
-- **`scanner_status`** carries one entry per analyzer (`dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `python-engine`, its `python-engine/*` children when reported, `plugins`) with `state` ∈ `ok`/`skipped`/`failed` and a closed `reason` on every non-ok entry. **`metadata.coverage.configured_complete`** answers "did everything this run was configured to execute run?"; **`coverage.required_gaps`** answers "did `--require-analyzers` get what it asked for?". Only `failed` feeds `--fail-on-scanner-error` — that check itself is unchanged, but from v3.4.0 the set of analyzers that can record `failed` grew from six (`govulncheck`/`pip`/`npm`/`secrets`/`semgrep`/`textscan`) to the full registry above, so `dast`, `spec`, `active-probes`, `plugins` and the python-engine (and its checks) can now trip the flag too; `--fail-on-coverage-gap` also trips on `skipped/dependency_missing`. From v3.6.6, `semgrep` is `ok` only when Semgrep itself reports success: a fatal run (an invalid config, a rule that does not parse, the engine killed or out of memory) is `failed/execution_error` even when Semgrep printed a JSON envelope, and per-file problems (a file that does not parse, a per-file timeout) stay `ok` with their count in `detail` ([`docs/checks/semgrep.md`](checks/semgrep.md#what-ok-means-from-v366)).
+- **`scanner_status`** carries one entry per analyzer (`dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `python-engine`, its `python-engine/*` children when reported, `plugins`) with `state` ∈ `ok`/`skipped`/`failed` and a closed `reason` on every non-ok entry. **`metadata.coverage.configured_complete`** answers "did everything this run was configured to execute run?"; **`coverage.required_gaps`** answers "did `--require-analyzers` get what it asked for?". Only `failed` feeds `--fail-on-scanner-error` — that check itself is unchanged, but from v3.4.0 the set of analyzers that can record `failed` grew from six (`govulncheck`/`pip`/`npm`/`secrets`/`semgrep`/`textscan`) to the full registry above, so `dast`, `spec`, `active-probes`, `plugins` and the python-engine (and its checks) can now trip the flag too; `--fail-on-coverage-gap` also trips on `skipped/dependency_missing`. From v3.7.0, `semgrep` is `ok` only when Semgrep itself reports success: a fatal run (an invalid config, a rule that does not parse, the engine killed or out of memory) is `failed/execution_error` even when Semgrep printed a JSON envelope, and per-file problems (a file that does not parse, a per-file timeout) stay `ok` with their count in `detail` ([`docs/checks/semgrep.md`](checks/semgrep.md#what-ok-means-from-v370)).
 - **`findings[].severity`** ∈ `CRITICAL`/`HIGH`/`MEDIUM`/`LOW`/`INFO`. Severity rank used by `--fail-on`: CRITICAL=4, HIGH=3, MEDIUM=2, LOW=1, INFO=0. `rank(finding) >= rank(threshold)` is **necessary but not sufficient** since v2.0 — the gate then reads `findings[].confidence_band` and `findings[].status`. Read `status == "BLOCK"` (or `decisions.blocking`) to know what actually fails the build; `confidence_reasons` names the rule behind any demotion.
 - **`findings[].source`** ∈ `blackbox`/`whitebox`/`correlated`/`imported`. **`confidence`** ∈ `HIGH`/`MEDIUM`/`LOW`. The legacy top-level `sources` counters omit `imported`; use `metadata.imports` for import accounting.
 - **`line`** is a nullable pointer — serialized even when `null` (no omitempty).
@@ -446,7 +446,7 @@ jobs:
 Never reference `@main`; it changes without review. On a private repository without GitHub Code Security, set `upload-sarif: 'false'`: the scan and the gate still run. The v3.6.2 Action, by its release commit and as literal `@v1`, passed the external-user end-to-end matrix in public and private repositories on 2026-10-16. Until then `v1` pointed to the June 2026 revision `d59a901`; a workflow pinned to that revision should move to `@v1` or to the release commit.
 
 This section documents the Action as shipped in v3.6.2.
-Items marked **v3.6.6** describe the Action at the v3.6.6 release commit, which `@v1` moves to after that release's end-to-end run.
+Items marked **v3.7.0** describe the Action at the v3.7.0 release commit, which `@v1` moves to after that release's end-to-end run.
 
 A **composite** action. Its steps, in order:
 
@@ -454,15 +454,15 @@ A **composite** action. Its steps, in order:
 2. **Install cosign** (`sigstore/cosign-installer`, pinned), for every caller.
 3. **Install Fendix.** One exact release from `Fendix-app/Fendix`: `version: latest` is resolved once to an exact tag. The installer bundled with the Action revision, never fetched live, runs with the signature required, in an environment stripped of every inherited `FENDIX_*` variable. It verifies the release's checksum, then its cosign signature, and only then installs and first runs the binary, in a private temporary directory under `RUNNER_TEMP` (no `sudo`, nothing written to `/usr/local/bin`). The binary must report exactly the requested release; only then is the directory added to `PATH`. There is no checksum-only fallback.
 4. **Set up Python 3.11** without changing the rest of the job's environment (`update-environment: false`).
-5. **Prepare the Python engine** (below). **v3.6.6:** wheels only, and `require-analyzers` is resolved here.
-6. **v3.6.6: Preflight required analyzers.** A required Semgrep runs, offline, on a bundled rule and file and must report their one match (below).
-7. **Run `fendix scan`**, recording whether a report was written and the exit code. **v3.6.6:** with `--require-analyzers` set to the required list.
-8. **Upload SARIF** to code scanning, only when the scan wrote one (`upload-sarif`, `format: sarif`). **v3.6.6:** only when the scan also finished (exit 0 or 1); a partial report from a failed scan would close every alert missing from it.
-9. **Gate:** `0` passes, `1` is a policy `BLOCK`, `2` a scan error (**v3.6.6:** or a required analyzer not delivered). A setup failure before the scan, or any other value, fails closed with `2`. **v3.6.6:** a pass prints the clean-scan line only when coverage was complete and enforced; otherwise it is a warning, and the job summary states the requirement and the coverage.
+5. **Prepare the Python engine** (below). **v3.7.0:** wheels only, and `require-analyzers` is resolved here.
+6. **v3.7.0: Preflight required analyzers.** A required Semgrep runs, offline, on a bundled rule and file and must report their one match (below).
+7. **Run `fendix scan`**, recording whether a report was written and the exit code. **v3.7.0:** with `--require-analyzers` set to the required list.
+8. **Upload SARIF** to code scanning, only when the scan wrote one (`upload-sarif`, `format: sarif`). **v3.7.0:** only when the scan also finished (exit 0 or 1); a partial report from a failed scan would close every alert missing from it.
+9. **Gate:** `0` passes, `1` is a policy `BLOCK`, `2` a scan error (**v3.7.0:** or a required analyzer not delivered). A setup failure before the scan, or any other value, fails closed with `2`. **v3.7.0:** a pass prints the clean-scan line only when coverage was complete and enforced; otherwise it is a warning, and the job summary states the requirement and the coverage.
 
-**Python engine.** With `engine_path` empty, the Python source is fetched at the commit the release's signed build record names, and the installed binary's hash must appear in that record. From v3.6.1 its dependencies are installed only from the release's hash-locked `python/requirements.lock`, with `--require-hashes`. Releases up to v3.6.0 ship no lock, so they keep `requirements.txt` with a `pydantic<2.14` compatibility bound, and a later release without a lock is refused. A caller-managed `engine_path` must contain `engine.py` and `requirements.txt`; its `requirements.txt` is installed with the same bound (a lock inside it is not used), and matching it to the binary is the caller's responsibility. Both install into an isolated venv whose `bin/`, with `FENDIX_ENGINE`, stays available to later steps of the job. **v3.6.6:** both install wheels only (`--only-binary=:all:`), as the official image does. A package with no wheel for the runner stops preparation with exit 2, naming the package, the runner's C library and version, its architecture and the supported floor, and nothing is built from source: a Semgrep built from its source distribution has no `semgrep-core` and cannot scan.
+**Python engine.** With `engine_path` empty, the Python source is fetched at the commit the release's signed build record names, and the installed binary's hash must appear in that record. From v3.6.1 its dependencies are installed only from the release's hash-locked `python/requirements.lock`, with `--require-hashes`. Releases up to v3.6.0 ship no lock, so they keep `requirements.txt` with a `pydantic<2.14` compatibility bound, and a later release without a lock is refused. A caller-managed `engine_path` must contain `engine.py` and `requirements.txt`; its `requirements.txt` is installed with the same bound (a lock inside it is not used), and matching it to the binary is the caller's responsibility. Both install into an isolated venv whose `bin/`, with `FENDIX_ENGINE`, stays available to later steps of the job. **v3.7.0:** both install wheels only (`--only-binary=:all:`), as the official image does. A package with no wheel for the runner stops preparation with exit 2, naming the package, the runner's C library and version, its architecture and the supported floor, and nothing is built from source: a Semgrep built from its source distribution has no `semgrep-core` and cannot scan.
 
-**Required analyzers (v3.6.6).** The `require-analyzers` input says which analyzers must run for the gate to pass. They fail closed twice: before the scan, by a functional preflight, and during it, because the list is passed to the engine as `--require-analyzers`, which exits 2 unless each one is recorded `ok` or `not_applicable`.
+**Required analyzers (v3.7.0).** The `require-analyzers` input says which analyzers must run for the gate to pass. They fail closed twice: before the scan, by a functional preflight, and during it, because the list is passed to the engine as `--require-analyzers`, which exits 2 unless each one is recorded `ok` or `not_applicable`.
 
 | `require-analyzers` | Required | When it cannot run |
 |---|---|---|
@@ -478,9 +478,9 @@ A **composite** action. Its steps, in order:
 
 | Integration | Semgrep | How to require it |
 |---|---|---|
-| GitHub Action (v3.6.6) | Required by default for code scans (`require-analyzers: auto`) | Default; `none` opts out |
+| GitHub Action (v3.7.0) | Required by default for code scans (`require-analyzers: auto`) | Default; `none` opts out |
 | Native CLI | Optional by default: without `semgrep` on `PATH` it is recorded `unavailable` (`dependency_missing`) and coverage incomplete, and the exit code is decided by the analyzers that ran | `--require-analyzers semgrep` (exit 2 unless delivered), or `--fail-on-coverage-gap` for any configured analyzer |
-| Official image | Always present. From v3.6.6 the image build runs the same preflight and fails if Semgrep cannot scan; the release smoke also requires `semgrep` `ok` in a scan | `--require-analyzers semgrep` in the `fendix scan` command, as for the CLI |
+| Official image | Always present. From v3.7.0 the image build runs the same preflight and fails if Semgrep cannot scan; the release smoke also requires `semgrep` `ok` in a scan | `--require-analyzers semgrep` in the `fendix scan` command, as for the CLI |
 | Managed CI (preview) | The evidence carries every analyzer's execution and the observed coverage; the backend's binding policy requires the `sast` and `sca` families. A failed member fails its family, which makes the decision `INCOMPLETE`; a Semgrep absent from the runner leaves `sast` completed by its other members | The binding's policy. The Action in managed mode still requires Semgrep's preflight |
 
 **Requirements.**
@@ -488,7 +488,7 @@ A **composite** action. Its steps, in order:
 - **Signed releases only.** Only releases published with a cosign signature can be installed. Automatic Python preparation needs a signed build record, published from v3.5.0.
 - **Network.** Outbound HTTPS to GitHub (release downloads, and the API for `latest`) and to Sigstore (its TUF root and Rekor) for the signature check; the Python engine also needs `codeload.github.com` and PyPI. Without Sigstore access the install fails. Proxies work through the standard `HTTPS_PROXY` and `NO_PROXY` variables; a `~/.curlrc` is ignored.
 - **Linux runners: glibc 2.34 or later for Semgrep, from v3.6.5.** The Semgrep that v3.6.5 and later lock (1.182.1) publishes Linux wheels only for glibc 2.34 or later and musl 1.2 or later, on x86_64 or aarch64. Older glibc includes Ubuntu 20.04, Debian 11, RHEL 8 and its rebuilds, and Amazon Linux 2. GitHub-hosted runners and the official image are not affected.
-  - **v3.6.6 Action:** a code scan on such a runner fails at setup with exit 2, and the error names Semgrep, the runner's glibc and architecture, the floor, and the remedies. Use the official image as a container job (§3.4), or a runner with glibc 2.34 or later (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). `require-analyzers: none` scans without Semgrep, with coverage not enforced.
+  - **v3.7.0 Action:** a code scan on such a runner fails at setup with exit 2, and the error names Semgrep, the runner's glibc and architecture, the floor, and the remedies. Use the official image as a container job (§3.4), or a runner with glibc 2.34 or later (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). `require-analyzers: none` scans without Semgrep, with coverage not enforced.
   - **v3.6.2 Action (`@v1` today):** with `version: v3.6.5`, pip builds Semgrep from source without `semgrep-core`. Preparation succeeds, but the scan records `semgrep` as `failed` (`execution_error`) and coverage as incomplete, and the gate is decided by the analyzers that ran. Add `extra-args: --require-analyzers semgrep` to fail the job, with exit 2, instead. `version: v3.6.4` keeps Semgrep 1.141.0 but gives up v3.6.5's fixes; the v3.6.5 Upgrading notes in [`CHANGELOG.md`](../CHANGELOG.md) list what it keeps.
 - **Permissions.**
 
@@ -499,7 +499,7 @@ A **composite** action. Its steps, in order:
   | Any, with `upload-sarif: 'false'` | `contents: read` |
 
   The Action uses the job token only for the SARIF upload. Pull requests from forks get a read-only token and no secrets, so the upload cannot succeed there and a secret-based DAST URL is empty.
-- **Diff mode** (`diff: auto` on `pull_request`). The native secrets, text and Semgrep scanners read only the changed files, whole files, so existing issues in them are reported. Dependency checks run when a manifest changed and then report the manifest's full set. The Python engine and DAST always scan the full target. If the diff cannot be computed, or a changed file cannot be placed under `code`, the scan falls back to a full scan. Use a baseline to report only new findings. With `code` set to a subdirectory of the repository, the changed paths, which git reports from the repository root, cannot yet be placed under it, so from v3.6.2 the scan falls back to a full scan of `code` and logs a warning; diff scoping for a subdirectory is planned for v3.7.0.
+- **Diff mode** (`diff: auto` on `pull_request`). The native secrets, text and Semgrep scanners read only the changed files, whole files, so existing issues in them are reported. Dependency checks run when a manifest changed and then report the manifest's full set. The Python engine and DAST always scan the full target. If the diff cannot be computed, or a changed file cannot be placed under `code`, the scan falls back to a full scan. Use a baseline to report only new findings. With `code` set to a subdirectory of the repository, the changed paths, which git reports from the repository root, cannot yet be placed under it, so from v3.6.2 the scan falls back to a full scan of `code` and logs a warning; diff scoping for a subdirectory is planned for a later release.
 
 ```yaml
 name: Fendix Security Scan
@@ -548,8 +548,8 @@ jobs:
 | `output` | `fendix-results.sarif` | Report path. |
 | `upload-sarif` | `true` | Upload SARIF to code scanning, when `format=sarif` and the scan wrote a report. A private or internal repository needs `actions: read` and GitHub Code Security. |
 | `version` | `latest` | Exact release tag, or `latest` (resolved once to an exact tag). Only signed releases install; automatic Python preparation needs v3.5.0 or later. |
-| `extra-args` | `""` | Raw args appended to `fendix scan`. **v3.6.6:** they cannot cancel a required analyzer. |
-| `require-analyzers` | `auto` | **v3.6.6.** Analyzers that must run for the gate to pass: `auto` (`semgrep` whenever `code` is set), a comma-separated list of engine analyzer names, or `none` (opt out; the gate warns that coverage is not enforced). Managed mode takes only `auto`. |
+| `extra-args` | `""` | Raw args appended to `fendix scan`. **v3.7.0:** they cannot cancel a required analyzer. |
+| `require-analyzers` | `auto` | **v3.7.0.** Analyzers that must run for the gate to pass: `auto` (`semgrep` whenever `code` is set), a comma-separated list of engine analyzer names, or `none` (opt out; the gate warns that coverage is not enforced). Managed mode takes only `auto`. |
 | `engine_path` | `""` | Caller-managed Python engine dir, installed from its `requirements.txt`. Empty: the release's own source, from its signed build record, with its hash-locked `requirements.lock` from v3.6.1. |
 
 **Outputs:** `report` (path to the generated report), `exit-code` (0 no blocking decision / 1 at least one `BLOCK` / 2 error).
@@ -834,7 +834,7 @@ automation contract.
 
 3. **SEC-NNN finding-ID instability.** `SEC-NNN` IDs reassign across scans. Use the report's versioned `fingerprint` for baselines, `fingerprint:` ignore rules, and persistent mappings. Current builds emit `fendix/v2` semantic fingerprints; line/column coordinates and evidence wording do not re-key a finding.
 
-4. **The Python taint engine resolution.** The flag default is false, but `--code` auto-enables the Python engine unless `--python-engine=false` is explicit. Official v3.6.6 standalone binaries **do not bundle** the tree: the release runs `make embed-engine`, whose current target intentionally resets the embedded directory to a placeholder. Resolution order is explicit dir → `FENDIX_ENGINE` → the pin in `~/.fendix/config` → optional legacy/custom embedded payload → `./python`. A missing tree on the implicit `--code` path is recorded as `python-engine: skipped/dependency_missing` and the native analyzers continue; a missing tree after explicitly passing `--python-engine` is fatal (exit 2). The official Docker image ships `/opt/fendix/python/` and sets the engine environment, so hybrid/white-box works there. The v3.6.0 Action ran `fendix engine sync` unconditionally when `engine_path` was empty, which failed the job; from v3.6.1 the Action prepares the engine from the release's signed build record (§3.1).
+4. **The Python taint engine resolution.** The flag default is false, but `--code` auto-enables the Python engine unless `--python-engine=false` is explicit. Official v3.7.0 standalone binaries **do not bundle** the tree: the release runs `make embed-engine`, whose current target intentionally resets the embedded directory to a placeholder. Resolution order is explicit dir → `FENDIX_ENGINE` → the pin in `~/.fendix/config` → optional legacy/custom embedded payload → `./python`. A missing tree on the implicit `--code` path is recorded as `python-engine: skipped/dependency_missing` and the native analyzers continue; a missing tree after explicitly passing `--python-engine` is fatal (exit 2). The official Docker image ships `/opt/fendix/python/` and sets the engine environment, so hybrid/white-box works there. The v3.6.0 Action ran `fendix engine sync` unconditionally when `engine_path` was empty, which failed the job; from v3.6.1 the Action prepares the engine from the release's signed build record (§3.1).
 
 5. **SARIF upload differs by repository.** Upload to code scanning needs `security-events: write`, plus `actions: read` on a private repository, and a private repository also needs GitHub Code Security. Where Code Security is unavailable, skip the upload and rely on the PR comment or a `$GITHUB_STEP_SUMMARY` report, as the reference workflow does (§3.2). Never let a failed upload skip the gate.
 
@@ -905,8 +905,8 @@ These inputs belong to the composite Action (§3.1).
 | `output` | `fendix-results.sarif` | Report path |
 | `upload-sarif` | `true` | SARIF → code scanning, when a report was written (a private repository needs `actions: read` and GitHub Code Security) |
 | `version` | `latest` | Exact signed release tag, or `latest` resolved once |
-| `extra-args` | `""` | Raw args appended to `fendix scan`; from v3.6.6 they cannot cancel a required analyzer |
-| `require-analyzers` | `auto` | v3.6.6: analyzers that must run (`auto` = `semgrep` for code scans; a list; `none` opts out, coverage not enforced) |
+| `extra-args` | `""` | Raw args appended to `fendix scan`; from v3.7.0 they cannot cancel a required analyzer |
+| `require-analyzers` | `auto` | v3.7.0: analyzers that must run (`auto` = `semgrep` for code scans; a list; `none` opts out, coverage not enforced) |
 | `engine_path` | `""` | Caller-managed Python engine dir; empty uses the release's own source and, from v3.6.1, its hash lock |
 
 **Pinned image (v3.6.5):** `fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef`

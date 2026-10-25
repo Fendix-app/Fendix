@@ -107,11 +107,11 @@ jobs:
           prepare = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(prepare)
           work = Path(tempfile.mkdtemp(prefix="fendix-lock-", dir=os.environ["RUNNER_TEMP"]))
-          # "v3.6.6" is the release this tree becomes; it only names the log line.
+          # "v3.7.0" is the release this tree becomes; it only names the log line.
           # Semgrep is required, as the Action's default makes it for a code scan.
-          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.6.6", work, required=["semgrep"])
+          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.7.0", work, required=["semgrep"])
           PY
-          grep -qF "Installing the locked dependencies of Fendix v3.6.6 (requirements.lock, --require-hashes)" prepare.log
+          grep -qF "Installing the locked dependencies of Fendix v3.7.0 (requirements.lock, --require-hashes)" prepare.log
           grep -qF "Wheels only (--only-binary=:all:): no dependency is built from source" prepare.log
           if grep -qF "Building wheel for" prepare.log; then echo "::error::a dependency was built from source"; exit 1; fi
       - name: Preflight the locked venv's Semgrep

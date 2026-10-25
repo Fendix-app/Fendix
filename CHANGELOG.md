@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.6.6] - 2026-10-25
+## [3.7.0] - 2026-10-25
 
 The GitHub Action now fails closed when an analyzer it requires cannot run,
 Semgrep first. Until v3.6.5 a runner whose Semgrep could not scan passed the
@@ -19,9 +19,16 @@ required analyzer can no longer produce a green release gate.
 The engine gets the same fix: a fatal Semgrep run is now recorded `failed`,
 never `ok`, so a Semgrep that dies on the scanned tree fails a required
 Semgrep there too. Report schema, SARIF structure, fingerprints, finding
-identity, decision policy, CLI flags and defaults, and exit codes are
-otherwise the same as v3.6.5. The Python lock is v3.6.5's (Semgrep 1.182.1,
-MCP 1.29.0).
+identity, decision policy, CLI flags and defaults, and the meaning of each
+exit code are otherwise the same as v3.6.5. The Python lock is v3.6.5's
+(Semgrep 1.182.1, MCP 1.29.0).
+
+**Why a minor release:** it adds a public Action input, `require-analyzers`,
+and makes failing closed the default, so the Action now exits 2 on a runner
+whose Semgrep cannot run, and a fatal Semgrep run exits 2 under
+`--require-analyzers`, `--fail-on-coverage-gap` or `--fail-on-scanner-error`.
+The Action stays on `v1`: inputs are only added, and `require-analyzers: none`
+opts out explicitly.
 
 ### Security
 
@@ -143,9 +150,9 @@ MCP 1.29.0).
   unchanged, and the report shows the gap.
 - **`semgrep` `ok` can now carry a `detail`** counting per-file problems.
   Consumers that read `detail` only for non-ok entries are unaffected.
-- **`@v1` still points to the v3.6.2 release commit.** It moves to the v3.6.6
+- **`@v1` still points to the v3.6.2 release commit.** It moves to the v3.7.0
   release commit after that release's external-user end-to-end run; until
-  then, the fail-closed Action is available by pinning the v3.6.6 release
+  then, the fail-closed Action is available by pinning the v3.7.0 release
   commit.
 
 ## [3.6.5] - 2026-10-25

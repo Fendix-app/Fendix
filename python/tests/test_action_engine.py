@@ -371,7 +371,7 @@ class WheelsOnlyTests(unittest.TestCase):
         return [c for c in calls if "pip" in c]
 
     def test_every_install_is_wheels_only(self):
-        for version, tree in (("v3.6.6", self.release_tree()), (None, make_tree(self.root, "custom")),
+        for version, tree in (("v3.7.0", self.release_tree()), (None, make_tree(self.root, "custom")),
                               ("v3.6.0", make_tree(self.root, "legacy"))):
             with self.subTest(version=version):
                 pip = self.pip_calls(self.prepare(tree, version, ("semgrep",)))
@@ -382,7 +382,7 @@ class WheelsOnlyTests(unittest.TestCase):
     def test_required_semgrep_without_a_wheel_stops_preparation(self):
         tree = self.release_tree()
         with self.assertRaises(engine.PrepareError) as failure:
-            self.prepare(tree, "v3.6.6", ("semgrep",), missing=["semgrep==1.182.1"])
+            self.prepare(tree, "v3.7.0", ("semgrep",), missing=["semgrep==1.182.1"])
         error = failure.exception
         self.assertEqual(error.title, "Fendix required analyzer semgrep is unavailable")
         message = str(error)
@@ -405,7 +405,7 @@ class WheelsOnlyTests(unittest.TestCase):
     def test_unrequired_semgrep_is_left_out_with_a_warning(self):
         tree = self.release_tree()
         with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
-            calls = self.prepare(tree, "v3.6.6", (), missing=["semgrep==1.182.1"])
+            calls = self.prepare(tree, "v3.7.0", (), missing=["semgrep==1.182.1"])
         pip = self.pip_calls(calls)
         self.assertEqual(len(pip), 2)
         retried = Path(pip[1][pip[1].index("-r") + 1])
@@ -427,7 +427,7 @@ class WheelsOnlyTests(unittest.TestCase):
 
     def test_another_package_without_a_wheel_is_never_left_out(self):
         with self.assertRaises(engine.PrepareError) as failure:
-            self.prepare(self.release_tree(), "v3.6.6", (), missing=["pydantic-core==2.46.5"])
+            self.prepare(self.release_tree(), "v3.7.0", (), missing=["pydantic-core==2.46.5"])
         self.assertEqual(failure.exception.title, "Fendix engine dependency pydantic-core is unavailable")
         self.assertIn("pydantic-core==2.46.5", str(failure.exception))
         # Semgrep is left out, then the retry finds another package missing.

@@ -67,7 +67,7 @@ authority if this page and the pack ever disagree.
 4. Severity resolution prefers `metadata.fendix_severity`; falls back to Semgrep's own `ERROR`→`HIGH` / `WARNING`→`MEDIUM` / `INFO`→`LOW`; ultimate default `MEDIUM`
 5. If `semgrep` is not on `$PATH`, returns `ErrSemgrepUnavailable` — the orchestrator logs an install hint at INFO, records `scanner_status: {"name":"semgrep","state":"skipped","reason":"dependency_missing"}`, and continues
 
-## What `ok` means (from v3.6.6)
+## What `ok` means (from v3.7.0)
 
 `semgrep` is recorded `ok` only when Semgrep itself would call the run
 successful. The rule follows Semgrep 1.182.1's own contract (its
