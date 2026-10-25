@@ -63,7 +63,7 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     env:
-      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015
     permissions:
       actions: read           # Required for SARIF upload on a private repository
       security-events: write  # Required for SARIF upload
