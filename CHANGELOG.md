@@ -203,9 +203,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - It can also be assigned after construction, when the response is bound
       to a name: `resp["Content-Type"] = ...` (Django),
       `resp.headers["Content-Type"] = ...` (Flask, Starlette), or
-      `resp.mimetype`, `resp.content_type` or `resp.media_type`. When every
-      such assignment later in the function is a non-HTML constant, the
-      response is not a sink. Otherwise the construction decides.
+      `resp.mimetype`, `resp.content_type` or `resp.media_type`.
+      - Such an assignment decides by itself, whatever the constructor
+        declared, and the last one wins.
+      - Only the statements after the binding in the same block count. The
+        scan stops where the name is bound again, or at a statement that
+        returns or yields, since the response may already have left.
+      - An assignment inside a branch, loop, `with` or `try` may not run, so
+        it makes the type unknown, which counts as HTML.
     - A type containing `html` or `xml` (`text/html; charset=utf-8`,
       `application/xhtml+xml`, `image/svg+xml`) is HTML. So is a type held in
       a variable, and an empty type. `None` is a type not given.
@@ -234,14 +239,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Django's `render(...)` and `render_to_string(...)` and Flask's
       `render_template(...)`, imported from their frameworks, which render
       autoescaped templates, and Flask's `jsonify(...)`, which sends JSON.
+      - `.render(...)` on a Django template object is not reported either.
+        That covers `loader.get_template(...)`, `select_template(...)`,
+        `django.template.Template(...)`, and `engines[...]` with its
+        `from_string`/`get_template` (Django's Jinja2 backend autoescapes),
+        directly or through a variable.
       - Flask's `render_template` of a template whose constant name does not
         end in `.html`, `.htm`, `.xml`, `.xhtml` or `.svg` (`"mail.txt"`) is
         not autoescaped, so it is reported.
       - A function of the same name that the file defines is not a renderer.
-      - Neither is a `<template>.render(...)` method: Jinja2's `Template` and
-        `Environment.from_string` do not autoescape by default. So
-        `HttpResponse(Template(src).render(name=name))` is reported, and so is
-        Django's `get_template(...).render(...)`;
+      - `.render(...)` on a raw Jinja2 or Mako template is not a renderer
+        either: neither autoescapes by default. Raw Jinja2 means
+        `jinja2.Template`, or an `Environment`'s `from_string`/`get_template`.
+        So `HttpResponse(Template(src).render(name=name))` is reported;
     - Flask's `make_response({...})` or `make_response([...])`, which Flask
       sends as JSON;
     - a body that is, as a whole, the result of a helper function or of a
@@ -260,7 +270,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - String methods (`.format`, `.join`, `.strip`), `str()`, `json.dumps`,
         `json.loads`, `textwrap.dedent`, `urllib.parse.unquote` and
         `unquote_plus`, `html.unescape` and `map` pass text through.
-        `int()`, `float()`, `bool()` and `len()` hold none.
+      - These hold no text:
+        - `int()`, `float()`, `bool()`, `len()`, `round()` and `abs()`;
+        - `uuid.UUID`, `decimal.Decimal` and `fractions.Fraction`;
+        - `fromisoformat`/`strptime` on `date`, `datetime` and `time`.
   - **`json.dumps` is not an escape.** `HttpResponse(json.dumps(data))` with
     no content type is `text/html`, and `json.dumps` leaves `<` as it is, so
     request data in it is reported. With `content_type="application/json"` it
@@ -275,9 +288,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       HTML unescaped, as in `HttpResponse(build_page(name))`;
     - Django's other response classes, such as `HttpResponseBadRequest(...)`;
     - a content type set after construction other than by assigning to the
-      bound name (`resp.headers.update(...)`, `resp.headers.set(...)`), so
-      such a response is still reported. A later assignment counts wherever
-      it sits in the function, even inside a branch;
+      bound name (`resp.headers.update(...)`, `resp.headers.set(...)`). Such a
+      call is ignored, so the constructor's own type decides;
     - a media type passed to `HTMLResponse`, which is ignored.
   - **Framework parity:** the Django, Flask and FastAPI `direct` and
     `indirect` XSS cases are now detected and block, and their `cross_file`
@@ -609,6 +621,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limit. The engine then skipped the rest of the file, with every finding after
   that point. Such a value is now not sanitised or escaped, so its sink is
   reported and the file is analysed to the end. Findings this restores are
+  new.
+- **A value repeated by a number is no longer treated as escaped.**
+  `"&nbsp;" * depth` is inert, because it can only hold the constant's own
+  characters. But any expression multiplied by a constant counted as escaped
+  too, so `mark_safe(name * 2)` and `Markup(f"<b>{name * 2}</b>")` were not
+  reported. Now only a constant string repeated is inert. These findings are
   new.
 
 ## [3.6.4] - 2026-10-24

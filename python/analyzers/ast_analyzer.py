@@ -397,7 +397,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # call is visited, so the HTML response sink can find a content type
         # assigned to the response afterwards; and the names the file defines
         # with def/class, collected on first need.
-        self._call_targets: dict[ast.Call, str] = {}
+        self._call_targets: dict[ast.Call, tuple[str, ast.Assign]] = {}
         self._defined_names: frozenset[str] | None = None
         # Task 3.1: each def → the parameters that carry request data because
         # it is a route handler bound to this file (`_route_param_sources`),
@@ -1402,9 +1402,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         ``mark_safe("%s%s" % (indent, escape(title)))`` was reported as
         reflected XSS despite the explicit ``escape()``.
 
-        A Constant repeated with ``*`` (``"&nbsp;" * depth``) is also inert: the
-        result can only ever contain characters from the constant, whatever the
-        multiplier evaluates to."""
+        A constant string repeated with ``*`` (``"&nbsp;" * depth``) is also
+        inert: the result can only ever contain characters from the constant,
+        whatever the multiplier evaluates to. A value repeated by a constant
+        count (``name * 2``) is not: its text is the value's."""
         if _depth >= _MAX_TAINT_HOPS:
             return False
         if isinstance(expr, ast.Constant):
@@ -1423,8 +1424,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             )
         if isinstance(expr, ast.BinOp):
             # `<const> * <anything>` yields only the constant's own characters.
-            if isinstance(expr.op, ast.Mult) and (
-                isinstance(expr.left, ast.Constant) or isinstance(expr.right, ast.Constant)
+            if isinstance(expr.op, ast.Mult) and any(
+                isinstance(side, ast.Constant) and isinstance(side.value, str)
+                for side in (expr.left, expr.right)
             ):
                 return True
             return self._expr_is_fully_escaped(
@@ -2979,7 +2981,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
         ):
-            self._call_targets[node.value] = node.targets[0].id
+            self._call_targets[node.value] = (node.targets[0].id, node)
         if not self._scopes:
             self.generic_visit(node)
             return
@@ -4279,23 +4281,21 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _response_is_non_html(self, node: ast.Call, ctor: str, package: str) -> bool:
         """True when the response's content type is provably not markup.
 
-        Declared at construction by the ``content_type``/``mimetype``/
-        ``media_type`` keyword, by its position (`_response_layout`), or by a
-        ``Content-Type`` entry in a literal headers dict or list of pairs
-        (``headers=``, or Flask's ``make_response(body, status, headers)``):
-        every declared type must be a non-markup constant (``None`` is a type
-        not given). With none, the response is HTML: Django and Flask default to text/html, and a
+        A type assigned after construction (`_late_content_type`) decides by
+        itself. Otherwise the construction decides: a type declared by the
+        ``content_type``/``mimetype``/``media_type`` keyword, by its position
+        (`_response_layout`), or by a ``Content-Type`` entry in a literal
+        headers dict or list of pairs (``headers=``, or Flask's
+        ``make_response(body, status, headers)``). Every declared type must be
+        a non-markup constant (``None`` is a type not given). With none, the
+        response is HTML: Django and Flask default to text/html, and a
         Starlette ``Response`` sends no Content-Type, so the browser sniffs the
-        body. ``HTMLResponse`` is always HTML.
-
-        A type assigned after construction (`_late_content_types`) also
-        counts: when every such assignment is a non-markup constant, the
-        response is not HTML; otherwise the construction decides."""
+        body. ``HTMLResponse`` is always HTML."""
         if ctor == "HTMLResponse":
             return False
-        late = self._late_content_types(node)
-        if late and all(self._is_non_markup_media_type(v) for v in late):
-            return True
+        late = self._late_content_type(node)
+        if late is not None:
+            return self._is_non_markup_media_type(late)
         args = self._response_args(node, ctor)
         _, headers_index, type_indexes = self._response_layout(ctor, package)
         declared = [
@@ -4315,31 +4315,44 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         ]
         return bool(declared) and all(self._is_non_markup_media_type(v) for v in declared)
 
-    def _late_content_types(self, node: ast.Call) -> list[ast.AST]:
-        """The values assigned as the content type of the response ``node``
-        builds, after it is built and bound to a name (``resp = ...``):
+    def _late_content_type(self, node: ast.Call) -> ast.AST | None:
+        """The content type the response ``node`` builds ends up with after
+        construction, or None when nothing later sets one.
+
+        Only when ``node`` is bound to a name (``resp = ...``), and only in the
+        statements that follow that binding in the same statement list:
         ``resp["Content-Type"] = v`` (Django), ``resp.headers["Content-Type"]
         = v`` (Flask, Starlette), and ``resp.mimetype``/``.content_type``/
-        ``.media_type = v``. Searched in the rest of the enclosing function
-        (or module), not in nested functions or classes."""
-        name = self._call_targets.get(node)
+        ``.media_type = v``. The last such assignment wins. The scan stops at
+        a statement that rebinds the name, or that returns or yields (the
+        response may leave before a later assignment runs). An assignment
+        inside a nested branch, loop, ``with`` or ``try`` may not run, so it
+        makes the type unknown, which is HTML."""
+        target = self._call_targets.get(node)
         scope = self._func_stack[-1] if self._func_stack else self._module_root
-        if name is None or scope is None:
-            return []
-        after = getattr(node, "end_lineno", None) or node.lineno
-        found: list[ast.AST] = []
-        stack: list[ast.AST] = list(scope.body)
-        while stack:
-            stmt = stack.pop()
-            if isinstance(stmt, _SCOPE_NODES):
-                continue
-            if (
-                isinstance(stmt, ast.Assign)
-                and stmt.lineno > after
-                and any(_is_content_type_target(t, name) for t in stmt.targets)
+        if target is None or scope is None:
+            return None
+        name, binding = target
+        stmts = _statement_list_holding(scope, binding)
+        if stmts is None:
+            return None
+        found: ast.AST | None = None
+        for stmt in stmts[_index_of(stmts, binding) + 1 :]:
+            if _rebinds(stmt, name):
+                break
+            if isinstance(stmt, ast.Assign) and any(
+                _is_content_type_target(t, name) for t in stmt.targets
             ):
-                found.append(stmt.value)
-            stack.extend(ast.iter_child_nodes(stmt))
+                found = stmt.value
+                continue
+            if any(
+                isinstance(n, ast.Assign)
+                and any(_is_content_type_target(t, name) for t in n.targets)
+                for n in _walk_own_scope(stmt)
+            ):
+                found = _UNKNOWN_CONTENT_TYPE
+            if any(isinstance(n, _LEAVING_NODES) for n in _walk_own_scope(stmt)):
+                break
         return found
 
     def _is_non_markup_media_type(self, value: ast.AST) -> bool:
@@ -4356,12 +4369,18 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _renderer_verdict(self, call: ast.Call) -> str:
         """``"safe"`` for a renderer that escapes what it renders (or Flask's
         ``jsonify``), called through an import from its framework
-        (`_HTML_RESPONSE_SAFE_BODIES`); ``"text"`` for Flask's
+        (`_HTML_RESPONSE_SAFE_BODIES`), and for ``.render(...)`` on a Django
+        template object (`_is_django_template`); ``"text"`` for Flask's
         ``render_template`` of a template whose constant name Flask does not
-        autoescape (``"x.txt"``); "" for anything else, including a
-        ``<template>.render(...)`` method and a same-file ``def render``
-        (R-pf40)."""
+        autoescape (``"x.txt"``); "" for anything else, including ``.render``
+        on a Jinja2 or Mako template and a same-file ``def render`` (R-pf40)."""
         func = call.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "render"
+            and self._is_django_template(func.value)
+        ):
+            return "safe"
         if isinstance(func, ast.Name):
             module, name = self._from_imports.get(func.id, ("", ""))
         elif isinstance(func, ast.Attribute):
@@ -4384,6 +4403,43 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return "text"
         return "safe"
 
+    def _is_django_template(self, expr: ast.AST, _depth: int = 0) -> bool:
+        """True when ``expr`` is, directly or through a binding, a Django
+        template object, whose ``render`` autoescapes: the result of
+        ``django.template.loader.get_template``/``select_template``, a
+        ``django.template.Template(...)``, or ``engines[...]`` (Django's
+        Jinja2 backend autoescapes too) or its ``from_string``/``get_template``
+        result. Each name must resolve through the file's imports; a raw
+        ``jinja2.Template`` or ``Environment`` is not one."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(expr, ast.Name):
+            bound = self._scope_binding(expr.id)
+            return bound is not None and self._is_django_template(bound, _depth + 1)
+        if isinstance(expr, ast.Subscript):
+            return self._import_origin(expr.value) == "django.template.engines"
+        if isinstance(expr, ast.Call):
+            func = expr.func
+            if self._import_origin(func) in _DJANGO_TEMPLATE_FACTORIES:
+                return True
+            return (
+                isinstance(func, ast.Attribute)
+                and func.attr in ("from_string", "get_template")
+                and self._is_django_template(func.value, _depth + 1)
+            )
+        return False
+
+    def _is_non_text_call(self, call: ast.Call) -> bool:
+        """True for a call whose result holds no text from its argument: the
+        builtins in `_NON_TEXT_FUNCS` (by bare name), and the value parsers in
+        `_NON_TEXT_CALLS` (``UUID``, ``Decimal``, ``Fraction``, ``date``/
+        ``datetime``/``time`` ``.fromisoformat``/``.strptime``), each resolved
+        through the file's imports."""
+        func = call.func
+        if isinstance(func, ast.Name) and func.id in _NON_TEXT_FUNCS:
+            return True
+        return self._import_origin(func) in _NON_TEXT_CALLS
+
     def _html_body_carries_text(
         self,
         expr: ast.AST,
@@ -4398,7 +4454,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
         False for constants, parts `_arg_is_sanitised` accepts (escaped,
         allowlisted, membership-guarded), `_renderer_verdict`'s safe renderers,
-        `_NON_TEXT_FUNCS`, and, when it is the WHOLE body (``whole``), the
+        `_is_non_text_call`, and, when it is the WHOLE body (``whole``), the
         result of a helper function or ``self``/``cls`` method (R-pf41). The
         engine cannot see what a function returns, and a function whose result
         is the whole page is a renderer: `HTMLResponse(content=
@@ -4466,7 +4522,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return any(part(a) for a in args)
             if _dotted(func).partition(".")[0] in _REQUEST_NAMES:
                 return True  # request.GET.get(...), request.get_json()
-            if isinstance(func, ast.Name) and name in _NON_TEXT_FUNCS:
+            if self._is_non_text_call(expr):
                 return False
             if (
                 isinstance(func, ast.Attribute)
@@ -4847,8 +4903,37 @@ _TEXT_PASSTHROUGH_FUNCS: frozenset[str] = frozenset(
         "map",
     }
 )
-# Builtins whose result holds no text from their argument.
-_NON_TEXT_FUNCS: frozenset[str] = frozenset({"int", "float", "bool", "len"})
+# Calls whose result holds no text from their argument: builtins (by bare
+# name) and value parsers (by import path).
+_NON_TEXT_FUNCS: frozenset[str] = frozenset(
+    {"int", "float", "bool", "len", "round", "abs"}
+)
+_NON_TEXT_CALLS: frozenset[str] = frozenset(
+    {
+        "decimal.Decimal",
+        "uuid.UUID",
+        "fractions.Fraction",
+        "datetime.date.fromisoformat",
+        "datetime.datetime.fromisoformat",
+        "datetime.time.fromisoformat",
+        "datetime.datetime.strptime",
+        "datetime.date.strptime",
+        "datetime.time.strptime",
+    }
+)
+# Django calls that return a template object whose `.render` autoescapes.
+_DJANGO_TEMPLATE_FACTORIES: frozenset[str] = frozenset(
+    {
+        "django.template.loader.get_template",
+        "django.template.loader.select_template",
+        "django.template.Template",
+        "django.template.base.Template",
+    }
+)
+# The content type assigned in a branch that may not run: unknown, so HTML.
+_UNKNOWN_CONTENT_TYPE: ast.AST = ast.Name(id="<content type set in a branch>")
+# Statements through which a built response may leave the function.
+_LEAVING_NODES = (ast.Return, ast.Yield, ast.YieldFrom)
 # Receivers whose methods are the class's own helpers, not operations on a
 # value: `self.render_page(name)` is opaque like `render_page(name)`.
 _OWN_RECEIVERS: frozenset[str] = frozenset({"self", "cls"})
@@ -4874,6 +4959,45 @@ def _header_content_types(headers: ast.AST) -> list[ast.AST]:
         and isinstance(key.value, str)
         and key.value.lower() == "content-type"
     ]
+
+
+def _walk_own_scope(node: ast.AST):
+    """``node`` and every node under it, without entering a nested function,
+    lambda, class or comprehension."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(
+            child
+            for child in ast.iter_child_nodes(current)
+            if not isinstance(child, _SCOPE_NODES)
+        )
+
+
+def _statement_list_holding(scope: ast.AST, stmt: ast.stmt) -> list[ast.stmt] | None:
+    """The statement list (a ``body``, ``orelse``, ``finalbody`` or ``handlers``
+    body) in ``scope`` that holds ``stmt`` itself."""
+    for node in _walk_own_scope(scope):
+        for attr in ("body", "orelse", "finalbody"):
+            stmts = getattr(node, attr, None)
+            if isinstance(stmts, list) and any(s is stmt for s in stmts):
+                return stmts
+    return None
+
+
+def _index_of(stmts: list[ast.stmt], stmt: ast.stmt) -> int:
+    return next(i for i, s in enumerate(stmts) if s is stmt)
+
+
+def _rebinds(stmt: ast.stmt, name: str) -> bool:
+    """True when ``stmt`` (at any depth in its own scope) binds ``name`` again."""
+    for node in _walk_own_scope(stmt):
+        if isinstance(node, ast.Name) and node.id == name and isinstance(
+            node.ctx, (ast.Store, ast.Del)
+        ):
+            return True
+    return False
 
 
 def _is_content_type_target(target: ast.AST, name: str) -> bool:

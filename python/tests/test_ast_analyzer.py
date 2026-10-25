@@ -889,6 +889,109 @@ class TestHTMLResponseSink:
             "request.GET",
         )
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # the type is set on a later binding, after this response returned
+            (
+                '    if request.args.get("fmt") == "html":\n'
+                '        resp = make_response(f"<p>{name}</p>")\n'
+                "        return resp\n"
+                '    resp = make_response(json.dumps({"n": name}))\n'
+                '    resp.headers["Content-Type"] = "application/json"\n'
+                "    return resp\n"
+            ),
+            # the type is set on a sibling branch's response
+            (
+                '    if request.args.get("fmt") == "html":\n'
+                '        resp = make_response(f"<p>{name}</p>")\n'
+                "    else:\n"
+                '        resp = make_response(json.dumps({"n": name}))\n'
+                '        resp.mimetype = "application/json"\n'
+                "    return resp\n"
+            ),
+            # the type is set in only one branch, or only on an error path
+            (
+                '    resp = make_response(f"<p>{name}</p>")\n'
+                '    if request.args.get("fmt") == "json":\n'
+                '        resp.mimetype = "application/json"\n'
+                "    return resp\n"
+            ),
+            (
+                '    resp = make_response(f"<p>{name}</p>")\n'
+                "    try:\n"
+                "        pass\n"
+                "    except Exception:\n"
+                '        resp.mimetype = "text/plain"\n'
+                "    return resp\n"
+            ),
+            # the response may return before the type is set
+            (
+                "    for i in range(2):\n"
+                '        resp = make_response(f"<p>{name}</p>")\n'
+                "        if i:\n"
+                "            return resp\n"
+                '        resp.mimetype = "text/plain"\n'
+                "    return resp\n"
+            ),
+            # the name is rebound before the type is set
+            (
+                '    resp = make_response(f"<p>{name}</p>")\n'
+                "    page = resp\n"
+                '    resp = make_response("")\n'
+                '    resp.mimetype = "text/plain"\n'
+                "    return page\n"
+            ),
+            # a branch may set HTML after a JSON type
+            (
+                '    resp = make_response(f"<p>{name}</p>")\n'
+                '    resp.mimetype = "application/json"\n'
+                '    if request.args.get("html"):\n'
+                '        resp.mimetype = "text/html"\n'
+                "    return resp\n"
+            ),
+        ],
+        ids=[
+            "rebinding-after-return", "sibling-branch", "one-branch-only", "except-only",
+            "after-return-in-loop", "rebound-name", "branch-after-json",
+        ],
+    )
+    def test_late_content_type_counts_only_in_the_bindings_own_block(self, body: str) -> None:
+        found = self._xss("import json\n" + _FLASK_VIEW + body)
+        html = [f for f in found if "<p>" in f["sink"]]
+        assert len(html) == 1, found
+        assert html[0].get("reachable") is True, html[0]
+
+    @pytest.mark.parametrize(
+        "ctor, late",
+        [
+            ('HttpResponse(f"<p>{name}</p>", content_type="text/plain")', 'resp["Content-Type"] = "text/html"'),
+            ('HttpResponse(f"<p>{name}</p>", content_type="application/json")', "resp['content-type'] = kind"),
+        ],
+        ids=["late-html", "late-variable"],
+    )
+    def test_late_content_type_overrides_the_construction(self, ctor: str, late: str) -> None:
+        # A late type decides by itself, whatever the constructor declared.
+        self._proven(
+            _DJANGO_VIEW
+            + "    kind = pick_type()\n"
+            + f"    resp = {ctor}\n"
+            + f"    {late}\n"
+            + "    return resp\n",
+            "request.GET",
+        )
+
+    def test_last_late_content_type_wins(self) -> None:
+        self._clean(
+            _FLASK_VIEW
+            + '    resp = make_response(f"<p>{name}</p>")\n'
+            + '    resp.mimetype = "text/html"\n'
+            + '    if request.args.get("x"):\n'
+            + '        resp.headers["X-Mode"] = "x"\n'
+            + '    resp.mimetype = "text/plain"\n'
+            + "    return resp\n"
+        )
+
     def test_content_type_set_before_construction_does_not_count(self) -> None:
         self._proven(
             _DJANGO_VIEW
@@ -1071,19 +1174,77 @@ class TestHTMLResponseSink:
                 "HttpResponse(Environment().from_string(src).render(name=name))",
             ),
             (
-                "from django.template import loader",
-                'HttpResponse(loader.get_template("x.html").render({"n": name}, request))',
+                "import jinja2",
+                'HttpResponse(jinja2.Environment().get_template("x.html").render(name=name))',
             ),
+            ("from mako.template import Template", "HttpResponse(Template(src).render(name=name))"),
         ],
-        ids=["jinja2-Template", "jinja2-from_string", "django-get_template"],
+        ids=["jinja2-Template", "jinja2-from_string", "jinja2-get_template", "mako"],
     )
     def test_template_render_method_is_xss(self, imports: str, ret: str) -> None:
-        # R-pf40: a `<template>.render(...)` method is not a sanitiser. Jinja2's
-        # Template and Environment do not autoescape by default.
+        # R-pf40: `.render(...)` on a raw Jinja2 or Mako template is not a
+        # sanitiser: neither autoescapes by default.
         self._proven(
             imports + "\n" + _DJANGO_VIEW + '    src = "<p>{{ name }}</p>"\n' + f"    return {ret}\n",
             "request.GET",
         )
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            (
+                "from django.template import loader\n"
+                "def v(request):\n"
+                '    q = request.GET.get("q", "")\n'
+                '    template = loader.get_template("polls/index.html")\n'
+                '    context = {"q": q}\n'
+                "    return HttpResponse(template.render(context, request))\n"
+            ),
+            (
+                "from django.template.loader import get_template\n"
+                "def v(request):\n"
+                '    q = request.GET.get("q", "")\n'
+                '    return HttpResponse(get_template("s.html").render({"q": q}, request))\n'
+            ),
+            (
+                "from django.template.loader import select_template\n"
+                "def v(request):\n"
+                '    q = request.GET.get("q", "")\n'
+                '    return HttpResponse(select_template(["a.html"]).render({"q": q}))\n'
+            ),
+            (
+                "from django.template import Context, Template\n"
+                "def v(request):\n"
+                '    q = request.GET.get("q", "")\n'
+                '    return HttpResponse(Template("<p>{{ q }}</p>").render(Context({"q": q})))\n'
+            ),
+            (
+                "from django.template import engines\n"
+                "def v(request):\n"
+                '    q = request.GET.get("q", "")\n'
+                '    engine = engines["jinja2"]\n'
+                '    return HttpResponse(engine.from_string("<p>{{ q }}</p>").render({"q": q}))\n'
+            ),
+            (
+                "from django.template import Context, Template, loader\n"
+                "from .models import Question\n"
+                "def index(request):\n"
+                '    latest = Question.objects.order_by("-pub_date")[:5]\n'
+                '    template = loader.get_template("polls/index.html")\n'
+                '    context = {"latest_question_list": latest}\n'
+                "    return HttpResponse(template.render(context, request))\n"
+            ),
+        ],
+        ids=[
+            "loader.get_template", "get_template", "select_template", "Template",
+            "engines-jinja2", "tutorial",
+        ],
+    )
+    def test_django_template_object_render_is_not_xss(self, src: str) -> None:
+        # R-pf40 (corrected): `.render` on a Django template object autoescapes,
+        # including Django's Jinja2 backend. The tutorial's view gets no
+        # finding at all, not even an unproven one.
+        self._clean("from django.http import HttpResponse\n" + src)
 
     @pytest.mark.parametrize(
         "template",
@@ -1225,6 +1386,72 @@ class TestHTMLResponseSink:
     )
     def test_numbers_hold_no_text(self, ret: str) -> None:
         self._clean(_DJANGO_VIEW + f"    return {ret}\n")
+
+    @pytest.mark.parametrize(
+        "imports, ret",
+        [
+            ("from uuid import UUID", "HttpResponse(UUID(name))"),
+            ("import uuid", "HttpResponse(str(uuid.UUID(name)))"),
+            ("import decimal", 'HttpResponse(f"<p>{decimal.Decimal(name)}</p>")'),
+            ("from decimal import Decimal", 'HttpResponse(f"<p>Total {Decimal(name) * 2}</p>")'),
+            ("from fractions import Fraction", 'HttpResponse(f"<p>{Fraction(name)}</p>")'),
+            ("from datetime import date", 'HttpResponse(f"<p>{date.fromisoformat(name)}</p>")'),
+            ("import datetime", 'HttpResponse(f"<p>{datetime.date.fromisoformat(name)}</p>")'),
+            (
+                "from datetime import datetime",
+                'HttpResponse(f"<p>{datetime.strptime(name, \'%Y\')}</p>")',
+            ),
+            ("", 'HttpResponse(f"<p>{round(float(name), 2)} {abs(int(name))}</p>")'),
+        ],
+        ids=[
+            "UUID", "uuid.UUID", "decimal.Decimal", "Decimal", "Fraction",
+            "date.fromisoformat", "datetime.date.fromisoformat", "datetime.strptime",
+            "round-abs",
+        ],
+    )
+    def test_value_parsers_hold_no_text(self, imports: str, ret: str) -> None:
+        self._clean(imports + "\n" + _DJANGO_VIEW + f"    return {ret}\n")
+
+    def test_path_still_carries_text(self) -> None:
+        # Path is a class constructor whose `.name` is the request's text.
+        self._proven(
+            "from pathlib import Path\n" + _DJANGO_VIEW + "    return HttpResponse(Path(name).name)\n",
+            "request.GET",
+        )
+
+    def test_value_parser_named_by_the_project_still_carries(self) -> None:
+        # A same-named class the project imports is not uuid.UUID.
+        self._proven(
+            "from app.types import UUID\n" + _DJANGO_VIEW + "    return HttpResponse(UUID(name))\n",
+            "request.GET",
+        )
+
+    @pytest.mark.parametrize(
+        "ret",
+        ['HttpResponse(f"<p>{name * 2}</p>")', "HttpResponse(2 * name)", "mark_safe(name * 2)"],
+        ids=["httpresponse-fstring", "httpresponse-left", "mark_safe"],
+    )
+    def test_repeated_value_carries_text(self, ret: str) -> None:
+        # Only a constant string is inert when repeated.
+        self._proven(
+            "from django.utils.safestring import mark_safe\n"
+            + _DJANGO_VIEW
+            + f"    return {ret}\n",
+            "request.GET",
+        )
+
+    @pytest.mark.parametrize(
+        "ret",
+        ['HttpResponse("<br>" * len(name))', 'mark_safe("<br>" * count)'],
+        ids=["httpresponse", "mark_safe"],
+    )
+    def test_repeated_constant_string_is_inert(self, ret: str) -> None:
+        self._clean(
+            "from django.utils.safestring import mark_safe\n"
+            + _DJANGO_VIEW
+            + "    count = int(request.GET.get('n', '1'))\n"
+            + f"    return {ret}\n"
+        )
 
     def test_map_carries_its_iterable_not_its_function(self) -> None:
         self._clean(
