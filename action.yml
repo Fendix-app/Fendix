@@ -36,9 +36,9 @@
 # High-assurance or reproducible pipelines: pin the full commit of the
 # validated release instead, which is immutable.
 #
-#   - uses: Fendix-app/Fendix@b9e1fad6e1d9531ac899ab44b01f413424f30a7a # v3.6.2
+#   - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
 #     with:
-#       version: v3.6.2
+#       version: v3.7.0
 #
 # Usage (full: add a DAST target and fail the build on HIGH):
 #

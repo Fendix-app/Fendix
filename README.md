@@ -243,7 +243,7 @@ Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity. Binar
 For the current Docker image, use `cosign verify` against the immutable digest and the official workflow identity:
 
 ```bash
-cosign verify fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef \
+cosign verify fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015 \
   --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com"
 ```
@@ -664,20 +664,25 @@ jobs:
 ```
 
 `@v1` follows compatible stable releases of the v1 Action; `version` pins the
-Fendix release it installs. For high-assurance or reproducible pipelines, pin
-the Action to the full commit of the validated release instead, which is
-immutable:
+Fendix release it installs. **`@v1` still resolves to the v3.6.2 Action code**
+(release commit `b9e1fad`) until `v1` is moved, so it does not have v3.7.0's
+fail-closed required analyzers. For those, and for high-assurance or
+reproducible pipelines, pin the Action to the full commit of the validated
+v3.7.0 release, which is immutable (or use `@v1` once it is moved):
 
 ```yaml
-      - uses: Fendix-app/Fendix@b9e1fad6e1d9531ac899ab44b01f413424f30a7a # v3.6.2
+      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
         with:
-          version: v3.6.2
+          version: v3.7.0
 ```
 
 Never reference `@main`; it changes without review. The permissions above are
 all the Action needs; it uses the job token only for the SARIF upload. The
-v3.6.2 Action, by its release commit and as literal `@v1`, passed the
-external-user end-to-end matrix in public and private repositories.
+v3.7.0 release commit with `version: v3.7.0` was tested end to end in a public
+repository on 2026-10-25 (`Fendix-app/fendix-action-e2e-public`, runs
+40225358870 to 40225440001). The v3.6.2 Action, by its release commit and as
+literal `@v1`, passed the external-user end-to-end matrix in public and private
+repositories.
 
 #### What the Action does
 
@@ -711,7 +716,8 @@ external-user end-to-end matrix in public and private repositories.
   (`--only-binary=:all:`): nothing is built from source. `setup-python` does
   not change the rest of the job's environment, but the venv's `bin/` and
   `FENDIX_ENGINE` stay available to later steps.
-- **Required analyzers fail closed (from v3.7.0).** `require-analyzers`
+- **Required analyzers fail closed (from v3.7.0; with `@v1`, once it is
+  moved).** `require-analyzers`
   defaults to `auto`, which requires `semgrep` whenever `code` is set. A
   required Semgrep must install from a wheel, then pass a preflight before the
   scan: the Action runs it, offline, on a bundled rule and file and requires
@@ -788,14 +794,15 @@ external-user end-to-end matrix in public and private repositories.
 #### Alternative: the digest-pinned reference workflow
 
 For teams that want the container-based path and to own the workflow file
-directly, the reference workflow runs the official v3.6.2 container by digest,
-pins every third-party Action to a full commit SHA, and was tested end to end
-from fresh repositories. Install it from its tested commit, not from `main`:
+directly, the reference workflow runs the official v3.7.0 container by digest
+and pins every third-party Action to a full commit SHA. Its content was tested
+end to end; the integration guide has the record. Install it from that commit,
+not from `main`:
 
 ```bash
 mkdir -p .github/workflows
 curl -fsSL -o .github/workflows/fendix-scan.yml \
-  https://raw.githubusercontent.com/Fendix-app/Fendix/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml
+  https://raw.githubusercontent.com/Fendix-app/Fendix/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml
 ```
 
 The [integration guide](docs/INTEGRATION_GUIDE.md#32-alternative--the-digest-pinned-reference-workflow)

@@ -404,7 +404,7 @@ Key facts:
 
 Goal: fail the build when a scan finds something at/above a severity threshold, and surface the findings to reviewers.
 
-> **GitHub Actions: use the Fendix Action, `uses: Fendix-app/Fendix@v1` with an explicit `version` (§3.1).** For high-assurance or reproducible pipelines, pin it to the full commit of the validated release instead. The digest-pinned reference workflow (§3.2) is a tested alternative. Never reference `@main`; it changes without review.
+> **GitHub Actions: use the Fendix Action, `uses: Fendix-app/Fendix@v1` with an explicit `version` (§3.1).** For high-assurance or reproducible pipelines, and for v3.7.0's fail-closed required analyzers until `v1` is moved, pin it to the full commit of the validated release instead. The digest-pinned reference workflow (§3.2) is a tested alternative. Never reference `@main`; it changes without review.
 
 The engine runs in CI as the composite GitHub Action (§3.1), or from the official container image (§3.2, §3.4).
 
@@ -435,18 +435,17 @@ jobs:
           fail-on: HIGH
 ```
 
-`@v1` follows compatible stable releases of the v1 Action. `version` pins the Fendix release the Action installs. For high-assurance or reproducible pipelines, pin the Action to the full commit of the validated release instead, which is immutable:
+`@v1` follows compatible stable releases of the v1 Action. `version` pins the Fendix release the Action installs. **`@v1` still resolves to the v3.6.2 Action code** (release commit `b9e1fad`) until `v1` is moved, so it does not have the items marked **v3.7.0** below. For those, and for high-assurance or reproducible pipelines, pin the Action to the full commit of the validated v3.7.0 release, which is immutable (or use `@v1` once it is moved):
 
 ```yaml
-      - uses: Fendix-app/Fendix@b9e1fad6e1d9531ac899ab44b01f413424f30a7a # v3.6.2
+      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
         with:
-          version: v3.6.2
+          version: v3.7.0
 ```
 
-Never reference `@main`; it changes without review. On a private repository without GitHub Code Security, set `upload-sarif: 'false'`: the scan and the gate still run. The v3.6.2 Action, by its release commit and as literal `@v1`, passed the external-user end-to-end matrix in public and private repositories on 2026-10-16. Until then `v1` pointed to the June 2026 revision `d59a901`; a workflow pinned to that revision should move to `@v1` or to the release commit.
+Never reference `@main`; it changes without review. On a private repository without GitHub Code Security, set `upload-sarif: 'false'`: the scan and the gate still run. The v3.7.0 release commit with `version: v3.7.0` was tested end to end in a public repository on 2026-10-25 (`Fendix-app/fendix-action-e2e-public`, runs 40225358870 to 40225440001). The v3.6.2 Action, by its release commit and as literal `@v1`, passed the external-user end-to-end matrix in public and private repositories on 2026-10-16. Until then `v1` pointed to the June 2026 revision `d59a901`; a workflow pinned to that revision should move to `@v1` or to a release commit.
 
-This section documents the Action as shipped in v3.6.2.
-Items marked **v3.7.0** describe the Action at the v3.7.0 release commit, which `@v1` moves to after that release's end-to-end run.
+This section documents the Action as shipped in v3.6.2, which `@v1` resolves to until it is moved. Items marked **v3.7.0** describe the Action at the v3.7.0 release commit `90adf6a`, and `@v1` once it is moved there.
 
 A **composite** action. Its steps, in order:
 
@@ -489,7 +488,7 @@ A **composite** action. Its steps, in order:
 - **Network.** Outbound HTTPS to GitHub (release downloads, and the API for `latest`) and to Sigstore (its TUF root and Rekor) for the signature check; the Python engine also needs `codeload.github.com` and PyPI. Without Sigstore access the install fails. Proxies work through the standard `HTTPS_PROXY` and `NO_PROXY` variables; a `~/.curlrc` is ignored.
 - **Linux runners: glibc 2.34 or later for Semgrep, from v3.6.5.** The Semgrep that v3.6.5 and later lock (1.182.1) publishes Linux wheels only for glibc 2.34 or later and musl 1.2 or later, on x86_64 or aarch64. Older glibc includes Ubuntu 20.04, Debian 11, RHEL 8 and its rebuilds, and Amazon Linux 2. GitHub-hosted runners and the official image are not affected.
   - **v3.7.0 Action:** a code scan on such a runner fails at setup with exit 2, and the error names Semgrep, the runner's glibc and architecture, the floor, and the remedies. Use the official image as a container job (§3.4), or a runner with glibc 2.34 or later (Ubuntu 22.04+, Debian 12+, RHEL 9+, Amazon Linux 2023). `require-analyzers: none` scans without Semgrep, with coverage not enforced.
-  - **v3.6.2 Action (`@v1` today):** with `version: v3.6.5`, pip builds Semgrep from source without `semgrep-core`. Preparation succeeds, but the scan records `semgrep` as `failed` (`execution_error`) and coverage as incomplete, and the gate is decided by the analyzers that ran. Add `extra-args: --require-analyzers semgrep` to fail the job, with exit 2, instead. `version: v3.6.4` keeps Semgrep 1.141.0 but gives up v3.6.5's fixes; the v3.6.5 Upgrading notes in [`CHANGELOG.md`](../CHANGELOG.md) list what it keeps.
+  - **v3.6.2 Action (`@v1` until it is moved):** with `version: v3.6.5`, pip builds Semgrep from source without `semgrep-core`. Preparation succeeds, but the scan records `semgrep` as `failed` (`execution_error`) and coverage as incomplete, and the gate is decided by the analyzers that ran. Add `extra-args: --require-analyzers semgrep` to fail the job, with exit 2, instead. `version: v3.6.4` keeps Semgrep 1.141.0 but gives up v3.6.5's fixes; the v3.6.5 Upgrading notes in [`CHANGELOG.md`](../CHANGELOG.md) list what it keeps.
 - **Permissions.**
 
   | Repository | `permissions:` |
@@ -560,15 +559,15 @@ Outside the Action, the same verification is available to any workflow: install 
 
 ### 3.2 Alternative — the digest-pinned reference workflow
 
-[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml) at commit `41da3ae48fc17412893112061175120958b8b91e` is an alternative for teams that want the container-based path and to own the workflow file directly. It runs the official v3.6.2 image by immutable digest and pins every third-party Action to a full commit SHA.
+[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml) at commit `5ddfd88bde0e24d67d23be7f0d0302cfb29789f5` is an alternative for teams that want the container-based path and to own the workflow file directly. It runs the official v3.7.0 image by immutable digest and pins every third-party Action to a full commit SHA.
 
 Install it from that commit, not from `main`:
 
 ```bash
 mkdir -p .github/workflows
 curl -fsSL -o .github/workflows/fendix-scan.yml \
-  https://raw.githubusercontent.com/Fendix-app/Fendix/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml
-echo "5d5cce3bf02f72971d70f7b3dcde4b3a66b7a9fec39ebbba8183a1e53a8f915c  .github/workflows/fendix-scan.yml" | sha256sum -c -
+  https://raw.githubusercontent.com/Fendix-app/Fendix/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml
+echo "1125f8ed0031da3cd2bdce839aacb73e6cc3bb06400ea0dda4ec1d6a9b688ca5  .github/workflows/fendix-scan.yml" | sha256sum -c -
 ```
 
 On macOS, use `shasum -a 256 -c -` in place of `sha256sum -c -`.
@@ -606,11 +605,11 @@ A failing reporting step (SARIF upload, PR comment) still fails the job, but it 
 - **Private repository without Code Security:** the workflow skips the upload and writes a notice. The scan, the PR comment and the gate run as usual, and the comment says that no SARIF was uploaded.
 - **Private repository with Code Security:** set the repository variable `FENDIX_UPLOAD_SARIF` to `true` (Settings → Secrets and variables → Actions → Variables) to upload. This path has not yet been verified end to end.
 
-This file, at commit `41da3ae48fc17412893112061175120958b8b91e` with the v3.6.2 image `sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529`, was tested end to end on 2026-10-16, installed with the commands above in fresh public and private repositories (the private one without Code Security), against scans with no findings, a held `WARN` finding, a `BLOCK` finding and a scan error, on GitHub-hosted `ubuntu-24.04` runners. The scan with no findings uploaded its SARIF as the engine wrote it, with `"rules": []`. The previous version of this file (commit `7cf1960f321c497e0b15da7e5e1f02d87988743e`: the v3.6.0 image and a temporary step that rewrote a `null` rules value) also passed the core scenarios on `ubuntu-26.04`, the image `ubuntu-latest` moves to from 2026-10-19 (public: no findings, `WARN`, `BLOCK`, scan error; private: no findings, `BLOCK`). This version has not yet run there; the workflow stays on `ubuntu-latest`. Not yet tested: a private repository with Code Security, and pull requests from forks.
+This file, at commit `5ddfd88bde0e24d67d23be7f0d0302cfb29789f5`, is the version tested at commit `41da3ae48fc17412893112061175120958b8b91e` with only two lines changed: the image digest, now v3.7.0 `sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015`, and the comment that names it. That content was tested end to end on 2026-10-25 in round r5 of `Fendix-app/fendix-action-e2e-public` (commit `7fe98164e596a9e2f6e5bb62aeee81fe6dea1d55`, a byte-identical copy) in a public repository: a push to `main` and pull requests with a `BLOCK` finding, a scan error, no `pull-requests` permission, no `security-events` permission and a held `WARN` finding, all six matching the previous round on outcome, exit code, SARIF upload, PR comment and findings (runs 40226953419, 40227084070, 40227089397, 40227093383, 40227099121 and 40227105157). The version at commit `41da3ae48fc17412893112061175120958b8b91e`, with the v3.6.2 image `sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529`, was tested end to end on 2026-10-16, installed with the commands of that version in fresh public and private repositories (the private one without Code Security), against scans with no findings, a held `WARN` finding, a `BLOCK` finding and a scan error, on GitHub-hosted `ubuntu-24.04` runners. The scan with no findings uploaded its SARIF as the engine wrote it, with `"rules": []`. The previous version of this file (commit `7cf1960f321c497e0b15da7e5e1f02d87988743e`: the v3.6.0 image and a temporary step that rewrote a `null` rules value) also passed the core scenarios on `ubuntu-26.04`, the image `ubuntu-latest` moves to from 2026-10-19 (public: no findings, `WARN`, `BLOCK`, scan error; private: no findings, `BLOCK`). This version has not yet run there; the workflow stays on `ubuntu-latest`. Not yet tested: a private repository with Code Security, and pull requests from forks.
 
 ### 3.3 Public Action availability
 
-The Action is listed on GitHub Marketplace as [Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan), published from the v3.6.2 release. The engine source repository (`Fendix-app/Fendix`) is public, so the Action resolves from public and private consumers. Use `@v1`, which resolves to the validated v3.6.2 release, or pin the release's full commit for reproducibility (§3.1). Never reference `@main`.
+The Action is listed on GitHub Marketplace as [Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan), published from the v3.6.2 release. The engine source repository (`Fendix-app/Fendix`) is public, so the Action resolves from public and private consumers. Use `@v1`, which resolves to the validated v3.6.2 release until it is moved, or pin a release's full commit for reproducibility; v3.7.0's fail-closed required analyzers need its release commit `90adf6a` until `v1` is moved (§3.1). Never reference `@main`.
 
 The canonical Docker Hub image is public and can be pulled anonymously. The previous GHCR image remains a compatibility path for existing consumers.
 
@@ -630,11 +629,22 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Pin by digest for reproducibility / supply-chain integrity
-      image: fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef
+      image: fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015
+      # The image runs as uid 1000, and the runner's workspace and command
+      # files belong to the runner user, so checkout fails with EACCES
+      # unless the job runs as root.
+      options: --user 0
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # git rejects a workspace owned by another user ("detected dubious
+      # ownership"), so diff mode falls back to a full scan; actions/checkout
+      # v6 and later trust the workspace only during their own step. The
+      # official image ships no git, so here the step does nothing; it
+      # matters in a job image that has git.
+      - name: Trust the workspace for git
+        run: if command -v git >/dev/null; then git config --global --add safe.directory "$GITHUB_WORKSPACE"; fi
       - name: Run Fendix
         run: |
           set +e
@@ -654,11 +664,12 @@ Or as a one-shot `docker run` step (e.g. from a non-container job):
 
 ```bash
 docker run --rm -v "$PWD:/src" -w /src \
-  fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef \
+  fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015 \
   scan --code . --format json --output findings.json --fail-on HIGH
 ```
 
-- **Version v3.6.5 image digest:** `sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef` (public, anonymously pullable; multi-arch `linux/amd64` + `linux/arm64`).
+- **No git in the image.** `actions/checkout` downloads the tree through the REST API, and `--diff` falls back to a full scan with a warning. For diff mode, use the Action (§3.1) or a job image that has git.
+- **Version v3.7.0 image digest:** `sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015` (public, anonymously pullable; multi-arch `linux/amd64` + `linux/arm64`).
 - **Pin by digest** (not a floating tag) for reproducible, tamper-evident builds — this is the form the release workflow itself signs and references.
 
 ### 3.5 `--fail-on` gating and exit codes
@@ -909,10 +920,10 @@ These inputs belong to the composite Action (§3.1).
 | `require-analyzers` | `auto` | v3.7.0: analyzers that must run (`auto` = `semgrep` for code scans; a list; `none` opts out, coverage not enforced) |
 | `engine_path` | `""` | Caller-managed Python engine dir; empty uses the release's own source and, from v3.6.1, its hash lock |
 
-**Pinned image (v3.6.5):** `fendixapp/fendix@sha256:ddf07e334b34ae40292e64aeb37a55e79eadc3e44461a13423b6127cc83017ef`
+**Pinned image (v3.7.0):** `fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015`
 
 ---
 
 ### Worked-example note (TwiScope)
 
-TwiScope is a Django/DRF backend, so the natural integration is: (1) a developer `fendix hook install --fail-on HIGH` for commit-time secret/IaC gating; (2) a CI job using the public GitHub Action (`Fendix-app/Fendix`), which resolves for public and private repositories, or the canonical Docker Hub image, running `fendix scan --code . --fail-on HIGH` against a fresh checkout and surfacing findings through `$GITHUB_STEP_SUMMARY`; and, if internal/staging API targets must be scanned, (3) an Enterprise-org **runner** inside the network performing `mode=hybrid` scans (`--url` staging + `--code` repo) and POSTing results back so they land in the dashboard with full TrackedFinding lifecycle. Use the validated v3.6.2 Action (§3.1) or the reference workflow (§3.2); the older v3.6.0 Action needs a version-matched Python engine tree through `engine_path`. SARIF upload from a private repository needs GitHub Code Security, but its absence does not stop the scan or the gate. A fresh checkout narrows the scanned files; review the report before publishing it because secret values are redacted at capture time while file locations, safe identifiers, and security structure remain visible.
+TwiScope is a Django/DRF backend, so the natural integration is: (1) a developer `fendix hook install --fail-on HIGH` for commit-time secret/IaC gating; (2) a CI job using the public GitHub Action (`Fendix-app/Fendix`), which resolves for public and private repositories, or the canonical Docker Hub image, running `fendix scan --code . --fail-on HIGH` against a fresh checkout and surfacing findings through `$GITHUB_STEP_SUMMARY`; and, if internal/staging API targets must be scanned, (3) an Enterprise-org **runner** inside the network performing `mode=hybrid` scans (`--url` staging + `--code` repo) and POSTing results back so they land in the dashboard with full TrackedFinding lifecycle. Use the Fendix Action (§3.1), `@v1` (the validated v3.6.2 Action until it is moved) or the v3.7.0 release commit, or the reference workflow (§3.2); the older v3.6.0 Action needs a version-matched Python engine tree through `engine_path`. SARIF upload from a private repository needs GitHub Code Security, but its absence does not stop the scan or the gate. A fresh checkout narrows the scanned files; review the report before publishing it because secret values are redacted at capture time while file locations, safe identifiers, and security structure remain visible.

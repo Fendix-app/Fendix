@@ -7,15 +7,19 @@ Fendix produces SARIF 2.1.0 output for GitHub code scanning: PR annotations and 
 The recommended GitHub integration is the Fendix Action
 ([Fendix Security Scan on GitHub Marketplace](https://github.com/marketplace/actions/fendix-security-scan)),
 `uses: Fendix-app/Fendix@v1` with an explicit `version: v3.6.2`, or pinned to
-the full commit of the validated release for high-assurance pipelines; see
+the full commit of the validated release for high-assurance pipelines,
+`Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0` with
+`version: v3.7.0`. `@v1` still resolves to the v3.6.2 Action code until it is
+moved, so v3.7.0's fail-closed required analyzers need the v3.7.0 commit until
+then; see
 [INTEGRATION_GUIDE §3.1](INTEGRATION_GUIDE.md#31-recommended--the-composite-github-action).
 Never reference `@main`.
 
 ### Alternative — copy the reference workflow
 
-For the container-based path, a complete, digest-pinned v3.6.2 container
+For the container-based path, a complete, digest-pinned v3.7.0 container
 workflow lives at
-[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml).
+[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml).
 Install it from that tested commit, not from `main`, as shown in
 [INTEGRATION_GUIDE §3.2](INTEGRATION_GUIDE.md#32-alternative--the-digest-pinned-reference-workflow).
 Dropped into `.github/workflows/fendix-scan.yml` of your project, it will:
@@ -59,7 +63,7 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     env:
-      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015
     permissions:
       actions: read           # Required for SARIF upload on a private repository
       security-events: write  # Required for SARIF upload
