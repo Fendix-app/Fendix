@@ -326,6 +326,13 @@ jobs:
         require: [auto, none]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # sigstore/cosign-installer needs envsubst, which this image lacks.
+      - name: Install the cosign installer's prerequisite
+        run: |
+          set -eu
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends gettext-base >/dev/null
+          command -v envsubst
       - name: Use the container's Python 3.11 as setup-python's tool cache
         run: |
           set -eu
@@ -353,6 +360,8 @@ jobs:
           EXIT_CODE: ${{ steps.fendix.outputs.exit-code }}
         run: |
           set -eu
+          # The step outcome cannot say which inner step failed; the Action
+          # log checks below require it to be engine preparation, on Semgrep.
           if [ "$REQUIRE" = auto ]; then
             [ "$OUTCOME" = failure ] || { echo "::error::old glibc, Semgrep required: the Action should fail, got '$OUTCOME'"; exit 1; }
             [ -z "$EXIT_CODE" ] || { echo "::error::old glibc, Semgrep required: the scan should not run, got exit-code '$EXIT_CODE'"; exit 1; }
