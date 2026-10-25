@@ -59,6 +59,17 @@ RUN pip install --no-cache-dir --require-hashes --only-binary=:all: \
     pip check && \
     rm /tmp/requirements.lock
 
+# Semgrep must run, not only install. The probe the Action runs before every
+# code scan (scripts/action/analyzer_preflight.py) runs this Semgrep on a
+# bundled rule and file, offline, and requires their one match, so a build
+# whose Semgrep cannot scan (no semgrep-core, a damaged install, a binary for
+# another architecture, a crash or a hang) fails here instead of shipping.
+# The script is bind-mounted, not copied, and Semgrep's home is temporary, so
+# the image gains no file from the check.
+RUN --mount=type=bind,source=scripts/action/analyzer_preflight.py,target=/tmp/analyzer_preflight.py \
+    HOME=/tmp/fendix-preflight-home python3 /tmp/analyzer_preflight.py --analyzers semgrep && \
+    rm -rf /tmp/fendix-preflight-home
+
 COPY --from=go-builder /fendix     /usr/local/bin/fendix
 COPY --from=go-builder /fendix-app /usr/local/bin/fendix-app
 

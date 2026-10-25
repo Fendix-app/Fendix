@@ -10,6 +10,8 @@ import unittest
 from unittest import mock
 import subprocess
 import os
+import re
+import sys
 
 spec = importlib.util.spec_from_file_location("action_engine", Path(__file__).resolve().parents[2] / "scripts/prepare-action-engine.py")
 engine = importlib.util.module_from_spec(spec)
@@ -322,3 +324,175 @@ class FailureMessageTests(unittest.TestCase):
         self.assertTrue(line.startswith("::error::Python engine preparation failed: "))
         self.assertNotIn("\n", line)
         self.assertIn("first%0Asecond %25", line)
+
+
+GLIBC_231 = {"system": "Linux", "machine": "x86_64", "libc": "glibc", "libc_version": "2.31", "python": "3.11.13", "mac": ""}
+REAL_LOCK = Path(__file__).resolve().parents[1] / "requirements.lock"
+
+
+class WheelsOnlyTests(unittest.TestCase):
+    """Dependencies install from wheels only; no wheel is a named setup failure."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.env_file, self.path_file, self.output = self.root / "env", self.root / "path", self.root / "output"
+        for handle in (self.env_file, self.path_file, self.output):
+            handle.write_text("")
+
+    def release_tree(self):
+        tree = self.root / "release"
+        tree.mkdir()
+        (tree / "engine.py").touch()
+        (tree / "requirements.txt").write_text("semgrep>=1.182.1\n")
+        (tree / "requirements.lock").write_text(REAL_LOCK.read_text())
+        return tree
+
+    def prepare(self, tree, version, required, missing=()):
+        """Run prepare() with pip failing, in turn, for each name in missing."""
+        calls = []
+        failures = list(missing)
+
+        def run(command, **kwargs):
+            calls.append(list(command))
+            if "pip" in command and failures:
+                log = Path(command[command.index("--log") + 1])
+                log.write_text(f"2026-10-25T00:00:00 ERROR: No matching distribution found for {failures.pop(0)}\n")
+                raise subprocess.CalledProcessError(1, command)
+
+        with mock.patch.dict(os.environ, {"GITHUB_ENV": str(self.env_file), "GITHUB_PATH": str(self.path_file)}), \
+                mock.patch.object(engine.subprocess, "run", side_effect=run), \
+                mock.patch.object(engine.preflight, "platform_facts", return_value=GLIBC_231):
+            engine.prepare("/usr/bin/fendix", tree, version, self.root, required=required)
+        return calls
+
+    def pip_calls(self, calls):
+        return [c for c in calls if "pip" in c]
+
+    def test_every_install_is_wheels_only(self):
+        for version, tree in (("v3.7.0", self.release_tree()), (None, make_tree(self.root, "custom")),
+                              ("v3.6.0", make_tree(self.root, "legacy"))):
+            with self.subTest(version=version):
+                pip = self.pip_calls(self.prepare(tree, version, ("semgrep",)))
+                self.assertEqual(len(pip), 1)
+                self.assertIn("--only-binary=:all:", pip[0])
+                self.assertNotIn("--no-binary", " ".join(pip[0]))
+
+    def test_required_semgrep_without_a_wheel_stops_preparation(self):
+        tree = self.release_tree()
+        with self.assertRaises(engine.PrepareError) as failure:
+            self.prepare(tree, "v3.7.0", ("semgrep",), missing=["semgrep==1.182.1"])
+        error = failure.exception
+        self.assertEqual(error.title, "Fendix required analyzer semgrep is unavailable")
+        message = str(error)
+        for want in ("Required analyzer semgrep cannot run.", "semgrep==1.182.1", "glibc 2.31 on x86_64",
+                     "glibc 2.34 or later", "musl 1.2 or later", "x86_64 or aarch64", "docker.io/fendixapp/fendix@sha256:",
+                     "Ubuntu 22.04"):
+            self.assertIn(want, message)
+        self.assertEqual(self.env_file.read_text(), "")
+        self.assertEqual(self.path_file.read_text(), "")
+        line = engine.error_line(error)
+        self.assertTrue(line.startswith("::error title=Fendix required analyzer semgrep is unavailable::"), line)
+        self.assertNotIn("\n", line)
+
+    def test_a_caller_managed_tree_gets_the_same_failure(self):
+        with self.assertRaises(engine.PrepareError) as failure:
+            self.prepare(make_tree(self.root, "custom"), None, ("semgrep",), missing=["semgrep>=1.182.1"])
+        self.assertIn("semgrep>=1.182.1", str(failure.exception))
+        self.assertEqual(failure.exception.title, "Fendix required analyzer semgrep is unavailable")
+
+    def test_unrequired_semgrep_is_left_out_with_a_warning(self):
+        tree = self.release_tree()
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            calls = self.prepare(tree, "v3.7.0", (), missing=["semgrep==1.182.1"])
+        pip = self.pip_calls(calls)
+        self.assertEqual(len(pip), 2)
+        retried = Path(pip[1][pip[1].index("-r") + 1])
+        self.assertNotEqual(retried, tree / "requirements.lock")
+        text = retried.read_text()
+        self.assertNotIn("semgrep==", text)
+        self.assertIn("--require-hashes", pip[1])
+        self.assertIn("--only-binary=:all:", pip[1])
+        # Every other pinned package keeps its pin and its hashes.
+        original = (tree / "requirements.lock").read_text()
+        semgrep_hashes = re.search(r"^semgrep==.*?(?=^\S)", original, re.MULTILINE | re.DOTALL).group(0).count("--hash")
+        self.assertEqual(text.count("--hash"), original.count("--hash") - semgrep_hashes)
+        self.assertIn("mcp==", text)
+        warnings = [line for line in stdout.getvalue().splitlines() if line.startswith("::warning")]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("glibc 2.31", warnings[0])
+        self.assertIn("records semgrep unavailable", warnings[0])
+        self.assertIn(f"FENDIX_ENGINE={tree}", self.env_file.read_text())
+
+    def test_another_package_without_a_wheel_is_never_left_out(self):
+        with self.assertRaises(engine.PrepareError) as failure:
+            self.prepare(self.release_tree(), "v3.7.0", (), missing=["pydantic-core==2.46.5"])
+        self.assertEqual(failure.exception.title, "Fendix engine dependency pydantic-core is unavailable")
+        self.assertIn("pydantic-core==2.46.5", str(failure.exception))
+        # Semgrep is left out, then the retry finds another package missing.
+        with self.assertRaises(engine.PrepareError) as failure:
+            self.prepare(make_tree(self.root, "two"), None, (), missing=["semgrep>=1.182.1", "cffi>=1"])
+        self.assertEqual(failure.exception.title, "Fendix engine dependency cffi is unavailable")
+
+    def test_missing_distribution_parses_pip_logs(self):
+        log = self.root / "pip.log"
+        for text, want in (("ERROR: No matching distribution found for semgrep==1.182.1", ("semgrep", "semgrep==1.182.1")),
+                           ("x ERROR: No matching distribution found for Pydantic_Core>=2", ("pydantic-core", "Pydantic_Core>=2")),
+                           ("ERROR: Could not install packages due to an OSError", None)):
+            with self.subTest(text=text):
+                log.write_text(text + "\n")
+                self.assertEqual(engine.missing_distribution(log), want)
+        self.assertIsNone(engine.missing_distribution(self.root / "absent.log"))
+
+    def test_without_package_handles_requirements_txt(self):
+        tree = make_tree(self.root, "custom")
+        (tree / "requirements.txt").write_text("semgrep>=1.182.1\nsemgrep-rules==1\nbandit>=1.9.4\n")
+        args = engine.without_package(["-r", str(tree / "requirements.txt"), "pydantic<2.14"], "semgrep", self.root)
+        self.assertEqual(args[-1], "pydantic<2.14")
+        self.assertEqual(Path(args[1]).read_text(), "semgrep-rules==1\nbandit>=1.9.4\n")
+
+
+class RequirementOutputTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.tree = make_tree(self.root, "custom")
+
+    def main(self, **env):
+        files = {name: self.root / name for name in ("env", "path", "output")}
+        for handle in files.values():
+            handle.write_text("")
+        tree = self.tree
+        environ = {"RUNNER_TEMP": str(self.root), "GITHUB_ENV": str(files["env"]), "GITHUB_PATH": str(files["path"]),
+                   "GITHUB_OUTPUT": str(files["output"])}
+        environ.update(env)
+        with mock.patch.dict(os.environ, environ), mock.patch("sys.argv", ["prepare", "--engine-path", str(tree)]), \
+                mock.patch("shutil.which", return_value="/usr/bin/fendix"), \
+                mock.patch.object(engine.subprocess, "run"):
+            engine.main()
+        return dict(line.split("=", 1) for line in files["output"].read_text().splitlines())
+
+    def test_resolved_requirement_is_published(self):
+        self.assertEqual(self.main(REQUIRE_ANALYZERS="auto", CODE="."), {"required-analyzers": "semgrep", "requirement": "auto"})
+        self.assertEqual(self.main(REQUIRE_ANALYZERS="auto", CODE=""), {"required-analyzers": "", "requirement": "auto"})
+        self.assertEqual(self.main(REQUIRE_ANALYZERS="none", CODE="."), {"required-analyzers": "", "requirement": "none"})
+        self.assertEqual(self.main(REQUIRE_ANALYZERS="secrets,semgrep", CODE="."),
+                         {"required-analyzers": "secrets,semgrep", "requirement": "explicit"})
+
+    def test_invalid_input_fails_before_anything_is_fetched(self):
+        with mock.patch.dict(os.environ, {"REQUIRE_ANALYZERS": "semgerp", "CODE": "."}), \
+                mock.patch.object(engine, "automatic_tree") as automatic, mock.patch("sys.argv", ["prepare"]), \
+                self.assertRaises(engine.PrepareError) as failure:
+            engine.main()
+        automatic.assert_not_called()
+        self.assertEqual(failure.exception.title, "Fendix require-analyzers")
+        self.assertIn("unknown analyzer 'semgerp'", str(failure.exception))
+
+    def test_preparation_failure_exits_2(self):
+        script = Path(engine.__file__)
+        result = subprocess.run([sys.executable, str(script)], env={"PATH": "/nonexistent", "RUNNER_TEMP": str(self.root)},
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("::error::Python engine preparation failed: install Fendix", result.stderr)

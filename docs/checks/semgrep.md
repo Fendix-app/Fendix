@@ -62,10 +62,31 @@ authority if this page and the pack ever disagree.
 ## How It Works
 
 1. On the first scan of a process, `ensureRules()` extracts the embedded pack to a temp dir (cached in a `sync.Once` for the process lifetime)
-2. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet <code_path>`, with a 120 s default deadline layered onto the caller's context
-3. Parses Semgrep JSON output and maps to Fendix Finding format (`SEC-<RULE_ID>`)
+2. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet --disable-version-check <code_path>`, with a 120 s default deadline layered onto the caller's context
+3. Classifies the run (below), then maps the JSON results to Fendix Finding format (`SEC-<RULE_ID>`)
 4. Severity resolution prefers `metadata.fendix_severity`; falls back to Semgrep's own `ERROR`→`HIGH` / `WARNING`→`MEDIUM` / `INFO`→`LOW`; ultimate default `MEDIUM`
-5. If `semgrep` is not on `$PATH`, returns `ErrSemgrepUnavailable` — the orchestrator logs an install hint at INFO, records `scanner_status: {"name":"semgrep","state":"skipped"}`, and continues
+5. If `semgrep` is not on `$PATH`, returns `ErrSemgrepUnavailable` — the orchestrator logs an install hint at INFO, records `scanner_status: {"name":"semgrep","state":"skipped","reason":"dependency_missing"}`, and continues
+
+## What `ok` means (from v3.7.0)
+
+`semgrep` is recorded `ok` only when Semgrep itself would call the run
+successful. The rule follows Semgrep 1.182.1's own contract (its
+`error.py`, `output.py` and `core_output.py`) and recorded runs of the real
+binary, kept as fixtures in `go/internal/scanner/semgrep/testdata/runs`:
+
+| Run | Recorded |
+|---|---|
+| Exit 0, JSON envelope, no error of level `error` | `ok` |
+| Per-file problems of level `warn`: a file that does not fully parse (`PartialParsing`, syntax or lexical error), a per-file or per-rule `Timeout`, a per-file `OutOfMemory` | `ok`, with the count by type in `detail` (never the message, which can quote source) |
+| A non-zero exit other than 1, or death by a signal: an invalid or missing config (exit 7), a rule that does not parse (exit 2), the engine killed or crashed mid-run, out of memory included (exit 2, "the engine was killed") | `failed` / `execution_error`, `detail` naming the first error |
+| Exit 0 with any entry of level `error`: Semgrep sets its exit code from its last error only, so a rule parse error followed by per-file warnings exits 0 | `failed` / `execution_error` |
+| Exit 0 with no JSON results envelope | `failed` / `malformed_output` |
+
+Only the error's `level` is read, never its `code`: a per-file `Timeout` has
+`code` 2 at level `warn`. Findings Semgrep still printed in a failed run are
+kept in the report. Until v3.6.5 any parseable envelope was `ok` whatever the
+exit code, so an engine killed by the kernel for memory recorded `semgrep ok`
+with no findings, and a required Semgrep passed `--require-analyzers semgrep`.
 
 ## Adding Custom Rules
 

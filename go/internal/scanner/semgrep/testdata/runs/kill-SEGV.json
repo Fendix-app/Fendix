@@ -1,0 +1,18 @@
+{
+ "engine_requested": "OSS",
+ "errors": [
+  {
+   "code": 2,
+   "level": "error",
+   "message": "Error while running rules: \n                    You are seeing this because the engine was killed.\n\n                    The most common reason this happens is because it used too much memory.\n                    If your repo is large (~10k files or more), you have three options:\n                    1. Increase the amount of memory available to semgrep\n                    2. Reduce the number of jobs semgrep runs with via `-j <jobs>`.\n                    3. Scan the repo in parts (contact us for help)\n\n                    Otherwise, it is likely that semgrep is hitting the limit on only some\n                    files. In this case, you can try to set the limit on the amount of memory\n                    semgrep can use on each file with `--max-memory <memory>`. We recommend\n                    lowering this to a limit 70% of the available memory. For CI runs with\n                    interfile analysis, the default max-memory is 5000MB. Without, the default\n                    is unlimited.\n\n                    If you have tried all these steps and still are seeing this error, please\n                    contact us.\n\n                       Error: semgrep-core exited with unexpected output\n                    \n          ____\n        /\uff1e    \u30d5\n       |  _  _ |\n      /` \u30df_x \u30ce\n     /        |\n    /   \u30fd    \uff89\n   |     | | |\n\uff0f\uffe3      | | |\n| (\uffe3\u30fd\uff3f\u30fd)_)_)\n\uff3c\u4e8c\u3064\nSegfault cat says: process 33 received signal:\n> \"Segmentation fault\"\nfaulting address: 0xb\nStack trace (most recent call last):\n#3    Object \"/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1\", at 0xbffff5fdb28fb, in \n#2    Object \"/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1\", at 0xbffff5fdb28fb, in \n#1    Source \"/root/.opam/5.4.0/.opam-switch/build/obackward.dev/_build/default/src/backward.h\", line 946, in load_here [0x5d8ee27]\n#0    Object \"/usr/lib/aarch64-linux-gnu/libc.so.6\", at 0xffff5fdbf22c, in \nSegmentation fault (Signal sent by kill() [0xb])\n",
+   "type": "SemgrepError"
+  }
+ ],
+ "paths": {
+  "scanned": []
+ },
+ "profiling_results": [],
+ "results": [],
+ "skipped_rules": [],
+ "version": "1.182.1"
+}

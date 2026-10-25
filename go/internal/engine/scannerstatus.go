@@ -161,6 +161,9 @@ func classifyErr(err error) reporters.ScannerReason {
 	if errors.Is(err, semgrep.ErrTimeout) {
 		return reporters.ReasonTimeout
 	}
+	if errors.Is(err, semgrep.ErrMalformedOutput) {
+		return reporters.ReasonMalformedOutput
+	}
 	switch neterr.Classify(err) {
 	case neterr.KindTimeout:
 		return reporters.ReasonTimeout

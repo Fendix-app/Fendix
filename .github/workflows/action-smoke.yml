@@ -107,10 +107,21 @@ jobs:
           prepare = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(prepare)
           work = Path(tempfile.mkdtemp(prefix="fendix-lock-", dir=os.environ["RUNNER_TEMP"]))
-          # "v3.6.5" is the release this tree becomes; it only names the log line.
-          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.6.5", work)
+          # "v3.7.0" is the release this tree becomes; it only names the log line.
+          # Semgrep is required, as the Action's default makes it for a code scan.
+          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.7.0", work, required=["semgrep"])
           PY
-          grep -qF "Installing the locked dependencies of Fendix v3.6.5 (requirements.lock, --require-hashes)" prepare.log
+          grep -qF "Installing the locked dependencies of Fendix v3.7.0 (requirements.lock, --require-hashes)" prepare.log
+          grep -qF "Wheels only (--only-binary=:all:): no dependency is built from source" prepare.log
+          if grep -qF "Building wheel for" prepare.log; then echo "::error::a dependency was built from source"; exit 1; fi
+      - name: Preflight the locked venv's Semgrep
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          "$PYTHON" scripts/action/analyzer_preflight.py --analyzers semgrep | tee preflight.log
+          grep -qF "reported the probe's known match" preflight.log
+          case "$(command -v semgrep)" in "$RUNNER_TEMP"/fendix-lock-*/venv/bin/semgrep) ;; *) echo "::error::semgrep resolves to $(command -v semgrep), not the locked venv"; exit 1 ;; esac
       - name: Assert the venv holds exactly the locked versions
         run: |
           python3 - <<'PY'
@@ -250,6 +261,15 @@ jobs:
             fail-on: HIGH
             upload-sarif: 'false'
             expected-exit: '1'
+          # extra-args cannot cancel the default requirement: --fast disables
+          # semgrep, which require-analyzers: auto requires for a code scan,
+          # so the engine exits 2 and its partial report is not uploaded.
+          - case: required-disabled
+            version: v3.6.5
+            fail-on: HIGH
+            upload-sarif: 'true'
+            extra-args: --fast
+            expected-exit: '2'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: fendix
@@ -263,6 +283,7 @@ jobs:
           format: sarif
           output: action report.sarif
           upload-sarif: ${{ matrix.upload-sarif }}
+          extra-args: ${{ matrix.extra-args }}
       - name: Assert the Action failed closed with the expected result
         env:
           CASE: ${{ matrix.case }}
@@ -273,18 +294,138 @@ jobs:
           set -eu
           [ "$OUTCOME" = failure ] || { echo "::error::$CASE: the Action step should fail, got '$OUTCOME'"; exit 1; }
           [ "$EXIT_CODE" = "$EXPECTED" ] || { echo "::error::$CASE: exit-code should be '$EXPECTED', got '$EXIT_CODE'"; exit 1; }
-          if [ "$CASE" = block ]; then
-            [ -s "action report.sarif" ] || { echo "::error::block: no report was written"; exit 1; }
+          if [ "$CASE" = block ] || [ "$CASE" = required-disabled ]; then
+            # required-disabled: the engine writes its report before exit 2;
+            # the log checks prove it was not uploaded.
+            [ -s "action report.sarif" ] || { echo "::error::$CASE: no report was written"; exit 1; }
           else
             [ ! -e "action report.sarif" ] || { echo "::error::$CASE: a report was left behind"; exit 1; }
           fi
           echo "$CASE: outcome=$OUTCOME exit-code='$EXIT_CODE' as expected"
 
+  # A self-hosted runner whose glibc is older than 2.34 (Debian 11, glibc
+  # 2.31), as a container job. Semgrep 1.182.1, which v3.6.5 locks, has no
+  # wheel for it. With Semgrep required (the default for a code scan) setup
+  # must fail with exit 2, naming Semgrep and the platform, and nothing may
+  # read as a pass. With require-analyzers: none the scan must complete
+  # without Semgrep, and say coverage is not enforced.
+  analyzer-old-glibc:
+    name: Action analyzers on old glibc (${{ matrix.require }})
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11-bullseye@sha256:df0bd610af061603b29d63eb82027b64d5a3f15506e39270422b10b2a55079fc
+    env:
+      # In a container job, setup-python would take the host's cached Python,
+      # built for Ubuntu 24.04, which does not run on glibc 2.31. This tool
+      # cache holds the container's own Python 3.11 instead, as a self-hosted
+      # runner of this distribution has one built for it.
+      AGENT_TOOLSDIRECTORY: /opt/fendix-toolcache
+    strategy:
+      fail-fast: false
+      matrix:
+        require: [auto, none]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # sigstore/cosign-installer needs envsubst, which this image lacks.
+      - name: Install the cosign installer's prerequisite
+        run: |
+          set -eu
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends gettext-base >/dev/null
+          command -v envsubst
+      - name: Use the container's Python 3.11 as setup-python's tool cache
+        run: |
+          set -eu
+          ldd --version 2>&1 | sed -n 1p
+          version=$(python3 -c 'import platform; print(platform.python_version())')
+          mkdir -p "$AGENT_TOOLSDIRECTORY/Python/$version"
+          ln -s /usr/local "$AGENT_TOOLSDIRECTORY/Python/$version/x64"
+          touch "$AGENT_TOOLSDIRECTORY/Python/$version/x64.complete"
+      - id: fendix
+        uses: ./
+        continue-on-error: true
+        with:
+          version: v3.6.5
+          code: .
+          diff: 'false'
+          fail-on: ''
+          format: json
+          output: old-glibc-report.json
+          upload-sarif: 'false'
+          require-analyzers: ${{ matrix.require }}
+      - name: Assert the result
+        env:
+          REQUIRE: ${{ matrix.require }}
+          OUTCOME: ${{ steps.fendix.outcome }}
+          EXIT_CODE: ${{ steps.fendix.outputs.exit-code }}
+        run: |
+          set -eu
+          # The step outcome cannot say which inner step failed; the Action
+          # log checks below require it to be engine preparation, on Semgrep.
+          if [ "$REQUIRE" = auto ]; then
+            [ "$OUTCOME" = failure ] || { echo "::error::old glibc, Semgrep required: the Action should fail, got '$OUTCOME'"; exit 1; }
+            [ -z "$EXIT_CODE" ] || { echo "::error::old glibc, Semgrep required: the scan should not run, got exit-code '$EXIT_CODE'"; exit 1; }
+            [ ! -e old-glibc-report.json ] || { echo "::error::old glibc, Semgrep required: a report was written"; exit 1; }
+            echo "old glibc, Semgrep required: setup failed and no scan ran, as expected"
+            exit 0
+          fi
+          [ "$OUTCOME" = success ] || { echo "::error::old glibc, opt-out: the Action should pass, got '$OUTCOME'"; exit 1; }
+          [ "$EXIT_CODE" = 0 ] || { echo "::error::old glibc, opt-out: exit-code should be 0, got '$EXIT_CODE'"; exit 1; }
+          python3 - <<'PY'
+          import json
+          meta = json.load(open("old-glibc-report.json"))["metadata"]
+          semgrep = next(s for s in meta["scanner_status"] if s["name"] == "semgrep")
+          coverage = meta["coverage"]
+          assert (semgrep["state"], semgrep.get("reason")) == ("skipped", "dependency_missing"), semgrep
+          assert coverage["strict"] is False and coverage["required_analyzers"] == [], coverage
+          assert coverage["configured_complete"] is False and "semgrep" in coverage["gaps"], coverage
+          print("old glibc, opt-out: scanned without Semgrep; semgrep", semgrep["reason"], "and coverage not enforced:", coverage)
+          PY
+
+  # Supported runners, x86_64 and arm64: the default requirement installs
+  # Semgrep from its wheel, the preflight runs it, and the scan records it ok.
+  analyzer-supported:
+    name: Action analyzers on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: fendix
+        uses: ./
+        with:
+          version: v3.6.5
+          code: .
+          diff: 'false'
+          fail-on: ''
+          format: json
+          output: supported-report.json
+          upload-sarif: 'false'
+      - name: Assert Semgrep ran and was enforced
+        env:
+          EXIT_CODE: ${{ steps.fendix.outputs.exit-code }}
+        run: |
+          set -eu
+          [ "$EXIT_CODE" = 0 ] || { echo "::error::exit-code should be 0, got '$EXIT_CODE'"; exit 1; }
+          echo "runner: $(uname -m), $(ldd --version 2>&1 | sed -n 1p), $(fendix version | sed -n 1p)"
+          python3 - <<'PY'
+          import json
+          meta = json.load(open("supported-report.json"))["metadata"]
+          semgrep = next(s for s in meta["scanner_status"] if s["name"] == "semgrep")
+          coverage = meta["coverage"]
+          assert semgrep["state"] == "ok", semgrep
+          assert coverage["strict"] is True and coverage["required_analyzers"] == ["semgrep"], coverage
+          assert coverage["required_gaps"] == [], coverage
+          print("semgrep ok and required; coverage:", coverage)
+          PY
+
   # A composite Action's inner steps are invisible to the caller, so what
   # each Action job printed is checked in its finished log.
   action-logs:
     name: Action log checks
-    needs: [python-engine, failure-handling]
+    needs: [python-engine, failure-handling, analyzer-old-glibc, analyzer-supported]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -310,6 +451,36 @@ jobs:
                 "present|Fendix v3.4.1 predates signed build records" ;;
               "Action failure (scan-error)") printf '%s\n' "present|The scan did not complete" ;;
               "Action failure (block)") printf '%s\n' "present|At least one finding reached BLOCK status" ;;
+              "Action failure (required-disabled)") printf '%s\n' \
+                "present|--require-analyzers semgrep --fast" \
+                "present|required analyzer semgrep was disabled by --fast" \
+                "present|The scan ran, but a required analyzer was not delivered" \
+                "present|the partial report was not uploaded" \
+                "absent|no finding reached BLOCK" ;;
+              "Action analyzers on old glibc (auto)") printf '%s\n' \
+                "present|Wheels only (--only-binary=:all:): no dependency is built from source" \
+                "present|Required analyzer semgrep cannot run. semgrep==1.182.1 has no wheel for this runner: it has glibc 2.31 on x86_64" \
+                "present|glibc 2.34 or later (manylinux_2_34) or musl 1.2 or later (musllinux_1_2), on x86_64 or aarch64" \
+                "present|docker.io/fendixapp/fendix@sha256:" \
+                "present|A setup step failed before the scan" \
+                "absent|Building wheel for semgrep" \
+                "absent|reported the probe's known match" \
+                "absent|no finding reached BLOCK" ;;
+              "Action analyzers on old glibc (none)") printf '%s\n' \
+                "present|semgrep==1.182.1 has no wheel for this runner: it has glibc 2.31 on x86_64" \
+                "present|No requirement needs Semgrep, so it is left out" \
+                "present|No analyzer is required (require-analyzers: none)" \
+                "present|require-analyzers is none, so required-analyzer enforcement is off" \
+                "present|coverage: incomplete (semgrep)" \
+                "absent|Building wheel for semgrep" \
+                "absent|--require-analyzers" \
+                "absent|✓ Fendix" ;;
+              "Action analyzers on "*) printf '%s\n' \
+                "present|Wheels only (--only-binary=:all:): no dependency is built from source" \
+                "present|reported the probe's known match" \
+                "present|--require-analyzers semgrep" \
+                "present|required: satisfied" \
+                "absent|Building wheel for" ;;
             esac
             # Every Action job: the signature verified before the binary first
             # ran, the exact version confirmed, and never checksum-only.
@@ -318,7 +489,7 @@ jobs:
               "present|Verified Fendix v" \
               "absent|cosign not installed"
             case "$1" in
-              "Action failure ("*) printf '%s\n' \
+              "Action failure ("*|"Action analyzers on old glibc (auto)") printf '%s\n' \
                 "present|##[start-action display=Enforce fail-on threshold;" \
                 "present|##[end-action id=fendix.upload;outcome=skipped;" \
                 "absent|Run github/codeql-action/upload-sarif@" \
@@ -327,8 +498,8 @@ jobs:
             esac
           }
           jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
-            --jq '.jobs[] | select(.name | startswith("Action Python setup (") or startswith("Action failure (")) | "\(.id) \(.name)"')
-          [ "$(printf '%s\n' "$jobs" | grep -c .)" = 5 ] || { echo "::error::expected 5 Action jobs, found: $jobs"; exit 1; }
+            --jq '.jobs[] | select(.name | startswith("Action Python setup (") or startswith("Action failure (") or startswith("Action analyzers on ")) | "\(.id) \(.name)"')
+          [ "$(printf '%s\n' "$jobs" | grep -c .)" = 10 ] || { echo "::error::expected 10 Action jobs, found: $jobs"; exit 1; }
           failed=0
           while read -r id name; do
             # Job logs carry ANSI colour codes, which gh refuses to print

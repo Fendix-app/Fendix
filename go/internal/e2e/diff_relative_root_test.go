@@ -184,7 +184,7 @@ func scanWithStderr(t *testing.T, bin, repo string, args ...string) (int, []stri
 // changed paths from the repository root, which the diff mapper cannot place
 // under the subdirectory, so a non-empty diff must widen to a full scan of
 // --code, with a warning, instead of scanning no file. Diff scoping for
-// subdirectories is v3.7.0 work.
+// subdirectories is planned for a later release.
 func TestDiffRefScan_SubdirectoryCodeRootFallsBackToFullScan_E2E(t *testing.T) {
 	bin := fendixBinary(t)
 	repo, err := filepath.EvalSymlinks(t.TempDir())

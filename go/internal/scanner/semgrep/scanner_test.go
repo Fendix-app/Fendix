@@ -418,12 +418,15 @@ func TestScan_EmptyResultsProducesNothing(t *testing.T) {
 	}
 }
 
-func TestScan_MalformedJSONReturnsZeroFindings(t *testing.T) {
+// Until v3.6.5 this was read as zero findings, so a semgrep that printed
+// anything but its JSON envelope was recorded ok. With --json a working
+// semgrep always writes the envelope; without it nothing is known.
+func TestScan_MalformedJSONIsMalformedOutput(t *testing.T) {
 	installFakeSemgrep(t, "not json", "", 0)
 	dir := t.TempDir()
 	got, err := Scan(context.Background(), dir)
-	if err != nil {
-		t.Errorf("err = %v; want nil", err)
+	if !errors.Is(err, ErrMalformedOutput) {
+		t.Errorf("err = %v; want ErrMalformedOutput", err)
 	}
 	if len(got) != 0 {
 		t.Errorf("got %d findings; want 0", len(got))

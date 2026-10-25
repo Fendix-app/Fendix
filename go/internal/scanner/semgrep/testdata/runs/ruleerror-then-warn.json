@@ -1,0 +1,240 @@
+{
+ "engine_requested": "OSS",
+ "errors": [
+  {
+   "code": 2,
+   "level": "error",
+   "message": "Rule parse error in rule c.bp.x:\n Invalid pattern for Python: Stdlib.Parsing.Parse_error\n----- pattern -----\ndef ($X:\n----- end pattern -----\n",
+   "rule_id": "c.bp.x",
+   "type": "Rule parse error"
+  },
+  {
+   "code": 3,
+   "level": "warn",
+   "message": "Syntax error at line /t/mix/bad1.py:2:\n `)))) (((( \n x = = 1` was unexpected",
+   "path": "/t/mix/bad1.py",
+   "spans": [
+    {
+     "end": {
+      "col": 9,
+      "line": 3,
+      "offset": 19
+     },
+     "file": "/t/mix/bad1.py",
+     "start": {
+      "col": 3,
+      "line": 2,
+      "offset": 0
+     }
+    }
+   ],
+   "type": [
+    "PartialParsing",
+    [
+     {
+      "end": {
+       "col": 9,
+       "line": 3,
+       "offset": 19
+      },
+      "path": "/t/mix/bad1.py",
+      "start": {
+       "col": 3,
+       "line": 2,
+       "offset": 0
+      }
+     }
+    ]
+   ]
+  },
+  {
+   "code": 3,
+   "level": "warn",
+   "message": "Syntax error at line /t/mix/bad2.py:2:\n `)))) (((( \n x = = 1` was unexpected",
+   "path": "/t/mix/bad2.py",
+   "spans": [
+    {
+     "end": {
+      "col": 9,
+      "line": 3,
+      "offset": 19
+     },
+     "file": "/t/mix/bad2.py",
+     "start": {
+      "col": 3,
+      "line": 2,
+      "offset": 0
+     }
+    }
+   ],
+   "type": [
+    "PartialParsing",
+    [
+     {
+      "end": {
+       "col": 9,
+       "line": 3,
+       "offset": 19
+      },
+      "path": "/t/mix/bad2.py",
+      "start": {
+       "col": 3,
+       "line": 2,
+       "offset": 0
+      }
+     }
+    ]
+   ]
+  },
+  {
+   "code": 3,
+   "level": "warn",
+   "message": "Syntax error at line /t/mix/bad3.py:2:\n `)))) (((( \n x = = 1` was unexpected",
+   "path": "/t/mix/bad3.py",
+   "spans": [
+    {
+     "end": {
+      "col": 9,
+      "line": 3,
+      "offset": 19
+     },
+     "file": "/t/mix/bad3.py",
+     "start": {
+      "col": 3,
+      "line": 2,
+      "offset": 0
+     }
+    }
+   ],
+   "type": [
+    "PartialParsing",
+    [
+     {
+      "end": {
+       "col": 9,
+       "line": 3,
+       "offset": 19
+      },
+      "path": "/t/mix/bad3.py",
+      "start": {
+       "col": 3,
+       "line": 2,
+       "offset": 0
+      }
+     }
+    ]
+   ]
+  }
+ ],
+ "paths": {
+  "scanned": [
+   "/t/mix/bad1.py",
+   "/t/mix/bad2.py",
+   "/t/mix/bad3.py",
+   "/t/mix/good.py"
+  ]
+ },
+ "profiling_results": [],
+ "results": [
+  {
+   "check_id": "c.bp.python-subprocess-shell-true-with-variable",
+   "end": {
+    "col": 31,
+    "line": 2,
+    "offset": 48
+   },
+   "extra": {
+    "engine_kind": "OSS",
+    "fingerprint": "requires login",
+    "lines": "requires login",
+    "message": "subprocess with shell=True and a non-literal command \u2014 command injection risk. Drop shell=True and pass argv as a list, OR shlex.quote() each interpolated argument if shell semantics are truly required.\n",
+    "metadata": {
+     "category": "injection",
+     "confidence": "HIGH",
+     "cwe": "CWE-78",
+     "fendix_severity": "CRITICAL"
+    },
+    "severity": "ERROR",
+    "validation_state": "NO_VALIDATOR"
+   },
+   "path": "/t/mix/good.py",
+   "start": {
+    "col": 1,
+    "line": 2,
+    "offset": 18
+   }
+  }
+ ],
+ "skipped_rules": [],
+ "time": {
+  "fixpoint_timeouts": [],
+  "matching_time": {
+   "per_file_and_rule_time": {
+    "mean": 0.00020306587219238282,
+    "std_dev": 2.1406720188679172e-07
+   },
+   "total_time": 0.00507664680480957,
+   "very_slow_rules_on_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "max_memory_bytes": 107974784,
+  "parsing_time": {
+   "per_file_time": {
+    "mean": 0.00035184860229492187,
+    "std_dev": 6.705045792841702e-07
+   },
+   "total_time": 0.008796215057373047,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "prefiltering": {
+   "file_level_time": 0.0,
+   "project_level_time": 0.0,
+   "rules_matched_ratio": 0.2717391304347826,
+   "rules_selected_ratio": 0.2717391304347826,
+   "rules_with_file_prefilters_ratio": 0.7391304347826086,
+   "rules_with_project_prefilters_ratio": 0.0
+  },
+  "profiling_times": {
+   "config_time": 0.20182323455810547,
+   "core_time": 0.1531672477722168,
+   "ignores_time": 3.409385681152344e-05,
+   "total_time": 0.3567934036254883
+  },
+  "rules": [],
+  "rules_parse_time": 0.0010099411010742188,
+  "scanning_time": {
+   "per_file_time": {
+    "mean": 0.0035947561264038086,
+    "std_dev": 1.4997546315953514e-07
+   },
+   "total_time": 0.014379024505615234,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "tainting_time": {
+   "per_def_and_rule_time": {
+    "mean": 0.0,
+    "std_dev": 0.0
+   },
+   "total_time": 0.0,
+   "very_slow_rules_on_defs": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "targets": [],
+  "total_bytes": 0
+ },
+ "version": "1.182.1"
+}

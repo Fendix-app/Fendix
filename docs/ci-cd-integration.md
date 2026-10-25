@@ -37,7 +37,7 @@ The sections below show the individual building blocks if you'd rather
 assemble your own workflow.
 
 Commands shown with a bare `fendix` binary assume a version-matched Python
-engine tree is configured when `--code` coverage is expected. Official v3.6.5
+engine tree is configured when `--code` coverage is expected. Official v3.7.0
 standalone binaries do not include that tree; without it, the native analyzers
 continue and `python-engine` is recorded `skipped/dependency_missing`. The
 reference workflow avoids that degradation by using the official container.

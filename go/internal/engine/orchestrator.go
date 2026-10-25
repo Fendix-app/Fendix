@@ -595,13 +595,20 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		// recorded diff_unchanged above
 	default:
 		started := time.Now()
-		semgrepFindings, err := semgrep.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
+		semgrepFindings, semgrepReport, err := semgrep.ScanWithReport(ctx, o.cfg.CodePath, allow)
 		o.recordAnalyzerTime(AnalyzerSemgrep, started)
 		switch {
 		case err == nil:
 			slog.Info("native semgrep scan complete", "findings", len(semgrepFindings))
 			evid = append(evid, semgrepFindings...)
-			scanStatus.ok("semgrep")
+			// Per-file problems Semgrep reports as non-fatal (a file that
+			// did not fully parse, a per-file timeout) leave the run ok,
+			// counted in the detail so they are not invisible.
+			if detail := semgrepReport.Summary(); detail != "" {
+				scanStatus.okDetail(AnalyzerSemgrep, detail)
+			} else {
+				scanStatus.ok("semgrep")
+			}
 		case errors.Is(err, semgrep.ErrSemgrepUnavailable):
 			slog.Info("semgrep not installed — skipping (install with: pip install semgrep)")
 			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDependencyMissing, "semgrep binary not installed")
@@ -609,7 +616,11 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			slog.Debug("code path missing — skipping native semgrep scan")
 			scanStatus.fail(AnalyzerSemgrep, reporters.ReasonInputError, err)
 		default:
-			slog.Warn("native semgrep scan failed", "error", err)
+			// A fatal run (semgrep.ErrFatal) still returns the findings
+			// Semgrep printed before it failed. They are real, so they are
+			// kept; the run is recorded failed, never ok.
+			evid = append(evid, semgrepFindings...)
+			slog.Warn("native semgrep scan failed", "error", err, "partial_findings", len(semgrepFindings))
 			scanStatus.fail(AnalyzerSemgrep, classifyErr(err), err)
 		}
 	}
