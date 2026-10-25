@@ -179,6 +179,13 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		"--json",
 		"--no-git-ignore",
 		"--quiet",
+		// Without this, every run first asks semgrep.dev whether a newer
+		// Semgrep exists. Fendix pins Semgrep itself and --quiet hides the
+		// answer, so the check only adds outbound traffic, and with no route
+		// out it is a wait: about 25 s on Semgrep 1.141.0 and 96 s on
+		// 1.182.1, enough to push a mid-size tree past defaultTimeout and
+		// record semgrep failed/timeout on an offline scan.
+		"--disable-version-check",
 	}
 	for _, rel := range includes {
 		args = append(args, "--include", rel)
