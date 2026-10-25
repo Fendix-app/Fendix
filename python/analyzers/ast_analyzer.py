@@ -374,6 +374,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # mapped to that resolving call. `_note_resolved_join` records them
         # when the enclosing call is visited, which is always before the join.
         self._resolved_joins: dict[ast.Call, ast.Call] = {}
+        # Task 3.1: each def → the parameters that carry request data because
+        # it is a route handler bound to this file (`_route_param_sources`),
+        # and the module's `Annotated[..., Depends(...)]` aliases. Lazy.
+        self._route_sources: dict[ast.AST, frozenset[str]] = {}
+        self._dependency_aliases: frozenset[str] | None = None
 
     def _line_text(self, lineno: int) -> str:
         """Return the source line (1-indexed), or empty string."""
@@ -524,10 +529,101 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _bound_route(self):
         """Return the Route whose handler is the innermost enclosing
         function, or None when there's no route table or no match."""
-        if self._route_table is None or not self._func_stack:
+        if not self._func_stack:
             return None
-        func_name = self._func_stack[-1].name
-        return self._route_table.for_function(func_name)
+        return self._route_for(self._func_stack[-1])
+
+    def _route_for(self, func: ast.FunctionDef | ast.AsyncFunctionDef):
+        """The first Route that points at `func` itself, or None."""
+        routes = self._routes_for(func)
+        return routes[0] if routes else None
+
+    def _routes_for(self, func: ast.FunctionDef | ast.AsyncFunctionDef) -> list:
+        """Every Route that points at `func` itself, first declared first.
+
+        The route table is keyed on the bare function name, project-wide, so
+        a name alone would make every same-named def a handler: an unrelated
+        `def index(...)` in another file, a method sharing a view's name. A
+        route binds only the def it was declared for (`_route_binds_here`)."""
+        if self._route_table is None:
+            return []
+        return [
+            route
+            for route in self._route_table.routes_for_function(func.name)
+            if self._route_binds_here(route, func)
+        ]
+
+    def _route_binds_here(self, route, func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        """True when `route` dispatches to `func`, the def in this file.
+
+        A urlconf route (Django) names its view as `module.func`: `func` must
+        be a module-level def of a file one of the route's resolved
+        `handler_modules` names. A decorator route (Flask, FastAPI) is
+        declared on the def itself: same file, and one of `func`'s decorators
+        is the route's."""
+        modules = getattr(route, "handler_modules", ())
+        if modules:
+            return self._is_module_level_def(func) and any(
+                _module_matches_file(m, self._rel) for m in modules
+            )
+        return route.file.replace(os.sep, "/") == self._rel.replace(
+            os.sep, "/"
+        ) and any(d.lineno == route.line for d in func.decorator_list)
+
+    def _is_module_level_def(self, func: ast.AST) -> bool:
+        """True when `func` is defined in the module's own scope (under an
+        `if`/`try` at top level too), not in a class or another def."""
+        if self._module_root is None:
+            return True
+        if self._callsite_index is None:
+            self._callsite_index = self._build_callsite_index()
+        return self._scope_parents.get(func) is self._module_root
+
+    def _route_param_sources(
+        self, func: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> frozenset[str]:
+        """The parameters of `func` that are request sources: none unless
+        `func` is a route handler bound to this file (`_routes_for`). Then
+        `route_param_source_names(func)`, less the URL variables its routes'
+        converters coerce to a scalar (`<int:id>`, R-pf33), the parameters
+        annotated with a module-level `Annotated[..., Depends(...)]` alias
+        (R-pf27), and, for a Django view, its first positional parameter, the
+        request object whatever its name. Cached per def."""
+        cached = self._route_sources.get(func)
+        if cached is not None:
+            return cached
+        routes = self._routes_for(func)
+        if not routes:
+            sources = frozenset()
+        else:
+            if self._dependency_aliases is None:
+                self._dependency_aliases = _dependency_alias_names(self._module_root)
+            aliased = {
+                p.arg
+                for p in (*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs)
+                if any(
+                    isinstance(t, ast.Name) and t.id in self._dependency_aliases
+                    for t in _unwrap_annotation(p.annotation)[0]
+                )
+            }
+            sources = route_param_source_names(func) - _converter_coerced_names(routes) - aliased
+            positional = [*func.args.posonlyargs, *func.args.args]
+            if positional and any(getattr(r, "handler_modules", ()) for r in routes):
+                # Django calls a function view as view(request, *args, **kwargs):
+                # its first positional parameter is the HttpRequest, whatever
+                # its name. URL variables arrive as keyword arguments.
+                sources -= {positional[0].arg}
+        self._route_sources[func] = sources
+        return sources
+
+    def _name_is_route_param_source(self, name: str) -> bool:
+        """True when `name` is a request-carrying parameter of the route
+        handler being visited: `self._bound_route() is not None and name in
+        route_param_source_names(self._func_stack[-1])`, less the route's
+        coercing converters and dependency aliases (`_route_param_sources`)."""
+        return bool(self._func_stack) and name in self._route_param_sources(
+            self._func_stack[-1]
+        )
 
     # ------------------------------------------------------------------
     # Taint-chain helpers (TASK-114)
@@ -585,8 +681,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         the hop budget" — the sink still emits, only without a taint_chain.
 
         A Name with no binding in scope may be a parameter of the enclosing
-        function whose taint comes from a caller (audit recall gap; benchmark
-        cmdi-interprocedural): `_param_is_tainted_via_caller` tries one hop.
+        function: a request source itself when the function is a route handler
+        (`_name_is_route_param_source`), or one whose taint comes from a
+        caller (audit recall gap; benchmark cmdi-interprocedural), which
+        `_param_is_tainted_via_caller` tries one hop for.
         """
         return self._trace_names(
             expr,
@@ -594,8 +692,23 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             visited,
             depth,
             extra_source,
-            self._param_is_tainted_via_caller,
+            self._unbound_name_source,
         )
+
+    def _unbound_name_source(
+        self, name: str, extra_source, depth: int
+    ) -> list[dict] | None:
+        """The chain prefix for a bare Name no binding in scope resolves.
+
+        A request-carrying parameter of the route handler being visited is a
+        source where it enters, at the `def` line, exactly as a `request.args`
+        read would be at its assignment; sanitisers then apply to it as to
+        any request value, because the sink predicates check the argument,
+        not where it came from. Otherwise a same-file caller may taint the
+        parameter (one hop)."""
+        if self._name_is_route_param_source(name):
+            return [self._link(self._func_stack[-1].lineno, name)]
+        return self._param_is_tainted_via_caller(name, extra_source, depth)
 
     def _trace_in_bindings(
         self,
@@ -604,12 +717,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         visited: frozenset[str],
         depth: int,
         extra_source=None,
+        on_unbound_name: Callable[..., list[dict] | None] | None = None,
     ) -> list[dict] | None:
         """`_trace_to_source` over a caller's ``bindings`` instead of the
         scopes being visited. A Name the bindings do not hold (a parameter of
-        the caller, a global) ends the trace: that is the single hop, and the
-        caller's own callers are never searched."""
-        return self._trace_names(expr, bindings.get, visited, depth, extra_source, None)
+        the caller, a global) ends the trace unless ``on_unbound_name``
+        proves it: that is the single hop, and the caller's own callers are
+        never searched."""
+        return self._trace_names(
+            expr, bindings.get, visited, depth, extra_source, on_unbound_name
+        )
 
     def _scope_binding(self, key: str) -> ast.AST | None:
         """The value `key` is bound to in the scopes being visited, innermost
@@ -845,8 +962,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     ) -> list[dict] | None:
         """The chain prefix one caller's argument proves, or None: the
         argument as an inline source, or traced through the caller's bindings
-        before the call and followed by the call itself. None as well when a
-        sanitiser accepts the argument in the caller."""
+        before the call (to a request expression, or to a request-carrying
+        parameter of a caller that is a route handler) and followed by the
+        call itself. None as well when a sanitiser accepts the argument in
+        the caller."""
         if _is_taint_source(arg, extra_source):
             prefix = [self._link(call.lineno, _ast_expr_text(arg))]
         else:
@@ -856,6 +975,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 frozenset(),
                 depth + 1,
                 extra_source,
+                self._caller_route_param_source(scope),
             )
             if prefix is None:
                 return None
@@ -863,6 +983,23 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if self._caller_arg_is_sanitised(scope, call, arg):
             return None
         return prefix
+
+    def _caller_route_param_source(self, scope: ast.AST):
+        """The `on_unbound_name` hook for a caller running in `scope`: a Name
+        its bindings do not hold is a source when it is a request-carrying
+        parameter of `scope`, a route handler (`_route_param_sources`), linked
+        at the handler's `def` line. Only a def's own parameters: in a lambda,
+        class or comprehension a name may be bound by that scope instead."""
+        if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return None
+        sources = self._route_param_sources(scope)
+        if not sources:
+            return None
+
+        def source(name: str, _extra_source, _depth: int) -> list[dict] | None:
+            return [self._link(scope.lineno, name)] if name in sources else None
+
+        return source
 
     def _caller_arg_is_sanitised(
         self, scope: ast.AST, call: ast.Call, arg: ast.AST
@@ -4286,6 +4423,205 @@ def _param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     params = [*a.posonlyargs, *a.args, *a.kwonlyargs]
     params += [p for p in (a.vararg, a.kwarg) if p is not None]
     return {p.arg for p in params}
+
+
+# ---------------------------------------------------------------------------
+# Route-handler parameters as request sources (Task 3.1)
+# ---------------------------------------------------------------------------
+
+# Annotations naming a value the framework injects into a handler (FastAPI and
+# Starlette request plumbing, a database session). Never client data.
+_INJECTED_PARAM_TYPES: frozenset[str] = frozenset(
+    {"Request", "Response", "BackgroundTasks", "WebSocket", "HTTPConnection", "Session"}
+)
+# Calls marking a FastAPI dependency: the server resolves the value, the client
+# does not send it (Review Focus 2). As a default (`user = Depends(f)`) or in
+# `Annotated[...]` metadata (ruling R-pf27).
+_DEPENDENCY_MARKERS: frozenset[str] = frozenset({"Depends", "Security"})
+# Ruling R-pf33: annotations FastAPI coerces to a non-string scalar before the
+# handler runs. A value that parsed as one of these cannot carry a payload.
+_COERCED_SCALAR_TYPES: frozenset[str] = frozenset(
+    {"int", "float", "bool", "UUID", "datetime", "date", "time", "timedelta", "Decimal"}
+)
+# Ruling R-pf33: Flask (`int`, `float`, `uuid`) and Django (`int`, `uuid`) URL
+# converters that coerce the same way, read from the route pattern. Both
+# frameworks write a URL variable `<name>` or `<converter:name>`; Flask's
+# converter may take arguments (`<int(signed=True):n>`).
+_COERCING_CONVERTERS: frozenset[str] = frozenset({"int", "float", "uuid"})
+_URL_VARIABLE = re.compile(
+    r"<\s*(?:([A-Za-z_]\w*)\s*(?:\([^)>]*\))?\s*:)?\s*([A-Za-z_]\w*)\s*>"
+)
+
+
+def _terminal_name(node: ast.AST) -> str:
+    """`Request` for `Request` and `fastapi.Request`; "" for anything else."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _is_dependency_call(node: ast.AST | None) -> bool:
+    """`Depends(...)` / `Security(...)`, bare or module-qualified."""
+    return isinstance(node, ast.Call) and _terminal_name(node.func) in _DEPENDENCY_MARKERS
+
+
+def _unwrap_annotation(
+    ann: ast.AST | None, _depth: int = 0
+) -> tuple[list[ast.AST], list[ast.AST]]:
+    """`(types, metadata)` of an annotation. `types` are the types it admits,
+    with `Optional[...]`, `Union[...]`, `X | None` and the first argument of
+    `Annotated[...]` unwrapped and `None` dropped; `metadata` holds the other
+    `Annotated` arguments. A string annotation is parsed first. Anything else,
+    `list[str]` included, is one type as written."""
+    if ann is None or _depth >= _MAX_TAINT_HOPS:
+        return [], []
+    if isinstance(ann, ast.Constant):
+        if ann.value is None:
+            return [], []
+        if isinstance(ann.value, str):
+            try:
+                parsed = ast.parse(ann.value.strip(), mode="eval").body
+            except (SyntaxError, ValueError, RecursionError, MemoryError):
+                return [ann], []
+            return _unwrap_annotation(parsed, _depth + 1)
+        return [ann], []
+    if isinstance(ann, ast.BinOp) and isinstance(ann.op, ast.BitOr):
+        left_types, left_meta = _unwrap_annotation(ann.left, _depth + 1)
+        right_types, right_meta = _unwrap_annotation(ann.right, _depth + 1)
+        return left_types + right_types, left_meta + right_meta
+    if isinstance(ann, ast.Subscript):
+        head = _terminal_name(ann.value)
+        args = list(ann.slice.elts) if isinstance(ann.slice, ast.Tuple) else [ann.slice]
+        if head in ("Optional", "Union") and args:
+            types: list[ast.AST] = []
+            meta: list[ast.AST] = []
+            for arg in args if head == "Union" else args[:1]:
+                arg_types, arg_meta = _unwrap_annotation(arg, _depth + 1)
+                types += arg_types
+                meta += arg_meta
+            return types, meta
+        if head == "Annotated" and args:
+            types, meta = _unwrap_annotation(args[0], _depth + 1)
+            return types, meta + args[1:]
+    return [ann], []
+
+
+def _annotation_is_dependency(ann: ast.AST | None) -> bool:
+    """`Annotated[..., Depends(...)]` or `Annotated[..., Security(...)]`."""
+    return any(_is_dependency_call(m) for m in _unwrap_annotation(ann)[1])
+
+
+def _annotation_excludes_param(ann: ast.AST | None) -> bool:
+    """True when the annotation alone says the parameter is not client data: a
+    dependency, an injected framework object, or a coerced scalar (R-pf33)."""
+    if ann is None:
+        return False
+    types, meta = _unwrap_annotation(ann)
+    if any(_is_dependency_call(m) for m in meta):
+        return True
+    names = [_terminal_name(t) for t in types]
+    return bool(names) and (
+        all(n in _INJECTED_PARAM_TYPES for n in names)
+        or all(n in _COERCED_SCALAR_TYPES for n in names)
+    )
+
+
+def route_param_source_names(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """The parameters of `func` that carry request data IF `func` is a route
+    handler: FastAPI query, path, header, cookie and body parameters, Flask and
+    Django URL variables. Every positional-only, positional and keyword-only
+    parameter counts except:
+
+    - ``self``;
+    - the first positional parameter (after ``self``) named ``request`` or
+      ``req``: the request object, whose attributes `_references_request_input`
+      already treats as sources;
+    - one annotated with a framework-injected type (`_INJECTED_PARAM_TYPES`),
+      bare or under ``Optional``/``Union``/``| None``/``Annotated``;
+    - one defaulted to ``Depends(...)``/``Security(...)``, or annotated
+      ``Annotated[..., Depends(...)]`` (Review Focus 2, R-pf27);
+    - one annotated with a scalar the framework coerces to before the handler
+      runs (`_COERCED_SCALAR_TYPES`, R-pf33): ``int``, ``Optional[UUID]``,
+      ``Annotated[int, Query()]``. ``str``, ``list[str]``, a pydantic model
+      and an unannotated parameter stay sources.
+
+    It reads only the signature. Whether `func` IS a handler, the URL
+    converters of its route and module-level ``Annotated`` aliases are the
+    caller's to apply (`_PythonSecurityVisitor._route_param_sources`)."""
+    a = func.args
+    positional = [*a.posonlyargs, *a.args]
+    defaults: list[ast.AST | None] = [None] * (len(positional) - len(a.defaults))
+    defaults += a.defaults
+    params = [*zip(positional, defaults), *zip(a.kwonlyargs, a.kw_defaults)]
+    first = next((p.arg for p in positional if p.arg != "self"), None)
+    names = set()
+    for param, default in params:
+        name = param.arg
+        if name == "self" or (name == first and name in _REQUEST_NAMES):
+            continue
+        if _is_dependency_call(default) or _annotation_excludes_param(param.annotation):
+            continue
+        names.add(name)
+    return frozenset(names)
+
+
+def _converter_coerced_names(routes) -> frozenset[str]:
+    """URL variables that the converters of `routes`, every route bound to one
+    handler, coerce to a non-string scalar (`<int:id>`, `<uuid:pk>`,
+    `<int(signed=True):n>`): not sources (R-pf33). A variable some route
+    passes as a string (`<id>`, `<path:id>`) stays a source, whichever of the
+    handler's routes is declared first."""
+    coerced: set[str] = set()
+    textual: set[str] = set()
+    for route in routes:
+        for converter, name in _URL_VARIABLE.findall(getattr(route, "pattern", "") or ""):
+            (coerced if converter in _COERCING_CONVERTERS else textual).add(name)
+    return frozenset(coerced - textual)
+
+
+def _dependency_alias_names(module: ast.AST | None) -> frozenset[str]:
+    """Names bound at module level to an `Annotated[..., Depends(...)]` (or
+    `Security`) type, directly or through another such alias, so a parameter
+    annotated `user: CurrentUser` is a dependency too (R-pf27). Same file
+    only: an alias imported from another module is not seen."""
+    if not isinstance(module, ast.Module):
+        return frozenset()
+    type_alias = getattr(ast, "TypeAlias", None)  # `type X = ...`, Python 3.12+
+    aliases: set[str] = set()
+    for stmt in module.body:
+        target = value = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign):
+            target, value = stmt.target, stmt.value
+        elif type_alias is not None and isinstance(stmt, type_alias):
+            target, value = stmt.name, stmt.value
+        if not isinstance(target, ast.Name) or value is None:
+            continue
+        if _annotation_is_dependency(value) or any(
+            isinstance(t, ast.Name) and t.id in aliases
+            for t in _unwrap_annotation(value)[0]
+        ):
+            aliases.add(target.id)
+    return frozenset(aliases)
+
+
+def _module_matches_file(module: str, rel: str) -> bool:
+    """True when dotted `module` names the file at `rel`: `app.views` is
+    `app/views.py` or `app/views/__init__.py`, at the scan root or under a
+    directory above the package (a `src/` layout, a scan of the repo root)."""
+    if not module:
+        return False
+    rel = rel.replace(os.sep, "/")
+    base = module.replace(".", "/")
+    return any(
+        rel == cand or rel.endswith("/" + cand)
+        for cand in (f"{base}.py", f"{base}/__init__.py")
+    )
 
 
 def _end_position(node: ast.AST) -> tuple[int, int]:

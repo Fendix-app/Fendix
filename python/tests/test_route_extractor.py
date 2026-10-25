@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from analyzers.route_extractor import extract_routes
 
 
@@ -109,3 +111,51 @@ def test_as_dict_shape():
     d = extract_routes(src, "a.py").routes[0].as_dict()
     assert set(d) == {"method", "pattern", "handler", "file", "line"}
     assert d["file"] == "a.py" and d["pattern"] == "/x"
+
+
+def test_decorator_route_has_no_handler_modules():
+    # A decorator route's handler is the decorated def in its own file.
+    r = extract_routes('@app.get("/x")\ndef h(): pass\n', "a.py").routes[0]
+    assert r.handler_modules == ()
+
+
+@pytest.mark.parametrize(
+    "rel, imports, view, func, modules",
+    [
+        ("config/urls.py", "from app.views import a\n", "a.search", "search", ("app.views.a",)),
+        ("config/urls.py", "from app import views\n", "views.search", "search", ("app.views",)),
+        ("config/urls.py", "import app.views\n", "app.views.search", "search", ("app.views",)),
+        ("config/urls.py", "import app.views as v\n", "v.search", "search", ("app.views",)),
+        ("config/urls.py", "from app.views import search as s\n", "s", "search", ("app.views",)),
+        ("app/urls.py", "from . import views\n", "views.search", "search", ("app.views",)),
+        ("app/urls.py", "from .views import search\n", "search", "search", ("app.views",)),
+        ("app/sub/urls.py", "from ..views import search\n", "search", "search", ("app.views",)),
+        ("urls.py", "from . import views\n", "views.search", "search", ("views",)),
+        ("app/__init__.py", "from .views import search\n", "search", "search", ("app.views",)),
+        # Not imported: defined in the urlconf itself, or from a star import.
+        ("app/urls.py", "from app.views import *\n", "search", "search", ("app.urls", "app.views")),
+        # A head nothing imports is taken as written.
+        ("app/urls.py", "", "views.search", "search", ("views",)),
+        # A relative import above the scan root resolves to nothing.
+        ("urls.py", "from .. import views\n", "views.search", "search", ("views",)),
+    ],
+)
+def test_django_view_module_resolves_through_imports(rel, imports, view, func, modules):
+    src = f'from django.urls import path\n{imports}urlpatterns = [path("s/", {view})]\n'
+    [r] = extract_routes(src, rel).routes
+    assert r.handler == view  # reported as written
+    assert r.handler_func == func
+    assert r.handler_modules == modules
+
+
+def test_routes_for_function_keeps_every_same_named_route():
+    src = '''
+from django.urls import path
+from app.views import a, b
+urlpatterns = [path("a/", a.search), path("b/", b.search)]
+'''
+    table = extract_routes(src, "config/urls.py")
+    assert [r.pattern for r in table.routes_for_function("search")] == ["a/", "b/"]
+    # for_function keeps its first-wins answer.
+    assert table.for_function("search").pattern == "a/"
+    assert table.routes_for_function("missing") == []

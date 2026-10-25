@@ -467,7 +467,7 @@
     },
     "fastapi-cmdi-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-cmdi-cross_file": {
       "outcome": "TP",
@@ -475,11 +475,11 @@
     },
     "fastapi-cmdi-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-cmdi-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-cmdi-safe": {
       "outcome": "TN",
@@ -554,8 +554,8 @@
       "blocks": false
     },
     "fastapi-path_traversal-alt_api": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-path_traversal-cross_file": {
       "outcome": "TP",
@@ -563,11 +563,11 @@
     },
     "fastapi-path_traversal-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-path_traversal-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-path_traversal-safe": {
       "outcome": "TN",
@@ -579,7 +579,7 @@
     },
     "fastapi-sqli-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-sqli-cross_file": {
       "outcome": "TP",
@@ -587,11 +587,11 @@
     },
     "fastapi-sqli-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-sqli-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-sqli-safe": {
       "outcome": "TN",
@@ -603,7 +603,7 @@
     },
     "fastapi-ssrf-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-ssrf-cross_file": {
       "outcome": "TP",
@@ -611,11 +611,11 @@
     },
     "fastapi-ssrf-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-ssrf-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-ssrf-safe": {
       "outcome": "TN",
@@ -675,7 +675,7 @@
     },
     "fastapi-xss-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-xss-cross_file": {
       "outcome": "FN",

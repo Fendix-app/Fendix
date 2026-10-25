@@ -59,9 +59,18 @@ class Route:
     line: int
     # Function names that ARE this handler (for binding a finding whose
     # enclosing function matches). For decorator routes this is the
-    # decorated function; for Django it's the dotted/bare view symbol's
-    # final component.
+    # decorated function; for Django it's the final component of the view
+    # symbol, after the urlconf's imports resolve it (`from .views import
+    # show as v; path("x", v)` binds `show`).
     handler_func: str = ""
+    # Django only: the dotted modules (relative to the scan root) the view
+    # symbol may be defined in, resolved through the urlconf's imports
+    # (`from app.views import a; path("x", a.search)` -> "app.views.a").
+    # A bare view the urlconf does not import is its own module's, or a
+    # star import's. Empty for a decorator route, whose handler is the
+    # decorated def in `file` itself. Not part of `as_dict`: it locates the
+    # handler, it is not reported.
+    handler_modules: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
         return {
@@ -80,6 +89,10 @@ class RouteTable:
     routes: list[Route] = field(default_factory=list)
     # function-name → Route, for binding a finding by its enclosing def.
     by_func: dict[str, Route] = field(default_factory=dict)
+    # function-name → every Route with that handler name, in the order added.
+    # Several views share a name across modules (`search` in two apps), so
+    # the binding must pick the one whose handler is the def being visited.
+    all_by_func: dict[str, list[Route]] = field(default_factory=dict)
 
     def add(self, route: Route) -> None:
         self.routes.append(route)
@@ -87,9 +100,16 @@ class RouteTable:
             # First declaration wins if a function is decorated twice; the
             # taint binding only needs *a* route, not all of them.
             self.by_func.setdefault(route.handler_func, route)
+            self.all_by_func.setdefault(route.handler_func, []).append(route)
 
     def for_function(self, func_name: str) -> Route | None:
         return self.by_func.get(func_name)
+
+    def routes_for_function(self, func_name: str) -> list[Route]:
+        """Every route whose handler is named `func_name`, first added first.
+        The name alone does not identify the def: the caller checks which
+        route, if any, actually points at it."""
+        return self.all_by_func.get(func_name, [])
 
 
 def extract_routes(source: str, rel_path: str) -> RouteTable:
@@ -106,10 +126,81 @@ def extract_routes(source: str, rel_path: str) -> RouteTable:
 
     try:
         _DecoratorRouteVisitor(table, rel_path).visit(tree)
-        _DjangoUrlpatternsVisitor(table, rel_path).visit(tree)
+        _DjangoUrlpatternsVisitor(table, rel_path, _ImportScope(tree, rel_path)).visit(tree)
     except RecursionError:
         return table
     return table
+
+
+def _module_name(rel_path: str) -> tuple[str, str]:
+    """`(module, package)` dotted names of a file at `rel_path` under the scan
+    root: `app/urls.py` -> ("app.urls", "app"), `app/__init__.py` ->
+    ("app", "app"), `urls.py` -> ("urls", "")."""
+    parts = [p for p in rel_path.replace("\\", "/").split("/") if p]
+    if not parts:
+        return "", ""
+    parts[-1] = parts[-1].removesuffix(".py")
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+        return ".".join(parts), ".".join(parts)
+    return ".".join(parts), ".".join(parts[:-1])
+
+
+class _ImportScope:
+    """What each imported name in one file refers to, as a dotted path from
+    the scan root. Relative imports resolve against the file's own package;
+    one that climbs above the scan root resolves to nothing."""
+
+    def __init__(self, tree: ast.AST, rel_path: str) -> None:
+        self.module, self.package = _module_name(rel_path)
+        self.names: dict[str, str] = {}
+        self.star_modules: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.asname:
+                        self.names[alias.asname] = alias.name
+                    else:
+                        # `import a.b` binds `a`, and `a.b.f` reads through it.
+                        top = alias.name.split(".", 1)[0]
+                        self.names[top] = top
+            elif isinstance(node, ast.ImportFrom):
+                base = self._from_base(node)
+                if base is None:
+                    continue
+                for alias in node.names:
+                    if alias.name == "*":
+                        self.star_modules.append(base)
+                        continue
+                    target = f"{base}.{alias.name}" if base else alias.name
+                    self.names[alias.asname or alias.name] = target
+
+    def _from_base(self, node: ast.ImportFrom) -> str | None:
+        if not node.level:
+            return node.module or None
+        package = self.package.split(".") if self.package else []
+        climb = node.level - 1
+        if climb > len(package):
+            return None
+        base = package[: len(package) - climb]
+        if node.module:
+            base += node.module.split(".")
+        return ".".join(base)
+
+    def resolve_view(self, handler: str) -> tuple[str, tuple[str, ...]]:
+        """`(function name, candidate modules)` for a view symbol written as
+        `handler` in this file. An imported head resolves through its import;
+        a dotted symbol with an unknown head is taken as written; a bare name
+        nothing imports is defined here or comes from a star import."""
+        head, _, rest = handler.partition(".")
+        if head in self.names:
+            full = self.names[head] + (f".{rest}" if rest else "")
+        elif rest:
+            full = handler
+        else:
+            return handler, (self.module, *self.star_modules)
+        module, _, func = full.rpartition(".")
+        return func, ((module,) if module else ())
 
 
 def _str_const(node: ast.AST) -> str | None:
@@ -198,9 +289,10 @@ class _DjangoUrlpatternsVisitor(ast.NodeVisitor):
     → 'get_user'), which is what the taint finding's enclosing function name
     will match when the view lives in this project."""
 
-    def __init__(self, table: RouteTable, rel_path: str) -> None:
+    def __init__(self, table: RouteTable, rel_path: str, imports: _ImportScope) -> None:
         self.table = table
         self.rel = rel_path
+        self.imports = imports
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         func = node.func
@@ -216,7 +308,7 @@ class _DjangoUrlpatternsVisitor(ast.NodeVisitor):
             # Skip include() and class-based .as_view() — v1 binds plain
             # function views only (the common case for the ICP).
             if pattern is not None and handler and not _is_include(view):
-                func_name = handler.rsplit(".", 1)[-1]
+                func_name, modules = self.imports.resolve_view(handler)
                 # Strip a trailing .as_view for CBVs so the label is clean,
                 # though we won't bind a finding to it (no matching def name).
                 self.table.add(
@@ -227,6 +319,7 @@ class _DjangoUrlpatternsVisitor(ast.NodeVisitor):
                         file=self.rel,
                         line=node.lineno,
                         handler_func=func_name,
+                        handler_modules=modules,
                     )
                 )
         self.generic_visit(node)

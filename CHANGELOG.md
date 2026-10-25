@@ -29,6 +29,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `python.ast/PY_SQL_INJECTION`, listed as CRITICAL with MEDIUM confidence,
     reports HIGH.
   - Detection does not change.
+- **A Python route handler's parameters are now request sources.** FastAPI
+  query, path, header, cookie, form and body parameters, and Flask and Django
+  URL variables, reach a handler without any `request.` expression, so a sink
+  they reached was reported but never proven. FastAPI was hit hardest: the
+  same f-string SQL query blocked in Flask and only warned in FastAPI. The
+  engine now treats such a parameter as request input where it enters, at the
+  handler's `def` line. A finding it reaches is marked reachable and carries a
+  taint chain that starts with the parameter's name. Like any proven finding,
+  it takes the rule's proven title and severity where it has one, the engine
+  escalates it one level as reachable, and it may now block.
+  - **Only route handlers.** A parameter counts only in the def a Flask or
+    FastAPI route decorator sits on, or in the module-level view a Django
+    `path()`, `re_path()` or `url()` names. The view's module is resolved
+    through the urlconf's imports (`from app.views import a; path("x/",
+    a.search)` is `app/views/a.py`). Parameters of any other function are
+    not sources.
+  - **Not sources:** `self`; a first positional parameter named `request` or
+    `req`, and a Django view's first positional parameter whatever its name
+    (Django passes the request object there); a parameter annotated `Request`, `Response`, `BackgroundTasks`,
+    `WebSocket`, `HTTPConnection` or `Session`; a dependency, defaulted to
+    `Depends(...)` or `Security(...)` or annotated
+    `Annotated[..., Depends(...)]`; a parameter annotated with a module-level
+    alias of such a dependency in the same file
+    (`CurrentUser = Annotated[User, Depends(get_current_user)]`); `*args` and
+    `**kwargs`. An alias imported from another module
+    (`from app.api.deps import CurrentUser`) is not recognised, and a
+    parameter annotated with it still counts as a source.
+  - **Values coerced to a non-string scalar are not sources.** FastAPI
+    parameters annotated `int`, `float`, `bool`, `UUID`, `datetime`, `date`,
+    `time`, `timedelta` or `Decimal`, bare, `Optional[...]`, `X | None` or as
+    the first argument of `Annotated[...]`. Flask `<int:...>`, `<float:...>`
+    and `<uuid:...>` and Django `<int:...>` and `<uuid:...>` URL variables. A
+    variable that another of the view's routes passes as a string stays a
+    source. `str`, `list[str]`, a pydantic model, an unannotated parameter and
+    the `path` converter are sources.
+  - **Sanitisers apply as they do to a `request.args` value.** A membership
+    guard, a `urlparse(...).netloc` allowlist, path containment, escaping or an
+    allowlist lookup leaves the finding unreported or unproven exactly as it
+    would for a value read from the request.
+  - **Same-file helpers.** A handler that passes its parameter to a helper in
+    the same file proves the helper's sink, through the one-hop check. The
+    chain starts at the handler's `def` line, then the call. Caller-side
+    sanitisers still apply. A helper in another file is not followed.
+  - **Identity.** A finding this change proves can change identity once. A
+    baseline entry or a `.fendix-ignore` `fingerprint:` rule for it stops
+    matching, and it is reported as new once.
+    - The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+      `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+      `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+      proven, so such a finding is identified by its sink instead of its
+      evidence line.
+    - A proven finding bound to a route is identified by the route's file.
+      A Flask or FastAPI route is declared in the handler's own file, so
+      nothing moves. A Django route is declared in the urlconf, so a Django
+      view's finding that this change proves through a URL variable is
+      identified by the urlconf's file instead of the view's, whatever the
+      rule.
+    - Otherwise SSRF, open-redirect, path-traversal and XSS findings keep
+      their identity.
+  - **New findings where a sink is reported only when proven.** A handler
+    parameter reaching `os.path.join(...)` (or `abspath`, `expanduser`,
+    `expandvars`) or an LLM prompt now reports it. So
+    `open(os.path.join(BASE, filename))` in a FastAPI handler reports both
+    calls, and `FileResponse(os.path.join(BASE, filename))` is now reported
+    through the join. `FileResponse(path)` itself is still not a sink.
+  - **A route binds only the function it was declared for.** The route table
+    is keyed on the bare function name, project-wide. A function that only
+    shared a handler's name, in another file or as a method, got that
+    handler's route, and Django views with one name in several modules all
+    got the first one's route. Each finding now carries its own view's route,
+    or none. A finding whose route changes is identified by its new route's
+    file, or by its own file when it has none, once.
+  - **Not covered:** routes registered without a route decorator or a
+    urlconf entry (`app.add_api_route(...)`, `app.add_url_rule(...)`,
+    class-based views). A Flask `defaults=` value counts as a source unless
+    one of the view's routes coerces that name with a converter.
+  - **Framework parity:** FastAPI's `direct`, `indirect` and `alt_api` cases
+    for SQL injection, command injection and SSRF, its `direct` and
+    `indirect` path-traversal cases and its `alt_api` XSS case now block, and
+    its `alt_api` path-traversal case is detected and blocks. FastAPI blocks on
+    17 of 36 vulnerable cases, up from 4. No safe case is flagged or blocks.
 
 ### Changed
 

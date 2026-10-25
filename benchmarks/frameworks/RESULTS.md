@@ -97,11 +97,14 @@ The `direct` and `indirect` columns include the new classes.
   - Detection holds at 81% for `cross_file`, because the sink shape alone is enough to report.
   - Almost nothing in the helper variants proves reachability: 9% block for same-file helpers, 14% for cross-file. The one-hop interprocedural check (`_param_is_tainted_via_caller`) proves only when the request expression is passed inline, as in `helper(request.GET.get("x"))`. The common shape, `x = request.GET.get("x"); helper(x)`, never proves, because the caller's local bindings are not visible while the helper is visited. This is the same defect for every class.
     - Closed after v3.6.3 for same-file helpers. The check now traces the argument through the caller's own assignments before the call. The Django and Flask `indirect` cases for SQLi, command injection, SSRF, path traversal and open redirect, and Flask's `ssti` `indirect` case, now block.
-    - FastAPI's `indirect` cases still warn: the caller passes a typed handler parameter, which is not a request source. Cross-file helpers are unchanged.
+    - FastAPI's `indirect` cases still warned: the caller passes a typed handler parameter, which was not a request source. Closed after v3.6.3 too: a route handler's parameters are now request sources, and FastAPI's `indirect` cases for SQLi, command injection, SSRF and path traversal block.
+    - Cross-file helpers are unchanged.
     - See `CHANGELOG.md`, `[Unreleased]`.
 - **Python handles a second API well.** `os.system`, `Markup`/`mark_safe`, `urllib.request.urlopen`, `send_file`/`FileResponse`, `HttpResponseRedirect` and SQLAlchemy `text(f"...")` are all found, and most block.
   - FastAPI is the exception: its findings warn.
+    - Closed after v3.6.3. With handler parameters as request sources, FastAPI's `alt_api` cases for SQLi, command injection, SSRF and XSS block.
   - Two forms are missed: a raw `Location` header redirect in Flask and FastAPI, and FastAPI `FileResponse(path)`.
+    - The FastAPI case, `FileResponse(os.path.join(REPORTS_DIR, filename))`, is detected and blocks after v3.6.3 through the inner `os.path.join`, which is reported once the flow is proven. `FileResponse` itself is still not a sink.
 - **Regex rules depend on one exact shape.**
   - JS SQL is found only as a template literal. mysql2 `"..." + name` concatenation is missed.
   - Spring SQL is found only through `Statement.executeQuery`. `JdbcTemplate` is missed.
@@ -120,6 +123,10 @@ The `direct` and `indirect` columns include the new classes.
 - **Template injection is found only in Flask.** `render_template_string` is modelled. Django `Template(src)` and `jinja2.Template(src)` are not.
 - **Weak random tokens are missed everywhere.** The bundled rule lists `random.choice`, but not `random.choices`, the most common token idiom.
 - **FastAPI findings almost never block.** Typed handler parameters are not proven reachable. The same SQLi scores 90 (HIGH, BLOCK) in Flask and 50 (MEDIUM, WARN) in FastAPI. FastAPI's `RedirectResponse` and manual `Location` headers are not redirect sinks.
+  - Closed after v3.6.3 for handler parameters. A route handler's parameters are now request sources: FastAPI query, path, header, cookie and body parameters, and Flask and Django URL variables. `Depends(...)`/`Security(...)` dependencies, injected objects such as `Request`, and values coerced to `int`, `UUID` or another scalar are not.
+    - Every FastAPI SQLi, command-injection, SSRF, path-traversal and XSS case the engine detects now blocks, except the four `cross_file` ones. FastAPI blocks on 17 of 36 vulnerable cases, up from 4. No safe case is flagged or blocks.
+    - Django blocks on 20 and Flask on 21. FastAPI's remaining gap to Django is its three blocking redirect cases: `RedirectResponse` is still not a redirect sink.
+    - See `CHANGELOG.md`, `[Unreleased]`.
 - **Correct fixes still block (4 cases).**
   - The cases are a `urlparse(url).hostname` allowlist for SSRF, and a `realpath` + `commonpath` check for path traversal, in Django and Flask.
   - The engine recognises only a membership check on the tainted name itself. The request-to-sink flow inside the handler proves, the guard is not recognised, so the fixed code blocks on its own, with no sibling involved (confirmed under `--isolate`).
