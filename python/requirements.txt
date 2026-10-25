@@ -7,7 +7,7 @@ jsonschema>=4.25.1,<5
 # Semgrep 1.182.1's MCP 1.29.0 no longer imports eval_type_backport, the API
 # Pydantic 2.14 removed (MCP 1.16 did). The bound now only holds the validated
 # Pydantic 2.13 line until the 2.14 line is validated with Semgrep (#111).
-pydantic<2.14
+pydantic<2.15
 # certifi before 2026.10.19 trusts emSign roots whose intermediate CA keys
 # were compromised (GHSA-6q48-6c7w-9gw2). requests and httpx verify TLS
 # against its bundle. The images install python/requirements.lock; CI and
