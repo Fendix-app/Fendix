@@ -35,6 +35,11 @@ class Check:
     # proven_severity, this is the unproven value: the finding escalates only
     # when a taint chain is collected.
     default_severity: str
+    # The confidence an unproven finding carries: the declared confidence,
+    # after _emit_finding drops HIGH to MEDIUM for a site that attempted a
+    # taint chain and collected none. With default_severity it makes the
+    # engine's confidence cap (MEDIUM caps at HIGH) derivable.
+    confidence: str
     # The rule_id the finding carries, which identity and SARIF key on. It is
     # the check's catalog id.
     rule_id: str
@@ -42,7 +47,9 @@ class Check:
     finding_id: str
 
 
-def _py(id: str, title: str, cwe: str, category: str, default_severity: str) -> Check:
+def _py(
+    id: str, title: str, cwe: str, category: str, default_severity: str, confidence: str
+) -> Check:
     return Check(
         id,
         title,
@@ -50,12 +57,13 @@ def _py(id: str, title: str, cwe: str, category: str, default_severity: str) -> 
         category,
         ("python",),
         default_severity,
+        confidence,
         rule_id=f"python.ast/{id}",
         finding_id=f"SEC-{id}",
     )
 
 
-def _js(id: str, title: str, cwe: str, default_severity: str) -> Check:
+def _js(id: str, title: str, cwe: str, default_severity: str, confidence: str) -> Check:
     # The JS pattern loop emits category "injection" for every pattern, and a
     # rule_id equal to the finding id (see the comment at its emit site).
     return Check(
@@ -65,6 +73,7 @@ def _js(id: str, title: str, cwe: str, default_severity: str) -> Check:
         "injection",
         ("javascript", "typescript"),
         default_severity,
+        confidence,
         rule_id=f"SEC-{id}",
         finding_id=f"SEC-{id}",
     )
@@ -80,6 +89,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-290",
         "auth_bypass",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_EVAL",
@@ -87,6 +97,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-95",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_JWT_WEAK",
@@ -94,6 +105,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-347",
         "auth_bypass",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_LLM_PROMPT_INJECTION",
@@ -101,6 +113,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-77",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_OPEN_REDIRECT",
@@ -108,6 +121,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-601",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_OS_POPEN",
@@ -115,6 +129,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-78",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_OS_SYSTEM",
@@ -122,12 +137,14 @@ CHECKS: tuple[Check, ...] = (
         "CWE-78",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_PATH_TRAVERSAL",
         "Potential unsafe dynamic filesystem path",
         "CWE-22",
         "injection",
+        "MEDIUM",
         "MEDIUM",
     ),
     _py(
@@ -136,12 +153,14 @@ CHECKS: tuple[Check, ...] = (
         "CWE-502",
         "injection",
         "CRITICAL",
+        "HIGH",
     ),
     _py(
         "PY_SECRET_IN_LOG",
         "Secret written to logs — credential exposure",
         "CWE-532",
         "secrets",
+        "MEDIUM",
         "MEDIUM",
     ),
     _py(
@@ -150,6 +169,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-89",
         "injection",
         "CRITICAL",
+        "MEDIUM",
     ),
     _py(
         "PY_SSRF",
@@ -157,6 +177,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-918",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_SUBPROCESS_SHELL",
@@ -164,6 +185,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-78",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_WEAK_CRYPTO_PASSWORD",
@@ -171,6 +193,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-916",
         "secrets",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_XSS_HTML_SINK",
@@ -178,6 +201,7 @@ CHECKS: tuple[Check, ...] = (
         "CWE-79",
         "injection",
         "HIGH",
+        "MEDIUM",
     ),
     _py(
         "PY_YAML_UNSAFE_LOAD",
@@ -185,19 +209,28 @@ CHECKS: tuple[Check, ...] = (
         "CWE-502",
         "injection",
         "HIGH",
+        "HIGH",
     ),
     _js(
         "JS_DOCUMENT_WRITE",
         "Unsafe use of document.write() — XSS risk",
         "CWE-79",
         "MEDIUM",
+        "MEDIUM",
     ),
-    _js("JS_EVAL", "Unsafe use of eval() in JavaScript", "CWE-95", "HIGH"),
-    _js("JS_INNER_HTML", "Unsafe assignment to innerHTML — XSS risk", "CWE-79", "HIGH"),
+    _js("JS_EVAL", "Unsafe use of eval() in JavaScript", "CWE-95", "HIGH", "HIGH"),
+    _js(
+        "JS_INNER_HTML",
+        "Unsafe assignment to innerHTML — XSS risk",
+        "CWE-79",
+        "HIGH",
+        "MEDIUM",
+    ),
     _js(
         "JS_SQL_TEMPLATE",
         "SQL query built via template literal — injection risk",
         "CWE-89",
+        "HIGH",
         "HIGH",
     ),
 )

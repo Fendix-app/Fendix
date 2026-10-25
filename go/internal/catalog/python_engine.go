@@ -26,6 +26,7 @@ type pythonEngineCheck struct {
 	Category        string   `json:"category"`
 	Languages       []string `json:"languages"`
 	DefaultSeverity string   `json:"default_severity"`
+	Confidence      string   `json:"confidence"`
 	RuleID          string   `json:"rule_id"`
 	FindingID       string   `json:"finding_id"`
 }
@@ -33,8 +34,11 @@ type pythonEngineCheck struct {
 // pythonEngineChecks lists the Python engine's AST (python.ast/PY_*) and
 // JavaScript pattern (SEC-JS_*) checks. Like every other analyzer's, each is
 // named by the rule_id its findings carry, with the finding's own id as
-// finding_id. All of them run in the engine's injection pass, which the scan
-// reports as the python-engine/injection analyzer.
+// finding_id. DefaultSeverity is the severity declared for an unproven
+// finding and Confidence the confidence that finding carries, before the
+// engine's confidence cap (models.MaxSeverityForConfidence), as for Semgrep.
+// All of them run in the engine's injection pass, which the scan reports as
+// the python-engine/injection analyzer.
 func pythonEngineChecks() ([]Check, error) {
 	decoder := json.NewDecoder(bytes.NewReader(pythonEngineChecksJSON))
 	decoder.DisallowUnknownFields()
@@ -47,7 +51,8 @@ func pythonEngineChecks() ([]Check, error) {
 		out = append(out, Check{
 			ID: row.RuleID, FindingID: row.FindingID, Title: row.Title,
 			Analyzer: engine.AnalyzerPythonInjection, Category: row.Category,
-			DefaultSeverity: row.DefaultSeverity, CWEs: compactStrings([]string{row.CWE}),
+			DefaultSeverity: row.DefaultSeverity, Confidence: row.Confidence,
+			CWEs:          compactStrings([]string{row.CWE}),
 			ExecutionMode: "passive", AuthRequirement: "none",
 			Applicability: append([]string{}, row.Languages...), Availability: "stable",
 		})

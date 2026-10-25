@@ -1502,6 +1502,7 @@
       "analyzer": "python-engine/injection",
       "category": "auth_bypass",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-290"
       ],
@@ -1519,6 +1520,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-95"
       ],
@@ -1536,6 +1538,7 @@
       "analyzer": "python-engine/injection",
       "category": "auth_bypass",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-347"
       ],
@@ -1553,6 +1556,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-77"
       ],
@@ -1570,6 +1574,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-601"
       ],
@@ -1587,6 +1592,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-78"
       ],
@@ -1604,6 +1610,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-78"
       ],
@@ -1621,6 +1628,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-22"
       ],
@@ -1638,6 +1646,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "CRITICAL",
+      "confidence": "HIGH",
       "cwes": [
         "CWE-502"
       ],
@@ -1655,6 +1664,7 @@
       "analyzer": "python-engine/injection",
       "category": "secrets",
       "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-532"
       ],
@@ -1672,6 +1682,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "CRITICAL",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-89"
       ],
@@ -1689,6 +1700,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-918"
       ],
@@ -1706,6 +1718,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-78"
       ],
@@ -1723,6 +1736,7 @@
       "analyzer": "python-engine/injection",
       "category": "secrets",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-916"
       ],
@@ -1740,6 +1754,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-79"
       ],
@@ -1757,6 +1772,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "HIGH",
       "cwes": [
         "CWE-502"
       ],
@@ -1774,6 +1790,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-79"
       ],
@@ -1792,6 +1809,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "HIGH",
       "cwes": [
         "CWE-95"
       ],
@@ -1810,6 +1828,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "MEDIUM",
       "cwes": [
         "CWE-79"
       ],
@@ -1828,6 +1847,7 @@
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",
+      "confidence": "HIGH",
       "cwes": [
         "CWE-89"
       ],

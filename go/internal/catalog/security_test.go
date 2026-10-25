@@ -101,7 +101,10 @@ func compareFields(t *testing.T, kind, id string, published, executable any) {
 }
 
 // Python-engine checks are named by the rule_id their findings carry, like
-// every other analyzer's; finding_id is the finding's own id.
+// every other analyzer's; finding_id is the finding's own id. Severity is the
+// declared unproven one and confidence what an unproven finding carries, so
+// the engine's confidence cap (MEDIUM caps at HIGH) is derivable: an
+// unproven PY_SQL_INJECTION reports HIGH.
 func TestCatalogIncludesPythonEngineChecks(t *testing.T) {
 	contract, err := Build()
 	if err != nil {
@@ -115,12 +118,14 @@ func TestCatalogIncludesPythonEngineChecks(t *testing.T) {
 		{
 			ID: "python.ast/PY_SQL_INJECTION", FindingID: "SEC-PY_SQL_INJECTION",
 			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "CRITICAL",
-			CWEs: []string{"CWE-89"}, Applicability: []string{"python"},
+			Confidence: "MEDIUM",
+			CWEs:       []string{"CWE-89"}, Applicability: []string{"python"},
 		},
 		{
 			ID: "SEC-JS_SQL_TEMPLATE", FindingID: "SEC-JS_SQL_TEMPLATE",
 			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "HIGH",
-			CWEs: []string{"CWE-89"}, Applicability: []string{"javascript", "typescript"},
+			Confidence: "HIGH",
+			CWEs:       []string{"CWE-89"}, Applicability: []string{"javascript", "typescript"},
 		},
 	} {
 		got, ok := byID[want.ID]
@@ -129,7 +134,8 @@ func TestCatalogIncludesPythonEngineChecks(t *testing.T) {
 			continue
 		}
 		if got.FindingID != want.FindingID || got.Analyzer != want.Analyzer || got.Category != want.Category ||
-			got.DefaultSeverity != want.DefaultSeverity || !reflect.DeepEqual(got.CWEs, want.CWEs) ||
+			got.DefaultSeverity != want.DefaultSeverity || got.Confidence != want.Confidence ||
+			!reflect.DeepEqual(got.CWEs, want.CWEs) ||
 			!reflect.DeepEqual(got.Applicability, want.Applicability) {
 			t.Errorf("%s = %+v, want %+v", want.ID, got, want)
 		}

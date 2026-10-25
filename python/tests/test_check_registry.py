@@ -25,13 +25,15 @@ CONTRACT = REPO_ROOT / "docs" / "security-catalog-contract.json"
 # The analyzer the scan reports the engine's injection pass under.
 CATALOG_ANALYZER = "python-engine/injection"
 
-# _emit_finding(pat_id, title, severity, confidence, cwe, fix, lineno, ...)
-_POSITIONAL = ("pat_id", "title", "severity", "confidence", "cwe")
-_DEFAULT_CATEGORY = (
-    inspect.signature(ast_analyzer._PythonSecurityVisitor._emit_finding)
-    .parameters["category"]
-    .default
-)
+_EMIT_SIGNATURE = inspect.signature(ast_analyzer._PythonSecurityVisitor._emit_finding)
+# _emit_finding's parameter names in call order, without `self`.
+_POSITIONAL = tuple(name for name in _EMIT_SIGNATURE.parameters if name != "self")
+_DEFAULT_CATEGORY = _EMIT_SIGNATURE.parameters["category"].default
+
+# Checks whose every emit site builds its title with an f-string, so the
+# registry's title cannot be compared verbatim. Each must at least name what
+# it flags.
+_FSTRING_TITLE_TERMS = {"PY_EVAL": "eval", "PY_OS_POPEN": "os.popen"}
 
 
 def _literal(args: dict, key: str, default=None):
@@ -74,6 +76,9 @@ def _emit_sites() -> list[dict]:
                 "id": pat_id.value,
                 "title": _literal(args, "title"),  # None for an f-string title
                 "severity": _literal(args, "severity"),
+                "confidence": _literal(args, "confidence"),
+                # Passing taint_chain= at all means a chain was attempted.
+                "chain_attempted": "taint_chain" in args,
                 "cwe": _literal(args, "cwe"),
                 "category": _literal(args, "category", _DEFAULT_CATEGORY),
             }
@@ -152,12 +157,15 @@ def test_go_copy_matches_registry():
 
 
 def test_python_checks_match_their_emit_sites():
-    """CWE, category and default severity are what the analyzer emits.
+    """CWE, category, default severity and confidence are what the analyzer
+    emits for an unproven finding.
 
     A check emitted from several sites must emit the same values from all of
     them, or the catalog has no single value to publish. The default severity
-    is the unproven one: a call that passes proven_severity escalates only when
-    a taint chain is collected.
+    is the declared one: a call that passes proven_severity escalates only when
+    a taint chain is collected. The confidence is the declared one after
+    _emit_finding's demotion: a site that attempts a chain and collects none
+    drops HIGH to MEDIUM.
     """
     checks = _by_id()
     sites = _emit_sites()
@@ -167,6 +175,10 @@ def test_python_checks_match_their_emit_sites():
         assert check.cwe == site["cwe"], where
         assert check.category == site["category"], where
         assert check.default_severity == site["severity"], where
+        unproven = site["confidence"]
+        if site["chain_attempted"] and unproven == "HIGH":
+            unproven = "MEDIUM"
+        assert check.confidence == unproven, where
         assert check.languages == ("python",), where
         assert check.rule_id == PY_RULE_ID(check.id), where
         assert check.finding_id == PY_FINDING_ID(check.id), where
@@ -179,14 +191,28 @@ def test_python_checks_match_their_emit_sites():
                 f"{check.id}: title {check.title!r} is none of the analyzer's "
                 f"literal titles {sorted(literal_titles)}"
             )
+        elif check.id.startswith("PY_"):
+            assert check.id in _FSTRING_TITLE_TERMS, (
+                f"{check.id}: every emit site builds its title with an f-string; "
+                "add the term its title must contain to _FSTRING_TITLE_TERMS"
+            )
+            assert _FSTRING_TITLE_TERMS[check.id] in check.title, check.id
+    fstring_only = {
+        c.id
+        for c in CHECKS
+        if c.id.startswith("PY_")
+        and not {s["title"] for s in sites if s["id"] == c.id} - {None}
+    }
+    assert set(_FSTRING_TITLE_TERMS) == fstring_only
 
 
 def test_javascript_checks_match_their_patterns():
     checks = _by_id()
-    for pat_id, title, _pattern, severity, _confidence, cwe in _JS_PATTERNS:
+    for pat_id, title, _pattern, severity, confidence, cwe in _JS_PATTERNS:
         check = checks[pat_id]
         assert check.title == title, pat_id
         assert check.default_severity == severity, pat_id
+        assert check.confidence == confidence, pat_id
         assert check.cwe == cwe, pat_id
         assert check.category == "injection", pat_id
         assert check.languages == ("javascript", "typescript"), pat_id
@@ -213,9 +239,29 @@ def test_catalog_names_each_check_by_the_rule_id_its_findings_carry():
     assert published == expected
 
 
+# Unproven on purpose: no request source reaches any of these sinks, so each
+# finding carries the confidence the catalog lists for its check.
 _PY_SOURCE = """
+import os
+import pickle
+
+import yaml
+
+
 def lookup(cursor, name):
     cursor.execute("SELECT * FROM users WHERE name = '%s'" % name)
+
+
+def run(cmd):
+    os.system(cmd)
+
+
+def restore(data):
+    return pickle.loads(data)
+
+
+def parse(text):
+    return yaml.load(text)
 """
 
 _JS_SOURCE = """
@@ -230,7 +276,9 @@ def test_registry_matches_what_the_analyzer_actually_emits():
     """The emit-site tests read source; this one runs the analyzer.
 
     Both emitters (Python _emit_finding and the JS pattern loop) must produce
-    the id, rule_id, category and severity the registry publishes.
+    the id, rule_id, category, severity and confidence the registry publishes.
+    The Python fixture covers a chain-attempted sink (SQL, os.system: HIGH
+    demoted to MEDIUM) and sinks that attempt none (pickle, yaml: HIGH kept).
     """
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "repo.py").write_text(_PY_SOURCE)
@@ -246,9 +294,14 @@ def test_registry_matches_what_the_analyzer_actually_emits():
         assert finding["id"] == check.finding_id, check.id
         assert finding["category"] == check.category, check.id
         assert finding["severity"] == check.default_severity, check.id
+        assert not finding.get("taint_chain"), f"{check.id}: fixture must be unproven"
+        assert finding["confidence"] == check.confidence, check.id
         assert finding["references"] == [check.cwe], check.id
     expected = {
         "PY_SQL_INJECTION",
+        "PY_OS_SYSTEM",
+        "PY_PICKLE_LOAD",
+        "PY_YAML_UNSAFE_LOAD",
         "JS_EVAL",
         "JS_INNER_HTML",
         "JS_DOCUMENT_WRITE",

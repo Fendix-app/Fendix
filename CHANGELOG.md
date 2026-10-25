@@ -9,18 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The security catalog now lists the Python engine's own checks.**
-  `docs/security-catalog-contract.json` gains the 16 Python AST checks
-  (`python.ast/PY_SQL_INJECTION`, `python.ast/PY_SSRF`,
+- **The security catalog now lists the Python engine's AST and JavaScript
+  pattern checks.** `docs/security-catalog-contract.json` gains the 16 Python
+  AST checks (`python.ast/PY_SQL_INJECTION`, `python.ast/PY_SSRF`,
   `python.ast/PY_PATH_TRAVERSAL` and the rest) and the four
   JavaScript/TypeScript pattern checks (`SEC-JS_EVAL`, `SEC-JS_INNER_HTML`,
   `SEC-JS_DOCUMENT_WRITE`, `SEC-JS_SQL_TEMPLATE`), under the
-  `python-engine/injection` analyzer: 105 checks, up from 85. As for every
+  `python-engine/injection` analyzer: 105 checks, up from 85. The engine's
+  spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. As for every
   other analyzer, each check's `id` is the `rule_id` its findings carry, and
   its `finding_id` is the finding's own id (`SEC-PY_SQL_INJECTION`,
-  `SEC-JS_SQL_TEMPLATE`). A check whose severity rises when the taint flow is
-  proven (`python.ast/PY_PATH_TRAVERSAL`: MEDIUM, HIGH when proven) lists the
-  unproven severity. Detection does not change.
+  `SEC-JS_SQL_TEMPLATE`).
+  - **Severity and confidence.** `default_severity` is the severity the
+    analyzer declares for an unproven finding, before any escalation on a
+    proven flow (`python.ast/PY_PATH_TRAVERSAL`: MEDIUM, HIGH when proven).
+    `confidence` is the confidence that unproven finding carries. The
+    engine's confidence cap then applies, as it does for Semgrep checks:
+    MEDIUM confidence caps severity at HIGH. So an unproven
+    `python.ast/PY_SQL_INJECTION`, listed as CRITICAL with MEDIUM confidence,
+    reports HIGH.
+  - Detection does not change.
 
 ### Fixed
 

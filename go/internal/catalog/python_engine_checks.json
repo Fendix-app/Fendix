@@ -8,6 +8,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_AUTH_HEADER_TRUST",
     "finding_id": "SEC-PY_AUTH_HEADER_TRUST"
   },
@@ -20,6 +21,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_EVAL",
     "finding_id": "SEC-PY_EVAL"
   },
@@ -32,6 +34,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_JWT_WEAK",
     "finding_id": "SEC-PY_JWT_WEAK"
   },
@@ -44,6 +47,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_LLM_PROMPT_INJECTION",
     "finding_id": "SEC-PY_LLM_PROMPT_INJECTION"
   },
@@ -56,6 +60,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_OPEN_REDIRECT",
     "finding_id": "SEC-PY_OPEN_REDIRECT"
   },
@@ -68,6 +73,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_OS_POPEN",
     "finding_id": "SEC-PY_OS_POPEN"
   },
@@ -80,6 +86,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_OS_SYSTEM",
     "finding_id": "SEC-PY_OS_SYSTEM"
   },
@@ -92,6 +99,7 @@
       "python"
     ],
     "default_severity": "MEDIUM",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_PATH_TRAVERSAL",
     "finding_id": "SEC-PY_PATH_TRAVERSAL"
   },
@@ -104,6 +112,7 @@
       "python"
     ],
     "default_severity": "CRITICAL",
+    "confidence": "HIGH",
     "rule_id": "python.ast/PY_PICKLE_LOAD",
     "finding_id": "SEC-PY_PICKLE_LOAD"
   },
@@ -116,6 +125,7 @@
       "python"
     ],
     "default_severity": "MEDIUM",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_SECRET_IN_LOG",
     "finding_id": "SEC-PY_SECRET_IN_LOG"
   },
@@ -128,6 +138,7 @@
       "python"
     ],
     "default_severity": "CRITICAL",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_SQL_INJECTION",
     "finding_id": "SEC-PY_SQL_INJECTION"
   },
@@ -140,6 +151,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_SSRF",
     "finding_id": "SEC-PY_SSRF"
   },
@@ -152,6 +164,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_SUBPROCESS_SHELL",
     "finding_id": "SEC-PY_SUBPROCESS_SHELL"
   },
@@ -164,6 +177,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_WEAK_CRYPTO_PASSWORD",
     "finding_id": "SEC-PY_WEAK_CRYPTO_PASSWORD"
   },
@@ -176,6 +190,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "python.ast/PY_XSS_HTML_SINK",
     "finding_id": "SEC-PY_XSS_HTML_SINK"
   },
@@ -188,6 +203,7 @@
       "python"
     ],
     "default_severity": "HIGH",
+    "confidence": "HIGH",
     "rule_id": "python.ast/PY_YAML_UNSAFE_LOAD",
     "finding_id": "SEC-PY_YAML_UNSAFE_LOAD"
   },
@@ -201,6 +217,7 @@
       "typescript"
     ],
     "default_severity": "MEDIUM",
+    "confidence": "MEDIUM",
     "rule_id": "SEC-JS_DOCUMENT_WRITE",
     "finding_id": "SEC-JS_DOCUMENT_WRITE"
   },
@@ -214,6 +231,7 @@
       "typescript"
     ],
     "default_severity": "HIGH",
+    "confidence": "HIGH",
     "rule_id": "SEC-JS_EVAL",
     "finding_id": "SEC-JS_EVAL"
   },
@@ -227,6 +245,7 @@
       "typescript"
     ],
     "default_severity": "HIGH",
+    "confidence": "MEDIUM",
     "rule_id": "SEC-JS_INNER_HTML",
     "finding_id": "SEC-JS_INNER_HTML"
   },
@@ -240,6 +259,7 @@
       "typescript"
     ],
     "default_severity": "HIGH",
+    "confidence": "HIGH",
     "rule_id": "SEC-JS_SQL_TEMPLATE",
     "finding_id": "SEC-JS_SQL_TEMPLATE"
   }
