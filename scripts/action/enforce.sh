@@ -71,6 +71,28 @@ if [ -z "$coverage" ]; then
 else
   coverage_text=$coverage
 fi
+# The engine's "coverage:" line is coverage.configured_complete, which by
+# contract (docs/schema.md) never counts a disabled analyzer as a gap and is
+# not changed by --require-analyzers. So a required analyzer disabled by
+# another flag (--fast) reads "coverage: complete" next to "required: not
+# delivered (semgrep)". The gate says both, so "complete" never stands alone.
+case "${REQUIRED_RESULT:-}" in
+  "not delivered ("*)
+    if [ "$coverage" = "complete" ]; then
+      coverage_text="complete for the analyzers configured to run, but required ${REQUIRED_RESULT}"
+    else
+      coverage_text="$coverage_text; required ${REQUIRED_RESULT}"
+    fi
+    ;;
+esac
+
+# With require-analyzers: none the gate says enforcement was off whatever the
+# outcome, not only on a pass: a BLOCK or an error does not show that every
+# analyzer ran either.
+not_enforced() {
+  [ "$opted_out" = true ] || return 0
+  echo "::warning title=Fendix coverage not enforced::require-analyzers is none, so required-analyzer enforcement is off and this result does not show that every analyzer ran. Coverage: $(esc "$coverage_text")."
+}
 
 summary() {
   [ -n "${GITHUB_STEP_SUMMARY:-}" ] || return 0
@@ -102,6 +124,7 @@ complete=false
 case "$code" in
   "")
     echo "::error title=Fendix did not run::A setup step failed before the scan, so there is no result to enforce. See the first failed step above."
+    not_enforced
     summary "Did not run: a setup step failed before the scan (see the first failed step)"
     exit 2
     ;;
@@ -120,6 +143,7 @@ case "$code" in
     ;;
   1)
     echo "::error title=Fendix policy BLOCK::At least one finding reached BLOCK status (fail-on: $(esc "${FAIL_ON:-not set}")). See the scan log above. Coverage: $(esc "$coverage_text").$(report_note)"
+    not_enforced
     summary "BLOCK: at least one finding reached BLOCK status"
     exit 1
     ;;
@@ -129,16 +153,18 @@ case "$code" in
       names=${names#not delivered (}
       names=${names%)}
       [ -n "$names" ] || names=$required
-      echo "::error title=Fendix required analyzer $(esc "$names" | sed 's/,/%2C/g') was not delivered::The scan ran, but a required analyzer was not delivered: $(esc "$REQUIRED_DETAIL"). fendix exited 2, so the gate fails closed and the partial report was not uploaded.$(report_note)"
+      echo "::error title=Fendix required analyzer $(esc "$names" | sed 's/,/%2C/g') was not delivered::The scan ran, but a required analyzer was not delivered: $(esc "$REQUIRED_DETAIL"). fendix exited 2, so the gate fails closed and the partial report was not uploaded. Coverage: $(esc "$coverage_text").$(report_note)"
       summary "Failed: required analyzer not delivered ($REQUIRED_DETAIL)"
     else
       echo "::error title=Fendix scan error::The scan did not complete (fendix exited 2). See the scan log above for the cause.$(report_note)"
       summary "Failed: the scan did not complete (fendix exited 2)"
     fi
+    not_enforced
     exit 2
     ;;
   *)
     echo "::error title=Fendix gate::Unexpected scan exit code '$(esc "$code")'; failing closed. See the scan log above."
+    not_enforced
     summary "Failed closed: unexpected scan exit code"
     exit 2
     ;;

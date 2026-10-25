@@ -270,6 +270,14 @@ jobs:
             upload-sarif: 'true'
             extra-args: --fast
             expected-exit: '2'
+          # The opt-out on a BLOCK: the gate fails on the finding and still
+          # says that required-analyzer enforcement was off.
+          - case: opt-out-block
+            version: v3.7.0
+            fail-on: HIGH
+            upload-sarif: 'false'
+            require-analyzers: none
+            expected-exit: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: fendix
@@ -284,6 +292,7 @@ jobs:
           output: action report.sarif
           upload-sarif: ${{ matrix.upload-sarif }}
           extra-args: ${{ matrix.extra-args }}
+          require-analyzers: ${{ matrix.require-analyzers || 'auto' }}
       - name: Assert the Action failed closed with the expected result
         env:
           CASE: ${{ matrix.case }}
@@ -294,7 +303,7 @@ jobs:
           set -eu
           [ "$OUTCOME" = failure ] || { echo "::error::$CASE: the Action step should fail, got '$OUTCOME'"; exit 1; }
           [ "$EXIT_CODE" = "$EXPECTED" ] || { echo "::error::$CASE: exit-code should be '$EXPECTED', got '$EXIT_CODE'"; exit 1; }
-          if [ "$CASE" = block ] || [ "$CASE" = required-disabled ]; then
+          if [ "$CASE" = block ] || [ "$CASE" = required-disabled ] || [ "$CASE" = opt-out-block ]; then
             # required-disabled: the engine writes its report before exit 2;
             # the log checks prove it was not uploaded.
             [ -s "action report.sarif" ] || { echo "::error::$CASE: no report was written"; exit 1; }
@@ -456,7 +465,12 @@ jobs:
                 "present|required analyzer semgrep was disabled by --fast" \
                 "present|The scan ran, but a required analyzer was not delivered" \
                 "present|the partial report was not uploaded" \
+                "present|Coverage: complete for the analyzers configured to run, but required not delivered (semgrep)." \
                 "absent|no finding reached BLOCK" ;;
+              "Action failure (opt-out-block)") printf '%s\n' \
+                "present|At least one finding reached BLOCK status" \
+                "present|require-analyzers is none, so required-analyzer enforcement is off" \
+                "absent|--require-analyzers" ;;
               "Action analyzers on old glibc (auto)") printf '%s\n' \
                 "present|Wheels only (--only-binary=:all:): no dependency is built from source" \
                 "present|Required analyzer semgrep cannot run. semgrep==1.182.1 has no wheel for this runner: it has glibc 2.31 on x86_64" \
@@ -499,7 +513,7 @@ jobs:
           }
           jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
             --jq '.jobs[] | select(.name | startswith("Action Python setup (") or startswith("Action failure (") or startswith("Action analyzers on ")) | "\(.id) \(.name)"')
-          [ "$(printf '%s\n' "$jobs" | grep -c .)" = 10 ] || { echo "::error::expected 10 Action jobs, found: $jobs"; exit 1; }
+          [ "$(printf '%s\n' "$jobs" | grep -c .)" = 11 ] || { echo "::error::expected 11 Action jobs, found: $jobs"; exit 1; }
           failed=0
           while read -r id name; do
             # Job logs carry ANSI colour codes, which gh refuses to print
