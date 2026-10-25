@@ -16,7 +16,7 @@ import (
 
 const (
 	SchemaVersion       = 1
-	StableEngineVersion = "v3.6.4"
+	StableEngineVersion = "v3.6.5"
 )
 
 type Contract struct {

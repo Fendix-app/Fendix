@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-const cliContractStableVersion = "v3.6.4"
+const cliContractStableVersion = "v3.6.5"
 
 type cliContract struct {
 	SchemaVersion int                  `json:"schema_version"`
