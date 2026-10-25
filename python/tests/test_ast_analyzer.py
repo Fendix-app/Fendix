@@ -1900,3 +1900,560 @@ class TestUrlHostAllowlistGuard:
             "    return redirect(url)\n"
         )
         assert redir, "browsers read `\\` as `/`, so a hostname allowlist is bypassable"
+
+
+class TestPathContainmentAssertion:
+    """A resolved path asserted to stay under a fixed base is not traversal.
+
+    The guard has two halves, and both are required. The path must be
+    RESOLVED (``os.path.realpath`` / ``Path.resolve()``), which collapses
+    ``..`` and follows symlinks; ``abspath`` and ``os.path.join`` do neither
+    for symlinks, and ``commonpath``, ``startswith`` and ``is_relative_to``
+    are lexical. The containment check must then end at a path component
+    (``B + os.sep``, never a bare ``B``) and leave the function when it fails.
+    The usual dominance discipline applies: a top-level guard before the sink
+    whose rejecting body ends control flow.
+    """
+
+    _PREFIX = (
+        "import logging\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "from flask import abort, request\n"
+        'REPORTS_DIR = "/srv/reports"\n'
+        'BASE = Path("/srv/reports")\n'
+    )
+
+    def _pt(self, body: str, prefix: str | None = None) -> list[dict]:
+        findings = _collect_src((self._PREFIX if prefix is None else prefix) + body)
+        return [f for f in findings if f["id"] == "SEC-PY_PATH_TRAVERSAL"]
+
+    @staticmethod
+    def _at(findings: list[dict], line: int) -> list[dict]:
+        return [f for f in findings if f["line"] == f"mod.py:{line}"]
+
+    # -- the brief's eight -----------------------------------------------------
+
+    def test_realpath_commonpath_guard_contains(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    base = os.path.realpath(REPORTS_DIR)\n"
+            "    full = os.path.realpath(os.path.join(base, f))\n"
+            "    if os.path.commonpath([base, full]) != base:\n"
+            '        return "invalid filename", 400\n'
+            "    with open(full) as fh:\n"
+            "        return fh.read()\n"
+        )
+        assert not pt, f"realpath + commonpath guard not honoured: {pt}"
+
+    def test_startswith_base_plus_sep_contains(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"realpath + separator-checked startswith not honoured: {pt}"
+
+    def test_pathlib_is_relative_to_contains(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    if not full.is_relative_to(BASE):\n"
+            '        raise ValueError("outside the reports directory")\n'
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"resolve() + is_relative_to guard not honoured: {pt}"
+
+    def test_pathlib_relative_to_in_try_contains(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    try:\n"
+            "        full.relative_to(BASE)\n"
+            "    except ValueError:\n"
+            '        return "invalid filename", 400\n'
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"resolve() + relative_to in try not honoured: {pt}"
+
+    def test_startswith_without_separator_does_not_contain(self) -> None:
+        # Review Focus 5: `/srv/reports_evil/x` starts with `/srv/reports`.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 12), "a prefix check without a separator admits sibling directories"
+
+    def test_commonpath_without_realpath_does_not_contain(self) -> None:
+        # commonpath is lexical: `/srv/reports/../../etc/passwd` passes it.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    base = os.path.realpath(REPORTS_DIR)\n"
+            "    full = os.path.join(base, f)\n"
+            "    if os.path.commonpath([base, full]) != base:\n"
+            '        return "invalid filename", 400\n'
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "commonpath over an unresolved join contains nothing"
+
+    def test_resolve_alone_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 10), "resolving a path without asserting containment is not a guard"
+
+    def test_join_consumed_only_by_realpath_is_not_its_own_sink(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    return open(full).read()\n"
+        )
+        assert not self._at(pt, 9), (
+            f"a join resolved in place is checked where it is used, not at the join: {pt}"
+        )
+
+    # -- pinned by the plan's decisions -----------------------------------------
+
+    def test_join_inside_realpath_still_reported_at_unguarded_sink(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    return open(full).read()\n"
+        )
+        at_open = self._at(pt, 10)
+        assert at_open, f"an unguarded resolved path is still traversal at the sink: {pt}"
+        assert at_open[0].get("reachable") is True
+
+    def test_abspath_with_commonpath_does_not_contain(self) -> None:
+        # abspath collapses `..` but follows no symlink: a link under the base
+        # that points outside it passes the check.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    base = os.path.realpath(REPORTS_DIR)\n"
+            "    full = os.path.abspath(os.path.join(base, f))\n"
+            "    if os.path.commonpath([base, full]) != base:\n"
+            '        return "invalid filename", 400\n'
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "abspath does not resolve symlinks, so it does not contain"
+
+    # -- the join is dropped only where it is resolved in place ------------------
+
+    @pytest.mark.parametrize(
+        "resolved",
+        [
+            "os.path.abspath(os.path.join(REPORTS_DIR, f))",
+            "Path(os.path.join(REPORTS_DIR, f)).resolve()",
+        ],
+    )
+    def test_join_wrapped_in_resolution_is_not_its_own_sink(self, resolved: str) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            f"    full = {resolved}\n"
+            "    return open(full).read()\n"
+        )
+        assert not [f for f in pt if f.get("sink", "").startswith("os.path.join(")], pt
+        assert self._at(pt, 10), f"the unguarded open is still reported: {pt}"
+
+    def test_unresolved_join_is_still_its_own_sink(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.join(REPORTS_DIR, f)\n"
+            "    return open(full).read()\n"
+        )
+        assert [f for f in self._at(pt, 9) if f.get("sink", "").startswith("os.path.join(")]
+
+    # -- accepted spellings -------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "prefix_arg",
+        ['REPORTS_DIR + "/"', 'os.path.join(REPORTS_DIR, "")', "REPORTS_DIR + os.path.sep"],
+    )
+    def test_startswith_other_separator_spellings_contain(self, prefix_arg: str) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            f"    if not full.startswith({prefix_arg}):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"`startswith({prefix_arg})` not honoured: {pt}"
+
+    @pytest.mark.parametrize(
+        "test",
+        [
+            "os.path.commonpath([full, base]) != base",
+            "base != os.path.commonpath([base, full])",
+        ],
+    )
+    def test_commonpath_operand_order_contains(self, test: str) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    base = os.path.realpath(REPORTS_DIR)\n"
+            "    full = os.path.realpath(os.path.join(base, f))\n"
+            f"    if {test}:\n"
+            '        return "invalid filename", 400\n'
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"`{test}` not honoured: {pt}"
+
+    def test_commonpath_against_inline_constant_contains(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            '    full = os.path.realpath(os.path.join("/srv/reports", f))\n'
+            '    if os.path.commonpath(["/srv/reports", full]) != "/srv/reports":\n'
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"constant base not honoured: {pt}"
+
+    def test_resolved_pathlib_base_contains(self) -> None:
+        pt = self._pt(
+            "ROOT = Path(REPORTS_DIR).resolve()\n"
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (ROOT / f).resolve()\n"
+            "    if not full.is_relative_to(ROOT):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"a resolved pathlib base not honoured: {pt}"
+
+    @pytest.mark.parametrize("caught", ["(TypeError, ValueError)", "Exception"])
+    def test_relative_to_with_broader_handler_contains(self, caught: str) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    try:\n"
+            "        full.relative_to(BASE)\n"
+            f"    except {caught}:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert not pt, f"`except {caught}` not honoured: {pt}"
+
+    def test_sink_in_else_of_guard_contains(self) -> None:
+        # The else branch runs only when the containment test passed.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            "    else:\n"
+            "        return open(full).read()\n"
+        )
+        assert not pt, f"a sink in the guard's else branch is contained: {pt}"
+
+    # -- rejected separators and arguments ----------------------------------------
+
+    def test_startswith_backslash_separator_does_not_contain(self) -> None:
+        # On POSIX `\` is a filename character: `/srv/reports\evil` is a file
+        # in /srv that starts with `/srv/reports\`.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            '    if not full.startswith(REPORTS_DIR + "\\\\"):\n'
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 12), "a backslash is not a separator on POSIX"
+
+    def test_startswith_with_start_offset_does_not_contain(self) -> None:
+        # `startswith(p, 4)` tests `full[4:]`: `/xyz/srv/reports/a` passes.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep, 4):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 12), "a startswith that skips the start of the path checks nothing"
+
+    def test_commonpath_against_different_base_does_not_contain(self) -> None:
+        # Passing means the common path is `/srv`, i.e. NOT under /srv/reports.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            '    if os.path.commonpath([REPORTS_DIR, full]) != "/srv":\n'
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 12), "commonpath compared with another directory contains nothing"
+
+    def test_is_relative_to_on_unresolved_path_does_not_contain(self) -> None:
+        # is_relative_to is lexical: BASE / "../../etc/passwd" is relative to BASE.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = BASE / f\n"
+            "    if not full.is_relative_to(BASE):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 12), "is_relative_to over an unresolved path contains nothing"
+
+    def test_relative_to_walk_up_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    try:\n"
+            "        full.relative_to(BASE, walk_up=True)\n"
+            "    except ValueError:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 14), "relative_to(walk_up=True) accepts paths outside the base"
+
+    # -- the base must be fixed ------------------------------------------------
+
+    def test_base_from_request_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            '    base = request.args["base"]\n'
+            "    full = os.path.realpath(os.path.join(base, f))\n"
+            "    if not full.startswith(base + os.sep):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "a base the request chooses contains nothing"
+
+    def test_base_from_environment_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            '    base = os.path.realpath(os.environ["REPORTS_DIR"])\n'
+            "    full = os.path.realpath(os.path.join(base, f))\n"
+            "    if os.path.commonpath([base, full]) != base:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "a base read from the environment is not provably bounded"
+
+    @pytest.mark.parametrize("root", ['"/"', '""', '"/srv/.."'])
+    def test_root_base_does_not_contain(self, root: str) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            f"    base = os.path.realpath({root})\n"
+            "    full = os.path.realpath(os.path.join(base, f))\n"
+            "    if os.path.commonpath([base, full]) != base:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), f"a base of {root} is the filesystem root"
+
+    # -- dominance ---------------------------------------------------------------
+
+    def test_guard_after_sink_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    data = open(full).read()\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            "    return data\n"
+        )
+        assert self._at(pt, 10), "a guard after the sink cannot protect it"
+
+    def test_guard_without_exit_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            '        logging.warning("outside the base: %s", full)\n'
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 12), "a guard that only logs protects nothing"
+
+    def test_guard_nested_in_branch_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report(strict):\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if strict:\n"
+            "        if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "            abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "a guard inside a branch that may not run does not dominate"
+
+    def test_sink_inside_rejecting_branch_is_reported(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            '        logging.warning("%s", open(full).read())\n'
+            "        abort(400)\n"
+            '    return "ok"\n'
+        )
+        assert self._at(pt, 11), "a sink inside the branch that rejects the path is unguarded"
+
+    def test_guard_on_another_path_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            '    other = os.path.realpath(os.path.join(REPORTS_DIR, request.args["g"]))\n'
+            "    if not other.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "a guard on another value says nothing about the sink argument"
+
+    def test_path_rebound_after_guard_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            '    full = os.path.realpath(os.path.join(REPORTS_DIR, request.args["g"]))\n'
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "the guard checked the old value, not the one opened"
+
+    def test_unresolved_binding_on_another_branch_does_not_contain(self) -> None:
+        # With `raw` set, `/srv/reports/../../etc/passwd` reaches commonpath
+        # unresolved and passes it.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            '    if request.args.get("raw"):\n'
+            "        full = f\n"
+            "    else:\n"
+            "        full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if os.path.commonpath([REPORTS_DIR, full]) != REPORTS_DIR:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 15), "a path resolved on one branch only is not resolved"
+
+    def test_relative_to_handler_that_falls_through_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    try:\n"
+            "        full.relative_to(BASE)\n"
+            "    except ValueError:\n"
+            '        logging.warning("outside the base: %s", full)\n'
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 14), "a handler that logs and falls through protects nothing"
+
+    def test_relative_to_caught_first_by_handler_that_falls_through(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    try:\n"
+            "        full.relative_to(BASE)\n"
+            "    except Exception:\n"
+            "        pass\n"
+            "    except ValueError:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 16), "the first matching handler decides, and it falls through"
+
+    def test_relative_to_under_condition_in_try_does_not_contain(self) -> None:
+        pt = self._pt(
+            "def read_report(strict):\n"
+            '    f = request.args["f"]\n'
+            "    full = (BASE / f).resolve()\n"
+            "    try:\n"
+            "        if strict:\n"
+            "            full.relative_to(BASE)\n"
+            "    except ValueError:\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 15), "a relative_to that may not run asserts nothing"
+
+    def test_base_parameter_shadowing_a_constant_does_not_contain(self) -> None:
+        # The scope chain finds the module-level `base`, but the guard compares
+        # against the parameter, which the caller chooses.
+        pt = self._pt(
+            'base = "/srv/reports"\n'
+            "def read_report(base):\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(base, f))\n"
+            "    if not full.startswith(base + os.sep):\n"
+            "        abort(400)\n"
+            "    return open(full).read()\n"
+        )
+        assert self._at(pt, 13), "a parameter named like a constant is not that constant"
+
+    def test_base_from_enclosing_function_does_not_contain(self) -> None:
+        pt = self._pt(
+            'base = "/srv/reports"\n'
+            "def make_reader(base):\n"
+            "    def read_report():\n"
+            '        f = request.args["f"]\n'
+            "        full = os.path.realpath(os.path.join(base, f))\n"
+            "        if not full.startswith(base + os.sep):\n"
+            "            abort(400)\n"
+            "        return open(full).read()\n"
+            "    return read_report\n"
+        )
+        assert self._at(pt, 14), "a closure over the caller's base is not a fixed base"
+
+    def test_alias_bound_on_a_branch_does_not_contain(self) -> None:
+        # `p` is the checked path on one branch and raw input on the other.
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            '    if request.args.get("raw"):\n'
+            '        p = request.args["g"]\n'
+            "    else:\n"
+            "        p = full\n"
+            "    return open(p).read()\n"
+        )
+        assert self._at(pt, 16), "an alias assigned on a branch is not always the checked path"
+
+    def test_plain_alias_of_contained_path_contains(self) -> None:
+        pt = self._pt(
+            "def read_report():\n"
+            '    f = request.args["f"]\n'
+            "    full = os.path.realpath(os.path.join(REPORTS_DIR, f))\n"
+            "    if not full.startswith(REPORTS_DIR + os.sep):\n"
+            "        abort(400)\n"
+            "    p = full\n"
+            "    return open(p).read()\n"
+        )
+        assert not pt, f"an alias bound once to the checked path is contained: {pt}"

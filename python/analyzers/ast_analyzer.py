@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import os
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -342,6 +343,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # `from pickle import loads as pl; pl(x)` resolve back to os.system /
         # pickle.loads despite the call being a bare ast.Name (audit #8-13).
         self._from_imports: dict[str, tuple[str, str]] = {}
+        # `os.path.join(...)` calls written as the direct argument of a path
+        # resolution (`realpath(join(...))`, `abspath(join(...))`,
+        # `Path(join(...)).resolve()`), noted by `_note_resolved_join` when the
+        # enclosing call is visited, which is always before the join itself.
+        self._resolved_joins: set[ast.Call] = set()
 
     def _line_text(self, lineno: int) -> str:
         """Return the source line (1-indexed), or empty string."""
@@ -1049,11 +1055,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # containing — `Path("/srv/data/../../etc/passwd").resolve()` returns
     # `/etc/passwd`. `resolve()` only becomes a guard when it is paired with a
     # containment ASSERTION (`.relative_to(base)` in a try/except, or a checked
-    # `startswith`), and recognising the call alone would suppress exactly the
-    # traversal it appears to defend against. The engine does not treat a
-    # function NAME as proof of what the function achieved; that is the same
-    # discipline that keeps `.. in x` below gated on control flow rather than
-    # on the mere presence of a comparison.
+    # `startswith`; see `_path_containment_asserted`), and recognising the call
+    # alone would suppress exactly the traversal it appears to defend against.
+    # The engine does not treat a function NAME as proof of what the function
+    # achieved; that is the same discipline that keeps `.. in x` below gated on
+    # control flow rather than on the mere presence of a comparison.
 
     # Calls that reduce a value to a single path component. Each genuinely
     # removes directory structure — basename() returns the trailing component,
@@ -1068,13 +1074,23 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # to disambiguate.
     _CONTAINMENT_CALL_NAMES = frozenset({"basename", "secure_filename"})
 
-    def _path_is_contained(self, arg: ast.AST, sink_line: int) -> bool:
+    def _path_is_contained(
+        self, arg: ast.AST, sink_line: int, *, aliases_are_sole: bool = True
+    ) -> bool:
         """Return True when `arg` cannot carry directory traversal into a
         filesystem sink, either because it was reduced to a bare filename or
         because a dominating guard rejects traversal sequences.
 
         Resolves through the scope chain the same way `_arg_is_sanitised` does,
         so `name = os.path.basename(raw); open(name)` is recognised.
+
+        `aliases_are_sole` is False once the resolution has passed through a
+        name with more than one binding. The scope chain records only the
+        last binding in source order, so `p` in
+        `if raw: p = request.args["g"]` / `else: p = full` resolves to `full`
+        although it is raw input on the other branch. An asserted containment
+        (`_path_containment_asserted`) holds for one binding of one name, so
+        it is honoured only while every alias on the way is bound once.
         """
         if isinstance(arg, ast.Call):
             fn = arg.func
@@ -1101,6 +1117,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if isinstance(arg, ast.Name):
             if self._name_is_traversal_rejected(arg.id, sink_line):
                 return True
+            if aliases_are_sole and self._path_containment_asserted(arg.id, sink_line):
+                return True
             for scope in reversed(self._scopes):
                 if arg.id in scope:
                     bound = scope[arg.id]
@@ -1108,7 +1126,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     # loop, matching _arg_is_sanitised.
                     if isinstance(bound, ast.Name) and bound.id == arg.id:
                         return False
-                    return self._path_is_contained(bound, sink_line)
+                    sole = aliases_are_sole and (
+                        not isinstance(bound, ast.Name)
+                        or self._is_sole_binding(arg.id, bound)
+                    )
+                    return self._path_is_contained(
+                        bound, sink_line, aliases_are_sole=sole
+                    )
         return False
 
     def _name_is_traversal_rejected(self, name: str, sink_line: int) -> bool:
@@ -1142,12 +1166,375 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
         return self._has_dominating_exit_guard(sink_line, rejects_traversal)
 
+    # ─── asserted containment (CWE-22) ──────────────────────────────
+    #
+    # The guard that keeps a FREE-FORM path under a base directory: resolve
+    # the path, assert that it is still under the base, and leave the function
+    # when it is not. Both halves are required.
+    #
+    #   * Resolving. `os.path.realpath` and `Path.resolve()` collapse `..` AND
+    #     follow symlinks. `abspath` / `normpath` only collapse `..`, so a
+    #     symlink under the base that points outside it passes the check; an
+    #     unresolved join collapses nothing, and `commonpath`, `startswith` and
+    #     `is_relative_to` are lexical: `/srv/reports/../../etc/passwd` passes
+    #     all three.
+    #   * Ending the prefix at a component. `startswith("/srv/reports")` also
+    #     admits `/srv/reports_evil/x`. `B + os.sep`, `B + "/"` and
+    #     `os.path.join(B, "")` end it at a separator. `B + "\\"` is not
+    #     accepted: on POSIX a backslash is an ordinary filename character, and
+    #     `/srv/reports\x` is a file in /srv.
+    #
+    # The base must be fixed by the code: a string constant narrower than the
+    # filesystem root, `os.path.realpath` of one, or `Path(...)` /
+    # `Path(...).resolve()` of one, inline or through a Name (a constant may
+    # itself be a Name bound to one). A base from the request, the environment
+    # or any other call cannot be shown to bound anything, and `/` bounds
+    # nothing.
+    #
+    # Accepted guards, each a top-level statement of the function placed after
+    # the path's binding and before the sink:
+    #
+    #   if os.path.commonpath([B, full]) != B: <exit>   (either operand order)
+    #   if not full.startswith(B + os.sep): <exit>      (or B + "/", join(B, ""))
+    #   if not full.is_relative_to(B): <exit>
+    #   try: full.relative_to(B)
+    #   except ValueError: <exit>                       (every handler exits)
+
+    def _path_containment_asserted(self, name: str, sink_line: int) -> bool:
+        """Return True when `name` is a resolved path that a dominating guard
+        asserts is under a fixed base directory, leaving the function when it
+        is not (the accepted shapes are listed above).
+
+        `name` must be bound exactly once in the function, by a top-level
+        `name = os.path.realpath(...)` or `name = <pathlib path>.resolve()`
+        that comes before the guard. Any other store of the name (on a branch,
+        as a loop target, after the guard) could put an unresolved or
+        unchecked value under the same name, so it disqualifies the guard.
+
+        Dominance follows `_has_dominating_exit_guard`. A sink inside the
+        rejecting body is not covered. A sink in the guard's `else` is, since
+        that branch runs only when the containment test passed. The `try`
+        form must end before the sink.
+        """
+        if not self._func_stack:
+            return False
+        bound = self._resolve_binding(ast.Name(id=name, ctx=ast.Load()))
+        if bound is None or not self._is_resolved_path(bound):
+            return False
+        binding = self._sole_top_level_assign(self._func_stack[-1], name)
+        if binding is None or binding.value is not bound:
+            return False
+        after = binding.end_lineno
+
+        def rejects_uncontained(test: ast.AST) -> bool:
+            return test.lineno > after and self._test_rejects_uncontained(test, name)
+
+        def asserts_relative(stmt: ast.Try) -> bool:
+            return stmt.lineno > after and self._try_asserts_relative(stmt, name)
+
+        return self._has_dominating_exit_guard(
+            sink_line,
+            rejects_uncontained,
+            require_body_before_sink=True,
+            try_pred=asserts_relative,
+        )
+
+    def _test_rejects_uncontained(self, test: ast.AST, name: str) -> bool:
+        """True when `test` is True whenever `name` is outside a fixed base:
+        `os.path.commonpath([B, name]) != B`, `not name.startswith(B + os.sep)`
+        or `not name.is_relative_to(B)`."""
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            call = test.operand
+            if not self._is_one_arg_method_call(call, name):
+                return False
+            if call.func.attr == "startswith":
+                base = self._component_prefix_base(call.args[0])
+                return base is not None and self._is_fixed_base(base, test.lineno)
+            if call.func.attr == "is_relative_to":
+                return self._is_fixed_base(call.args[0], test.lineno)
+            return False
+        if (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.NotEq)
+        ):
+            left, right = test.left, test.comparators[0]
+            for common, base in ((left, right), (right, left)):
+                if self._is_commonpath_with(common, name, base):
+                    return self._is_fixed_base(base, test.lineno)
+        return False
+
+    def _try_asserts_relative(self, stmt: ast.Try, name: str) -> bool:
+        """True when `stmt` is a `try` whose body calls `name.relative_to(B)`
+        as one of its own statements, with a handler that catches ValueError
+        (`ValueError`, a tuple holding it, `Exception`, `BaseException` or a
+        bare `except`), and where EVERY handler ends control flow.
+
+        Every handler, not just the ValueError one: a handler that falls
+        through for an exception raised before `relative_to` runs, or while it
+        is evaluated (an AttributeError when `name` is a str), skips the
+        assertion and reaches the sink.
+        """
+        if not stmt.handlers:
+            return False
+        if not any(self._is_relative_to_call(s, name, stmt.lineno) for s in stmt.body):
+            return False
+        if not any(_handler_catches_value_error(h.type) for h in stmt.handlers):
+            return False
+        return all(self._body_ends_control_flow(h.body) for h in stmt.handlers)
+
+    def _is_relative_to_call(self, stmt: ast.stmt, name: str, guard_line: int) -> bool:
+        """True when `stmt` is `name.relative_to(B)`, alone or assigned, with a
+        fixed base and no other argument (`walk_up=True` admits `..`)."""
+        if not isinstance(stmt, (ast.Expr, ast.Assign, ast.AnnAssign)):
+            return False
+        call = stmt.value
+        return (
+            self._is_one_arg_method_call(call, name)
+            and call.func.attr == "relative_to"
+            and self._is_fixed_base(call.args[0], guard_line)
+        )
+
+    @staticmethod
+    def _is_one_arg_method_call(expr: ast.AST, name: str) -> bool:
+        """True when `expr` is `name.<method>(arg)`: one positional argument,
+        no keyword. Extra arguments change the meaning: `startswith(p, 4)`
+        tests `name[4:]`, and `relative_to(B, walk_up=True)` accepts `..`."""
+        return (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Attribute)
+            and isinstance(expr.func.value, ast.Name)
+            and expr.func.value.id == name
+            and len(expr.args) == 1
+            and not isinstance(expr.args[0], ast.Starred)
+            and not expr.keywords
+        )
+
+    def _component_prefix_base(self, expr: ast.AST) -> ast.AST | None:
+        """Return `B` when `expr` is `B + os.sep`, `B + os.path.sep`,
+        `B + "/"` or `os.path.join(B, "")`: a prefix that ends at a path
+        component. Anything else, including a bare `B`, returns None."""
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            sep = expr.right
+            if (isinstance(sep, ast.Constant) and sep.value == "/") or _is_os_sep(sep):
+                return expr.left
+            return None
+        if (
+            self._is_os_path_call(expr, "join")
+            and len(expr.args) == 2
+            and not expr.keywords
+            and isinstance(expr.args[1], ast.Constant)
+            and expr.args[1].value == ""
+        ):
+            return expr.args[0]
+        return None
+
+    def _is_commonpath_with(self, expr: ast.AST, name: str, base: ast.AST) -> bool:
+        """True when `expr` is `os.path.commonpath([base, name])`, in either
+        order, with the same `base` expression as the other operand."""
+        if not (
+            self._is_os_path_call(expr, "commonpath")
+            and len(expr.args) == 1
+            and not expr.keywords
+        ):
+            return False
+        paths = expr.args[0]
+        if not isinstance(paths, (ast.List, ast.Tuple)) or len(paths.elts) != 2:
+            return False
+        want = ast.dump(base)
+        first, second = paths.elts
+        return any(
+            isinstance(p, ast.Name) and p.id == name and ast.dump(q) == want
+            for p, q in ((first, second), (second, first))
+        )
+
+    def _is_fixed_base(self, expr: ast.AST, guard_line: int) -> bool:
+        """True when `expr` is a base directory the code fixes: a string
+        constant narrower than the root, `os.path.realpath` of one, or
+        `Path(...)` / `Path(...).resolve()` of one, inline or bound to a
+        Name."""
+        if isinstance(expr, ast.Name):
+            value = self._value_at_guard(expr.id, guard_line)
+            return value is not None and self._is_fixed_base_value(value, guard_line)
+        return self._is_fixed_base_value(expr, guard_line)
+
+    def _is_fixed_base_value(self, expr: ast.AST, guard_line: int) -> bool:
+        if isinstance(expr, ast.Constant):
+            return _is_bounding_dir(expr.value)
+        if not isinstance(expr, ast.Call):
+            return False
+        fn = expr.func
+        if isinstance(fn, ast.Attribute) and fn.attr == "resolve" and not expr.args:
+            # Path(<fixed>).resolve(): check the constructor underneath.
+            expr = fn.value
+            if not self._is_pathlib_ctor_call(expr):
+                return False
+        if not (
+            self._is_os_path_call(expr, "realpath") or self._is_pathlib_ctor_call(expr)
+        ):
+            return False
+        if len(expr.args) != 1 or expr.keywords:
+            return False
+        arg = expr.args[0]
+        if isinstance(arg, ast.Name):
+            arg = self._value_at_guard(arg.id, guard_line)
+        return isinstance(arg, ast.Constant) and _is_bounding_dir(arg.value)
+
+    def _value_at_guard(self, name: str, guard_line: int) -> ast.AST | None:
+        """The value `name` holds when the guard at `guard_line` runs.
+
+        A name the function stores must be stored exactly once, by a top-level
+        assignment before the guard; otherwise the value the guard compares
+        against is not the one the scope chain records. A name the function
+        never stores is a module-level name, resolved through the scope chain,
+        unless it is a parameter of this or an enclosing function, or a local
+        of an enclosing one. The scope chain records neither of those (a
+        parameter is never bound in it, so a same-named module constant would
+        answer for it), and the caller chooses a parameter."""
+        func = self._func_stack[-1]
+        if _stores_of(func, name):
+            binding = self._sole_top_level_assign(func, name)
+            if binding is None or binding.end_lineno >= guard_line:
+                return None
+            return binding.value
+        for enclosing in self._func_stack:
+            if name in _param_names(enclosing):
+                return None
+            if enclosing is not func and _stores_of(enclosing, name):
+                return None
+        return self._resolve_binding(ast.Name(id=name, ctx=ast.Load()))
+
+    def _is_sole_binding(self, name: str, value: ast.AST) -> bool:
+        """True when `name = value` is the only binding of `name` in the
+        innermost function, as a top-level statement."""
+        if not self._func_stack:
+            return False
+        binding = self._sole_top_level_assign(self._func_stack[-1], name)
+        return binding is not None and binding.value is value
+
+    @staticmethod
+    def _sole_top_level_assign(func: ast.AST, name: str) -> ast.Assign | None:
+        """The statement binding `name` in `func`, when it is the only binding
+        of the name anywhere in the function and is a top-level
+        `name = <value>`; None otherwise."""
+        stores = _stores_of(func, name)
+        if len(stores) != 1:
+            return None
+        for stmt in func.body:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and stmt.targets[0] is stores[0]
+            ):
+                return stmt
+        return None
+
+    def _is_resolved_path(self, expr: ast.AST) -> bool:
+        """True when `expr` is `os.path.realpath(...)` or
+        `<pathlib path>.resolve()`: a path with `..` collapsed and symlinks
+        followed. `abspath` and `normpath` follow no symlink, so they are not
+        resolved paths."""
+        if self._is_os_path_call(expr, "realpath"):
+            return True
+        return (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == "resolve"
+            and not expr.args
+            and self._is_pathlib_path(expr.func.value)
+        )
+
+    def _is_pathlib_path(self, expr: ast.AST, _depth: int = 0) -> bool:
+        """True when `expr` builds a pathlib path: a `Path(...)` call, a `/`
+        whose left operand is one, `.joinpath()` / `.resolve()` /
+        `.absolute()` of one, or a Name bound to one."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(expr, ast.Call):
+            if self._is_pathlib_ctor_call(expr):
+                return True
+            fn = expr.func
+            return (
+                isinstance(fn, ast.Attribute)
+                and fn.attr in ("joinpath", "resolve", "absolute")
+                and self._is_pathlib_path(fn.value, _depth + 1)
+            )
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+            return self._is_pathlib_path(expr.left, _depth + 1)
+        if isinstance(expr, ast.Name):
+            bound = self._resolve_binding(expr)
+            return bound is not None and self._is_pathlib_path(bound, _depth + 1)
+        return False
+
+    def _is_pathlib_ctor_call(self, expr: ast.AST) -> bool:
+        """True when `expr` is `pathlib.Path(...)`, or a bare `Path(...)` that
+        is pathlib's (imported from pathlib, or not imported from elsewhere)."""
+        if not isinstance(expr, ast.Call):
+            return False
+        fn = expr.func
+        if isinstance(fn, ast.Name):
+            origin = self._from_imports.get(fn.id)
+            if origin is None:
+                return fn.id == "Path"
+            return origin == ("pathlib", "Path")
+        return (
+            isinstance(fn, ast.Attribute)
+            and fn.attr == "Path"
+            and isinstance(fn.value, ast.Name)
+            and self._module_aliases.get(fn.value.id, fn.value.id) == "pathlib"
+        )
+
+    def _is_os_path_call(self, expr: ast.AST, attr: str) -> bool:
+        """True when `expr` calls `os.path.<attr>`, written that way or as a
+        bare name imported from os.path (`from os.path import realpath`)."""
+        if not isinstance(expr, ast.Call):
+            return False
+        fn = expr.func
+        if isinstance(fn, ast.Name):
+            return self._from_imports.get(fn.id) == ("os.path", attr)
+        return (
+            isinstance(fn, ast.Attribute)
+            and fn.attr == attr
+            and isinstance(fn.value, ast.Attribute)
+            and fn.value.attr == "path"
+            and isinstance(fn.value.value, ast.Name)
+            and fn.value.value.id == "os"
+        )
+
+    def _note_resolved_join(self, node: ast.Call) -> None:
+        """Remember an `os.path.join(...)` that is the direct argument of
+        `os.path.realpath(...)`, `os.path.abspath(...)` or
+        `Path(...).resolve()`, for `_is_path_traversal_sink` to skip.
+
+        The join's result reaches the filesystem only resolved, so the sink
+        that consumes the resolved value reports it, and that sink is the one a
+        containment guard can dominate. Reported at the join line too, the
+        same flow was found twice, and the first finding sat above any guard.
+        """
+        if self._is_os_path_call(node, "realpath") or self._is_os_path_call(
+            node, "abspath"
+        ):
+            inner = node.args[0] if node.args else None
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "resolve"
+            and self._is_pathlib_ctor_call(node.func.value)
+        ):
+            ctor_args = node.func.value.args
+            inner = ctor_args[0] if len(ctor_args) == 1 else None
+        else:
+            return
+        if inner is not None and self._is_os_path_call(inner, "join"):
+            self._resolved_joins.add(inner)
+
     def _has_dominating_exit_guard(
         self,
         sink_line: int,
         test_pred: Callable[[ast.AST], bool],
         *,
         require_end_before_sink: bool = False,
+        require_body_before_sink: bool = False,
+        try_pred: Callable[[ast.Try], bool] | None = None,
     ) -> bool:
         """True when a top-level `if` of the innermost function body starts
         before `sink_line`, has a test `test_pred` accepts, and has a body that
@@ -1156,14 +1543,29 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
         `require_end_before_sink` also requires the whole `if` to end before
         the sink, so a sink inside the guard's own branch is not covered.
+
+        `require_body_before_sink` is the narrower form: only the rejecting
+        body must end before the sink. A sink in the guard's `else` / `elif`
+        is covered, since those run only when the test was False.
+
+        `try_pred`, when given, also accepts a top-level `try` that ends before
+        the sink and that `try_pred` accepts.
         """
         if not self._func_stack:
             return False
         func = self._func_stack[-1]
         for stmt in func.body:
-            if not isinstance(stmt, ast.If) or stmt.lineno >= sink_line:
+            if stmt.lineno >= sink_line:
+                continue
+            if isinstance(stmt, ast.Try):
+                if try_pred is not None and stmt.end_lineno < sink_line and try_pred(stmt):
+                    return True
+                continue
+            if not isinstance(stmt, ast.If):
                 continue
             if require_end_before_sink and stmt.end_lineno >= sink_line:
+                continue
+            if require_body_before_sink and stmt.body[-1].end_lineno >= sink_line:
                 continue
             if test_pred(stmt.test) and self._body_ends_control_flow(stmt.body):
                 return True
@@ -1325,6 +1727,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         """Detect dangerous function calls."""
+        self._note_resolved_join(node)
         # eval() / exec(), and library code-eval sinks (PIL.ImageMath.eval,
         # asteval.Interpreter().eval, simpleeval). Attribute form matched via a
         # small sink set so e.g. ImageMath.eval(user_input) (PyGoat RCE) fires.
@@ -3185,6 +3588,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return False
         if not node.args:
             return False
+        # A join resolved in place never reaches the filesystem unresolved; the
+        # resolved value is checked at the sink that consumes it, which is the
+        # only place a containment guard can dominate.
+        if sink_name == "os.path.join" and node in self._resolved_joins:
+            return False
         arg_idx = self._path_traversal_arg_index(node)
         if arg_idx >= len(node.args):
             return False
@@ -3461,6 +3869,80 @@ _OS_PATH_SINK_ATTRS: frozenset[str] = frozenset(
         "expandvars",
     }
 )
+
+
+def _is_bounding_dir(value: object) -> bool:
+    """True when the constant `value` names a directory narrower than the
+    filesystem root. Empty, `/`, `.`, a bare drive and a path whose `..`
+    climbs back to one of those (`/srv/..`) bound nothing: `realpath` of them
+    is the root or the working directory, which may itself be `/`."""
+    if not isinstance(value, str) or not value:
+        return False
+    posix = value.replace("\\", "/")
+    if re.fullmatch(r"[A-Za-z]:/*", posix):
+        return False
+    return any(p not in ("", ".", "..") for p in posixpath.normpath(posix).split("/"))
+
+
+def _is_os_sep(expr: ast.AST) -> bool:
+    """True when `expr` is `os.sep` or `os.path.sep`."""
+    if not (isinstance(expr, ast.Attribute) and expr.attr == "sep"):
+        return False
+    recv = expr.value
+    if isinstance(recv, ast.Attribute) and recv.attr == "path":
+        recv = recv.value
+    return isinstance(recv, ast.Name) and recv.id == "os"
+
+
+# Exception classes whose handler catches the ValueError `relative_to` raises.
+_VALUE_ERROR_CATCHERS: frozenset[str] = frozenset(
+    {"ValueError", "Exception", "BaseException"}
+)
+
+
+def _handler_catches_value_error(exc_type: ast.AST | None) -> bool:
+    """True when an `except` clause with this type catches ValueError: a bare
+    `except`, `ValueError` or one of its bases, or a tuple holding one."""
+    if exc_type is None:
+        return True
+    names = exc_type.elts if isinstance(exc_type, ast.Tuple) else [exc_type]
+    return any(isinstance(n, ast.Name) and n.id in _VALUE_ERROR_CATCHERS for n in names)
+
+
+def _binds_name(node: ast.AST, name: str) -> bool:
+    """True when `node` binds, deletes or declares `name`: an assignment,
+    loop, `with`, walrus or `del` target, `global`/`nonlocal`, a def or class
+    of that name, `except ... as name`, an import alias, or a match capture."""
+    if isinstance(node, ast.Name):
+        return node.id == name and not isinstance(node.ctx, ast.Load)
+    if isinstance(node, (ast.Global, ast.Nonlocal)):
+        return name in node.names
+    if isinstance(
+        node,
+        (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler),
+    ):
+        return node.name == name
+    if isinstance(node, ast.alias):
+        return (node.asname or node.name.split(".")[0]) == name
+    if isinstance(node, (ast.MatchAs, ast.MatchStar)):
+        return node.name == name
+    if isinstance(node, ast.MatchMapping):
+        return node.rest == name
+    return False
+
+
+def _param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Every parameter name of `func`, `*args` and `**kwargs` included."""
+    a = func.args
+    params = [*a.posonlyargs, *a.args, *a.kwonlyargs]
+    params += [p for p in (a.vararg, a.kwarg) if p is not None]
+    return {p.arg for p in params}
+
+
+def _stores_of(func: ast.AST, name: str) -> list[ast.AST]:
+    """Every node in `func`'s body that binds `name` (see `_binds_name`).
+    Nested defs are searched too, which can only over-count."""
+    return [n for stmt in func.body for n in ast.walk(stmt) if _binds_name(n, name)]
 
 
 # Path fragments that mark a file as test/fixture code (confidence demotion).

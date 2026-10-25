@@ -86,6 +86,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and a guard that comes after the sink;
   - the same value passed to an XSS or path sink, because the guard bounds
     the host only.
+- **A resolved path checked against its base directory now counts as a
+  path-traversal guard in Python.** `python.ast/PY_PATH_TRAVERSAL` no longer
+  reports a file opened or sent after the code resolves the path and leaves
+  when it is outside a fixed base directory. Two forms count:
+  - `full = os.path.realpath(...)`, then
+    `if os.path.commonpath([base, full]) != base:` or
+    `if not full.startswith(base + os.sep):` (`base + "/"` and
+    `os.path.join(base, "")` work too);
+  - `full = <pathlib path>.resolve()`, then
+    `if not full.is_relative_to(base):`, or `full.relative_to(base)` in a
+    `try` with an `except ValueError` (or `Exception`, or a bare `except`).
+
+  The base must be a string constant, `os.path.realpath` of one, or
+  `Path(...)` or `Path(...).resolve()` of one, inline or through a name. It
+  must not be the filesystem root. The resolved path must be assigned once, in
+  a top-level statement of the function. The check must be a top-level
+  statement between that assignment and the sink, and it must return, raise or
+  abort; in the `try` form, every `except` clause must. These are still
+  reported:
+  - `full.startswith(base)` without a separator, which also lets through
+    `/srv/reports_evil/x`, and `full.startswith(base + "\\")`, because on POSIX
+    a backslash is an ordinary filename character;
+  - a path that is only joined, or normalised with `os.path.abspath` or
+    `os.path.normpath`. A joined path keeps its `..`, and `commonpath`,
+    `startswith` and `is_relative_to` compare text, so
+    `/srv/reports/../../etc/passwd` passes all three. `abspath` and `normpath`
+    remove `..` but follow no symlink, so a link under the base that points
+    outside it passes;
+  - a resolved path that is never checked;
+  - a base read from the request, the environment, a function parameter or
+    any other call, and a base of `/`;
+  - a path assigned more than once in the function, or on a branch, and the
+    same for a name it is copied to (`p = full`);
+  - `startswith` with a start offset and `relative_to(base, walk_up=True)`;
+  - a check that only logs, a `try` with an `except` clause that falls
+    through, a sink inside the branch that rejects the path, and a check that
+    comes after the sink.
+
+  **One duplicate finding goes away.** An `os.path.join(...)` written
+  directly inside `os.path.realpath(...)`, `os.path.abspath(...)` or
+  `Path(...).resolve()` is no longer reported on its own line. Without a
+  guard, the same flow is still reported where the resolved path reaches
+  `open`, `send_file` or another file sink, and an `os.path.abspath(...)` call
+  is still reported on its own line. A function that only resolves the joined
+  path and returns it no longer reports it; the code that opens the returned
+  path is reported as before. A baseline entry for the old
+  `os.path.join(...)` finding no longer matches anything. No new finding
+  replaces it.
 
 ## [3.6.4] - 2026-10-24
 

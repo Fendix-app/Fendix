@@ -123,7 +123,9 @@ The `direct` and `indirect` columns include the new classes.
   - Closed after v3.6.3 for SSRF, partly by correcting the cases. Their `hostname` allowlist could itself be bypassed with a backslash in the authority, so the three `ssrf-safe` cases now check `netloc` instead (see [Corrections](SPEC.md#corrections) in SPEC.md).
     - The engine now counts a dominating `urlparse(url).netloc` allowlist as an SSRF and open-redirect guard, and the corrected Django, Flask and FastAPI cases score TN.
     - A `hostname` allowlist is still reported.
-    - The two path-traversal cases still block.
+    - See `CHANGELOG.md`, `[Unreleased]`.
+  - Closed after v3.6.3 for path traversal. The engine now treats it as a guard when the handler resolves the path (`os.path.realpath` or `Path.resolve()`), checks that it is under a fixed base directory, and exits when it is not. The check can be `commonpath`, `startswith` with a trailing separator, `is_relative_to` or `relative_to`. The Django, Flask and FastAPI `path_traversal-safe` cases now score TN.
+    - A `startswith` without a separator, and a path that is only joined or `abspath`-ed, are still reported.
     - See `CHANGELOG.md`, `[Unreleased]`.
 - **Weak password hashing and unverified JWTs are found, but only warn,** even when the token comes from the request and the claims are trusted.
 - **Route-auth noise:** every one of the 58 Flask routes gets two "missing auth" findings (`flask-route-no-auth-decorator` and `flask-missing-login-required`). Every FastAPI route gets one. Django gets none.
