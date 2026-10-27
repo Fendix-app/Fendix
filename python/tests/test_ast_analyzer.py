@@ -5818,3 +5818,547 @@ class TestServerSideTemplateInjection:
         )
         assert len(found) == 1, found
         assert (found[0].get("reachable") is True) == mutation.startswith("TEMPLATES["), found
+
+
+# ---------------------------------------------------------------------------
+# Task 3.5: more open-redirect sinks
+# ---------------------------------------------------------------------------
+
+_FASTAPI_ROUTE = (
+    "from fastapi import FastAPI\n"
+    "app = FastAPI()\n"
+    '@app.get("/login")\n'
+    'def login(next_url: str = "/"):\n'
+)
+_FLASK_REDIRECT_VIEW = (
+    "from flask import Flask, Response, make_response, request, url_for\n"
+    "app = Flask(__name__)\n"
+    '@app.route("/login")\n'
+    "def login():\n"
+    '    nxt = request.args.get("next", "/")\n'
+)
+_DJANGO_REDIRECT_VIEW = (
+    "from django.http import HttpResponse, HttpResponsePermanentRedirect, HttpResponseRedirect\n"
+    "def login(request):\n"
+    '    nxt = request.GET.get("next", "/")\n'
+)
+
+
+class TestOpenRedirectSinks:
+    """Task 3.5: Starlette/FastAPI ``RedirectResponse`` and Django
+    ``HttpResponsePermanentRedirect`` are redirect constructors, resolved
+    through the file's imports like ``redirect`` and ``HttpResponseRedirect``;
+    and a ``Location`` header on a framework response that redirects is the
+    same sink, set in the constructor's headers, assigned afterwards
+    (``resp.headers["Location"] = x``, Django ``resp["Location"] = x``) or
+    returned in a Flask ``(body, status, headers)`` tuple. All are reported
+    under the existing PY_OPEN_REDIRECT rule, with the same constant,
+    sanitiser and ``urlparse(...).netloc`` allowlist checks."""
+
+    @staticmethod
+    def _redirects(src: str) -> list[dict]:
+        return [f for f in _collect_src(src) if f["id"] == "SEC-PY_OPEN_REDIRECT"]
+
+    def _proven(self, src: str, source: str) -> dict:
+        found = self._redirects(src)
+        assert len(found) == 1, found
+        f = found[0]
+        assert f.get("reachable") is True, f
+        assert any(source in link["expr"] for link in f["taint_chain"]), f["taint_chain"]
+        return f
+
+    def _clean(self, src: str) -> None:
+        found = self._redirects(src)
+        assert found == [], found
+
+    # -- the brief's cases ----------------------------------------------------
+
+    def test_redirectresponse_is_open_redirect(self) -> None:
+        f = self._proven(
+            "from fastapi.responses import RedirectResponse\n"
+            + _FASTAPI_ROUTE
+            + "    return RedirectResponse(next_url)\n",
+            "next_url",
+        )
+        assert f["line"] == "mod.py:6"
+        assert f["sink"] == "redirect(next_url)"
+        assert f["title"] == "Open redirect — user-controlled redirect target"
+        assert f["severity"] == "HIGH"
+        assert f["references"] == ["CWE-601"]
+        assert f["taint_chain"][0] == {"file": "mod.py", "line": 5, "expr": "next_url"}
+
+    def test_permanent_redirect_is_open_redirect(self) -> None:
+        f = self._proven(
+            _DJANGO_REDIRECT_VIEW + "    return HttpResponsePermanentRedirect(nxt)\n",
+            "request.GET",
+        )
+        assert f["sink"] == "redirect(nxt)"
+
+    def test_response_location_header_kwarg_is_open_redirect(self) -> None:
+        f = self._proven(
+            _FLASK_REDIRECT_VIEW
+            + '    return Response(status=302, headers={"Location": nxt})\n',
+            "request.args",
+        )
+        assert f["line"] == "mod.py:6"
+        assert f["sink"] == "Location: nxt"
+        assert f["title"] == "Open redirect — user-controlled redirect target"
+        assert f["references"] == ["CWE-601"]
+        assert f["taint_chain"][-1] == {"file": "mod.py", "line": 6, "expr": "Location: nxt"}
+
+    def test_headers_location_assignment_is_open_redirect(self) -> None:
+        f = self._proven(
+            _FLASK_REDIRECT_VIEW
+            + "    resp = Response(status=302)\n"
+            + '    resp.headers["Location"] = nxt\n'
+            + "    return resp\n",
+            "request.args",
+        )
+        assert f["line"] == "mod.py:7"
+        assert f["sink"] == "Location: nxt"
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ['return Response(status=302, headers={"Location": "/home"})'],
+            ['return Response(status=302, headers={"Location": HOME})'],
+            ['return Response(status=302, headers={"Location": url_for("index")})'],
+            ["resp = Response(status=302)", 'resp.headers["Location"] = "/home"', "return resp"],
+            ['return "", 302, {"Location": "/home"}'],
+        ],
+        ids=["literal", "constant-name", "url_for", "assignment", "flask-tuple"],
+    )
+    def test_location_header_constant_is_not_redirect(self, lines: list[str]) -> None:
+        self._clean(
+            'HOME = "/home"\n'
+            + _FLASK_REDIRECT_VIEW
+            + "".join(f"    {line}\n" for line in lines)
+        )
+
+    @pytest.mark.parametrize(
+        "sink",
+        [
+            'return Response(status=302, headers={"Location": nxt})',
+            'resp = Response(status=302)\n    resp.headers["Location"] = nxt\n    return resp',
+            'return "", 302, {"Location": nxt}',
+        ],
+        ids=["kwarg", "assignment", "flask-tuple"],
+    )
+    def test_location_header_host_allowlisted_is_not_redirect(self, sink: str) -> None:
+        # Task 2.1's guard: falling through it fixes the authority to a host
+        # of a literal allowlist.
+        guarded = (
+            "from urllib.parse import urlparse\n"
+            'ALLOWED = {"example.com", "www.example.com"}\n'
+            + _FLASK_REDIRECT_VIEW
+            + "    if urlparse(nxt).netloc not in ALLOWED:\n"
+            + '        return "bad host", 400\n'
+            + f"    {sink}\n"
+        )
+        self._clean(guarded)
+        # Control: the same sink without the guard is proven.
+        self._proven(_FLASK_REDIRECT_VIEW + f"    {sink}\n", "request.args")
+
+    def test_location_allowlist_holding_empty_string_does_not_sanitise(self) -> None:
+        # R-pf22: `/\evil.com` has netloc "", so "" in the allowlist admits it.
+        self._proven(
+            "from urllib.parse import urlparse\n"
+            'ALLOWED = {"example.com", ""}\n'
+            + _FLASK_REDIRECT_VIEW
+            + "    if urlparse(nxt).netloc not in ALLOWED:\n"
+            + '        return "bad host", 400\n'
+            + '    return Response(status=302, headers={"Location": nxt})\n',
+            "request.args",
+        )
+
+    def test_location_hostname_guard_does_not_sanitise(self) -> None:
+        # `.hostname` disagrees with browsers on a backslash authority.
+        self._proven(
+            "from urllib.parse import urlparse\n"
+            'ALLOWED = {"example.com"}\n'
+            + _FLASK_REDIRECT_VIEW
+            + "    if urlparse(nxt).hostname not in ALLOWED:\n"
+            + '        return "bad host", 400\n'
+            + '    return Response(status=302, headers={"Location": nxt})\n',
+            "request.args",
+        )
+
+    def test_location_membership_guard_is_sanitiser(self) -> None:
+        self._clean(
+            'SAFE = {"/home", "/profile"}\n'
+            + _FLASK_REDIRECT_VIEW
+            + "    if nxt not in SAFE:\n"
+            + '        return "no", 400\n'
+            + '    return Response(status=302, headers={"Location": nxt})\n'
+        )
+
+    # -- redirect constructors resolve through imports ------------------------
+
+    @pytest.mark.parametrize(
+        "imports, call",
+        [
+            ("from starlette.responses import RedirectResponse\n", "RedirectResponse(next_url)"),
+            ("from fastapi.responses import RedirectResponse as Go\n", "Go(next_url)"),
+            ("from fastapi.responses import RedirectResponse\n", "RedirectResponse(url=next_url)"),
+            (
+                "from fastapi.responses import RedirectResponse\n",
+                "RedirectResponse(next_url, status_code=302)",
+            ),
+            ("import starlette.responses\n", "starlette.responses.RedirectResponse(next_url)"),
+            ("from fastapi import responses\n", "responses.RedirectResponse(next_url)"),
+        ],
+        ids=["starlette", "alias", "url-keyword", "status-code", "module-attr", "submodule-attr"],
+    )
+    def test_redirectresponse_forms_are_open_redirect(self, imports: str, call: str) -> None:
+        f = self._proven(imports + _FASTAPI_ROUTE + f"    return {call}\n", "next_url")
+        assert f["sink"] == "redirect(next_url)"
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            (
+                "from werkzeug.utils import redirect\n"
+                "from flask import request\n"
+                "def go():\n"
+                '    return redirect(request.args["next"])\n'
+            ),
+            (
+                "from quart import redirect, request\n"
+                "async def go():\n"
+                '    return redirect(request.args["next"])\n'
+            ),
+            (
+                "from flask import request, redirect as flask_redirect\n"
+                "def go():\n"
+                '    return flask_redirect(request.args["next"])\n'
+            ),
+            (
+                "from flask import redirect, request\n"
+                "def go():\n"
+                '    return redirect(location=request.args["next"])\n'
+            ),
+            (
+                "from django.http import HttpResponseRedirect\n"
+                "def go(request):\n"
+                '    return HttpResponseRedirect(redirect_to=request.GET["next"])\n'
+            ),
+            (
+                "from django import shortcuts\n"
+                "def go(request):\n"
+                '    return shortcuts.redirect(request.GET["next"])\n'
+            ),
+            (
+                "from django.http.response import HttpResponsePermanentRedirect\n"
+                "def go(request):\n"
+                '    return HttpResponsePermanentRedirect(request.GET["next"])\n'
+            ),
+        ],
+        ids=[
+            "werkzeug", "quart", "flask-alias", "location-keyword", "redirect_to-keyword",
+            "django-shortcuts-module", "django-http-response",
+        ],
+    )
+    def test_framework_redirect_functions_are_open_redirect(self, src: str) -> None:
+        self._proven(src, "request.")
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            # A same-file def or class of the same name is the project's own.
+            (
+                "from flask import request\n"
+                "def redirect(url):\n"
+                "    return url\n"
+                "def go():\n"
+                '    return redirect(request.args["next"])\n'
+            ),
+            (
+                "from flask import request\n"
+                "class RedirectResponse:\n"
+                "    def __init__(self, url):\n"
+                "        self.url = url\n"
+                "def go():\n"
+                '    return RedirectResponse(request.args["next"])\n'
+            ),
+            # Imported from a module that is not a web framework.
+            (
+                "from flask import request\n"
+                "from app.utils import redirect\n"
+                "def go():\n"
+                '    return redirect(request.args["next"])\n'
+            ),
+            (
+                "from flask import request\n"
+                "from .responses import RedirectResponse\n"
+                "def go():\n"
+                '    return RedirectResponse(request.args["next"])\n'
+            ),
+            (
+                "from flask import request\n"
+                "from app import helpers\n"
+                "def go():\n"
+                '    return helpers.redirect(request.args["next"])\n'
+            ),
+            (
+                "from flask import request\n"
+                "from app.http import HttpResponsePermanentRedirect\n"
+                "def go():\n"
+                '    return HttpResponsePermanentRedirect(request.args["next"])\n'
+            ),
+        ],
+        ids=[
+            "same-file-def", "same-file-class", "project-import", "relative-import",
+            "project-module-attr", "project-permanent",
+        ],
+    )
+    def test_project_own_redirect_is_not_a_sink(self, src: str) -> None:
+        self._clean(src)
+
+    def test_unimported_redirect_name_keeps_matching_by_name(self) -> None:
+        # Unchanged: a bare `redirect` the file neither imports nor defines
+        # (a star import) and a method on another value (Tornado's
+        # `self.redirect`) still count by name.
+        found = self._redirects(
+            "from flask import *\n"
+            "class Handler:\n"
+            "    def get(self):\n"
+            '        return self.redirect(request.args["next"])\n'
+            "def go():\n"
+            '    return redirect(request.args["next"])\n'
+        )
+        assert [f["line"] for f in found] == ["mod.py:4", "mod.py:6"], found
+
+    # -- existing findings keep their identity --------------------------------
+
+    @pytest.mark.parametrize(
+        "src, line, sink, evidence",
+        [
+            (
+                (
+                    "from flask import redirect, request\n"
+                    "def go():\n"
+                    '    nxt = request.args.get("next")\n'
+                    "    return redirect(nxt)\n"
+                ),
+                4,
+                "redirect(nxt)",
+                "return redirect(nxt)",
+            ),
+            (
+                (
+                    "from django.http import HttpResponseRedirect\n"
+                    "def go(request):\n"
+                    '    nxt = request.GET.get("next")\n'
+                    "    return HttpResponseRedirect(nxt)\n"
+                ),
+                4,
+                "redirect(nxt)",
+                "return HttpResponseRedirect(nxt)",
+            ),
+        ],
+        ids=["flask-redirect", "django-HttpResponseRedirect"],
+    )
+    def test_existing_redirect_findings_are_unchanged(
+        self, src: str, line: int, sink: str, evidence: str
+    ) -> None:
+        f = self._proven(src, "request.")
+        assert f["rule_id"] == "python.ast/PY_OPEN_REDIRECT"
+        assert f["line"] == f"mod.py:{line}"
+        assert f["sink"] == sink
+        assert f["evidence"] == evidence
+        assert f["fix"] == (
+            "Validate redirect targets against an allow-list of safe URLs/paths "
+            "before passing to redirect(). Reject anything outside your domain."
+        )
+
+    # -- Location header forms --------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "imports, call",
+        [
+            ("from starlette.responses import Response\n",
+             'Response(status_code=302, headers={"Location": next_url})'),
+            ("from fastapi import Response\n",
+             'Response(None, 307, {"location": next_url})'),
+            ("from fastapi.responses import HTMLResponse\n",
+             'HTMLResponse("", status_code=303, headers=[("LOCATION", next_url)])'),
+        ],
+        ids=["starlette-kwarg", "positional-lowercase", "list-of-pairs"],
+    )
+    def test_starlette_location_header_is_open_redirect(self, imports: str, call: str) -> None:
+        f = self._proven(imports + _FASTAPI_ROUTE + f"    return {call}\n", "next_url")
+        assert f["sink"] == "Location: next_url"
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ['return HttpResponse(status=302, headers={"Location": nxt})'],
+            ["resp = HttpResponse(status=302)", 'resp["Location"] = nxt', "return resp"],
+            ["resp = HttpResponse(status=302)", 'resp.headers["Location"] = nxt', "return resp"],
+            ["resp = HttpResponseRedirect('/')", 'resp["Location"] = nxt', "return resp"],
+        ],
+        ids=["kwarg", "item-assignment", "headers-assignment", "redirect-response-overwritten"],
+    )
+    def test_django_location_header_is_open_redirect(self, lines: list[str]) -> None:
+        f = self._proven(
+            _DJANGO_REDIRECT_VIEW + "".join(f"    {line}\n" for line in lines),
+            "request.GET",
+        )
+        assert f["sink"] == "Location: nxt"
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ['return make_response("", 302, {"Location": nxt})'],
+            ['return make_response(("", 302, {"Location": nxt}))'],
+            ['headers = {"Location": nxt}', "return Response(status=302, headers=headers)"],
+            ["resp = Response()", "resp.status_code = 302", 'resp.headers["Location"] = nxt',
+             "return resp"],
+            ['resp = Response(status=302)', 'resp.headers["location"] = nxt', "return resp"],
+            ['return Response(headers={"Location": nxt}, status=STATUS)'],
+            ['resp = make_response("", 302)', 'resp.headers["Location"] = "/" + nxt', "return resp"],
+        ],
+        ids=[
+            "make_response", "make_response-tuple", "headers-name", "late-status",
+            "lowercase-assignment", "unknown-status", "relative-prefix",
+        ],
+    )
+    def test_flask_location_header_is_open_redirect(self, lines: list[str]) -> None:
+        self._proven(
+            "STATUS = get_status()\n"
+            + _FLASK_REDIRECT_VIEW
+            + "".join(f"    {line}\n" for line in lines),
+            "request.args",
+        )
+
+    def test_flask_tuple_location_is_open_redirect(self) -> None:
+        f = self._proven(
+            _FLASK_REDIRECT_VIEW + '    return "", 302, {"Location": nxt}\n',
+            "request.args",
+        )
+        assert f["line"] == "mod.py:6"
+        assert f["sink"] == "Location: nxt"
+
+    @pytest.mark.parametrize(
+        "ret",
+        [
+            '"", 200, {"Location": nxt}',
+            '"", {"Location": nxt}',
+            '"", 201, [("Location", nxt)]',
+        ],
+        ids=["status-200", "no-status", "created"],
+    )
+    def test_flask_tuple_location_without_redirect_status_is_not_a_sink(self, ret: str) -> None:
+        self._clean(_FLASK_REDIRECT_VIEW + f"    return {ret}\n")
+
+    def test_tuple_return_outside_a_flask_view_is_not_a_sink(self) -> None:
+        # A FastAPI route serialises a returned tuple as JSON.
+        self._clean(_FASTAPI_ROUTE + '    return "", 302, {"Location": next_url}\n')
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            # A REST API's 201 Created names the new resource; browsers do not
+            # follow it.
+            ['return Response(status=201, headers={"Location": nxt})'],
+            ['return Response(status=HTTPStatus.CREATED, headers={"Location": nxt})'],
+            ['return Response(status=status.HTTP_201_CREATED, headers={"Location": nxt})'],
+            # No status: the default 200, which nothing can change afterwards.
+            ['return Response(headers={"Location": nxt})'],
+            ["resp = Response(status=201)", 'resp.headers["Location"] = nxt', "return resp"],
+            ["resp = Response()", 'resp.headers["Location"] = nxt', "return resp"],
+            ["resp = Response(status=302)", "resp.status_code = 201",
+             'resp.headers["Location"] = nxt', "return resp"],
+        ],
+        ids=[
+            "201", "HTTPStatus.CREATED", "status-module", "no-status", "assignment-201",
+            "assignment-no-status", "late-201",
+        ],
+    )
+    def test_location_without_redirect_status_is_not_a_sink(self, lines: list[str]) -> None:
+        self._clean(
+            "from http import HTTPStatus\n"
+            "from starlette import status\n"
+            + _FLASK_REDIRECT_VIEW
+            + "".join(f"    {line}\n" for line in lines)
+        )
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            # A plain dict named `headers` is not a response.
+            ["headers = {}", 'headers["Location"] = nxt', "return headers"],
+            # A response class the project defines itself.
+            ["resp = MyResponse(status=302)", 'resp.headers["Location"] = nxt', "return resp"],
+            # A Django-style item assignment on a Flask response sets no header.
+            ["resp = Response(status=302)", 'resp["Location"] = nxt', "return resp"],
+            # Another header.
+            ['return Response(status=302, headers={"X-Next": nxt})'],
+        ],
+        ids=["plain-dict", "project-class", "flask-item-assignment", "other-header"],
+    )
+    def test_location_on_something_else_is_not_a_sink(self, lines: list[str]) -> None:
+        self._clean(
+            "class MyResponse:\n"
+            "    def __init__(self, status):\n"
+            "        self.headers = {}\n"
+            + _FLASK_REDIRECT_VIEW
+            + "".join(f"    {line}\n" for line in lines)
+        )
+
+    def test_location_header_through_a_same_file_helper_is_proven(self) -> None:
+        f = self._proven(
+            "from fastapi.responses import Response\n"
+            "def _go(target: str):\n"
+            '    return Response(status_code=302, headers={"Location": target})\n'
+            + _FASTAPI_ROUTE
+            + "    return _go(next_url)\n",
+            "next_url",
+        )
+        assert f["line"] == "mod.py:3"
+
+    def test_redirectresponse_through_a_same_file_helper_is_proven(self) -> None:
+        # The parity corpus's `indirect` shape.
+        f = self._proven(
+            "from fastapi.responses import RedirectResponse\n"
+            "def _redirect_after_login(next_url: str):\n"
+            "    return RedirectResponse(next_url)\n"
+            + _FASTAPI_ROUTE
+            + "    return _redirect_after_login(next_url)\n",
+            "next_url",
+        )
+        assert f["line"] == "mod.py:3"
+
+    def test_unproven_location_header_is_reported_unproven(self) -> None:
+        found = self._redirects(
+            "from starlette.responses import Response\n"
+            "def go(target):\n"
+            '    return Response(status_code=302, headers={"Location": target})\n'
+        )
+        assert len(found) == 1, found
+        f = found[0]
+        assert f.get("reachable") is not True
+        assert f["title"] == "Potential open redirect — dynamic redirect target"
+        assert f["sink"] == "Location: target"
+
+    def test_relative_prefix_is_reported_like_redirect(self) -> None:
+        # `"/" + "/evil.com"` is `//evil.com`, a protocol-relative URL; the
+        # Location forms follow redirect() exactly.
+        for sink in (
+            'return redirect("/" + nxt)',
+            'return Response(status=302, headers={"Location": "/" + nxt})',
+        ):
+            self._proven(
+                _FLASK_REDIRECT_VIEW.replace("url_for\n", "url_for, redirect\n") + f"    {sink}\n",
+                "request.args",
+            )
+
+    def test_location_and_xss_are_reported_separately(self) -> None:
+        found = _collect_src(
+            _FLASK_REDIRECT_VIEW
+            + '    return Response(f"<p>{nxt}</p>", status=STATUS, headers={"Location": nxt})\n'
+        )
+        assert sorted(f["id"] for f in found) == [
+            "SEC-PY_OPEN_REDIRECT",
+            "SEC-PY_XSS_HTML_SINK",
+        ], found

@@ -530,20 +530,20 @@
       "blocks": false
     },
     "fastapi-open_redirect-alt_api": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-open_redirect-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "fastapi-open_redirect-direct": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-open_redirect-indirect": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-open_redirect-safe": {
       "outcome": "TN",
@@ -762,8 +762,8 @@
       "blocks": false
     },
     "flask-open_redirect-alt_api": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "flask-open_redirect-cross_file": {
       "outcome": "TP",

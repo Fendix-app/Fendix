@@ -104,6 +104,7 @@ The `direct` and `indirect` columns include the new classes.
   - FastAPI is the exception: its findings warn.
     - Closed after v3.6.3. With handler parameters as request sources, FastAPI's `alt_api` cases for SQLi, command injection, SSRF and XSS block.
   - Two forms are missed: a raw `Location` header redirect in Flask and FastAPI, and FastAPI `FileResponse(path)`.
+    - Closed after v3.6.3 for the `Location` header. A `Location` header on a framework response with a redirect status is now an open-redirect sink, set in the constructor's headers, assigned afterwards, or returned in a Flask `(body, status, headers)` tuple. The Flask and FastAPI `alt_api` open-redirect cases are detected and block.
     - The FastAPI case, `FileResponse(os.path.join(REPORTS_DIR, filename))`, is detected and blocks after v3.6.3 through the inner `os.path.join`, which is reported once the flow is proven. `FileResponse` itself is still not a sink.
 - **Regex rules depend on one exact shape.**
   - JS SQL is found only as a template literal. mysql2 `"..." + name` concatenation is missed.
@@ -135,6 +136,10 @@ The `direct` and `indirect` columns include the new classes.
   - Closed after v3.6.3 for handler parameters. A route handler's parameters are now request sources: FastAPI query, path, header, cookie and body parameters, and Flask and Django URL variables. Dependencies (`Depends(...)`, `Security(...)`, a type from a `deps` module), injected objects such as `Request`, fixed-value types (`int`, `UUID`, `Literal[...]`, a same-file Enum) and Flask or Django parameters their URL pattern does not name are not.
     - Every FastAPI SQLi, command-injection, SSRF, path-traversal and XSS case the engine detects now blocks, except the four `cross_file` ones. FastAPI blocks on 17 of 36 vulnerable cases, up from 4. No safe case is flagged or blocks.
     - Django blocks on 20 and Flask on 21. FastAPI's remaining gap to Django is its three blocking redirect cases: `RedirectResponse` is still not a redirect sink.
+    - See `CHANGELOG.md`, `[Unreleased]`.
+  - Closed after v3.6.3 for redirects too. Starlette's and FastAPI's `RedirectResponse` and Django's `HttpResponsePermanentRedirect` are now redirect sinks, resolved through the file's imports.
+    - FastAPI's four open-redirect cases are detected, and all but `cross_file` block. FastAPI now blocks on as many vulnerable cases as Django and Flask.
+    - The Python frameworks detect 102 of 108 vulnerable cases, up from 97, and block on 72, up from 68. Django, FastAPI and Flask each block on 24.
     - See `CHANGELOG.md`, `[Unreleased]`.
 - **Correct fixes still block (4 cases).**
   - The cases are a `urlparse(url).hostname` allowlist for SSRF, and a `realpath` + `commonpath` check for path traversal, in Django and Flask.

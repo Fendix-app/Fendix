@@ -567,6 +567,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     The Python frameworks detect 97 of 108 vulnerable cases, up from 93, and
     block on 68, up from 64: Django on 24, FastAPI on 21 and Flask on 23.
 
+- **More open redirects are detected: Starlette and FastAPI
+  `RedirectResponse`, Django `HttpResponsePermanentRedirect`, and `Location`
+  headers.** Only `redirect(...)` and `HttpResponseRedirect(...)` were
+  reported. The existing rule, `python.ast/PY_OPEN_REDIRECT`, now covers
+  these sinks too:
+  - **Redirect constructors.** `RedirectResponse(url)` from Starlette or
+    FastAPI and `HttpResponsePermanentRedirect(url)` from Django, beside
+    `redirect(url)` and `HttpResponseRedirect(url)`. Each is resolved
+    through the file's imports, aliases included
+    (`from fastapi.responses import RedirectResponse as Go`), and called by
+    name or through its module (`responses.RedirectResponse(url)`). The
+    target may also be passed by keyword: `url=`, `location=`, `to=` or
+    `redirect_to=`.
+  - **`Location` headers.** A `Location` header, matched in any case, on a
+    framework response that redirects:
+    - in the constructor's headers, as a literal dict, a literal list of
+      `(name, value)` pairs, or a name bound to either:
+      `Response(status=302, headers={"Location": nxt})`, or Flask's
+      `make_response("", 302, {"Location": nxt})`;
+    - assigned after construction to a name bound to such a response:
+      `resp.headers["Location"] = nxt`, or Django's
+      `resp["Location"] = nxt`;
+    - in a `(body, status, headers)` tuple returned from a Flask view:
+      `return "", 302, {"Location": nxt}`.
+
+    The response is Django's `HttpResponse`, Flask's `make_response` or
+    `Response`, Starlette's or FastAPI's `Response` or `HTMLResponse`,
+    resolved as for the HTML-response XSS sink, or, for an assignment, a
+    redirect constructor (`resp = HttpResponseRedirect("/")`).
+    Its status must be a redirect (301, 302, 303, 307 or 308) or a value the
+    engine cannot read. A status assigned after construction
+    (`resp.status_code = 302`) decides. A response with no status is sent
+    with 200, and a `201 Created` names a new resource, so a `Location` on
+    either is not reported. A plain dict, such as `headers["Location"] = url`,
+    is not a response.
+  - **The same checks as `redirect(...)`.** A constant target, `url_for(...)`
+    or `reverse(...)`, a lookup in a literal allowlist, a dominating
+    membership guard and a dominating `urlparse(url).netloc` allowlist guard
+    keep each of these sinks quiet. A target that joins a constant prefix and
+    request input, such as `"/" + nxt`, is reported, as it is for
+    `redirect(...)`.
+  - **Severity and title.** As for `redirect(...)`: HIGH with MEDIUM
+    confidence, titled "Open redirect — user-controlled redirect target"
+    when the flow from the request is proven, and "Potential open redirect —
+    dynamic redirect target" when it is not.
+  - **Identity.** Existing `PY_OPEN_REDIRECT` findings keep their
+    fingerprints, sinks and evidence. The new constructors name their sink
+    `redirect(<target>)`, as `HttpResponseRedirect` does. A `Location`
+    header's sink is `Location: <value>` in every form.
+  - **A project's own `redirect` is no longer a sink.** A function or class
+    named `redirect`, `HttpResponseRedirect`, `HttpResponsePermanentRedirect`
+    or `RedirectResponse` that the file defines, or imports from a module
+    that is not a web framework (`from app.utils import redirect`,
+    `helpers.redirect(url)`), is no longer reported. The engine cannot see
+    what such a helper does. A `redirect` imported from Flask, Werkzeug,
+    Quart, Django, Bottle, Sanic, TurboGears (`tg`), Pylons, web.py (`web`),
+    Morepath or Emmett still counts. So does a bare `redirect` the file
+    neither imports nor defines, and a method on another value, such as
+    Tornado's `self.redirect(url)`. For example, the four call sites of
+    django-allauth's own `redirect(to)` helper in `allauth/account/views.py`
+    are no longer reported; the `shortcuts.redirect(to)` inside the helper
+    still is.
+  - **Not covered:** a `Location` header set through `headers.update(...)`,
+    `.setdefault(...)` or another method, or on FastAPI's injected
+    `response: Response` parameter; a status given by the route decorator
+    (`status_code=302`); a `(body, status, headers)` tuple a helper returns
+    for the view to pass on; and other response classes, such as
+    `JSONResponse`.
+  - **Framework parity:** FastAPI's `direct`, `indirect`, `cross_file` and
+    `alt_api` open-redirect cases and Flask's `alt_api` case are now
+    detected. All but FastAPI's `cross_file` case block. No safe case is
+    flagged. The Python frameworks detect 102 of 108 vulnerable cases, up
+    from 97, and block on 72, up from 68: Django, FastAPI and Flask each block
+    on 24.
+
 ### Changed
 
 - **A Flask route without authentication now gets one missing-auth finding

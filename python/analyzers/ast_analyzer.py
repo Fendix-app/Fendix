@@ -2543,35 +2543,29 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 category="secrets",
             )
 
-        # redirect()/HttpResponseRedirect() with request-derived input.
-        # Pattern: flask.redirect(request.args.get('url'))  or
-        #          HttpResponseRedirect(request.GET['next'])
+        # A redirect constructor with request-derived input (`_redirect_ctor`):
+        # flask.redirect(request.args.get('url')), HttpResponseRedirect(
+        # request.GET['next']), RedirectResponse(next_url) (Task 3.5).
         elif self._is_open_redirect(node):
-            chain = None
+            target = self._redirect_target(node)
             # Built once, OUTSIDE the chain attempt, so the operation is named
             # whether or not the flow can be proven — see _emit_finding's sink.
-            sink_expr = (
-                f"redirect({_ast_expr_text(node.args[0])})" if node.args else ""
-            )
-            if node.args:
-                chain = self._collect_taint_chain(
-                    node.args[0],
-                    node.lineno,
-                    sink_expr,
-                )
+            # Every constructor names it `redirect(<target>)`.
+            sink_expr = f"redirect({_ast_expr_text(target)})"
+            chain = self._collect_taint_chain(target, node.lineno, sink_expr)
             self._emit_finding(
                 "PY_OPEN_REDIRECT",
-                "Potential open redirect — dynamic redirect target",
-                "HIGH",
-                "MEDIUM",
-                "CWE-601",
+                _OPEN_REDIRECT_TITLE,
+                _OPEN_REDIRECT_SEVERITY,
+                _OPEN_REDIRECT_CONFIDENCE,
+                _OPEN_REDIRECT_CWE,
                 (
                     "Validate redirect targets against an allow-list of safe URLs/paths "
                     "before passing to redirect(). Reject anything outside your domain."
                 ),
                 node.lineno,
                 taint_chain=chain,
-                proven_title="Open redirect — user-controlled redirect target",
+                proven_title=_OPEN_REDIRECT_PROVEN_TITLE,
                 sink=sink_expr,
             )
 
@@ -2891,6 +2885,14 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 category="secrets",
             )
 
+        # A `Location` header on a framework response that redirects (Task
+        # 3.5): `Response(status=302, headers={"Location": nxt})`. Checked
+        # outside the chain above, so a response whose body is also an XSS
+        # sink is reported for both.
+        location = self._location_header_value(node)
+        if location is not None and self._redirect_value_is_dynamic(location, node.lineno):
+            self._report_location_redirect(location, node.lineno)
+
         self.generic_visit(node)
 
     def _is_jwt_misuse(self, node: ast.Call) -> bool:
@@ -3062,12 +3064,20 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
     def visit_Return(self, node: ast.Return) -> None:  # noqa: N802
         """Task 3.3: report a string a Flask view, or a FastAPI route whose
-        response class is HTML, returns unescaped (`_report_view_return`), then
-        visit the returned expression."""
+        response class is HTML, returns unescaped (`_report_view_return`), and
+        Task 3.5: a ``Location`` header in a Flask view's returned
+        ``(body, status, headers)`` tuple (`_returned_location`); then visit
+        the returned expression."""
         if node.value is not None:
             response = self._view_return_response()
             if response is not None:
                 self._report_view_return(node, *response)
+            if response == ("make_response", "flask"):
+                location = self._returned_location(node.value)
+                if location is not None and self._redirect_value_is_dynamic(
+                    location, node.lineno
+                ):
+                    self._report_location_redirect(location, node.lineno)
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
@@ -3083,6 +3093,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             and isinstance(node.targets[0], ast.Name)
         ):
             self._call_targets[node.value] = (node.targets[0].id, node)
+        # Task 3.5: `resp.headers["Location"] = x` / Django `resp["Location"] = x`.
+        for target in node.targets:
+            holder = _location_assignment_holder(target)
+            if holder is not None:
+                self._check_location_assignment(node, *holder)
         if not self._scopes:
             self.generic_visit(node)
             return
@@ -3721,7 +3736,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         return _arg_subtree_looks_like_password(data_arg)
 
     def _is_open_redirect(self, node: ast.Call) -> bool:
-        """Return True if redirect(...)/HttpResponseRedirect(...) gets non-literal input.
+        """Return True if a redirect constructor (`_redirect_ctor`) gets a
+        non-literal target (`_redirect_value_is_dynamic`).
 
         Posture upgraded to match SSRF/XSS/path-traversal (surfaced by
         the accuracy corpus, 2026-05-13): emit on any non-literal arg,
@@ -3731,36 +3747,227 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         redirect(next_url)` pattern was silently missed because the
         first arg was a Name, not a request-access subtree.
         """
-        is_redirect_func = (
-            isinstance(node.func, ast.Name)
-            and node.func.id in {"redirect", "HttpResponseRedirect"}
-        ) or (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr in {"redirect", "HttpResponseRedirect"}
-        )
-        if not (is_redirect_func and node.args):
+        if not self._redirect_ctor(node)[0]:
             return False
-        first = node.args[0]
+        target = self._redirect_target(node)
+        return target is not None and self._redirect_value_is_dynamic(target, node.lineno)
+
+    def _redirect_value_is_dynamic(self, value: ast.AST, sink_line: int) -> bool:
+        """True when a redirect target (a constructor's argument or a
+        ``Location`` header's value) is not provably a safe destination."""
         # Constant literal redirect target is safe.
-        if isinstance(first, ast.Constant):
+        if isinstance(value, ast.Constant):
             return False
         # Name that resolves to a constant in scope is also safe.
-        if isinstance(first, ast.Name):
+        if isinstance(value, ast.Name):
             for scope in reversed(self._scopes):
-                if first.id in scope:
-                    if isinstance(scope[first.id], ast.Constant):
+                if value.id in scope:
+                    if isinstance(scope[value.id], ast.Constant):
                         return False
                     break  # innermost binding wins (audit #17)
         # Whitelisted dict lookup / set-membership / URL-host allowlist guard
         # → sanitised.
-        if self._arg_is_sanitised(first, node.lineno, url_sink=True):
+        if self._arg_is_sanitised(value, sink_line, url_sink=True):
             return False
         # Framework URL builders produce safe internal URLs from a route NAME,
         # not user input: Flask url_for(...), Django reverse(...). A redirect to
         # one of these is not an open redirect (real-data FP on flask/django).
-        if self._is_safe_url_builder(first):
+        if self._is_safe_url_builder(value):
             return False
         return True
+
+    # ─── Redirect constructors and Location headers (Task 3.5) ───────
+    #
+    # A redirect is sent by a framework's redirect constructor (Flask's
+    # `redirect`, Django's `HttpResponseRedirect`, Starlette's
+    # `RedirectResponse`, ...) or by any framework response that carries a
+    # `Location` header and a redirect status. Both are the PY_OPEN_REDIRECT
+    # sink, judged by `_redirect_value_is_dynamic`.
+
+    def _redirect_ctor(self, node: ast.Call) -> tuple[str, str]:
+        """``(constructor, package)`` for a call to a redirect constructor
+        (`_REDIRECT_CTOR_PACKAGES`), else ``("", "")``.
+
+        An imported name resolves to the symbol it imports and must come from
+        a framework that defines it: ``from fastapi.responses import
+        RedirectResponse as Go; Go(x)`` is one, ``from app.utils import
+        redirect`` is not, and neither is a name the file defines itself
+        (``def redirect(...)``). A method on a module resolves the same way
+        (``flask.redirect``, ``shortcuts.redirect``). A bare name the file
+        neither imports nor defines (a star import), and a method on any other
+        value (Tornado's ``self.redirect``), count by their name."""
+        func = node.func
+        if isinstance(func, ast.Name):
+            if func.id in self._file_defined_names():
+                return "", ""
+            imported = func.id in self._from_imports
+            module, name = self._from_imports.get(func.id, ("", func.id))
+        elif isinstance(func, ast.Attribute):
+            module, name = self._import_origin(func.value), func.attr
+            imported = bool(module)
+        else:
+            return "", ""
+        packages = _REDIRECT_CTOR_PACKAGES.get(name)
+        if packages is None:
+            return "", ""
+        package = module.split(".")[0]
+        if imported and package not in packages:
+            return "", ""
+        return name, package
+
+    @staticmethod
+    def _redirect_target(node: ast.Call) -> ast.AST | None:
+        """The destination a redirect constructor is given: its first
+        positional argument, else its ``location=`` (Flask, Werkzeug),
+        ``to=`` (Django ``redirect``), ``redirect_to=`` (Django
+        ``HttpResponseRedirect``) or ``url=`` (Starlette ``RedirectResponse``)
+        keyword."""
+        if node.args:
+            return node.args[0]
+        return next(
+            (kw.value for kw in node.keywords if kw.arg in _REDIRECT_TARGET_KEYWORDS),
+            None,
+        )
+
+    def _location_header_value(self, node: ast.Call) -> ast.AST | None:
+        """The ``Location`` value a framework response constructor
+        (`_resolve_html_response`) is given in its headers, when the response
+        redirects (`_response_redirects`), else None:
+        ``Response(status=302, headers={"Location": nxt})``. The headers are a
+        literal dict or list of ``(name, value)`` pairs, or a name bound to
+        one, passed by the ``headers=`` keyword or by position (Flask's
+        ``make_response(body, status, headers)`` too); the key is compared
+        case-insensitively. The last ``Location`` entry wins, as in a dict."""
+        ctor, package = self._resolve_html_response(node)
+        if not ctor:
+            return None
+        values = self._location_values(self._response_headers(node, ctor, package))
+        if not values or not self._response_redirects(node, ctor, package):
+            return None
+        return values[-1]
+
+    def _location_values(self, headers: list[ast.AST]) -> list[ast.AST]:
+        """The ``Location`` values in each of ``headers``: a literal dict or
+        list of pairs, or a Name bound to one in scope."""
+        values: list[ast.AST] = []
+        for h in headers:
+            if isinstance(h, ast.Name):
+                h = self._scope_binding(h.id) or h
+            values.extend(_header_values(h, "location"))
+        return values
+
+    def _response_redirects(self, node: ast.Call, ctor: str, package: str) -> bool:
+        """True when the response ``node`` builds may have a redirect status,
+        which is what makes a browser follow its ``Location`` header.
+
+        A status assigned to the bound response afterwards (``resp.status_code
+        = 302``, found as `_late_content_type` finds a content type) decides by
+        itself; otherwise the status given at construction, by keyword
+        (``status``/``status_code``) or position (`_response_layout`). With no
+        status the response sends the framework's default 200, which no
+        browser follows. A 201 Created's ``Location`` names a new resource,
+        so a status that is provably not a redirect is no sink
+        (`_status_may_redirect`)."""
+        late = self._late_assignment(node, _is_status_target)
+        if late is not None:
+            return self._status_may_redirect(late)
+        args = self._response_args(node, ctor)
+        status_index = self._response_layout(ctor, package)[0]
+        statuses = [kw.value for kw in node.keywords if kw.arg in ("status", "status_code")]
+        if status_index < len(args):
+            statuses.append(args[status_index])
+        return any(self._status_may_redirect(s) for s in statuses)
+
+    def _status_may_redirect(self, value: ast.AST) -> bool:
+        """False for a status that is provably not a redirect: a constant (or a
+        Name bound to one) outside 301/302/303/307/308, ``None`` (the default
+        200), a headers literal in a status position (Flask's
+        ``make_response(body, headers)``), or a named status of a status module
+        (`_STATUS_MODULES`) other than a redirect (``HTTPStatus.CREATED``,
+        ``status.HTTP_201_CREATED``). Any other value may be a redirect."""
+        if isinstance(value, ast.Name):
+            bound = self._scope_binding(value.id)
+            if isinstance(bound, ast.Constant):
+                value = bound
+        if isinstance(value, ast.Constant):
+            status = value.value
+            if isinstance(status, str):
+                # Werkzeug also takes a status line: "302 FOUND".
+                match = re.match(r"\s*(\d{3})", status)
+                return match is not None and int(match.group(1)) in _REDIRECT_STATUSES
+            return (
+                isinstance(status, int)
+                and not isinstance(status, bool)
+                and status in _REDIRECT_STATUSES
+            )
+        if isinstance(value, (ast.Dict, ast.List, ast.Tuple, ast.Set)):
+            return False
+        if self._is_redirect_status_constant(value):
+            return True
+        module = self._import_origin(value).rpartition(".")[0]
+        return module not in _STATUS_MODULES
+
+    def _returned_location(self, value: ast.AST) -> ast.AST | None:
+        """The ``Location`` value of a Flask view's returned ``(body, status,
+        headers)`` tuple when its status may be a redirect, else None. A
+        ``(body, headers)`` tuple is sent with status 200."""
+        if not (isinstance(value, ast.Tuple) and len(value.elts) == 3):
+            return None
+        _, status, headers = value.elts
+        if not self._status_may_redirect(status):
+            return None
+        values = self._location_values([headers])
+        return values[-1] if values else None
+
+    def _check_location_assignment(
+        self, node: ast.Assign, name: str, via_headers: bool
+    ) -> None:
+        """Report ``<name>.headers["Location"] = x`` (or Django's
+        ``<name>["Location"] = x``) when ``name`` is bound to a framework
+        response that redirects: a redirect constructor (`_redirect_ctor`), or
+        a response constructor (`_resolve_html_response`) whose status may be
+        a redirect (`_response_redirects`). The item form sets a header only on
+        a Django response. A name bound to anything else (a plain dict, a
+        parameter, a project's own class) is not a response this rule
+        knows."""
+        bound = self._scope_binding(name)
+        if not isinstance(bound, ast.Call):
+            return
+        ctor, package = self._redirect_ctor(bound)
+        if ctor:
+            redirects = True
+        else:
+            ctor, package = self._resolve_html_response(bound)
+            if not ctor:
+                return
+            redirects = self._response_redirects(bound, ctor, package)
+        django = package == "django" or ctor in _DJANGO_RESPONSE_NAMES
+        if not redirects or not (via_headers or django):
+            return
+        if self._redirect_value_is_dynamic(node.value, node.lineno):
+            self._report_location_redirect(node.value, node.lineno)
+
+    def _report_location_redirect(self, value: ast.AST, lineno: int) -> None:
+        """Emit PY_OPEN_REDIRECT for a ``Location`` header set to ``value``.
+        The sink is named ``Location: <value>`` in every form."""
+        sink_expr = f"Location: {_ast_expr_text(value)}"
+        chain = self._collect_taint_chain(value, lineno, sink_expr)
+        self._emit_finding(
+            "PY_OPEN_REDIRECT",
+            _OPEN_REDIRECT_TITLE,
+            _OPEN_REDIRECT_SEVERITY,
+            _OPEN_REDIRECT_CONFIDENCE,
+            _OPEN_REDIRECT_CWE,
+            (
+                "Validate redirect targets against an allow-list of safe URLs/paths "
+                "before setting them as the Location header. Reject anything "
+                "outside your domain."
+            ),
+            lineno,
+            taint_chain=chain,
+            proven_title=_OPEN_REDIRECT_PROVEN_TITLE,
+            sink=sink_expr,
+        )
 
     def _is_safe_url_builder(self, expr: ast.AST, _depth: int = 0) -> bool:
         """True if `expr` is (or resolves to) a call to a known safe internal
@@ -4691,6 +4898,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         response may leave before a later assignment runs). An assignment
         inside a nested branch, loop, ``with`` or ``try`` may not run, so it
         makes the type unknown, which is HTML."""
+        return self._late_assignment(node, _is_content_type_target)
+
+    def _late_assignment(
+        self, node: ast.Call, is_target: Callable[[ast.AST, str], bool]
+    ) -> ast.AST | None:
+        """The value last assigned, after construction, to the part of the
+        response ``node`` builds that ``is_target(target, name)`` recognises,
+        scanned as `_late_content_type` describes; `_UNKNOWN_LATE_VALUE` when
+        the last such assignment sits in a nested statement that may not run;
+        None when nothing assigns it."""
         target = self._call_targets.get(node)
         scope = self._func_stack[-1] if self._func_stack else self._module_root
         if target is None or scope is None:
@@ -4703,17 +4920,14 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         for stmt in stmts[_index_of(stmts, binding) + 1 :]:
             if _rebinds(stmt, name):
                 break
-            if isinstance(stmt, ast.Assign) and any(
-                _is_content_type_target(t, name) for t in stmt.targets
-            ):
+            if isinstance(stmt, ast.Assign) and any(is_target(t, name) for t in stmt.targets):
                 found = stmt.value
                 continue
             if any(
-                isinstance(n, ast.Assign)
-                and any(_is_content_type_target(t, name) for t in n.targets)
+                isinstance(n, ast.Assign) and any(is_target(t, name) for t in n.targets)
                 for n in _walk_own_scope(stmt)
             ):
-                found = _UNKNOWN_CONTENT_TYPE
+                found = _UNKNOWN_LATE_VALUE
             if any(isinstance(n, _LEAVING_NODES) for n in _walk_own_scope(stmt)):
                 break
         return found
@@ -5655,6 +5869,38 @@ _HTML_RESPONSE_PACKAGES: dict[str, frozenset[str]] = {
     "HTMLResponse": frozenset({"starlette", "fastapi"}),
     "Response": frozenset({"flask", "werkzeug", "starlette", "fastapi"}),
 }
+# Redirect constructors recognised by `_redirect_ctor` (Task 3.5), each with
+# the framework packages it must be imported from when the file imports it:
+# `redirect` from Flask, Werkzeug (where Flask's lives), Quart, Django
+# (`django.shortcuts`), Bottle, Sanic, TurboGears (`tg`), Pylons, web.py
+# (`web`), Morepath and Emmett; Django `HttpResponseRedirect` and
+# `HttpResponsePermanentRedirect`; Starlette/FastAPI `RedirectResponse`. A
+# same-named function or class of the project itself is not one.
+_REDIRECT_CTOR_PACKAGES: dict[str, frozenset[str]] = {
+    "redirect": frozenset(
+        {
+            "flask", "werkzeug", "quart", "django", "bottle", "sanic",
+            "tg", "pylons", "web", "morepath", "emmett",
+        }
+    ),
+    "HttpResponseRedirect": frozenset({"django"}),
+    "HttpResponsePermanentRedirect": frozenset({"django"}),
+    "RedirectResponse": frozenset({"starlette", "fastapi"}),
+}
+# The keywords a redirect constructor takes its target by (`_redirect_target`).
+_REDIRECT_TARGET_KEYWORDS: frozenset[str] = frozenset({"location", "to", "redirect_to", "url"})
+# Django response classes, whose headers are also set by item assignment
+# (`resp["Location"] = url`).
+_DJANGO_RESPONSE_NAMES: frozenset[str] = frozenset(
+    {"HttpResponse", "HttpResponseRedirect", "HttpResponsePermanentRedirect"}
+)
+# PY_OPEN_REDIRECT's presentation, shared by the redirect constructor and the
+# Location header forms.
+_OPEN_REDIRECT_TITLE = "Potential open redirect — dynamic redirect target"
+_OPEN_REDIRECT_PROVEN_TITLE = "Open redirect — user-controlled redirect target"
+_OPEN_REDIRECT_SEVERITY = "HIGH"
+_OPEN_REDIRECT_CONFIDENCE = "MEDIUM"
+_OPEN_REDIRECT_CWE = "CWE-601"
 # Where a response constructor takes its body and its content type by keyword:
 # `content` (Django, Starlette) or `response` (Flask) for the body;
 # `content_type` (Django, Flask), `mimetype` (Flask) or `media_type`
@@ -5841,8 +6087,9 @@ _SSTI_FIX = (
     "limits what a template can reach but does not make an attacker's "
     "template safe."
 )
-# The content type assigned in a branch that may not run: unknown, so HTML.
-_UNKNOWN_CONTENT_TYPE: ast.AST = ast.Name(id="<content type set in a branch>")
+# A response's content type or status assigned in a branch that may not run
+# (`_late_assignment`): unknown, so HTML, or a status that may redirect.
+_UNKNOWN_LATE_VALUE: ast.AST = ast.Name(id="<set in a branch>")
 # Statements through which a built response may leave the function.
 _LEAVING_NODES = (ast.Return, ast.Yield, ast.YieldFrom)
 # Receivers whose methods are the class's own helpers, not operations on a
@@ -5981,6 +6228,38 @@ def _is_content_type_target(target: ast.AST, name: str) -> bool:
             holder = holder.value
         return isinstance(holder, ast.Name) and holder.id == name
     return False
+
+
+def _is_status_target(target: ast.AST, name: str) -> bool:
+    """True when an assignment target sets the status of the response bound
+    to ``name``: ``name.status_code`` (Django, Flask, Starlette) or
+    ``name.status`` (Flask)."""
+    return (
+        isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == name
+        and target.attr in ("status_code", "status")
+    )
+
+
+def _location_assignment_holder(target: ast.AST) -> tuple[str, bool] | None:
+    """``(name, via_headers)`` when an assignment target sets the
+    ``Location`` header (any case) of the value bound to ``name``:
+    ``name.headers["Location"]`` (via_headers) or ``name["Location"]``."""
+    if not isinstance(target, ast.Subscript):
+        return None
+    key = target.slice
+    if not (
+        isinstance(key, ast.Constant)
+        and isinstance(key.value, str)
+        and key.value.lower() == "location"
+    ):
+        return None
+    holder = target.value
+    via_headers = isinstance(holder, ast.Attribute) and holder.attr == "headers"
+    if via_headers:
+        holder = holder.value
+    return (holder.id, via_headers) if isinstance(holder, ast.Name) else None
 
 
 # Path-traversal sinks recognised by `_is_path_traversal_sink` (TASK-134).
