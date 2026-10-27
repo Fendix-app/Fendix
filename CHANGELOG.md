@@ -218,7 +218,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       Starlette `Response` sends no `Content-Type`, so the browser sniffs the
       body. All three are sinks. `HTMLResponse` is always one.
     - A 204 or 304 response is not a sink, because the browser renders no
-      body for it (Werkzeug drops it).
+      body for it (Werkzeug drops it). Neither is a redirect (301, 302, 303,
+      307 or 308) with a `Location` entry in a literal headers dict or list
+      of pairs, because the browser follows it instead of rendering the body.
+      A redirect status without a `Location` header, or a `Location` header
+      without a redirect status, is still a sink.
   - **Only a framework's constructor.** An imported constructor must come
     from its framework: `HttpResponse` from Django, `make_response` from
     Flask, `HTMLResponse` from Starlette or FastAPI, and `Response` from
@@ -253,9 +257,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         `jinja2.Template`, or an `Environment`'s `from_string`/`get_template`.
         So `HttpResponse(Template(src).render(name=name))` is reported;
     - Flask's `make_response(...)` of a dict or list, which Flask sends as
-      JSON: a literal, a comprehension, a name bound to one, or request data
-      read whole (`request.get_json()`, `request.json`, `request.args`,
-      `request.form`, `request.args.to_dict()`, `request.form.getlist(...)`);
+      JSON: a literal, a comprehension, a `.split()`, `.rsplit()` or
+      `.splitlines()` list, request data read whole (`request.get_json()`,
+      `request.json`, `request.args`, `request.form`,
+      `request.args.to_dict()`, `request.form.getlist(...)`), or a name every
+      assignment of which is one of these. A name assigned text in any branch,
+      before or after its other assignments, stays text;
     - Flask's `make_response(...)` of a response object, which Flask sends as
       it is (`make_response(Response(...))`);
     - a body that is, as a whole, the result of a helper function, of a
@@ -265,6 +272,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       `email_data = generate_reset_password_email(email=email)`. The engine
       cannot see what a function returns, and a function that returns the
       whole page is usually a renderer that escapes.
+      - A method on the request's own data is not a helper: its receiver,
+        followed through attribute and subscript reads, method calls and the
+        names it is bound to, starts at `request`, or at a route handler's
+        request parameter. So `HttpResponse(request.FILES["f"].read())`,
+        `up = request.FILES.get("f")` then `HttpResponse(up.read())`, and
+        `make_response(request.files["f"].read())` are reported.
       - Inside an interpolated part, a call carries its arguments' text, so
         `f"<div>{build(name)}</div>"` is reported. An interpolated part is an
         f-string value, a `+` or `%` operand, or a `.format` or `.join`
@@ -272,15 +285,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - A class constructor carries its arguments' text anywhere, so
         `form = NameForm(request.POST)` then `form.cleaned_data["name"]` is
         reported.
-      - String methods (`.format`, `.join`, `.strip`, `.replace`, `.encode`
-        and the rest of `str`'s), a mapping's `.get`, a raw template's
-        `.render`, `str()`, `json.dumps`, `json.loads`, `textwrap.dedent`,
-        `urllib.parse.unquote` and `unquote_plus`, `html.unescape` and `map`
-        pass text through.
+      - String methods (`.format`, `.join`, `.strip`, `.replace`, `.encode`,
+        `.split`, `.rsplit`, `.splitlines`, `.partition`, `.rpartition` and
+        the rest of `str`'s that return text), a mapping's `.get`, a raw
+        template's `.render`, `str()`, `json.dumps`, `json.loads`,
+        `textwrap.dedent`, `urllib.parse.unquote` and `unquote_plus`,
+        `html.unescape` and `map` pass text through. So
+        `HttpResponse(name.split(",")[0])` is reported.
       - These hold no text:
         - `int()`, `float()`, `bool()`, `len()`, `round()` and `abs()`;
         - `uuid.UUID`, `decimal.Decimal` and `fractions.Fraction`;
-        - `fromisoformat`/`strptime` on `date`, `datetime` and `time`.
+        - `fromisoformat`/`strptime` on `date`, `datetime` and `time`;
+        - a comparison (`q == "x"`) or a `not`;
+        - the `str` methods that return a bool or a number: `.isdigit()`,
+          `.isalpha()`, `.isalnum()` and the other `.is...()` tests,
+          `.startswith()`, `.endswith()`, `.count()`, `.find()`, `.rfind()`,
+          `.index()` and `.rindex()`;
+        - a request value Werkzeug converts with `type=`:
+          `request.args.get("page", 1, type=int)`, and `float`, `bool` or a
+          value parser such as `uuid.UUID`. The converted value, or the
+          default when conversion fails, is what the body holds, so a text
+          default still counts.
   - **`json.dumps` is not an escape.** `HttpResponse(json.dumps(data))` with
     no content type is `text/html`, and `json.dumps` leaves `<` as it is, so
     request data in it is reported. With `content_type="application/json"` it
@@ -311,7 +336,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response Flask builds from it, `make_response(value)`, under the existing
   `python.ast/PY_XSS_HTML_SINK` rule and with the same rules as
   `make_response(...)`: escaping, allowlists, autoescaped templates,
-  `jsonify`, `json.dumps`, helper results and values that hold no text.
+  `jsonify`, `json.dumps`, helper results and values that hold no text. A
+  FastAPI route whose response class is HTML is judged the same way (below).
   - **Only a proven flow.** A returned string is reported only when request
     input is proven to reach it. The finding is marked reachable, carries a
     taint chain and may block. Every view returns something, so a string built
@@ -324,23 +350,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - a return in a def, lambda or class nested in the view, or in a helper
       that no route points at;
     - a return in a view that yields, which streams what it yields;
-    - a FastAPI or Django Ninja return, which is sent as JSON, a Django view's
-      (Django needs an `HttpResponse`), and a route whose framework is
-      unknown.
+    - a Django view's (Django needs an `HttpResponse`), and a route whose
+      framework is unknown;
+    - a FastAPI or Django Ninja return under the default response class,
+      which sends it as JSON, or under `PlainTextResponse`, `JSONResponse` or
+      another class that is not HTML.
+  - **FastAPI routes that render HTML.** A FastAPI route whose response class
+    is `HTMLResponse`, or Starlette's `Response`, which sends no Content-Type
+    for the browser to sniff, sends a returned `str` as the page. Its returns
+    are sinks, judged as `HTMLResponse(value)`. Only a proven flow is
+    reported, as for Flask.
+    - The class is the route decorator's `response_class=`, else the
+      `default_response_class=` of the `FastAPI(...)` or `APIRouter(...)` the
+      decorator is called on, when this file binds it once at module level.
+      A decorator's class overrides the default.
+    - A returned response object (`JSONResponse(...)`) is sent as it is, and a
+      dict, list or tuple cannot be rendered as HTML, so none of them is a
+      sink.
   - **Not reported:**
     - a dict or list, which Flask sends as JSON: a literal, a comprehension,
-      a name bound to one, or request data read whole (`request.get_json()`,
+      a `.split()` list, request data read whole (`request.get_json()`,
       `request.json`, `request.args`, `request.args.to_dict()`,
-      `request.form.getlist(...)`);
+      `request.form.getlist(...)`), or a name every assignment of which is
+      one of these;
     - a response object (`Response(...)`, `make_response(...)`,
       `redirect(...)`, `send_file(...)`, `app.send_static_file(...)`), a
       template (`render_template("page.html", ...)`) or `jsonify(...)`;
-    - an escaped value, such as `escape(q)` or `f"<p>{escape(q)}</p>"`.
+    - an escaped value, such as `escape(q)` or `f"<p>{escape(q)}</p>"`;
+    - a value that holds no text, such as `request.args.get("page", 1,
+      type=int)` or `f"<p>{q.isdigit()}</p>"`.
   - **Tuples.** A returned `(body, status)`, `(body, headers)` or
     `(body, status, headers)` is checked on its body. It is not a sink when a
     literal headers dict or list of pairs declares a `Content-Type` that is not
-    HTML (`{"Content-Type": "application/json"}`), or when the status is 204
-    or 304.
+    HTML (`{"Content-Type": "application/json"}`), when the status is 204 or
+    304, or when it is a redirect with a literal `Location` header
+    (`return "Moved", 302, {"Location": "/x"}`).
   - **One finding per flow.** `return make_response(f"...")`,
     `return Response(f"...")` and `return Markup(...)` are reported once, by
     the constructor's own finding.
@@ -354,7 +398,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - a headers dict held in a variable (`return body, 200, headers`), which
       counts as HTML;
     - a content type set elsewhere, such as in an `@app.after_request` hook
-      or by a custom `response_class`;
+      or by a custom Flask `response_class`;
+    - a FastAPI response class set on `app.include_router(...)`, on a router
+      or app from another file, or through a subclass of `HTMLResponse`;
     - a view registered with `app.add_url_rule(...)`, such as a class-based
       `MethodView`, which is not read as a route.
   - **Framework parity:** no corpus case returns a string from a view, so the

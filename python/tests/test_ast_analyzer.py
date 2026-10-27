@@ -4545,9 +4545,13 @@ class TestFlaskViewReturnedBody:
                 '        return f"<p>{q}</p>"',
                 "return jsonify(html=Page().html())",
             ],
-            ['render = lambda: f"<p>{q}</p>"', "return jsonify(html=render())"],
+            [
+                "async def render():",
+                '    return f"<p>{q}</p>"',
+                "return jsonify(html=1)",
+            ],
         ],
-        ids=["nested-def", "nested-class-method", "lambda"],
+        ids=["nested-def", "nested-class-method", "nested-async-def"],
     )
     def test_a_return_nested_inside_the_view_is_not_the_views(
         self, lines: list[str]
@@ -4678,3 +4682,220 @@ class TestFlaskViewReturnedBody:
     def test_whole_body_helper_method_is_opaque_for_django_too(self, lines: str) -> None:
         # The rule is the shared body analysis's, not the return sink's.
         assert self._xss(_DJANGO_VIEW + lines) == []
+
+
+class TestFlaskViewReturnedBodyFixRound1:
+    """Task 3.3 fix round 1: the shared body rules keep request-rooted and
+    str-method bodies reportable, honour Werkzeug's ``type=`` conversion,
+    treat comparisons and bool/int str methods as holding no text, drop the
+    body of a redirect with a ``Location`` header, read every binding of a
+    body name, and make a FastAPI route whose response class is HTML a sink."""
+
+    _xss = staticmethod(TestFlaskViewReturnedBody._xss)
+
+    def _proven(self, src: str) -> dict:
+        found = self._xss(src)
+        assert len(found) == 1, found
+        assert found[0].get("reachable") is True, found[0]
+        return found[0]
+
+    # -- 1. request-rooted receivers and the str split family ------------------
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            _DJANGO_VIEW + "    return HttpResponse(request.FILES['f'].read())\n",
+            _DJANGO_VIEW + "    up = request.FILES.get('f')\n    return HttpResponse(up.read())\n",
+            _DJANGO_VIEW + "    return HttpResponse(request.FILES['f'].read().decode())\n",
+            _DJANGO_VIEW + "    return HttpResponse(name.split(',')[0])\n",
+            _DJANGO_VIEW + "    return HttpResponse(name.split(','))\n",
+            _DJANGO_VIEW + "    return HttpResponse(name.partition(':')[2])\n",
+            _flask_view("return make_response(request.files['f'].read())"),
+            _flask_view("return make_response(request.files['f'].read(), 200)"),
+            _flask_view("return make_response(q.splitlines()[0])"),
+            _flask_view("return make_response(q.rpartition('/')[2])"),
+        ],
+        ids=[
+            "dj-files-read", "dj-files-get-read", "dj-files-read-decode", "dj-split-index",
+            "dj-split-list", "dj-partition", "mr-files-read", "mr-files-read-status",
+            "mr-splitlines", "mr-rpartition",
+        ],
+    )
+    def test_request_rooted_and_split_bodies_are_xss(self, src: str) -> None:
+        self._proven(src)
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["return request.files['f'].read()"],
+            ["f = request.files.get('f')", "return f.read()"],
+            ["return request.files['f'].stream.read()"],
+            ["return request.files['f'].read().decode('utf-8')"],
+            ["return q.split(',')[0]"],
+            ["return q.rsplit('/', 1)[-1]"],
+            ["return request.headers.get('X-Forwarded-For', '').split(',')[0]"],
+            ["return q.partition(':')[2]"],
+        ],
+        ids=[
+            "files-read", "files-get-read", "files-stream-read", "files-read-decode",
+            "split-index", "rsplit-index", "header-split", "partition",
+        ],
+    )
+    def test_request_rooted_and_split_returns_are_xss(self, lines: list[str]) -> None:
+        f = self._proven(_flask_view(*lines))
+        assert f["sink"].startswith("return ")
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["return q.split(',')"],
+            ["return make_response(q.splitlines())"],
+            ["return request.args.get('q', '').rsplit(',')"],
+        ],
+        ids=["split", "mr-splitlines", "request-rsplit"],
+    )
+    def test_a_split_list_flask_sends_as_json_is_not_xss(self, lines: list[str]) -> None:
+        assert self._xss(_flask_view(*lines)) == []
+
+    # -- 2. Werkzeug's type= conversion ---------------------------------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["page = request.args.get('page', 1, type=int)", "return f'<p>Page {page}</p>'"],
+            ["return f\"<p>{request.args.get('page', type=int)}</p>\""],
+            ["page = request.args.get('page', 1, int)", "return f'<p>Page {page}</p>'"],
+            ["n = request.args.get('n', 0.0, type=float)", "return make_response(f'<p>{n}</p>')"],
+            ["on = request.form.get('on', False, type=bool)", "return f'<p>{on}</p>', 200"],
+            ["u = request.args.get('u', type=uuid.UUID)", "return f'<p>{u}</p>'"],
+            [
+                "page = request.args.get('page', 1, type=int)",
+                "return make_response(f'<p>Page {page}</p>')",
+            ],
+        ],
+        ids=["int-bound", "int-inline", "int-positional", "float-mr", "bool-tuple", "uuid", "int-mr"],
+    )
+    def test_request_get_with_a_value_type_is_not_xss(self, lines: list[str]) -> None:
+        assert self._xss(_flask_view(*lines, prelude="import uuid\n")) == []
+
+    def test_request_get_with_type_str_is_xss(self) -> None:
+        self._proven(_flask_view("s = request.args.get('s', '', type=str)", "return f'<p>{s}</p>'"))
+
+    # -- 3. comparisons and bool/int str methods hold no text ------------------
+
+    @pytest.mark.parametrize(
+        "ret",
+        [
+            "f\"<p>{q == 'x'}</p>\"",
+            "make_response(f\"<p>{q == 'x'}</p>\")",
+            "f'<p>{q.isdigit()}</p>'",
+            "f\"<p>{q.count('a')} a</p>\"",
+            "f\"<p>{q.startswith('a')}</p>\"",
+            "f\"<p>{q.find('a')}</p>\"",
+            "f'<p>{not q}</p>'",
+            "f\"<p>{'yes' if q.isalnum() else 'no'}</p>\"",
+        ],
+        ids=["compare", "compare-mr", "isdigit", "count", "startswith", "find", "not", "ifexp-test"],
+    )
+    def test_values_that_hold_no_text_are_not_xss(self, ret: str) -> None:
+        assert self._xss(_flask_view(f"return {ret}")) == []
+
+    # -- 4. a redirect with a Location header renders no body ------------------
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            _flask_view("return f'Redirecting to {q}', 302, {'Location': '/x'}"),
+            _flask_view("return f'Redirecting to {q}', 301, [('location', '/x')]"),
+            _flask_view("return make_response(f'Redirecting to {q}', 303, {'Location': '/x'})"),
+            _DJANGO_VIEW
+            + "    return HttpResponse(f'Moved: {name}', status=302, headers={'Location': '/x'})\n",
+        ],
+        ids=["return-302", "return-301-pairs", "mr-303", "django-302"],
+    )
+    def test_redirect_with_location_is_not_xss(self, src: str) -> None:
+        assert self._xss(src) == []
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["return f'Redirecting to {q}', 302"],
+            ["return f'<p>{q}</p>', 200, {'Location': '/x'}"],
+        ],
+        ids=["302-without-location", "location-without-redirect-status"],
+    )
+    def test_redirect_needs_both_status_and_location(self, lines: list[str]) -> None:
+        self._proven(_flask_view(*lines))
+
+    # -- 5. every binding of a body name counts ---------------------------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["body = f'<p>{q}</p>'", "if request.args.get('fmt') == 'json':", "    body = {'q': q}", "return make_response(body)"],
+            ["body = {'q': q}", "if request.args.get('fmt') == 'html':", "    body = f'<p>{q}</p>'", "return make_response(body)"],
+            ["body = f'<p>{q}</p>'", "if request.args.get('fmt') == 'json':", "    body = {'q': q}", "return body"],
+            ["body = {'q': q}", "if request.args.get('fmt') == 'html':", "    body = f'<p>{q}</p>'", "return body"],
+        ],
+        ids=["mr-text-first", "mr-dict-first", "return-text-first", "return-dict-first"],
+    )
+    def test_a_body_name_with_any_text_binding_is_text(self, lines: list[str]) -> None:
+        self._proven(_flask_view(*lines))
+
+    def test_a_body_name_bound_only_to_json_data_is_not_xss(self) -> None:
+        src = _flask_view(
+            "body = {'q': q}", "if request.args.get('many'):", "    body = [q]", "return body"
+        )
+        assert self._xss(src) == []
+
+    # -- 6. a FastAPI route whose response class is HTML ------------------------
+
+    _FASTAPI = (
+        "from fastapi import APIRouter, FastAPI\n"
+        "from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse\n"
+    )
+
+    @pytest.mark.parametrize(
+        "head, deco",
+        [
+            ("app = FastAPI()\n", "@app.get('/s', response_class=HTMLResponse)"),
+            ("router = APIRouter(default_response_class=HTMLResponse)\n", "@router.get('/s')"),
+            ("app = FastAPI(default_response_class=HTMLResponse)\n", "@app.get('/s')"),
+        ],
+        ids=["decorator", "router-default", "app-default"],
+    )
+    def test_fastapi_html_response_class_return_is_xss(self, head: str, deco: str) -> None:
+        f = self._proven(
+            self._FASTAPI + head + deco + "\ndef s(q: str = ''):\n    return f'<p>{q}</p>'\n"
+        )
+        assert f["sink"] == "return f'<p>{q}</p>'"
+        assert f["route"]["framework"] == "fastapi"
+
+    @pytest.mark.parametrize(
+        "head, deco, ret",
+        [
+            ("app = FastAPI()\n", "@app.get('/s', response_class=PlainTextResponse)", "f'<p>{q}</p>'"),
+            (
+                "app = FastAPI(default_response_class=HTMLResponse)\n",
+                "@app.get('/s', response_class=JSONResponse)",
+                "f'<p>{q}</p>'",
+            ),
+            ("app = FastAPI()\n", "@app.get('/s', response_class=HTMLResponse)", "JSONResponse({'q': q})"),
+            ("app = FastAPI()\n", "@app.get('/s', response_class=HTMLResponse)", "{'q': q}"),
+            ("app = FastAPI()\n", "@app.get('/s', response_class=HTMLResponse)", "f'<p>{SITE}</p>'"),
+        ],
+        ids=["plain-text", "decorator-overrides-default", "response-object", "dict", "unproven"],
+    )
+    def test_fastapi_non_html_or_unproven_return_is_not_xss(
+        self, head: str, deco: str, ret: str
+    ) -> None:
+        src = self._FASTAPI + "SITE = 'x'\n" + head + deco + f"\ndef s(q: str = ''):\n    return {ret}\n"
+        assert self._xss(src) == []
+
+    def test_fastapi_html_route_returning_a_constructor_is_reported_once(self) -> None:
+        found = self._xss(
+            self._FASTAPI
+            + "app = FastAPI()\n@app.get('/s', response_class=HTMLResponse)\n"
+            + "def s(q: str = ''):\n    return HTMLResponse(f'<p>{q}</p>')\n"
+        )
+        assert [f["sink"] for f in found] == ["HTMLResponse(f'<p>{q}</p>')"]
