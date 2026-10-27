@@ -965,7 +965,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         """Yield ``(call, scope, arg)`` for every call in this file of the
         innermost enclosing function that passes an argument for its parameter
         ``param_name``: the positional argument at the parameter's index, or
-        the keyword of that name. ``scope`` is where the call runs (see
+        the keyword of that name (the only way to pass a keyword-only one). ``scope`` is where the call runs (see
         `_build_callsite_index`). Yields nothing once a hop is under way
         (`_interproc_depth`): one hop, never into the caller's callers.
 
@@ -975,16 +975,20 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return
         func = self._func_stack[-1]
         params = [a.arg for a in func.args.posonlyargs + func.args.args]
-        if param_name not in params:
+        # A keyword-only parameter (after `*`) is passed by keyword alone.
+        if param_name in params:
+            idx: int | None = params.index(param_name)
+        elif any(a.arg == param_name for a in func.args.kwonlyargs):
+            idx = None
+        else:
             return
-        idx = params.index(param_name)
         if self._callsite_index is None:
             self._callsite_index = self._build_callsite_index()
         if isinstance(self._scope_parents.get(func), ast.ClassDef):
             return
         for call, scope in self._callsite_index.get(func.name, []):
             arg = None
-            if idx < len(call.args):
+            if idx is not None and idx < len(call.args):
                 arg = call.args[idx]
             else:
                 for kw in call.keywords:
@@ -2622,12 +2626,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             if node.args:
                 sink_name = self._xss_sink_name(node)
                 sink_expr = f"{sink_name}({_ast_expr_text(node.args[0])})"
-                with self._without_template_sources():
-                    chain = self._collect_taint_chain(
-                        node.args[0],
-                        node.lineno,
-                        sink_expr,
-                    )
+                chain = self._collect_taint_chain(
+                    node.args[0],
+                    node.lineno,
+                    sink_expr,
+                )
             self._emit_finding(
                 "PY_XSS_HTML_SINK",
                 _XSS_HTML_SINK_TITLE,
@@ -4188,39 +4191,12 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _reports_html_sink(self, node: ast.Call) -> bool:
         """True when visit_Call's Markup/mark_safe/render_template_string
         branch reports ``node``: a known HTML-render sink whose argument is not
-        fully escaped (B5).
-
-        One flow, one finding (Task 3.4): when the argument renders a template
-        that PY_SSTI reports (`_renders_reported_template`), the page is that
-        rule's, and the sink is reported only when something else in the
-        argument, such as a render argument, can carry text
-        (`_html_body_carries_text`, which reads a template object as holding
-        none)."""
-        if not self._is_xss_html_sink(node) or self._expr_is_fully_escaped(node.args[0]):
-            return False
-        arg = node.args[0]
-        if self._renders_reported_template(arg):
-            return self._html_body_carries_text(arg, node.lineno)
-        return True
-
-    def _renders_reported_template(
-        self, expr: ast.AST, _seen: frozenset[str] = frozenset(), _depth: int = 0
-    ) -> bool:
-        """True when ``expr``, or a name it reads through the bindings in
-        scope, holds a template construction that PY_SSTI reports
-        (`_ssti_sink`)."""
-        if _depth >= _MAX_TAINT_HOPS:
-            return False
-        for n in ast.walk(expr):
-            if isinstance(n, ast.Call) and self._ssti_sink(n) is not None:
-                return True
-            if isinstance(n, ast.Name) and n.id not in _seen:
-                bound = self._scope_binding(n.id)
-                if bound is not None and self._renders_reported_template(
-                    bound, _seen | {n.id}, _depth + 1
-                ):
-                    return True
-        return False
+        fully escaped (B5). These sinks are released, so their findings are
+        frozen (R-pf47): a template built from request input in the argument
+        is reported by PY_SSTI beside them, never instead of them."""
+        return self._is_xss_html_sink(node) and not (
+            node.args and self._expr_is_fully_escaped(node.args[0])
+        )
 
     # ─── HTML response constructors (Task 3.2) ──────────────────────
     #
@@ -5319,7 +5295,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 bound, _seen | {expr.id}, _depth + 1
             )
         if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
-            return self._is_file_system_handle(expr.left, _seen, _depth + 1)
+            return not self._is_request_segment(expr.right) and self._is_file_system_handle(
+                expr.left, _seen, _depth + 1
+            )
         if isinstance(expr, ast.Attribute) and expr.attr in _PATH_DERIVING_ATTRS:
             return self._is_file_system_handle(expr.value, _seen, _depth + 1)
         if not isinstance(expr, ast.Call):
@@ -5327,10 +5305,29 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         func = expr.func
         if self._is_builtin_open(func) or self._is_pathlib_ctor_call(expr):
             return True
+        segments = [*expr.args, *(kw.value for kw in expr.keywords)]
         if isinstance(func, ast.Attribute) and func.attr in _PATH_DERIVING_METHODS:
-            return self._is_file_system_handle(func.value, _seen, _depth + 1)
+            return not any(
+                self._is_request_segment(seg) for seg in segments
+            ) and self._is_file_system_handle(func.value, _seen, _depth + 1)
         origin = self._callee_origin(func)
-        return origin in _FILE_OPEN_CALLS or origin in _RESOURCE_FILES_CALLS
+        if origin in _RESOURCE_FILES_CALLS:
+            return not any(self._is_request_segment(seg) for seg in segments)
+        return origin in _FILE_OPEN_CALLS
+
+    def _is_request_segment(self, segment: ast.AST) -> bool:
+        """True when a segment a path derivation adds (``base / segment``,
+        ``.joinpath(segment)``, ``.with_name(segment)``, the package of
+        ``importlib.resources.files(segment)``) is proven request input
+        (`_collect_taint_chain`). PY_PATH_TRAVERSAL models ``open(...)`` and
+        ``Path(...)`` but not these joins, so a request-chosen segment makes
+        the read the request's (R-pf48). A segment that is only a parameter no
+        caller is proven to fill, as in the full-stack-fastapi-template email
+        renderer, keeps the read trusted."""
+        if isinstance(segment, ast.Constant):
+            return False
+        line = getattr(segment, "lineno", 0)
+        return bool(self._collect_taint_chain(segment, line, _ast_expr_text(segment)))
 
     def _is_builtin_open(self, func: ast.AST) -> bool:
         """True for a bare ``open`` that is the builtin: not imported, not

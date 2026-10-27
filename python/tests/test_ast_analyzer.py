@@ -4028,6 +4028,24 @@ class TestHelperTaintThroughCallerAssignment:
         )
         assert chain[0]["expr"] == "request.GET['h']"
 
+    def test_keyword_only_parameter_bound_in_caller(self) -> None:
+        # Task 3.4 (R-pf48): a parameter after `*` is passed by keyword alone,
+        # as the full-stack-fastapi-template email renderer's are.
+        chain = self._proven(
+            'def _ping(*, host):\n    subprocess.run(f"ping -c 1 {host}", shell=True)\n'
+            + "def view(request):\n"
+            + '    target = request.GET["h"]\n'
+            + "    return _ping(host=target)\n"
+        )
+        assert chain[0]["expr"] == "request.GET['h']"
+
+    def test_keyword_only_parameter_with_a_constant_caller_is_not_reachable(self) -> None:
+        self._unproven(
+            'def _ping(*, host):\n    subprocess.run(f"ping -c 1 {host}", shell=True)\n'
+            + "def view(request):\n"
+            + '    return _ping(host="example.com")\n'
+        )
+
     def test_annotated_assignment_in_caller(self) -> None:
         chain = self._proven(
             _PING
@@ -5317,7 +5335,7 @@ class TestServerSideTemplateInjection:
                     "    template: Template = Template(template_str)",
                     "    return template.render(context)",
                     "def send(request):",
-                    '    return render_email_template(template_name=request.GET["t"], context={})',
+                    '    return render_email_template(template_name="reset.html", context={})',
                 ],
             ),
             (
@@ -5338,7 +5356,7 @@ class TestServerSideTemplateInjection:
             ),
             (
                 "from importlib.resources import files\n",
-                ["def render(name, ctx):", '    return Template(files("app").joinpath(name).read_text()).render(ctx)'],
+                ["def render(ctx):", '    return Template(files("app").joinpath("t.html").read_text()).render(ctx)'],
             ),
             (
                 "import codecs, io\n",
@@ -5585,6 +5603,43 @@ class TestServerSideTemplateInjection:
     ) -> None:
         self._proven(_ssti_view(*lines, prelude="from jinja2 import Template\n" + prelude))
 
+    @pytest.mark.parametrize(
+        "prelude, line",
+        [
+            ("from pathlib import Path\n", "return Template((Path('tpl') / src).read_text()).render()"),
+            ("from pathlib import Path\n", "return Template(Path('tpl').joinpath(src).read_text()).render()"),
+            (
+                "import importlib.resources\n",
+                "return Template(importlib.resources.files('app').joinpath(src).read_text()).render()",
+            ),
+            (
+                "import importlib.resources\n",
+                "return Template((importlib.resources.files('app') / src).read_text()).render()",
+            ),
+        ],
+        ids=["Path-div", "Path-joinpath", "files-joinpath", "files-div"],
+    )
+    def test_a_request_segment_joined_onto_a_path_is_ssti(self, prelude: str, line: str) -> None:
+        # R-pf48: PY_PATH_TRAVERSAL does not model pathlib joins, so a derived
+        # path is trusted only when no segment it adds is proven request input.
+        self._proven(_ssti_view(line, prelude="from jinja2 import Template\n" + prelude))
+
+    def test_email_renderer_called_with_a_request_name_is_ssti(self) -> None:
+        # The full-stack-fastapi-template shape, called with request input:
+        # the parameter segment is proven through the caller.
+        f = self._proven(
+            "from pathlib import Path\n"
+            "from flask import request\n"
+            "from jinja2 import Template\n"
+            "def render_email_template(*, template_name, context):\n"
+            '    template_str = (Path(__file__).parent / "email-templates" / template_name).read_text()\n'
+            "    return Template(template_str).render(context)\n"
+            "def send():\n"
+            '    return render_email_template(template_name=request.args["t"], context={})\n',
+            "request.args",
+        )
+        assert f["line"] == "mod.py:6"
+
     def test_fastapi_string_wrapped_in_stringio_is_ssti(self) -> None:
         self._proven(
             "import io\n"
@@ -5662,9 +5717,49 @@ class TestServerSideTemplateInjection:
         ],
         ids=["Markup", "mark_safe", "render_template_string", "Markup-bound"],
     )
-    def test_html_render_sink_of_a_template_built_from_request_is_ssti_only(self, src: str) -> None:
+    def test_released_html_render_sinks_keep_their_xss_beside_ssti(self, src: str) -> None:
+        # R-pf47: Markup, mark_safe and render_template_string are released
+        # PY_XSS_HTML_SINK sinks whose findings are frozen: they keep the
+        # base finding, proof and sink, and PY_SSTI is reported beside them.
+        import ast
+
         found = _collect_src(src)
-        assert [f["id"] for f in found] == ["SEC-PY_SSTI"], found
+        by_id = {f["id"]: f for f in found}
+        assert sorted(by_id) == ["SEC-PY_SSTI", "SEC-PY_XSS_HTML_SINK"], found
+        xss = by_id["SEC-PY_XSS_HTML_SINK"]
+        assert xss["reachable"] is True, xss
+        returned = src.strip().splitlines()[-1].strip().removeprefix("return ")
+        assert xss["sink"] == ast.unparse(ast.parse(returned)), xss
+        assert by_id["SEC-PY_SSTI"]["reachable"] is True
+
+    @pytest.mark.parametrize(
+        "lines, sink, ids",
+        [
+            (
+                ["name = request.args['n']", "src = request.args['t']",
+                 "return Markup(build_html(name, Template(src).render()))"],
+                "Markup(build_html(name, Template(src).render()))",
+                ["SEC-PY_SSTI", "SEC-PY_XSS_HTML_SINK"],
+            ),
+            (
+                ["return Markup(Template(open(request.args['p']).read()).render())"],
+                "Markup(Template(open(request.args['p']).read()).render())",
+                ["SEC-PY_PATH_TRAVERSAL", "SEC-PY_XSS_HTML_SINK"],
+            ),
+        ],
+        ids=["helper-with-tainted-name", "file-template-request-path"],
+    )
+    def test_released_markup_keeps_its_proof(
+        self, lines: list[str], sink: str, ids: list[str]
+    ) -> None:
+        found = _collect_src(
+            "from flask import request\nfrom markupsafe import Markup\nfrom jinja2 import Template\n"
+            "def v():\n" + "".join(f"    {line}\n" for line in lines)
+        )
+        assert sorted(f["id"] for f in found) == ids, found
+        (xss,) = [f for f in found if f["id"] == "SEC-PY_XSS_HTML_SINK"]
+        assert xss["sink"] == sink
+        assert xss["reachable"] is True, xss
 
     def test_html_render_sink_keeps_xss_for_tainted_render_args(self) -> None:
         found = _collect_src(

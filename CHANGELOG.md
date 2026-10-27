@@ -474,9 +474,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       `.read_bytes()`, decoded or not, on a file opened with `open(...)`,
       `io.open(...)` or `codecs.open(...)` (`with open(path) as fh` too), on
       a pathlib path (`Path(...)`, `/`, `.parent`, `.joinpath(...)`), or on
-      an `importlib.resources.files(...)` traversable. Which file is read is
-      the path-traversal rule's concern: a path the request chooses is still
-      reported, and proven, as `python.ast/PY_PATH_TRAVERSAL`;
+      an `importlib.resources.files(...)` traversable.
+      - The path given to `open(...)` or `Path(...)` is the path-traversal
+        rule's concern: a path the request chooses there is still reported,
+        and proven, as `python.ast/PY_PATH_TRAVERSAL`.
+      - `python.ast/PY_PATH_TRAVERSAL` does not model a pathlib join, so a
+        path derived with `/`, `.joinpath(...)`, `.with_name(...)` and the
+        like, or an `importlib.resources.files(...)` package, is trusted only
+        when no segment it adds is proven request input. With one,
+        `(Path("tpl") / request.args["t"]).read_text()` and
+        `files("app").joinpath(request.args["t"]).read_text()` are reported,
+        and proven, as `PY_SSTI`. A segment that is only a helper's parameter,
+        such as the full-stack-fastapi-template email renderer's
+        `template_name`, which its callers fill with constants, keeps the
+        read trusted;
     - a package resource read by a constant name:
       `pkgutil.get_data("app", "t.html")` or
       `importlib.resources.read_text("app", "t.html")`. A resource name that
@@ -491,18 +502,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`render_template_string` keeps its rule.** Flask's
     `render_template_string(src)` is still reported as
     `python.ast/PY_XSS_HTML_SINK`, as before, and never as `PY_SSTI`.
-  - **One finding per flow.** A template built from request input and
-    rendered into a page, such as `HTMLResponse(Template(src).render())`,
-    `Markup(Template(src).render())`, `mark_safe(...)` of one, or
-    `render_template_string(...)` of one, is reported once, as `PY_SSTI`.
-    The XSS finding on that page now follows only what `.render(...)` is
-    passed. It is reported when a render argument can carry text, as in
+  - **One finding per flow, for the new HTML-response sinks only.** A
+    template built from request input and rendered into an HTML response
+    (`HTMLResponse(Template(src).render())`, Django `HttpResponse`, Flask
+    `make_response` and `Response`), or returned from a Flask view or an
+    HTML FastAPI route, is reported once, as `PY_SSTI`. These are the HTML
+    response sinks added above in this release. Their XSS finding now
+    follows only what `.render(...)` is passed: it is reported when a render
+    argument can carry text, as in
     `HTMLResponse(Template(src).render(name=name))`, and proven only when
-    that argument is request input. This applies to a Flask view's returned
-    string too. A construction with no template source argument, such as
-    `Template(*args)` or Mako's `Template(filename=...)`, is neither a sink
-    of this rule nor a template object to these XSS rules, which read it as
-    before.
+    that argument is request input. A construction with no template source
+    argument, such as `Template(*args)` or Mako's `Template(filename=...)`,
+    is neither a sink of this rule nor a template object to these XSS rules,
+    which read it as before.
+  - **Released XSS sinks are unchanged.** `Markup(...)`, `mark_safe(...)`
+    and `render_template_string(...)` keep their
+    `python.ast/PY_XSS_HTML_SINK` finding, its proof and its taint chain
+    exactly as before. When their argument renders a template built from
+    request input, as in `Markup(Template(src).render())`, `PY_SSTI` is
+    reported beside that finding.
+  - **Helper parameters after `*`.** The one-hop helper check now follows a
+    keyword-only parameter (`def render(*, template_name)`) to the callers
+    in the file that pass it by keyword, for every rule that proves through
+    that check. Before, such a parameter was never proven. No existing
+    finding changed on the probe corpus (the parity trees, the noise
+    targets, eight Flask applications and eleven Django-family libraries).
   - **Imports.** `import a.b` now resolves `a.b.c` to `a.b.c`, as Python
     binds it, wherever the engine reads an import path: this rule, and the
     HTML-response sink's constructors, renderers, value types and redirect
@@ -510,10 +534,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `django.template.loader.get_template(...).render(...)` after
     `import django.template.loader` is now recognised as Django's
     autoescaped render, and is no longer reported as XSS.
-  - **Identity.** Existing findings keep their fingerprints. The new findings
-    are new. Their sink names the constructor and the source, as in
-    `jinja2.Template(template_src)` or `jinja2.Environment.from_string(src)`,
-    whatever the import style.
+  - **Identity.** Existing findings keep their fingerprints: existing
+    `python.ast/PY_XSS_HTML_SINK` findings keep theirs, and `PY_SSTI` may
+    appear alongside them. The new findings are new. Their sink names the
+    constructor and the source, as in `jinja2.Template(template_src)` or
+    `jinja2.Environment.from_string(src)`, whatever the import style.
   - **Catalog.** The security catalog lists `python.ast/PY_SSTI`, 105 checks
     in all.
   - **Not covered:**
