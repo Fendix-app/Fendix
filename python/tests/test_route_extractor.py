@@ -109,8 +109,38 @@ def test_syntax_error_returns_empty():
 def test_as_dict_shape():
     src = '@app.get("/x")\ndef h(): pass\n'
     d = extract_routes(src, "a.py").routes[0].as_dict()
-    assert set(d) == {"method", "pattern", "handler", "file", "line"}
+    assert set(d) == {"method", "pattern", "handler", "file", "line", "framework"}
     assert d["file"] == "a.py" and d["pattern"] == "/x"
+
+
+@pytest.mark.parametrize(
+    "rel, src, framework",
+    [
+        (
+            "app.py",
+            'from flask import Flask\napp = Flask(__name__)\n@app.route("/x")\ndef h():\n    return ""\n',
+            "flask",
+        ),
+        (
+            "app.py",
+            'from fastapi import FastAPI\napp = FastAPI()\n@app.get("/x")\ndef h():\n    return ""\n',
+            "fastapi",
+        ),
+        (
+            "app/urls.py",
+            'from django.urls import path\nfrom app import views\nurlpatterns = [path("x/", views.h)]\n',
+            "django",
+        ),
+    ],
+    ids=["flask", "fastapi", "django"],
+)
+def test_route_framework_is_recorded(rel, src, framework):
+    # Task 3.3: the framework that declared a route decides how a handler's
+    # returned value is sent (Flask: a str is text/html; FastAPI: JSON), and
+    # it is reported with the route.
+    [route] = extract_routes(src, rel).routes
+    assert route.framework == framework
+    assert route.as_dict()["framework"] == framework
 
 
 def test_decorator_route_has_no_handler_modules():

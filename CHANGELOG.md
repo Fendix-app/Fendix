@@ -252,11 +252,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         either: neither autoescapes by default. Raw Jinja2 means
         `jinja2.Template`, or an `Environment`'s `from_string`/`get_template`.
         So `HttpResponse(Template(src).render(name=name))` is reported;
-    - Flask's `make_response({...})` or `make_response([...])`, which Flask
-      sends as JSON;
-    - a body that is, as a whole, the result of a helper function or of a
-      `self`/`cls` method, such as `build_page(name)`, or
-      `email_data.html_content` with
+    - Flask's `make_response(...)` of a dict or list, which Flask sends as
+      JSON: a literal, a comprehension, a name bound to one, or request data
+      read whole (`request.get_json()`, `request.json`, `request.args`,
+      `request.form`, `request.args.to_dict()`, `request.form.getlist(...)`);
+    - Flask's `make_response(...)` of a response object, which Flask sends as
+      it is (`make_response(Response(...))`);
+    - a body that is, as a whole, the result of a helper function, of a
+      `self`/`cls` method, or of a method on a value that is not a string
+      method, such as `build_page(name)`, `storage.download(path)`,
+      `settings.get_sp_metadata()`, or `email_data.html_content` with
       `email_data = generate_reset_password_email(email=email)`. The engine
       cannot see what a function returns, and a function that returns the
       whole page is usually a renderer that escapes.
@@ -267,9 +272,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - A class constructor carries its arguments' text anywhere, so
         `form = NameForm(request.POST)` then `form.cleaned_data["name"]` is
         reported.
-      - String methods (`.format`, `.join`, `.strip`), `str()`, `json.dumps`,
-        `json.loads`, `textwrap.dedent`, `urllib.parse.unquote` and
-        `unquote_plus`, `html.unescape` and `map` pass text through.
+      - String methods (`.format`, `.join`, `.strip`, `.replace`, `.encode`
+        and the rest of `str`'s), a mapping's `.get`, a raw template's
+        `.render`, `str()`, `json.dumps`, `json.loads`, `textwrap.dedent`,
+        `urllib.parse.unquote` and `unquote_plus`, `html.unescape` and `map`
+        pass text through.
       - These hold no text:
         - `int()`, `float()`, `bool()`, `len()`, `round()` and `abs()`;
         - `uuid.UUID`, `decimal.Decimal` and `fractions.Fraction`;
@@ -279,7 +286,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     request data in it is reported. With `content_type="application/json"` it
     is not.
   - **One finding per flow.** `make_response(Markup(x))` is reported once, by
-    the `Markup` finding it already had.
+    the `Markup` finding it already had, and `make_response(Response(x))` once,
+    by the `Response` finding.
   - **Identity.** Existing `python.ast/PY_XSS_HTML_SINK` findings keep their
     fingerprints. The new findings are new. Their sink is the constructor and
     its body, as in `HttpResponse(f'<h1>{name}</h1>')`.
@@ -296,6 +304,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     cases are detected and warn. No safe case is flagged. The Python
     frameworks detect 93 of 108 vulnerable cases, up from 84, and block on
     64, up from 58.
+- **A string a Flask view returns is now an XSS sink.** Flask sends a `str` a
+  view returns as `text/html`, so `return f"<p>{request.args['q']}</p>"`
+  writes request input into a page that nothing escapes, and it was not
+  reported. The engine now judges a Flask or Quart view's return value as the
+  response Flask builds from it, `make_response(value)`, under the existing
+  `python.ast/PY_XSS_HTML_SINK` rule and with the same rules as
+  `make_response(...)`: escaping, allowlists, autoescaped templates,
+  `jsonify`, `json.dumps`, helper results and values that hold no text.
+  - **Only a proven flow.** A returned string is reported only when request
+    input is proven to reach it. The finding is marked reachable, carries a
+    taint chain and may block. Every view returns something, so a string built
+    from a value the engine cannot trace to the request (a database read, an
+    exception's text, a constant) is not reported, not even as a warning.
+  - **Only a Flask route's own returns.** The function must be the handler of
+    a route whose framework is Flask, decided as for route parameters (the
+    file's imports, which count Quart and Sanic as Flask, then the pattern,
+    `.route(...)` and the project's dominant framework). These are not sinks:
+    - a return in a def, lambda or class nested in the view, or in a helper
+      that no route points at;
+    - a return in a view that yields, which streams what it yields;
+    - a FastAPI or Django Ninja return, which is sent as JSON, a Django view's
+      (Django needs an `HttpResponse`), and a route whose framework is
+      unknown.
+  - **Not reported:**
+    - a dict or list, which Flask sends as JSON: a literal, a comprehension,
+      a name bound to one, or request data read whole (`request.get_json()`,
+      `request.json`, `request.args`, `request.args.to_dict()`,
+      `request.form.getlist(...)`);
+    - a response object (`Response(...)`, `make_response(...)`,
+      `redirect(...)`, `send_file(...)`, `app.send_static_file(...)`), a
+      template (`render_template("page.html", ...)`) or `jsonify(...)`;
+    - an escaped value, such as `escape(q)` or `f"<p>{escape(q)}</p>"`.
+  - **Tuples.** A returned `(body, status)`, `(body, headers)` or
+    `(body, status, headers)` is checked on its body. It is not a sink when a
+    literal headers dict or list of pairs declares a `Content-Type` that is not
+    HTML (`{"Content-Type": "application/json"}`), or when the status is 204
+    or 304.
+  - **One finding per flow.** `return make_response(f"...")`,
+    `return Response(f"...")` and `return Markup(...)` are reported once, by
+    the constructor's own finding.
+  - **Identity.** Existing findings keep their fingerprints. The new findings
+    are new. Their sink is `return` and the body, as in
+    `return f'<p>{q}</p>'`, so adding a status or headers to the returned
+    tuple does not re-identify one.
+  - **Not covered:**
+    - a helper that builds the HTML and returns it to the view, as in
+      `return render_page(q)`;
+    - a headers dict held in a variable (`return body, 200, headers`), which
+      counts as HTML;
+    - a content type set elsewhere, such as in an `@app.after_request` hook
+      or by a custom `response_class`;
+    - a view registered with `app.add_url_rule(...)`, such as a class-based
+      `MethodView`, which is not read as a route.
+  - **Framework parity:** no corpus case returns a string from a view, so the
+    parity results do not change.
 
 ### Changed
 

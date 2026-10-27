@@ -404,6 +404,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # and the module's `_ModuleFacts`, collected once, on first need.
         self._route_sources: dict[ast.AST, frozenset[str]] = {}
         self._module_facts: _ModuleFacts | None = None
+        # Task 3.3: each def → whether it is a generator (a `yield` in its own
+        # scope), whose `return` value is not a response body.
+        self._generator_defs: dict[ast.AST, bool] = {}
 
     def _line_text(self, lineno: int) -> str:
         """Return the source line (1-indexed), or empty string."""
@@ -2969,6 +2972,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # async def is the same shape — share the implementation.
     visit_AsyncFunctionDef = visit_FunctionDef
 
+    def visit_Return(self, node: ast.Return) -> None:  # noqa: N802
+        """Task 3.3: report a string a Flask view returns unescaped
+        (`_report_flask_view_return`), then visit the returned expression."""
+        if node.value is not None and self._returns_from_flask_view():
+            self._report_flask_view_return(node)
+        self.generic_visit(node)
+
     def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
         """Record assignments so later sinks can resolve the bound value.
 
@@ -4116,13 +4126,18 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         request text unescaped. The body's taint chain then decides whether the
         flow is proven, exactly as for Markup/mark_safe."""
         ctor, package = self._resolve_html_response(node)
-        if not ctor:
-            return False
+        return bool(ctor) and self._response_body_is_html_sink(node, ctor, package)
+
+    def _response_body_is_html_sink(self, node: ast.Call, ctor: str, package: str) -> bool:
+        """Steps 2-4 above for a call to the constructor ``ctor`` of
+        ``package``, already resolved. A Flask view's return value is judged
+        here too, as the ``make_response(...)`` Flask turns it into
+        (`visit_Return`)."""
         body = self._html_response_body(node, ctor)
         if body is None or isinstance(body, ast.Constant):
             return False
-        # Flask serialises a dict or list body to JSON.
-        if ctor == "make_response" and isinstance(body, (ast.Dict, ast.List)):
+        # Flask sends a dict or list as JSON and a response object as it is.
+        if ctor == "make_response" and self._flask_body_is_not_text(body):
             return False
         if self._response_drops_body(node, ctor, package):
             return False
@@ -4134,11 +4149,133 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return False
         if not self._html_body_carries_text(body, node.lineno):
             return False
-        # One finding per flow: an HTML-render sink inside the body
-        # (`make_response(Markup(x))`) is reported by its own branch.
+        # One finding per flow: an HTML-render sink or an HTML response inside
+        # the body (`make_response(Markup(x))`, `make_response(Response(x))`)
+        # is reported by its own branch.
         return not any(
-            isinstance(sub, ast.Call) and self._reports_html_sink(sub)
+            isinstance(sub, ast.Call)
+            and (self._reports_html_sink(sub) or self._is_html_response_sink(sub))
             for sub in ast.walk(body)
+        )
+
+    def _flask_body_is_not_text(
+        self, body: ast.AST, _seen: frozenset[str] = frozenset(), _depth: int = 0
+    ) -> bool:
+        """True when Flask's ``make_response``, which Flask also applies to the
+        value a view returns, does not send ``body`` as text:
+
+        - a dict or list, which Flask sends as JSON: a literal, a
+          comprehension, or the request data Flask reads into one
+          (`_is_flask_request_mapping`, and its ``.to_dict()``/``.getlist()``);
+        - a class instance (a capitalised callee): a response object Flask
+          sends as it is (``Response(...)``, a project's response class), or a
+          sink with a branch of its own (``Markup(...)``).
+
+        Followed through the names the whole body is bound to, and through
+        both sides of a conditional or ``or``/``and``. Never through an
+        attribute or subscript read: ``form.name.data`` is text."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(body, (ast.Dict, ast.List, ast.DictComp, ast.ListComp)):
+            return True
+        if isinstance(body, ast.IfExp):
+            return all(
+                self._flask_body_is_not_text(b, _seen, _depth + 1)
+                for b in (body.body, body.orelse)
+            )
+        if isinstance(body, ast.BoolOp):
+            return all(self._flask_body_is_not_text(v, _seen, _depth + 1) for v in body.values)
+        if isinstance(body, ast.Name):
+            if body.id in _seen:
+                return False
+            bound = self._scope_binding(body.id)
+            return bound is not None and self._flask_body_is_not_text(
+                bound, _seen | {body.id}, _depth + 1
+            )
+        if _is_flask_request_mapping(body):
+            return True
+        if isinstance(body, ast.Call):
+            func = body.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in _FLASK_MAPPING_METHODS
+                and _is_flask_request_mapping(func.value)
+            ):
+                return True
+            return _terminal_name(func)[:1].isupper()
+        return False
+
+    # ─── A Flask view's return value (Task 3.3) ─────────────────────
+    #
+    # Flask passes what a view returns to `make_response`, which sends a `str`
+    # (or `bytes`) as text/html. `return f"<p>{name}</p>"` is therefore an HTML
+    # response body exactly like `make_response(f"<p>{name}</p>")`, and it is
+    # judged by the same body analysis (`_response_body_is_html_sink`): a
+    # dict, list or response object is not text, a `(body, status, headers)`
+    # tuple is checked on its body and its headers' content type, and the
+    # sanitisers, opacity, value types and `json.dumps` rule are Task 3.2's.
+    # Quart, which the route extractor counts as Flask, does the same. FastAPI
+    # and Django Ninja send a returned `str` as JSON, and Django needs an
+    # `HttpResponse`, so only a Flask route's returns are sinks.
+
+    def _returns_from_flask_view(self) -> bool:
+        """True when a `return` being visited is the Flask view's own: the
+        innermost def is bound to a Flask route (`_bound_route`), and it is not
+        a generator. A return in a def, lambda or class nested in the view, or
+        in a helper no route points at, is not the view's."""
+        route = self._bound_route()
+        if route is None or getattr(route, "framework", "") != "flask":
+            return False
+        func = self._func_stack[-1]
+        if func not in self._generator_defs:
+            self._generator_defs[func] = any(
+                isinstance(n, (ast.Yield, ast.YieldFrom)) for n in _walk_own_scope(func)
+            )
+        return not self._generator_defs[func]
+
+    def _report_flask_view_return(self, node: ast.Return) -> None:
+        """Emit PY_XSS_HTML_SINK for a Flask view's ``return <value>`` when
+        Flask's ``make_response(<value>)`` would be an HTML response sink and
+        the body's text is proven to come from the request.
+
+        Only a proven flow is reported. Every view returns something, and a
+        string built from a value the engine cannot trace to the request (a
+        database read, an exception, a constant) is not a finding, not even an
+        unproven one."""
+        call = ast.copy_location(
+            ast.Call(
+                func=ast.Name(id="make_response", ctx=ast.Load()),
+                args=[node.value],
+                keywords=[],
+            ),
+            node,
+        )
+        if not self._response_body_is_html_sink(call, "make_response", "flask"):
+            return
+        body = self._html_response_body(call, "make_response")
+        # The body alone names the sink: a status or headers added to the
+        # returned tuple do not re-identify the finding.
+        sink_expr = f"return {_ast_expr_text(body)}"
+        chain = self._collect_taint_chain(body, node.lineno, sink_expr)
+        if not chain:
+            return
+        self._emit_finding(
+            "PY_XSS_HTML_SINK",
+            _XSS_HTML_SINK_TITLE,
+            _XSS_HTML_SINK_SEVERITY,
+            _XSS_HTML_SINK_CONFIDENCE,
+            _XSS_HTML_SINK_CWE,
+            (
+                "Flask sends a string a view returns as text/html. Escape the "
+                "value (markupsafe.escape or html.escape) before returning it, "
+                "or render it through an autoescaping template "
+                "(render_template with an .html template). Data that is not a "
+                "page should be returned as JSON (jsonify, a dict) or with a "
+                "non-HTML Content-Type in the returned headers."
+            ),
+            node.lineno,
+            taint_chain=chain,
+            sink=sink_expr,
         )
 
     def _html_response_ctor(self, node: ast.Call) -> str:
@@ -4461,7 +4598,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         email_data.html_content)` with `email_data =
         generate_reset_password_email(email=email)` renders a template. The
         whole body is followed through bindings, attribute and subscript
-        reads, conditionals, methods on a value and `_TEXT_PASSTHROUGH_FUNCS`.
+        reads, conditionals, the text methods of a value (`_TEXT_METHODS`) and
+        `_TEXT_PASSTHROUGH_FUNCS`. Any other method on a value, as the whole
+        body, is a helper too (`app.send_static_file(name)`).
 
         Inside an interpolated part (an f-string value, a ``+`` or ``%``
         operand, a ``.format``/``.join`` argument, a collection element) any
@@ -4531,7 +4670,12 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             ):
                 # A method on a value ("<p>{}</p>".format(x), ", ".join(xs),
                 # x.strip(), data.get("k")): its text is the receiver's and the
-                # arguments'. `self.helper(...)` is a helper function instead.
+                # arguments'. `self.helper(...)` is a helper function instead,
+                # and so, as the whole body, is a method that is not one of
+                # `_TEXT_METHODS`: `app.send_static_file(name)` and
+                # `storage.download(path)` return a response (R-pf41).
+                if whole and func.attr not in _TEXT_METHODS:
+                    return False
                 return same(func.value) or any(part(a) for a in args)
             if name in _TEXT_PASSTHROUGH_FUNCS:
                 return any(same(a) for a in (args[1:] if name == "map" else args))
@@ -4903,6 +5047,20 @@ _TEXT_PASSTHROUGH_FUNCS: frozenset[str] = frozenset(
         "map",
     }
 )
+# Methods whose result is text from their receiver or arguments, so a whole
+# response body (or returned value) built by one carries that text: str's own
+# methods (and bytes' `decode`), a mapping's `get`/`pop`, and a raw template's
+# `render` (Jinja2, Mako; R-pf40) or `substitute`. Any other method called as
+# the whole body is a helper whose result the engine cannot see (R-pf41).
+_TEXT_METHODS: frozenset[str] = frozenset(
+    {
+        "capitalize", "casefold", "center", "decode", "encode", "expandtabs",
+        "format", "format_map", "get", "join", "ljust", "lower", "lstrip", "pop",
+        "removeprefix", "removesuffix", "render", "render_unicode", "replace",
+        "rjust", "rstrip", "safe_substitute", "strip", "substitute", "swapcase",
+        "title", "translate", "upper", "zfill",
+    }
+)
 # Calls whose result holds no text from their argument: builtins (by bare
 # name) and value parsers (by import path).
 _NON_TEXT_FUNCS: frozenset[str] = frozenset(
@@ -4937,6 +5095,35 @@ _LEAVING_NODES = (ast.Return, ast.Yield, ast.YieldFrom)
 # Receivers whose methods are the class's own helpers, not operations on a
 # value: `self.render_page(name)` is opaque like `render_page(name)`.
 _OWN_RECEIVERS: frozenset[str] = frozenset({"self", "cls"})
+# Flask's request data that is a dict (or reads into one) as a whole, which
+# Flask's make_response sends as JSON (`_flask_body_is_not_text`):
+# `request.args`, `.form`, `.values`, `.files` and `.cookies` (MultiDicts),
+# `request.headers`, the parsed `request.json`, and `request.get_json()`; and
+# the methods that turn one into a dict or list.
+_FLASK_REQUEST_MAPPINGS: frozenset[str] = frozenset(
+    {"args", "form", "values", "files", "cookies", "headers", "json"}
+)
+_FLASK_MAPPING_METHODS: frozenset[str] = frozenset({"to_dict", "getlist"})
+
+
+def _is_flask_request_mapping(expr: ast.AST) -> bool:
+    """True for ``request.args``/``.form``/``.values``/``.files``/
+    ``.cookies``/``.headers``/``.json`` and ``request.get_json(...)``, read as
+    a whole (`_FLASK_REQUEST_MAPPINGS`)."""
+    if isinstance(expr, ast.Call):
+        func = expr.func
+        return (
+            isinstance(func, ast.Attribute)
+            and func.attr == "get_json"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in _REQUEST_NAMES
+        )
+    return (
+        isinstance(expr, ast.Attribute)
+        and expr.attr in _FLASK_REQUEST_MAPPINGS
+        and isinstance(expr.value, ast.Name)
+        and expr.value.id in _REQUEST_NAMES
+    )
 
 
 def _header_content_types(headers: ast.AST) -> list[ast.AST]:

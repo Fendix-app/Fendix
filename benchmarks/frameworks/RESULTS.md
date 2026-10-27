@@ -124,6 +124,7 @@ The `direct` and `indirect` columns include the new classes.
     - The `direct` and `indirect` XSS cases block in all three frameworks, and the `cross_file` cases are detected and warn. No safe case is flagged.
     - The Python frameworks detect 93 of 108 vulnerable cases, up from 84, and block on 64, up from 58. FastAPI blocks on 19, Django on 22 and Flask on 23.
     - See `CHANGELOG.md`, `[Unreleased]`.
+  - A string a Flask or Quart view returns (`return f"<p>{name}</p>"`) is now an HTML response body too, judged by the same rules as `make_response(...)`. No corpus case returns a string from a view, so these numbers do not change.
 - **Template injection is found only in Flask.** `render_template_string` is modelled. Django `Template(src)` and `jinja2.Template(src)` are not.
 - **Weak random tokens are missed everywhere.** The bundled rule lists `random.choice`, but not `random.choices`, the most common token idiom.
 - **FastAPI findings almost never block.** Typed handler parameters are not proven reachable. The same SQLi scores 90 (HIGH, BLOCK) in Flask and 50 (MEDIUM, WARN) in FastAPI. FastAPI's `RedirectResponse` and manual `Location` headers are not redirect sinks.

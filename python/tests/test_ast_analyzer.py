@@ -4249,3 +4249,432 @@ class TestHelperHopHonoursCallerSanitisers:
             4,
         )
         assert chain[0] == _link(6, "request.args['n']")
+
+
+# ---------------------------------------------------------------------------
+# Task 3.3: a string a Flask view returns is an HTML response body
+# ---------------------------------------------------------------------------
+
+_FLASK_APP = (
+    "import json\n"
+    "from flask import Flask, Response, jsonify, make_response, redirect, render_template, request\n"
+    "from markupsafe import Markup, escape\n"
+    "app = Flask(__name__)\n"
+)
+
+
+def _flask_view(*lines: str, prelude: str = "") -> str:
+    """A Flask app with one view, `search` (def on line 6), whose `q` holds
+    request input (line 7) and whose further body is ``lines`` (from line 8)."""
+    return (
+        prelude
+        + _FLASK_APP
+        + '@app.route("/search")\n'
+        + "def search():\n"
+        + '    q = request.args.get("q", "")\n'
+        + "".join(f"    {line}\n" for line in lines)
+    )
+
+
+class TestFlaskViewReturnedBody:
+    """Task 3.3: Flask hands a view's return value to ``make_response``, which
+    sends a ``str`` (or ``bytes``) as ``text/html``. A string a Flask or Quart
+    view returns is therefore an HTML response body, judged by the same body
+    analysis as ``make_response(...)`` (Task 3.2): the same sanitisers,
+    opacity, value types and ``json.dumps`` rule, and a ``(body, status,
+    headers)`` tuple is checked on its body and its headers' content type.
+    FastAPI and Django Ninja serialise a returned string as JSON, and Django
+    must return an ``HttpResponse``, so their returns are not sinks."""
+
+    @staticmethod
+    def _xss(src: str) -> list[dict]:
+        return [f for f in _collect_src(src) if f["id"] == "SEC-PY_XSS_HTML_SINK"]
+
+    @staticmethod
+    def _xss_in(files: dict[str, str]) -> list[dict]:
+        with tempfile.TemporaryDirectory() as d:
+            for name, content in files.items():
+                p = Path(d) / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+            found = _collect(d)
+        return [f for f in found if f["id"] == "SEC-PY_XSS_HTML_SINK"]
+
+    def _proven(self, src: str) -> dict:
+        found = self._xss(src)
+        assert len(found) == 1, found
+        f = found[0]
+        assert f.get("reachable") is True, f
+        assert f["taint_chain"], f
+        return f
+
+    # -- the brief's cases ----------------------------------------------------
+
+    def test_flask_route_returning_fstring_is_xss(self) -> None:
+        f = self._proven(
+            "from flask import Flask, request\n"
+            "app = Flask(__name__)\n"
+            '@app.route("/search")\n'
+            "def search():\n"
+            "    return f\"<p>{request.args['q']}</p>\"\n"
+        )
+        assert f["line"] == "mod.py:5"
+        assert f["symbol"] == "search"
+        assert f["sink"].startswith("return f")
+        assert "request.args" in f["taint_chain"][0]["expr"]
+        assert f["severity"] == "HIGH"
+        assert "CWE-79" in f["references"]
+        assert f["route"]["pattern"] == "/search"
+        assert f["route"]["framework"] == "flask"
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            (
+                "from fastapi import FastAPI\n"
+                "app = FastAPI()\n"
+                '@app.get("/search")\n'
+                'def search(q: str = ""):\n'
+                '    return f"<p>{q}</p>"\n'
+            ),
+            (
+                "from fastapi import FastAPI, Request\n"
+                "app = FastAPI()\n"
+                '@app.get("/search")\n'
+                "def search(request: Request):\n"
+                "    return f\"<p>{request.query_params['q']}</p>\"\n"
+            ),
+            (
+                "from ninja import NinjaAPI\n"
+                "api = NinjaAPI()\n"
+                '@api.get("/search")\n'
+                'def search(request, q: str = ""):\n'
+                '    return f"<p>{q}</p>"\n'
+            ),
+        ],
+        ids=["fastapi-param", "fastapi-request", "ninja"],
+    )
+    def test_fastapi_route_returning_str_is_not_xss(self, src: str) -> None:
+        # FastAPI and Django Ninja serialise a returned string as JSON.
+        assert self._xss(src) == []
+
+    def test_flask_route_returning_dict_is_not_xss(self) -> None:
+        # Flask sends a returned dict as JSON (jsonify).
+        assert self._xss(_flask_view('return {"q": request.args["q"]}')) == []
+
+    # -- what is reported -----------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ['return f"<p>{q}</p>"'],
+            ['return "<p>" + q + "</p>"'],
+            ["return q"],
+            ['return "<p>%s</p>" % q'],
+            ['return "<p>{}</p>".format(q)'],
+            ['html = f"<p>{q}</p>"', "return html"],
+            ['html = "<ul>"', 'html += f"<li>{q}</li>"', "return html"],
+            ['return q if q else "-"'],
+            ['return request.args.get("q", "")'],
+            ['return request.args["q"]'],
+            # R-pf38: json.dumps leaves `<` as it is, and the default type is HTML.
+            ['return json.dumps({"q": q})'],
+            # Flask's render_template does not autoescape a .txt template.
+            ['return render_template("search.txt", q=q)'],
+            # the body of a (body, status[, headers]) tuple
+            ['return f"<p>{q}</p>", 200'],
+            ['return f"<p>{q}</p>", 404'],
+            ['return f"<p>{q}</p>", 200, {"X-Frame-Options": "DENY"}'],
+            ['return f"<p>{q}</p>", {"Content-Type": "text/html; charset=utf-8"}'],
+        ],
+        ids=[
+            "fstring", "concat", "name", "percent", "format", "bound", "accumulator",
+            "ifexp", "inline-get", "inline-subscript", "json-dumps", "txt-template",
+            "tuple-status", "tuple-404", "tuple-headers", "tuple-html-type",
+        ],
+    )
+    def test_a_returned_string_is_xss(self, lines: list[str]) -> None:
+        f = self._proven(_flask_view(*lines))
+        assert f["sink"].startswith("return "), f["sink"]
+        assert f["route"]["framework"] == "flask"
+        assert f["symbol"] == "search"
+
+    def test_tuple_sink_names_the_body(self) -> None:
+        # The status and headers are not part of the sink, so adding them does
+        # not re-identify the finding.
+        bare = self._proven(_flask_view('return f"<p>{q}</p>"'))
+        tupled = self._proven(_flask_view('return f"<p>{q}</p>", 200'))
+        assert bare["sink"] == tupled["sink"] == "return f'<p>{q}</p>'"
+
+    def test_url_variable_returned_is_xss(self) -> None:
+        # Flask's own quickstart warns about exactly this view.
+        f = self._proven(
+            _FLASK_APP + '@app.route("/hello/<name>")\n'
+            "def hello(name):\n"
+            '    return f"<p>Hello, {name}!</p>"\n'
+        )
+        assert f["taint_chain"][0] == {"file": "mod.py", "line": 6, "expr": "name"}
+
+    def test_quart_view_returning_a_string_is_xss(self) -> None:
+        # Quart sends a returned str as text/html, as Flask does.
+        self._proven(
+            "from quart import Quart, request\n"
+            "app = Quart(__name__)\n"
+            '@app.route("/search")\n'
+            "async def search():\n"
+            '    q = request.args.get("q", "")\n'
+            '    return f"<p>{q}</p>"\n'
+        )
+
+    def test_flask_get_shortcut_returning_a_string_is_xss(self) -> None:
+        f = self._proven(
+            _FLASK_APP + '@app.get("/search")\n'
+            "def search():\n"
+            "    return f\"<p>{request.args['q']}</p>\"\n"
+        )
+        assert f["route"]["method"] == "GET"
+
+    # -- what is not reported -------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            # Flask sends a dict or list as JSON.
+            ["return [q]"],
+            ["return {k: v for k, v in request.args.items()}"],
+            ["return [v for v in request.args.values()]"],
+            ['data = {"q": q}', "return data"],
+            ['data = {"q": q}', 'return data or {"q": ""}'],
+            ["data = request.get_json()", "return data"],
+            ["return request.get_json()"],
+            ["return request.json"],
+            ["return request.args"],
+            ["return request.args.to_dict()"],
+            ['return request.form.getlist("tag")'],
+            ['return {"q": q}, 201'],
+            # renderers, helpers and response objects
+            ["return jsonify(q=q)"],
+            ["return jsonify(q=q), 400"],
+            ['return render_template("search.html", q=q)'],
+            ["return redirect(q)"],
+            ['return Response(f"<p>{q}</p>", mimetype="application/json")'],
+            ['resp = Response(f"<p>{q}</p>", mimetype="text/plain")', "return resp"],
+            [
+                'resp = make_response(json.dumps({"q": q}))',
+                'resp.mimetype = "application/json"',
+                "return resp",
+            ],
+            # escaped values and values that hold no text
+            ["return escape(q)"],
+            ['return f"<p>{escape(q)}</p>"'],
+            ['return "<p>" + escape(q) + "</p>"'],
+            ["return str(int(q))"],
+            ['return f"<p>{len(q)} characters</p>"'],
+            ['return "<p>ok</p>"'],
+            # a tuple that declares a non-HTML type, or a status with no body
+            ['return f"<p>{q}</p>", 200, {"Content-Type": "text/plain"}'],
+            ['return f"<p>{q}</p>", {"Content-Type": "application/json"}'],
+            ['return json.dumps({"q": q}), 200, {"Content-Type": "application/json"}'],
+            ['return f"<p>{q}</p>", 200, [("Content-Type", "text/plain; charset=utf-8")]'],
+            ['return f"<p>{q}</p>", 204'],
+            ["return '', 204"],
+        ],
+        ids=[
+            "list", "dictcomp", "listcomp", "bound-dict", "boolop-dicts", "bound-json",
+            "get-json", "json", "args", "to-dict", "getlist", "dict-tuple",
+            "jsonify", "jsonify-tuple", "html-template", "redirect", "response-json",
+            "bound-response", "late-json-type",
+            "escape", "escaped-fstring", "escaped-concat", "int", "len", "constant",
+            "tuple-text-plain", "tuple-json-no-status", "tuple-json-dumps",
+            "tuple-header-pairs", "tuple-204", "empty-204",
+        ],
+    )
+    def test_returned_values_flask_does_not_send_as_html_text_are_not_xss(
+        self, lines: list[str]
+    ) -> None:
+        assert self._xss(_flask_view(*lines)) == []
+
+    def test_allowlisted_value_is_not_xss(self) -> None:
+        assert (
+            self._xss(
+                _flask_view(
+                    "if q not in ALLOWED:",
+                    '    return "unknown", 400',
+                    'return f"<p>{q}</p>"',
+                    prelude='ALLOWED = {"en", "fr"}\n',
+                )
+            )
+            == []
+        )
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["count = db.count()", 'return f"<p>{count} results</p>"'],
+            ["try:", "    run(q)", "except Exception as e:", "    return str(e), 500"],
+            ['return f"<p>{SERVICE_NAME}</p>"'],
+        ],
+        ids=["server-value", "exception-text", "constant-global"],
+    )
+    def test_a_string_not_built_from_request_input_is_not_reported(
+        self, lines: list[str]
+    ) -> None:
+        # Every view returns some string. Only a proven request flow is
+        # reported: a returned value the engine cannot trace to the request
+        # is not a finding, not even a warning.
+        src = _flask_view(*lines, prelude='SERVICE_NAME = "Inventory"\n')
+        assert self._xss(src) == []
+
+    def test_typed_url_variable_is_not_reported(self) -> None:
+        src = (
+            _FLASK_APP + '@app.route("/items/<int:item_id>")\n'
+            "def item(item_id):\n"
+            '    return f"<p>Item {item_id}</p>"\n'
+        )
+        assert self._xss(src) == []
+
+    # -- only the view's own returns ------------------------------------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["def render():", '    return f"<p>{q}</p>"', "return jsonify(html=render())"],
+            [
+                "class Page:",
+                "    def html(self):",
+                '        return f"<p>{q}</p>"',
+                "return jsonify(html=Page().html())",
+            ],
+            ['render = lambda: f"<p>{q}</p>"', "return jsonify(html=render())"],
+        ],
+        ids=["nested-def", "nested-class-method", "lambda"],
+    )
+    def test_a_return_nested_inside_the_view_is_not_the_views(
+        self, lines: list[str]
+    ) -> None:
+        assert self._xss(_flask_view(*lines)) == []
+
+    def test_a_helper_that_is_not_a_route_is_not_reported(self) -> None:
+        src = (
+            _FLASK_APP + "def page(q):\n"
+            '    return f"<p>{q}</p>"\n'
+            '@app.route("/search")\n'
+            "def search():\n"
+            '    return jsonify(html=page(request.args.get("q", "")))\n'
+        )
+        assert self._xss(src) == []
+
+    def test_a_generator_views_return_is_not_its_body(self) -> None:
+        # A view that yields streams what it yields; its `return` value is
+        # discarded.
+        assert self._xss(_flask_view('yield "<p>"', 'return f"<p>{q}</p>"')) == []
+
+    def test_unknown_framework_route_is_not_reported(self) -> None:
+        # A route nothing places in a framework is read like FastAPI.
+        src = (
+            "from myapp.hooks import registry, request\n"
+            '@registry.get("/search")\n'
+            "def search():\n"
+            "    return f\"<p>{request.args['q']}</p>\"\n"
+        )
+        assert self._xss(src) == []
+
+    def test_django_view_returning_a_string_is_not_reported(self) -> None:
+        # Django must be given an HttpResponse; a str return is an error.
+        found = self._xss_in(
+            {
+                "app/urls.py": "from django.urls import path\n"
+                "from app import views\n"
+                'urlpatterns = [path("s/", views.search)]\n',
+                "app/views.py": "def search(request):\n"
+                "    return f\"<p>{request.GET['q']}</p>\"\n",
+            }
+        )
+        assert found == []
+
+    # -- one finding per flow -------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "ret, sink",
+        [
+            ('make_response(f"<p>{q}</p>")', "make_response(f'<p>{q}</p>')"),
+            ('make_response(f"<p>{q}</p>"), 200', "make_response(f'<p>{q}</p>')"),
+            ('Response(f"<p>{q}</p>")', "Response(f'<p>{q}</p>')"),
+            ('Markup(f"<p>{q}</p>")', "Markup(f'<p>{q}</p>')"),
+            ('f"<div>{Markup(q)}</div>"', "Markup(q)"),
+            ('make_response(Response(f"<p>{q}</p>"))', "Response(f'<p>{q}</p>')"),
+        ],
+        ids=["make_response", "make_response-tuple", "Response", "Markup", "inner-Markup", "nested"],
+    )
+    def test_a_returned_sink_is_reported_once(self, ret: str, sink: str) -> None:
+        found = self._xss(_flask_view(f"return {ret}"))
+        assert [f["sink"] for f in found] == [sink]
+
+    # -- the shared Flask body rules, as make_response sees them ---------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ['data = {"q": q}', "return make_response(data)"],
+            ["return make_response({k: v for k, v in request.args.items()})"],
+            ["return make_response(request.get_json())"],
+            ["return make_response(request.args.to_dict(), 200)"],
+        ],
+        ids=["bound-dict", "dictcomp", "get-json", "to-dict"],
+    )
+    def test_make_response_of_json_data_is_not_xss(self, lines: list[str]) -> None:
+        # make_response is what Flask applies to a returned value, so it sends
+        # the same dicts and lists as JSON.
+        assert self._xss(_flask_view(*lines)) == []
+
+    # -- a method on a value, as the whole body --------------------------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            # what a real Flask app returns from a method: a response object
+            ["return app.send_static_file(q)"],
+            ["storage = get_storage()", "return storage.download(q)"],
+            ["return make_response(app.send_static_file(q))"],
+            ["uploader = get_uploader()", "return make_response(uploader.serve(q), 200)"],
+        ],
+        ids=["send_static_file", "helper-object", "make_response-method", "make_response-tuple"],
+    )
+    def test_a_whole_body_method_that_is_not_a_text_method_is_not_claimed(
+        self, lines: list[str]
+    ) -> None:
+        # R-pf41: a whole body that is a helper's result is opaque, and a method
+        # on an object is a helper unless it is one of str's own methods.
+        assert self._xss(_flask_view(*lines)) == []
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["return q.upper()"],
+            ["return q.strip().encode()"],
+            ['return ", ".join([q, "x"])'],
+            ['return q.replace("a", "b")'],
+            ['data = request.get_json()', 'return data.get("name", "")'],
+            ['return f"<p>{storage.download(q)}</p>"'],
+        ],
+        ids=["upper", "chained", "join", "replace", "mapping-get", "method-in-fstring"],
+    )
+    def test_text_methods_carry_their_text(self, lines: list[str]) -> None:
+        self._proven(_flask_view(*lines))
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            "    return HttpResponse(exporter.export(name))\n",
+            # allauth's SAML metadata view: a method on a constructed object
+            (
+                "    settings = Saml2Settings(config=name)\n"
+                "    metadata = settings.get_sp_metadata()\n"
+                '    return HttpResponse(content=metadata, content_type="text/xml")\n'
+            ),
+        ],
+        ids=["method-on-global", "method-on-constructed-object"],
+    )
+    def test_whole_body_helper_method_is_opaque_for_django_too(self, lines: str) -> None:
+        # The rule is the shared body analysis's, not the return sink's.
+        assert self._xss(_DJANGO_VIEW + lines) == []

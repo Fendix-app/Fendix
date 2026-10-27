@@ -86,7 +86,9 @@ class Route:
     # then the pattern's syntax (`{x}` / `<x>`), then `.route(...)` (Flask),
     # then the project's dominant framework (`resolve_frameworks`). "" when
     # nothing tells. Flask and Django pass a handler only the URL variables
-    # their pattern names; FastAPI passes query parameters too.
+    # their pattern names; FastAPI passes query parameters too. Flask sends a
+    # `str` its view returns as text/html; FastAPI sends it as JSON. Reported
+    # in `as_dict`.
     framework: str = ""
     # Django only: the view symbol's head resolved through one of the
     # urlconf's imports, or is a bare name (defined in the urlconf or star
@@ -103,6 +105,7 @@ class Route:
             "handler": self.handler,
             "file": self.file,
             "line": self.line,
+            "framework": self.framework,
         }
 
 
