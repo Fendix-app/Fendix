@@ -634,8 +634,8 @@ also accepts an optional `FENDIX_SHA256` pin.
 ### GitHub Actions
 
 **Recommended: the Fendix Action.** It is listed on GitHub Marketplace as
-[Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan). Use `Fendix-app/Fendix@v1` with an explicit
-`version`:
+[Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan). Pin it to the full commit of the v3.7.0
+release, with an explicit `version`:
 
 ```yaml
 name: Security Scan
@@ -654,27 +654,23 @@ jobs:
         with:
           fetch-depth: 0      # diff mode compares against the PR base ref
 
-      - uses: Fendix-app/Fendix@v1
+      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
         with:
-          version: v3.6.2
+          version: v3.7.0
           code: .
           url: ${{ secrets.STAGING_API_URL }}   # optional, adds DAST
           spec: openapi.yaml                     # optional
           fail-on: HIGH
 ```
 
-`@v1` follows compatible stable releases of the v1 Action; `version` pins the
-Fendix release it installs. **`@v1` still resolves to the v3.6.2 Action code**
-(release commit `b9e1fad`) until `v1` is moved, so it does not have v3.7.0's
-fail-closed required analyzers. For those, and for high-assurance or
-reproducible pipelines, pin the Action to the full commit of the validated
-v3.7.0 release, which is immutable (or use `@v1` once it is moved):
-
-```yaml
-      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
-        with:
-          version: v3.7.0
-```
+The commit pins the Action's own code and cannot change; `version` pins the
+Fendix release it installs. `@v1` follows compatible stable releases of the v1
+Action, but **it still resolves to the v3.6.2 Action code** (release commit
+`b9e1fad`) until `v1` is moved, so it does not have v3.7.0's fail-closed
+required analyzers. Use `@v1` again once it is moved. Until then, a workflow
+that stays on `@v1` should set `version: v3.6.5`, the newest release tested
+with it: v3.6.2 and v3.6.3 still trust the compromised emSign intermediate
+CAs that v3.6.4 removed.
 
 Never reference `@main`; it changes without review. The permissions above are
 all the Action needs; it uses the job token only for the SARIF upload. The
@@ -682,7 +678,8 @@ v3.7.0 release commit with `version: v3.7.0` was tested end to end in a public
 repository on 2026-10-25 (`Fendix-app/fendix-action-e2e-public`, runs
 40225358870 to 40225440001). The v3.6.2 Action, by its release commit and as
 literal `@v1`, passed the external-user end-to-end matrix in public and private
-repositories.
+repositories, and literal `@v1` with `version: v3.6.5` passed the v3.6.5
+release's end-to-end run.
 
 #### What the Action does
 

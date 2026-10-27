@@ -404,7 +404,7 @@ Key facts:
 
 Goal: fail the build when a scan finds something at/above a severity threshold, and surface the findings to reviewers.
 
-> **GitHub Actions: use the Fendix Action, `uses: Fendix-app/Fendix@v1` with an explicit `version` (§3.1).** For high-assurance or reproducible pipelines, and for v3.7.0's fail-closed required analyzers until `v1` is moved, pin it to the full commit of the validated release instead. The digest-pinned reference workflow (§3.2) is a tested alternative. Never reference `@main`; it changes without review.
+> **GitHub Actions: use the Fendix Action pinned to the full commit of the v3.7.0 release, with an explicit `version` (§3.1).** `@v1` still resolves to the v3.6.2 Action, which does not have v3.7.0's fail-closed required analyzers, until it is moved. The digest-pinned reference workflow (§3.2) is a tested alternative. Never reference `@main`; it changes without review.
 
 The engine runs in CI as the composite GitHub Action (§3.1), or from the official container image (§3.2, §3.4).
 
@@ -413,7 +413,7 @@ The engine runs in CI as the composite GitHub Action (§3.1), or from the offici
 
 ### 3.1 Recommended — the composite GitHub Action
 
-Use the Fendix Action ([Fendix Security Scan on GitHub Marketplace](https://github.com/marketplace/actions/fendix-security-scan)) with `@v1` and an explicit `version`:
+Use the Fendix Action ([Fendix Security Scan on GitHub Marketplace](https://github.com/marketplace/actions/fendix-security-scan)) pinned to the full commit of the v3.7.0 release, with an explicit `version`:
 
 ```yaml
 permissions:
@@ -428,20 +428,14 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0      # diff mode compares against the PR base ref
-      - uses: Fendix-app/Fendix@v1
+      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
         with:
-          version: v3.6.2
+          version: v3.7.0
           code: .
           fail-on: HIGH
 ```
 
-`@v1` follows compatible stable releases of the v1 Action. `version` pins the Fendix release the Action installs. **`@v1` still resolves to the v3.6.2 Action code** (release commit `b9e1fad`) until `v1` is moved, so it does not have the items marked **v3.7.0** below. For those, and for high-assurance or reproducible pipelines, pin the Action to the full commit of the validated v3.7.0 release, which is immutable (or use `@v1` once it is moved):
-
-```yaml
-      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
-        with:
-          version: v3.7.0
-```
+The commit pins the Action's own code and cannot change; `version` pins the Fendix release the Action installs. `@v1` follows compatible stable releases of the v1 Action, but **it still resolves to the v3.6.2 Action code** (release commit `b9e1fad`) until `v1` is moved, so it does not have the items marked **v3.7.0** below. Use `@v1` again once it is moved. Until then, a workflow that stays on `@v1` should set `version: v3.6.5`, the newest release tested with it: v3.6.2 and v3.6.3 still trust the compromised emSign intermediate CAs that v3.6.4 removed.
 
 Never reference `@main`; it changes without review. On a private repository without GitHub Code Security, set `upload-sarif: 'false'`: the scan and the gate still run. The v3.7.0 release commit with `version: v3.7.0` was tested end to end in a public repository on 2026-10-25 (`Fendix-app/fendix-action-e2e-public`, runs 40225358870 to 40225440001). The v3.6.2 Action, by its release commit and as literal `@v1`, passed the external-user end-to-end matrix in public and private repositories on 2026-10-16. Until then `v1` pointed to the June 2026 revision `d59a901`; a workflow pinned to that revision should move to `@v1` or to a release commit.
 
@@ -519,10 +513,10 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0      # diff mode compares against the PR base ref
-      # @v1, or the full release commit for reproducibility; never @main.
-      - uses: Fendix-app/Fendix@v1
+      # The v3.7.0 release commit, or @v1 once it is moved; never @main.
+      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
         with:
-          version: "v3.6.2"
+          version: "v3.7.0"
           code: "."           # white-box SAST/secrets/SCA (default ".")
           url: ""             # optional: black-box DAST target
           spec: ""            # optional: OpenAPI spec to seed discovery
@@ -609,7 +603,7 @@ This file, at commit `5ddfd88bde0e24d67d23be7f0d0302cfb29789f5`, is the version 
 
 ### 3.3 Public Action availability
 
-The Action is listed on GitHub Marketplace as [Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan), published from the v3.6.2 release. The engine source repository (`Fendix-app/Fendix`) is public, so the Action resolves from public and private consumers. Use `@v1`, which resolves to the validated v3.6.2 release until it is moved, or pin a release's full commit for reproducibility; v3.7.0's fail-closed required analyzers need its release commit `90adf6a` until `v1` is moved (§3.1). Never reference `@main`.
+The Action is listed on GitHub Marketplace as [Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan), published from the v3.6.2 release. The engine source repository (`Fendix-app/Fendix`) is public, so the Action resolves from public and private consumers. Pin the v3.7.0 release commit `90adf6a` (§3.1), which has the fail-closed required analyzers; `@v1` resolves to the validated v3.6.2 release until it is moved. Never reference `@main`.
 
 The canonical Docker Hub image is public and can be pulled anonymously. The previous GHCR image remains a compatibility path for existing consumers.
 
