@@ -119,13 +119,13 @@ rules:
               regex: ^(req|request)$
           - metavariable-regex:
               metavariable: $FIELD
-              regex: (?i)^.*(password|passwd|passphrase|pwd)
+              regex: (?i)^.*(pass(word)?|pwd)
       - label: PASSWORD
         patterns:
           - pattern-inside: function $F(..., @Body($KEY) $P, ...) { ... }
           - metavariable-regex:
               metavariable: $KEY
-              regex: (?i)^['"].*(password|passwd|passphrase|pwd).*['"]$
+              regex: (?i)^['"].*(pass(word)?|pwd).*['"]$
           - pattern: $P
     pattern-sinks:
       # Any request input, when the hashed value is named like a password.
@@ -139,7 +139,7 @@ rules:
               regex: (?i)^['"`](md5|md4|sha-?1)['"`]$
           - metavariable-regex:
               metavariable: $PW
-              regex: (?i)^.*(password|passwd|passphrase|pwd)
+              regex: (?i)^.*(pass(word)?|pwd)
           - focus-metavariable: $PW
       # A request field named like a password, under any name.
       - requires: PASSWORD
@@ -180,7 +180,7 @@ rules:
           regex: (?i)^['"`](md5|md4|sha-?1)['"`]$
       - metavariable-regex:
           metavariable: $PW
-          regex: (?i)^.*(password|passwd|passphrase|pwd)
+          regex: (?i)^.*(pass(word)?|pwd)
       - pattern-not-inside: |
           const $PW = "...";
           ...
@@ -407,7 +407,7 @@ rules:
               - pattern: '{..., $T: $E, ...}'
           - metavariable-regex:
               metavariable: $T
-              regex: ^(?:(?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[^A-Za-z0-9](?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[a-z0-9](?:Token|TOKEN|Password|PASSWORD|Passwd|Secret|SECRET|Nonce|NONCE|Salt|SALT|Session|SESSION|Otp|OTP|Reset|RESET|Csrf|CSRF|Xsrf|XSRF|Api_?[Kk]ey|API_?KEY|Access_?[Kk]ey|ACCESS_?KEY))
+              regex: ^(?:.*[^A-Za-z0-9])?(?:(?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key|secret_?key)|[A-Za-z0-9]*[a-z0-9](?:Token|TOKEN|Password|PASSWORD|Passwd|Secret|SECRET|Nonce|NONCE|Salt|SALT|Session|SESSION|Otp|OTP|Reset|RESET|Csrf|CSRF|Xsrf|XSRF|Api_?[Kk]ey|API_?KEY|Access_?[Kk]ey|ACCESS_?KEY|Secret_?[Kk]ey|SECRET_?KEY))(?:Id|ID|Value|VALUE|Hash|HASH|Str|String|_(?i:id|value|hash|str|string))?$
           # A token copied from another variable was reported where it was made.
           - metavariable-regex:
               metavariable: $E
@@ -422,7 +422,7 @@ rules:
                   $T = (...) => { ... }
           - metavariable-regex:
               metavariable: $T
-              regex: ^(?:(?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[^A-Za-z0-9](?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[a-z0-9](?:Token|TOKEN|Password|PASSWORD|Passwd|Secret|SECRET|Nonce|NONCE|Salt|SALT|Session|SESSION|Otp|OTP|Reset|RESET|Csrf|CSRF|Xsrf|XSRF|Api_?[Kk]ey|API_?KEY|Access_?[Kk]ey|ACCESS_?KEY))
+              regex: ^(?:.*[^A-Za-z0-9])?(?:(?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key|secret_?key)|[A-Za-z0-9]*[a-z0-9](?:Token|TOKEN|Password|PASSWORD|Passwd|Secret|SECRET|Nonce|NONCE|Salt|SALT|Session|SESSION|Otp|OTP|Reset|RESET|Csrf|CSRF|Xsrf|XSRF|Api_?[Kk]ey|API_?KEY|Access_?[Kk]ey|ACCESS_?KEY|Secret_?[Kk]ey|SECRET_?KEY))(?:Id|ID|Value|VALUE|Hash|HASH|Str|String|_(?i:id|value|hash|str|string))?$
           - pattern: return $E;
           # Returning a record that carries the token is not making it.
           - pattern-not: 'return {...};'

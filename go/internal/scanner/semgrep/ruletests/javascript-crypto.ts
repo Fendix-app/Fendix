@@ -38,6 +38,17 @@ router.post('/register', async (req, res) => {
   res.status(201).json({ email, passwordHash, strong, etag });
 });
 
+// The brief's name test, pass(word)?|pwd: a short or prefixed name counts too.
+function hashShortNames(pass: string, userPass: string, passwd: string) {
+  // ruleid: js-weak-password-hash-sink
+  const a = crypto.createHash('md5').update(pass).digest('hex');
+  // ruleid: js-weak-password-hash-sink
+  const b = crypto.createHash('sha1').update(userPass).digest('hex');
+  // ruleid: js-weak-password-hash-sink
+  const c = crypto.createHash('md5').update(passwd).digest('hex');
+  return [a, b, c];
+}
+
 // Reached through a call: only the shape rule sees it.
 function hashPassword(password: string) {
   // ruleid: js-weak-password-hash-sink
@@ -118,6 +129,14 @@ router.get('/admin/challenge', (req, res) => {
   jwt.verify(token, JWT_SECRET, (err: unknown) => {
     res.json({ ok: !err && decoded !== null });
   });
+});
+
+// Decoding a cookie token only to log its key id reads no claim.
+router.get('/admin/log-kid', (req, res) => {
+  // ok: js-jwt-no-verify-taint
+  const d = jwt.decode(req.cookies.t, { complete: true });
+  console.log(d?.header.kid);
+  res.end();
 });
 
 // complete: true does not help when the payload is what gets trusted.
@@ -210,6 +229,26 @@ function generateResetToken() {
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
 
+// Timing jitter is not a token, even when its name starts with one of the
+// words: the word must be the name's last segment (optionally + Id, Value...).
+function scheduleRetry() {
+  // ok: js-weak-random-token-taint
+  const resetDelayMs = Math.floor(Math.random() * 1000);
+  // ok: js-weak-random-token-taint
+  const cfg = { sessionTimeout: 1000 + Math.random() * 500 };
+  // ok: js-weak-random-token-taint
+  const tokenRefreshJitter = Math.random() * 30000;
+  // ruleid: js-weak-random-token-taint
+  const csrfToken = Math.random().toString(36);
+  // ruleid: js-weak-random-token-taint
+  const otp = Math.floor(100000 + Math.random() * 900000);
+  // ruleid: js-weak-random-token-taint
+  const API_KEY = Math.random().toString(16);
+  // ruleid: js-weak-random-token-taint
+  const reset_token_value = String(Math.random());
+  return { resetDelayMs, cfg, tokenRefreshJitter, csrfToken, otp, API_KEY, reset_token_value };
+}
+
 router.get('/featured', (req, res) => {
   // ok: js-weak-random-token-taint
   const picks = [...FEATURED].sort(() => Math.random() - 0.5).slice(0, 3);
@@ -243,4 +282,4 @@ export async function PUT(request: NextRequest) {
   return NextResponse.json({ email, resetToken, picks });
 }
 
-export { router, hashPassword, getClaims, checkIssuer, lastLoginOf, generateResetToken, DIGEST };
+export { router, hashShortNames, scheduleRetry, hashPassword, getClaims, checkIssuer, lastLoginOf, generateResetToken, DIGEST };

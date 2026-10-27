@@ -105,13 +105,27 @@ rules:
           - metavariable-comparison:
               comparison: str($V) == str($W)
     pattern-sanitizers:
-      # escape-html, he.encode / he.escape, lodash escape, validator.escape,
-      # DOMPurify.sanitize, sanitize-html, xss, encodeURIComponent.
+      # HTML escapers, by name: escape-html (escapeHtml, escape), he.encode /
+      # he.escape, lodash and validator escape, entities, DOMPurify.sanitize,
+      # sanitize-html, xss / filterXSS, encodeURI, encodeURIComponent. Not a
+      # decoder (unescape, he.decode) or another language's escaper
+      # (_.escapeRegExp, a SQL or shell escape).
       - patterns:
           - pattern: $ESCAPE(...)
           - metavariable-regex:
               metavariable: $ESCAPE
-              regex: (?i)^(.*\.)?\w*(escape|saniti[sz]e|encode|purify|xss)\w*$
+              regex: ^(?:(?:[\w$]+\.)*(?:escapeHtml|escapeHTML|htmlEscape|escapeHtmlEntities|encodeHTML|encodeHtml|htmlEncode|sanitizeHtml|sanitizeHTML|filterXSS|encodeURI|encodeURIComponent)|escape|xss|(?:_|lodash|he|validator|entities|htmlEntities)\.(?:escape|encode|encodeHTML|escapeHTML)|(?:DOMPurify|dompurify|purify)\.sanitize)$
+      # The output of an autoescaping engine rendering a fixed template (a file
+      # name or a constant), and React's server rendering. A template taken
+      # from the request is template injection (js-ssti-taint), not escaped.
+      - pattern-either:
+          - pattern: $ENGINE.render("...", ...)
+          - pattern: $ENGINE.renderFile("...", ...)
+          - pattern: $ENGINE.renderString("...", ...)
+          - pattern: renderToString(...)
+          - pattern: renderToStaticMarkup(...)
+          - pattern: $REACT.renderToString(...)
+          - pattern: $REACT.renderToStaticMarkup(...)
       - pattern-either:
           - pattern: Number(...)
           - pattern: parseInt(...)
@@ -299,19 +313,21 @@ rules:
           - metavariable-comparison:
               comparison: str($V) == str($W)
     pattern-sanitizers:
-      # A host allowlist checked before the request, in the condition of an if:
-      #   if (!ALLOWED.has(new URL(url).hostname)) return ...
-      #   const target = new URL(url); if (!ALLOWED.has(target.hostname)) ...
-      # Every later use of the checked value is clean. (A by-side-effect
-      # sanitizer would miss the check behind a short-circuit `||`.)
+      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw.
+      # The host is read off a URL object, off new URL(string), or destructured
+      # from new URL(string); afterwards the URL object and the string it
+      # parsed are both clean. A denylist (no `!`) or a check whose body does
+      # not leave cleans nothing. Inside if (ALLOWED.has(<host>)) { ... } the
+      # value is clean as well.
       - patterns:
-          - pattern-either:
-              - pattern-inside: |
-                  if (<... $ALLOW.$HAS($U.$PART) ...>) $BODY
-                  ...
-              - pattern-inside: |
-                  if (<... $ALLOW.$HAS(new URL($U, ...).$PART) ...>) $BODY
-                  ...
+          - pattern-inside: |
+              if (<... !$ALLOW.$HAS($U.$PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -319,6 +335,85 @@ rules:
               metavariable: $PART
               regex: ^(hostname|host|origin)$
           - pattern: $U
+      - patterns:
+          - pattern-inside: |
+              if (<... !$ALLOW.$HAS(new URL($U, ...).$PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-inside: |
+              $OBJ = new URL($U, ...);
+              ...
+              if (<... !$ALLOW.$HAS($OBJ.$PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-inside: |
+              const {..., $PART, ...} = new URL($U, ...);
+              ...
+              if (<... !$ALLOW.$HAS($PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if ($ALLOW.$HAS($U.$PART)) $BODY
+              - pattern-inside: |
+                  if ($ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      # A URL built from a literal that already fixes the scheme and host, or
+      # a same-site path segment, wherever it is built: inline, or in a
+      # variable first. '/' + next does not ('/' + '/evil.com' leaves the site),
+      # nor does `https://host${path}` (path may be @evil.com).
+      - patterns:
+          - pattern: $URL_FIXED
+          - metavariable-regex:
+              metavariable: $URL_FIXED
+              regex: ^[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$]
+          - metavariable-pattern:
+              metavariable: $URL_FIXED
+              pattern-either:
+                - pattern: '`...`'
+                - pattern: $URL_L + $URL_R
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -675,23 +770,56 @@ rules:
               comparison: str($V) == str($W)
     pattern-sanitizers:
       - pattern: path.basename(...)
-      # Containment: the resolved path starts with the base directory AND a
-      # separator, checked in the condition of an if. A bare startsWith(BASE)
-      # still admits /srv/base_evil/x (Review Focus 5), so it is not one.
+      # Containment that rejects: if (!p.startsWith(BASE + path.sep)) return|
+      # throw, or the relative path from the base climbs out or is absolute
+      # (another drive on Windows). A bare startsWith(BASE) still admits
+      # /srv/base_evil/x (Review Focus 5), and a check whose body does not
+      # leave cleans nothing. Inside if (p.startsWith(BASE + path.sep)) { ... }
+      # the path is clean as well.
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  if (<... $P.startsWith($BASE + $PATH.sep) ...>) $BODY
+                  if (<... !$P.startsWith($BASE + $PATH.sep) ...>) $BODY
                   ...
               - pattern-inside: |
-                  if (<... $P.startsWith($BASE + "/") ...>) $BODY
+                  if (<... !$P.startsWith($BASE + "/") ...>) $BODY
                   ...
               - pattern-inside: |
-                  if (<... $P.startsWith(`${$BASE}${$PATH.sep}`) ...>) $BODY
+                  if (<... !$P.startsWith(`${$BASE}${$PATH.sep}`) ...>) $BODY
                   ...
               - pattern-inside: |
-                  if (<... $P.startsWith(`${$BASE}/`) ...>) $BODY
+                  if (<... !$P.startsWith(`${$BASE}/`) ...>) $BODY
                   ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if ($P.startsWith($BASE + $PATH.sep)) $BODY
+              - pattern-inside: |
+                  if ($P.startsWith($BASE + "/")) $BODY
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if (<... $REL.startsWith("..") || path.isAbsolute($REL) ...>) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if (<... path.isAbsolute($REL) || $REL.startsWith("..") ...>) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
           - pattern: $P
       - pattern-either:
           - pattern: Number(...)
@@ -714,6 +842,11 @@ rules:
           - pattern-either:
               - pattern: $RES.sendFile($P, ...)
               - pattern: $RES.download($P, ...)
+          # With root, Express's send resolves the path under it and rejects
+          # one that leaves it.
+          - pattern-not: '$RES.sendFile($P, {..., root: $ROOT, ...}, ...)'
+          - pattern-not: '$RES.download($P, {..., root: $ROOT, ...}, ...)'
+          - pattern-not: '$RES.download($P, $NAME, {..., root: $ROOT, ...}, ...)'
           - metavariable-regex:
               metavariable: $RES
               regex: ^(res|resp|response|reply)$
@@ -886,32 +1019,48 @@ rules:
           - metavariable-comparison:
               comparison: str($V) == str($W)
     pattern-sanitizers:
-      # A same-site path check: the target starts with "/" and not "//". As
-      # the condition of an if (a guard), every later use is clean; bound to a
-      # name, the ternary isLocal ? target : "/" is clean.
-      - patterns:
-          - pattern-inside: |
-              if (<... $U.startsWith("//") ...>) $BODY
-              ...
-          - pattern: $U
-      - patterns:
-          - pattern-inside: |
-              $OK = <... $U.startsWith("//") ...>;
-              ...
-          - pattern: '$OK ? $U : $FALLBACK'
-      # A host allowlist checked before the request, in the condition of an if:
-      #   if (!ALLOWED.has(new URL(url).hostname)) return ...
-      #   const target = new URL(url); if (!ALLOWED.has(target.hostname)) ...
-      # Every later use of the checked value is clean. (A by-side-effect
-      # sanitizer would miss the check behind a short-circuit `||`.)
+      # A same-site path check needs both halves: the target starts with "/"
+      # AND not with "//" (https://evil.com fails the first, //evil.com the
+      # second). As a guard whose body returns or throws, every later use is
+      # clean; bound to a name, the ternary isLocal ? target : "/" is clean.
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  if (<... $ALLOW.$HAS($U.$PART) ...>) $BODY
+                  if (<... !$U.startsWith("/") || $U.startsWith("//") ...>) $BODY
                   ...
               - pattern-inside: |
-                  if (<... $ALLOW.$HAS(new URL($U, ...).$PART) ...>) $BODY
+                  if (<... $U.startsWith("//") || !$U.startsWith("/") ...>) $BODY
                   ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $OK = <... $U.startsWith("/") && !$U.startsWith("//") ...>;
+                  ...
+              - pattern-inside: |
+                  $OK = <... !$U.startsWith("//") && $U.startsWith("/") ...>;
+                  ...
+          - pattern: '$OK ? $U : $FALLBACK'
+      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw.
+      # The host is read off a URL object, off new URL(string), or destructured
+      # from new URL(string); afterwards the URL object and the string it
+      # parsed are both clean. A denylist (no `!`) or a check whose body does
+      # not leave cleans nothing. Inside if (ALLOWED.has(<host>)) { ... } the
+      # value is clean as well.
+      - patterns:
+          - pattern-inside: |
+              if (<... !$ALLOW.$HAS($U.$PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -919,6 +1068,85 @@ rules:
               metavariable: $PART
               regex: ^(hostname|host|origin)$
           - pattern: $U
+      - patterns:
+          - pattern-inside: |
+              if (<... !$ALLOW.$HAS(new URL($U, ...).$PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-inside: |
+              $OBJ = new URL($U, ...);
+              ...
+              if (<... !$ALLOW.$HAS($OBJ.$PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-inside: |
+              const {..., $PART, ...} = new URL($U, ...);
+              ...
+              if (<... !$ALLOW.$HAS($PART) ...>) $BODY
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: return ...;
+                - pattern: throw $ERR;
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if ($ALLOW.$HAS($U.$PART)) $BODY
+              - pattern-inside: |
+                  if ($ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      # A URL built from a literal that already fixes the scheme and host, or
+      # a same-site path segment, wherever it is built: inline, or in a
+      # variable first. '/' + next does not ('/' + '/evil.com' leaves the site),
+      # nor does `https://host${path}` (path may be @evil.com).
+      - patterns:
+          - pattern: $URL_FIXED
+          - metavariable-regex:
+              metavariable: $URL_FIXED
+              regex: ^[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$]
+          - metavariable-pattern:
+              metavariable: $URL_FIXED
+              pattern-either:
+                - pattern: '`...`'
+                - pattern: $URL_L + $URL_R
       - pattern-either:
           - pattern: Number(...)
           - pattern: parseInt(...)
@@ -1316,10 +1544,22 @@ rules:
               - metavariable-regex:
                   metavariable: $LOC
                   regex: (?i)^['"]?location['"]?$
-      # The same-site check the taint rule accepts.
-      - pattern-not-inside: |
-          if (<... $P.startsWith("//") ...>) $GUARD
-          ...
+      # The same-site check the taint rule accepts: both halves, and a body
+      # that returns or throws.
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - pattern: |
+                    if (<... !$P.startsWith("/") || $P.startsWith("//") ...>) $BODY
+                    ...
+                - pattern: |
+                    if (<... $P.startsWith("//") || !$P.startsWith("/") ...>) $BODY
+                    ...
+            - metavariable-pattern:
+                metavariable: $BODY
+                pattern-either:
+                  - pattern: return ...;
+                  - pattern: throw $ERR;
       - pattern-not-inside: |
           const $P = "...";
           ...

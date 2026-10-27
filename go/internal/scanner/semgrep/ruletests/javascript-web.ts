@@ -9,6 +9,10 @@ import escapeHtml from 'escape-html';
 import express, { Response } from 'express';
 import got from 'got';
 import he from 'he';
+import ejs from 'ejs';
+import _ from 'lodash';
+import nunjucks from 'nunjucks';
+import { renderToString } from 'react-dom/server';
 import { NextRequest, NextResponse } from 'next/server';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
@@ -23,6 +27,8 @@ const STATUS_URL = 'https://status.example.com/api/v2/status.json';
 const LOGIN_URL = 'https://accounts.example.com/login';
 const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads');
 const ALLOWED_HOSTS = new Set(['api.github.com', 'cdn.example.com']);
+const BLOCKED_HOSTS = new Set(['169.254.169.254', 'localhost']);
+const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // ---------------------------------------------------------------------------
 // Cross-site scripting
@@ -70,6 +76,46 @@ function renderSafe(res: Response, q: string, count: number) {
   // ok: js-xss-sink
   return new Response(`<p>${q}</p>`, { headers: { 'Content-Type': 'application/json' } });
 }
+
+// A decoder, or an escaper for another language, is not an HTML sanitiser.
+router.get('/xss/decoders', (req, res) => {
+  const q = String(req.query.q);
+  // ruleid: js-xss-taint
+  res.send('<p>' + unescape(q) + '</p>');
+  // ruleid: js-xss-taint
+  res.send('<p>' + _.unescape(q) + '</p>');
+  // ruleid: js-xss-taint
+  res.send('<p>' + he.decode(q) + '</p>');
+  // ruleid: js-xss-taint
+  res.send('<p>' + _.escapeRegExp(q) + '</p>');
+  // ok: js-xss-taint
+  res.send(`<a href='/x?q=${encodeURI(q)}'>x</a>`);
+  // ok: js-xss-taint
+  res.send('<p>' + _.escape(q) + '</p>');
+});
+
+// The output of an autoescaping template rendered from a fixed template is
+// escaped already; a template taken from the request is SSTI, not this.
+router.get('/xss/rendered', async (req, res) => {
+  if (req.query.engine === 'nunjucks') {
+    const html = nunjucks.render('page.njk', { q: req.query.q });
+    // ok: js-xss-taint
+    return res.send(html);
+  }
+  if (req.query.engine === 'ejs') {
+    const html = await ejs.renderFile('views/page.ejs', { q: req.query.q });
+    // ok: js-xss-taint
+    return res.send(html);
+  }
+  if (req.query.engine === 'react') {
+    const html = renderToString(Page({ q: req.query.q }));
+    // ok: js-xss-taint
+    return res.send(html);
+  }
+  const html = nunjucks.renderString(String(req.query.tpl), {});
+  // ruleid: js-xss-taint
+  res.send(html);
+});
 
 @Controller('xss')
 export class XssController {
@@ -161,6 +207,56 @@ router.get('/ssrf/allowlist-braceless', async (req, res) => {
   res.json({ status: upstream.status });
 });
 
+// The allowlist checks the URL the string parses to; the string is clean too.
+router.get('/ssrf/allowlist-parsed', async (req, res) => {
+  const url = String(req.query.url);
+  const parsed = new URL(url);
+  if (!ALLOWED_HOSTS.has(parsed.hostname)) return res.status(400).end();
+  // ok: js-ssrf-taint
+  const upstream = await fetch(url);
+  res.json({ status: upstream.status });
+});
+
+router.get('/ssrf/allowlist-destructured', async (req, res) => {
+  const url = String(req.query.url);
+  const { hostname } = new URL(url);
+  if (!ALLOWED_HOSTS.has(hostname)) return res.status(400).end();
+  // ok: js-ssrf-taint
+  const upstream = await fetch(url);
+  res.json({ status: upstream.status });
+});
+
+// A denylist is not an allowlist, and a check that does not leave is no check.
+router.get('/ssrf/denylist', async (req, res) => {
+  const u = new URL(String(req.query.url));
+  if (BLOCKED_HOSTS.has(u.hostname)) return res.status(400).end();
+  // ruleid: js-ssrf-taint
+  const upstream = await fetch(u);
+  res.json({ status: upstream.status });
+});
+
+router.get('/ssrf/allowlist-log-only', async (req, res) => {
+  const u = new URL(String(req.query.url));
+  if (!ALLOWED_HOSTS.has(u.hostname)) console.warn('unknown host');
+  // ruleid: js-ssrf-taint
+  const upstream = await fetch(u);
+  res.json({ status: upstream.status });
+});
+
+// A fixed scheme and host, wherever the URL is built.
+router.get('/ssrf/fixed-host-variable', async (req, res) => {
+  const url = `https://api.github.com/users/${encodeURIComponent(String(req.query.login))}`;
+  // ok: js-ssrf-taint
+  const user = await fetch(url);
+  const endpoint = 'https://api.example.com/search?q=' + req.query.q;
+  // ok: js-ssrf-taint
+  const search = await axios.get(endpoint);
+  const hostOnly = `https://api.example.com${req.query.path}`;
+  // ruleid: js-ssrf-taint
+  const other = await fetch(hostOnly);
+  res.json({ user: user.status, search: search.status, other: other.status });
+});
+
 // The host part of the URL is fixed: only its path comes from the request.
 router.get('/ssrf/fixed-host', async (req, res) => {
   // ok: js-ssrf-taint
@@ -237,6 +333,35 @@ router.get('/files/contained', async (req, res) => {
   // ok: js-path-traversal-taint
   const content = await fsp.readFile(filePath, 'utf8');
   res.json({ content });
+});
+
+// With root, Express's send rejects a path that leaves it.
+router.get('/files/root/:name', (req, res) => {
+  // ok: js-path-traversal-taint
+  res.sendFile(req.params.name, { root: PUBLIC_DIR });
+});
+
+router.get('/files/download/:name', (req, res) => {
+  // ok: js-path-traversal-taint
+  res.download(req.params.name, 'report.pdf', { root: PUBLIC_DIR });
+});
+
+// Containment by path.relative: the relative path neither climbs out nor is
+// absolute (another drive on Windows).
+router.get('/files/relative', (req, res) => {
+  const p = path.resolve(PUBLIC_DIR, String(req.query.f));
+  const rel = path.relative(PUBLIC_DIR, p);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return res.status(400).end();
+  // ok: js-path-traversal-taint
+  res.send(fs.readFileSync(p, 'utf8'));
+});
+
+router.get('/files/relative-unchecked', (req, res) => {
+  const p = path.resolve(PUBLIC_DIR, String(req.query.f));
+  const rel = path.relative(PUBLIC_DIR, p);
+  console.log(rel.startsWith('..'));
+  // ruleid: js-path-traversal-taint
+  res.send(fs.readFileSync(p, 'utf8'));
 });
 
 // Review Focus 5: a prefix check without the separator is not containment.
@@ -321,6 +446,28 @@ router.get('/redirect/guard-braceless', (req, res) => {
   res.redirect(next);
 });
 
+// Only half the check: https://evil.com does not start with //.
+router.get('/redirect/half-guard', (req, res) => {
+  const next = String(req.query.next);
+  if (next.startsWith('//')) return res.redirect('/');
+  // ruleid: js-open-redirect-taint
+  res.redirect(next);
+});
+
+router.get('/redirect/half-ternary', (req, res) => {
+  const next = String(req.query.next);
+  const ok = !next.startsWith('//');
+  // ruleid: js-open-redirect-taint
+  res.redirect(ok ? next : '/');
+});
+
+// A same-site path built in a variable first.
+router.get('/redirect/settings', (req, res) => {
+  const target = `/settings/${req.query.tab}`;
+  // ok: js-open-redirect-taint
+  res.redirect(target);
+});
+
 // A same-site path prefix fixes the target; '/' alone does not ('/' + '/evil.com').
 router.get('/redirect/prefix', (req, res) => {
   if (req.query.tab) {
@@ -353,6 +500,14 @@ function redirectLocal(res: Response, returnTo: string) {
     return res.redirect('/');
   }
   // ok: js-open-redirect-sink
+  res.redirect(returnTo);
+}
+
+function redirectHalfChecked(res: Response, returnTo: string) {
+  if (returnTo.startsWith('//')) {
+    return res.redirect('/');
+  }
+  // ruleid: js-open-redirect-sink
   res.redirect(returnTo);
 }
 
@@ -400,9 +555,16 @@ export function POST(request: NextRequest) {
   return NextResponse.redirect(new URL(returnTo, request.url));
 }
 
+export function PATCH(request: NextRequest) {
+  const tab = request.nextUrl.searchParams.get('tab');
+  const dest = `/settings/${tab}`;
+  // ok: js-open-redirect-taint
+  return NextResponse.redirect(new URL(dest, request.url));
+}
+
 export function DELETE() {
   // ok: js-open-redirect-taint
   return NextResponse.redirect(LOGIN_URL);
 }
 
-export { router, renderResults, renderPage, renderSafe, redirectAfterLogin, redirectWithBase, redirectLocal, redirectHome };
+export { router, renderResults, renderPage, renderSafe, redirectAfterLogin, redirectWithBase, redirectLocal, redirectHalfChecked, redirectHome };

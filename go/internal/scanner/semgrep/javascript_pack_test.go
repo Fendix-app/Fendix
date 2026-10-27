@@ -2,9 +2,13 @@ package semgrep
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
@@ -133,47 +137,186 @@ func TestScanReportsAJavaScriptTaintFindingAsReachable(t *testing.T) {
 	requireTaint(t, find())
 }
 
+// javascriptRules returns the bundled rules that target JavaScript, split into
+// the taint rules that ask for reachability (mode: taint and
+// fendix_reachability: taint) and the rest, each sorted by id. Read from the
+// embedded pack, so a rule added later is covered without editing a test.
+func javascriptRules(t *testing.T) (taint, other []packRule) {
+	t.Helper()
+	all := loadAllRules(t)
+	ids := make([]string, 0, len(all))
+	for id := range all {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		r := all[id]
+		if !slices.Contains(r.Languages, "javascript") {
+			continue
+		}
+		mode, _ := r.Raw["mode"].(string)
+		meta, _ := r.Raw["metadata"].(map[string]any)
+		if mode == "taint" && meta[reachabilityMetadataKey] == reachabilityTaint {
+			taint = append(taint, r)
+		} else {
+			other = append(other, r)
+		}
+	}
+	return taint, other
+}
+
 // The shipped gate, with no test override: JavaScript and TypeScript are
-// enabled (Task 4.3), so a match of a taint rule of the pack is reachable and
-// a match of one of its shape rules is not, whatever its metadata says.
+// enabled (Task 4.3), so a match of every taint rule of the pack is a reachable
+// semgrep_taint finding, and a match of any other JavaScript rule stays a
+// semgrep_shim finding, even when its metadata claims reachability.
 func TestShippedGateOpensForTheJavaScriptTaintRulesOnly(t *testing.T) {
-	result := func(ruleID string) semgrepResult {
-		return semgrepResult{
-			CheckID: "tmp.fendix-semgrep-rules-1072928901." + ruleID,
+	taint, other := javascriptRules(t)
+	if len(taint) == 0 || len(other) == 0 {
+		t.Fatalf("got %d taint and %d other JavaScript rules; want both kinds", len(taint), len(other))
+	}
+	mapped := func(r packRule, claimReachability bool) evidence.Evidence {
+		t.Helper()
+		meta := bundledMetadata(t, r.ID)
+		if claimReachability {
+			meta[reachabilityMetadataKey] = reachabilityTaint
+		}
+		res := semgrepResult{
+			CheckID: "tmp.fendix-semgrep-rules-1072928901." + r.ID,
 			Path:    "routes/users.js",
 			Start:   semgrepLineCol{Line: 9, Col: 3},
 			Extra: semgrepExtra{
 				Message:  "finding",
 				Severity: "ERROR",
 				Lines:    semgrepRedactedLines,
-				Metadata: bundledMetadata(t, ruleID),
+				Metadata: meta,
 			},
 		}
-	}
-	for _, id := range []string{
-		"js-sqli-taint", "js-cmdi-taint", "js-ssti-taint", "js-xss-taint", "js-ssrf-taint",
-		"js-path-traversal-taint", "js-open-redirect-taint", "js-weak-password-hash-taint",
-		"js-jwt-no-verify-taint", "js-weak-random-token-taint",
-	} {
-		r := result(id)
-		ev, ok := mapResult(&r, "/code")
+		ev, ok := mapResult(&res, "/code")
 		if !ok {
-			t.Fatalf("%s: mapResult dropped the result", id)
+			t.Fatalf("%s: mapResult dropped the result", r.ID)
 		}
-		if !ev.Reachable {
-			t.Errorf("%s: not reachable with the shipped gate", id)
+		return ev
+	}
+	for _, r := range taint {
+		t.Run(r.ID, func(t *testing.T) { requireTaint(t, mapped(r, false)) })
+	}
+	for _, r := range other {
+		t.Run(r.ID, func(t *testing.T) { requireShim(t, mapped(r, true)) })
+	}
+}
+
+// requestSources is a taint rule's request-source block: its pattern-sources
+// without the sources of another label, and without the label key itself (a
+// rule that also has labelled sources, such as js-weak-password-hash-taint,
+// labels the shared ones INPUT).
+func requestSources(r packRule) ([]any, error) {
+	sources, ok := r.Raw["pattern-sources"].([]any)
+	if !ok || len(sources) == 0 {
+		return nil, fmt.Errorf("%s: no pattern-sources", r.ID)
+	}
+	var out []any
+	for _, s := range sources {
+		m, ok := s.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: a source is not a mapping: %v", r.ID, s)
+		}
+		label, _ := m["label"].(string)
+		if label != "" && label != "INPUT" {
+			continue
+		}
+		c := make(map[string]any, len(m))
+		for k, v := range m {
+			if k != "label" {
+				c[k] = v
+			}
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// requestSourceDrift returns every way the taint rules' request-source blocks
+// differ from the first rule's; notRequest names the rules whose source is
+// not request input, and each must be one of the rules.
+func requestSourceDrift(taint []packRule, notRequest map[string]string) []string {
+	var out []string
+	var want []any
+	var wantFrom string
+	compared := 0
+	for _, r := range taint {
+		if _, skip := notRequest[r.ID]; skip {
+			continue
+		}
+		got, err := requestSources(r)
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		compared++
+		if want == nil {
+			want, wantFrom = got, r.ID
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			out = append(out, fmt.Sprintf("%s: request sources differ from %s's; keep the block identical in every rule", r.ID, wantFrom))
 		}
 	}
-	for _, id := range []string{
-		"js-sqli-sink", "js-cmdi-sink", "js-ssti-sink", "js-xss-sink", "js-open-redirect-sink",
-		"js-weak-password-hash-sink", "js-jwt-no-verify-sink",
-	} {
-		r := result(id)
-		r.Extra.Metadata[reachabilityMetadataKey] = reachabilityTaint
-		ev, ok := mapResult(&r, "/code")
-		if !ok {
-			t.Fatalf("%s: mapResult dropped the result", id)
+	for id := range notRequest {
+		if !slices.ContainsFunc(taint, func(r packRule) bool { return r.ID == id }) {
+			out = append(out, fmt.Sprintf("exempted rule %s is not a taint rule of the pack; drop the exemption", id))
 		}
-		requireShim(t, ev)
+	}
+	if compared < 2 {
+		out = append(out, fmt.Sprintf("compared %d rules; want the shared block in at least two", compared))
+	}
+	return out
+}
+
+// Semgrep does not resolve YAML anchors, so the request sources are a copy in
+// every JavaScript taint rule that follows request input. The copies must not
+// drift: a source added to one rule and not another is a gap in that class.
+func TestJavaScriptTaintRulesShareOneRequestSourceBlock(t *testing.T) {
+	taint, _ := javascriptRules(t)
+	notRequest := map[string]string{"js-weak-random-token-taint": "its source is Math.random()"}
+	for _, problem := range requestSourceDrift(taint, notRequest) {
+		t.Error(problem)
+	}
+}
+
+func TestRequestSourceDriftIsCaught(t *testing.T) {
+	rule := func(id string, sources ...any) packRule {
+		return packRule{ID: id, Raw: map[string]any{"pattern-sources": sources}}
+	}
+	src := func(p string) map[string]any { return map[string]any{"pattern": p} }
+	labelled := func(label, p string) map[string]any { return map[string]any{"label": label, "pattern": p} }
+	cases := []struct {
+		name  string
+		rules []packRule
+		want  string
+	}{
+		{"identical", []packRule{rule("a", src("$R.query")), rule("b", src("$R.query"))}, ""},
+		{"INPUT label and an extra label", []packRule{
+			rule("a", src("$R.query")),
+			rule("b", labelled("INPUT", "$R.query"), labelled("PASSWORD", "$R.body.password")),
+		}, ""},
+		{"a source missing", []packRule{rule("a", src("$R.query"), src("$R.body")), rule("b", src("$R.query"))}, "b: request sources differ"},
+		{"a source changed", []packRule{rule("a", src("$R.query")), rule("b", src("$R.params"))}, "b: request sources differ"},
+		{"a stale exemption", []packRule{rule("a", src("$R.query")), rule("b", src("$R.query"))}, "exempted rule gone"},
+		{"one rule only", []packRule{rule("a", src("$R.query"))}, "compared 1 rules"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			notRequest := map[string]string{}
+			if tc.name == "a stale exemption" {
+				notRequest["gone"] = "removed"
+			}
+			got := strings.Join(requestSourceDrift(tc.rules, notRequest), "\n")
+			switch {
+			case tc.want == "" && got != "":
+				t.Errorf("unexpected problems:\n%s", got)
+			case tc.want != "" && !strings.Contains(got, tc.want):
+				t.Errorf("problems = %q; want one containing %q", got, tc.want)
+			}
+		})
 	}
 }

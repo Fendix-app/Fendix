@@ -16,6 +16,8 @@ import { Pool } from 'pg';
 import postgres from 'postgres';
 import pug from 'pug';
 import { sql as slonikSql } from 'slonik';
+import SQL from 'sql-template-strings';
+import { sql as drizzleSql } from 'drizzle-orm';
 
 const pool = new Pool();
 const prisma = new PrismaClient();
@@ -23,6 +25,9 @@ const sql = postgres();
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 const router = express.Router();
+const db: any = {};
+const apollo: any = {};
+const GET_USER = 'query GetUser($id: ID!) { user(id: $id) { name } }';
 
 const DEFAULT_ROLE = 'member';
 const LOG_DIR = '/var/log/app';
@@ -63,6 +68,46 @@ router.get('/sqli/tagged', async (req, res) => {
   // ok: js-sqli-taint, js-sqli-sink
   await prisma.$queryRaw(query);
   res.json({ users, rows });
+});
+
+// Review Focus 1, typed and fragment tags: slonik's sql.type(...), sql.unsafe,
+// sql.typeAlias(...) and sql.fragment, sql-template-strings' SQL and drizzle's
+// sql all bind their interpolations. drizzle's sql.raw(...) and String.raw do
+// not.
+router.get('/sqli/tag-variants', async (req, res) => {
+  const id = req.params.id;
+  // ok: js-sqli-taint, js-sqli-sink
+  const a = await pool.query(slonikSql.type(User)`SELECT * FROM users WHERE id = ${id}`);
+  // ok: js-sqli-taint, js-sqli-sink
+  const b = await pool.query(slonikSql.unsafe`SELECT * FROM users WHERE id = ${id}`);
+  // ok: js-sqli-taint, js-sqli-sink
+  const c = await pool.query(slonikSql.typeAlias('id')`SELECT id FROM users WHERE id = ${id}`);
+  // ok: js-sqli-taint, js-sqli-sink
+  await pool.query(slonikSql.fragment`WHERE id = ${id}`);
+  // ok: js-sqli-taint, js-sqli-sink
+  await pool.query(SQL`SELECT * FROM users WHERE id = ${id}`);
+  // ok: js-sqli-taint, js-sqli-sink
+  await db.execute(drizzleSql`SELECT * FROM users WHERE id = ${id}`);
+  // ruleid: js-sqli-taint, js-sqli-sink
+  await db.execute(drizzleSql.raw(`SELECT * FROM users WHERE id = ${id}`));
+  // ruleid: js-sqli-taint
+  await pool.query(String.raw`SELECT * FROM users WHERE id = ${id}`);
+  res.json({ a, b, c });
+});
+
+// A query object built first and passed by name is pg's parameterized form;
+// a GraphQL client's options object is not SQL at all. The text field of a
+// config object is still the query text.
+router.get('/sqli/config-variable', async (req, res) => {
+  const query = { text: 'SELECT * FROM users WHERE id = $1', values: [req.params.id] };
+  // ok: js-sqli-taint, js-sqli-sink
+  const r = await pool.query(query);
+  const options = { query: GET_USER, variables: { id: req.params.id } };
+  // ok: js-sqli-taint, js-sqli-sink
+  await apollo.query(options);
+  // ruleid: js-sqli-taint
+  await pool.query({ text: 'SELECT * FROM users WHERE id = ' + req.params.id });
+  res.json(r.rows);
 });
 
 router.get('/sqli/prisma-unsafe', async (req, res) => {

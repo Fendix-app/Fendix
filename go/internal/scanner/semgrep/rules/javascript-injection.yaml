@@ -106,13 +106,16 @@ rules:
           - metavariable-comparison:
               comparison: str($V) == str($W)
     pattern-sanitizers:
-      # Review Focus 1: a tagged template (postgres.js, slonik, Prisma.sql,
-      # sql-template-strings) sends its interpolations as bound parameters.
+      # Review Focus 1: an SQL builder's tagged template sends its
+      # interpolations as bound parameters: postgres.js sql, slonik sql,
+      # sql.type(...), sql.unsafe, sql.typeAlias(...), sql.fragment,
+      # Prisma.sql, sql-template-strings SQL, drizzle sql. The tag's member
+      # chain names sql; String.raw or a project's own string tag does not.
       - patterns:
           - pattern: $TAG`...`
           - metavariable-regex:
               metavariable: $TAG
-              regex: (?i)^(.*\.)?\w*sql$
+              regex: (?i)^[\w$.]*sql
       - pattern-either:
           - pattern: Number(...)
           - pattern: parseInt(...)
@@ -126,14 +129,28 @@ rules:
           - metavariable-regex:
               metavariable: $METHOD
               regex: ^(query|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
-          # A pg config object carries its values apart from the text.
+          # A config object carries its values apart from the text (pg's
+          # { text, values }, a GraphQL client's options), inline or bound to
+          # a name first. Its text field is a sink of its own, below.
           - pattern-not: '$DB.$METHOD({...}, ...)'
+          - pattern-not-inside: |
+              $Q = {...};
+              ...
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: '$DB.$METHOD({..., text: $Q, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|execute|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
           - focus-metavariable: $Q
       # .execute is a common method name: only SQL text counts there, or a
       # receiver named like a database connection.
       - patterns:
           - pattern: $DB.execute($Q, ...)
           - pattern-not: '$DB.execute({...}, ...)'
+          - pattern-not-inside: |
+              $Q = {...};
+              ...
           - pattern-either:
               - patterns:
                   - metavariable-regex:

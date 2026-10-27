@@ -906,10 +906,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `req.get(...)`; a NestJS parameter bound by `@Query()`, `@Param()`,
     `@Body()`, `@Headers()` or `@Req()`; and a Next.js route handler's
     `searchParams`, `json()`, `formData()`, `headers` and context `params`.
-  - **A tagged template is never SQL injection.** `` sql`... ${id}` ``
-    (postgres.js, slonik), `Prisma.sql` and `` prisma.$queryRaw`...` `` send
-    their interpolations as bound parameters, so neither the taint rule nor
-    the shape rule reports them.
+  - **An SQL builder's tagged template is never SQL injection.**
+    `` sql`... ${id}` `` (postgres.js, drizzle), slonik's `sql`,
+    `sql.type(...)`, `sql.unsafe`, `sql.typeAlias(...)` and `sql.fragment`,
+    `Prisma.sql`, `` prisma.$queryRaw`...` `` and sql-template-strings' `SQL`
+    send their interpolations as bound parameters, so neither the taint rule
+    nor the shape rule reports them. `String.raw` and drizzle's `sql.raw(...)`
+    do not, and are reported. A pg config object, inline or bound to a name
+    first, is the parameterized form too; its `text` is still checked.
+  - **A sanitiser has to hold.** An SSRF host allowlist counts only as
+    `if (!ALLOWED.has(<host>)) return` or `throw`, with the host read off
+    the URL object, off `new URL(url)` or destructured from it; the URL and
+    the string it parsed are clean afterwards. A denylist, or a check that
+    does not leave, cleans nothing. An open-redirect guard needs both
+    halves, starts with `/` and not with `//`. A URL whose literal start
+    fixes the scheme and host, or a same-site path, is clean wherever it is
+    built, inline or in a variable first. Path traversal accepts
+    `sendFile`/`download` with `root` and the `path.relative` containment
+    check. XSS accepts only named HTML escapers (not `unescape`,
+    `he.decode` or `_.escapeRegExp`) and the output of an engine rendering a
+    fixed template or of React's `renderToString`. A `Math.random()` token
+    is one whose name ends in the token word (`resetToken`, `sessionId`),
+    not jitter such as `resetDelayMs`.
   - **Seven shape rules** (`js-<class>-sink`) report the same sinks behind a
     helper's parameter, which Semgrep CE's intraprocedural taint does not
     follow: SQL text and shell commands built from a non-constant value,
@@ -923,12 +941,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Framework parity (JS/TS):** recall 19.4% to 88.9% (96 of 108
     vulnerable cases), with no new false positive: the false-positive rate
     on safe cases stays 4.5%, the three `sqli-safe_lookalike` cases the
-    Python engine's `SEC-JS_SQL_TEMPLATE` already flagged. Block recall is
-    unchanged. Still missed: SSRF and path traversal through a helper in the
+    Python engine's `SEC-JS_SQL_TEMPLATE` already flagged. Block recall goes
+    from 19.4% to 63.9% with the next entry, which lets the taint findings
+    block. Still missed: SSRF and path traversal through a helper in the
     same or another file (12 cases).
   - **Real-world noise:** no new finding on the clean
     `node-express-realworld` (2.4 kLOC). On the vulnerable-by-design apps,
-    6 new findings on `juice-shop` (0.06 per kLOC) and 2 on `nodegoat` (0.65
+    5 new findings on `juice-shop` (0.05 per kLOC) and 2 on `nodegoat` (0.65
     per kLOC); 17 of their 19 matches are true positives. The two others
     are path-traversal matches in `juice-shop` that a key lookup in another
     function guards. A scan of `juice-shop` (104 kLOC) takes 26 s instead
