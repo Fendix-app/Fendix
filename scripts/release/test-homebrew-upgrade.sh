@@ -101,7 +101,17 @@ git -C "$TMP/tapsrc" -c user.name=test -c user.email=test@example.invalid add -A
 git -C "$TMP/tapsrc" -c user.name=test -c user.email=test@example.invalid commit -qm "legacy formula"
 brew tap "$TAP" "$TMP/tapsrc" >/dev/null
 TAPDIR=$(brew --repository "$TAP")
-brew trust --formula "$FORMULA" >/dev/null 2>&1 || true
+# trust: trust the formula the way the install docs do. `brew uninstall`
+# removes that trust, and since Homebrew 7.0.11 only install, reinstall and
+# upgrade may load an untrusted formula named in full, so `brew --cache`,
+# `brew style` and `brew audit` need it again after every uninstall. A
+# Homebrew without the trust command loads the formula without it.
+trust() {
+    if brew trust --help >/dev/null 2>&1; then
+        brew trust --formula "$FORMULA" >/dev/null
+    fi
+}
+trust
 
 present() { cp "$1" "$TAPDIR/Formula/fendix.rb"; }
 # prime <binary>: put the binary where brew will look for the presented
@@ -148,6 +158,7 @@ echo "ok  nothing outdated after the upgrade"
 
 step "4. fresh install of the rendered v3.5.1 formula"
 brew uninstall --force fendix >/dev/null
+trust
 prime "$NEW_BIN"
 brew install "$FORMULA" >/dev/null
 expect "fresh install" "$(installed)" "fendix 3.5.1"
@@ -157,6 +168,7 @@ echo "ok  brew test"
 
 step "5. brew style and brew audit --strict on the rendered v3.5.1 formula"
 brew uninstall --force fendix >/dev/null
+trust
 brew style "$FORMULA"
 brew audit --strict "$FORMULA"
 echo "ok  brew style, brew audit --strict"
