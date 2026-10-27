@@ -170,6 +170,9 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
 - **The crypto rules' sources** are the weak value itself: a value named
   like a password, a JWT decoded without verification, a
   `java.util.Random`. The flow to where it is trusted is the finding.
+- **Java is enabled in the taint gate** (`ReachabilityLanguages`, ADR-011):
+  a Java taint match is reachable, escalated one severity level, and can
+  block at or above `--fail-on`. A shape rule's finding only warns.
 - Semgrep cannot share a block between rules, so the request sources are
   repeated in every taint rule of `java-injection.yaml` and
   `java-web.yaml`; `TestJavaTaintRulesShareTheirBlocks` keeps the copies

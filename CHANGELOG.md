@@ -1074,6 +1074,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A proven Java flow can now block.** Java is enabled in the Semgrep taint
+  gate (`semgrep.ReachabilityLanguages`, ADR-011), so a match of a Java taint
+  rule is a reachable `semgrep_taint` finding: the engine escalates it one
+  level and, at or above `--fail-on`, it blocks on its reachable path. The
+  shape rules (`java-*-sink`) still only warn.
+  - **Evidence.** Precision on the Spring corpus is 35 / (35 + 2) = 0.946,
+    above the 0.90 gate; both false positives are textscan's and only warn.
+    `spring-petclinic`, the clean Java noise target, gets no new finding.
+  - **Parity.** Spring block recall goes from 3 to 29 of 36 vulnerable cases.
+    No safe case blocks. The cases that still warn are the six whose sink is
+    in another file, and one hardcoded secret that is not found.
+  - **Real code.** On WebGoat, 25 Java taint locations block, all true
+    positives. That is two more than at warn: two weak random secrets that
+    textscan also reports on the same line are now kept as the proven
+    finding.
+  - The taint findings keep their identity: enabling the gate does not move a
+    fingerprint.
+
 - **`python-random-for-token-generation` reports more token generators.**
   - **More calls.** `random.choices`, `random.randrange` and
     `random.randbytes` are reported beside `random.random`, `choice`,

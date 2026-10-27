@@ -29,9 +29,15 @@ import (
 // (96 true and 3 false positives, none of the three from the pack) and no new
 // finding on the clean node-express-realworld application. Every rule of that
 // pack declares both, so neither is enabled without the other.
+//
+// Java met it with Task 4.4's packs (java-injection, java-web, java-crypto):
+// precision 35/37 = 0.946 on the Spring corpus, with no new finding on
+// spring-petclinic, the clean noise target. Every other language's Semgrep
+// findings are models.TierSemgrepShim findings.
 var ReachabilityLanguages = map[string]bool{
 	"javascript": true,
 	"typescript": true,
+	"java":       true,
 }
 
 // A rule asks for its matches to count as reachability with this metadata.

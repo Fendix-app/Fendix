@@ -177,6 +177,10 @@ func TestJavaTaintMatchFromRealSemgrepIsReachableOnlyWithJavaEnabled(t *testing.
 		enableReachability(t, "java")
 		requireTaint(t, scanFor(t))
 	})
+	// As the binary ships: Java has met the gate (ADR-011).
+	t.Run("as shipped", func(t *testing.T) {
+		requireTaint(t, scanFor(t))
+	})
 }
 
 // The Java request-input packs repeat two blocks in every taint rule, because

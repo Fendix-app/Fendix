@@ -202,8 +202,9 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
   follow-up.
 
 **Mitigations:**
-- `TestReachabilityLanguagesAreTheProvenOnes` pins the enabled set, so the
-  change that enables a language must also update that test.
+- `TestReachabilityLanguagesAreTheClearedOnes` (first
+  `TestReachabilityLanguagesShipEmpty`) pins the enabled set, so the change
+  that enables a language must also update that test.
 - `TestLoggedOutTaintResultIsReachableWithoutATrace` runs on Semgrep's real
   logged-out output, and `TestTraceNeverMovesIdentity` checks that both
   recorded runs, gate open and closed, have one fingerprint.
@@ -227,11 +228,12 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
 
 ## Enabled languages
 
-| Language | Task | Corpus v2 precision | Noise on the clean application |
+| Language | Enabled by | Development-set precision | Noise on the clean target |
 |---|---|---|---|
-| `javascript`, `typescript` | 4.3 | 0.97: 96 TP, 3 FP over the 174 Express, NestJS and Next.js cases. The 3 FPs are the `sqli-safe_lookalike` cases the Python engine's `SEC-JS_SQL_TEMPLATE` already flagged; the pack's own findings are 84 TP and no FP. | No new finding on `node-express-realworld` (2.4 kLOC). Of the pack's 19 matches on `juice-shop` and `nodegoat`, 17 are true positives. |
+| `javascript`, `typescript` | Task 4.3 (`javascript-injection`, `javascript-web`, `javascript-crypto`) | 96 / (96 + 3) = 0.970 over the 174 Express, NestJS and Next.js cases. The 3 FPs are the `sqli-safe_lookalike` cases the Python engine's `SEC-JS_SQL_TEMPLATE` already flagged; the pack's own findings are 84 TP and no FP. | No new finding on `node-express-realworld` (2.4 kLOC). Of the pack's 19 matches on `juice-shop` and `nodegoat`, 17 are true positives. |
+| `java` | Task 4.4 (Spring packs `java-injection`, `java-web`, `java-crypto`) | 35 / (35 + 2) = 0.946 on the Spring corpus; both false positives are textscan's | no new finding on `spring-petclinic` |
 
-The two languages are enabled together: every rule of the JavaScript and
-TypeScript pack declares both, and a rule counts only when all its languages
-are enabled. Holdout precision is checked by the controller after the Java and
-Go packs are integrated, and may disable a language.
+`javascript` and `typescript` are enabled together: every rule of the
+JavaScript and TypeScript pack declares both, and a rule counts only when all
+its languages are enabled. Holdout precision is checked by the controller after
+the packs are integrated, and may disable a language.

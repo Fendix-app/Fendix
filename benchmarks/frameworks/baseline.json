@@ -1859,7 +1859,7 @@
     },
     "spring-cmdi-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-cmdi-cross_file": {
       "outcome": "TP",
@@ -1867,11 +1867,11 @@
     },
     "spring-cmdi-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-cmdi-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-cmdi-safe": {
       "outcome": "TN",
@@ -1907,11 +1907,11 @@
     },
     "spring-jwt_no_verify-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-jwt_no_verify-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-jwt_no_verify-safe": {
       "outcome": "TN",
@@ -1923,7 +1923,7 @@
     },
     "spring-open_redirect-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-open_redirect-cross_file": {
       "outcome": "TP",
@@ -1931,11 +1931,11 @@
     },
     "spring-open_redirect-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-open_redirect-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-open_redirect-safe": {
       "outcome": "TN",
@@ -1947,7 +1947,7 @@
     },
     "spring-path_traversal-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-path_traversal-cross_file": {
       "outcome": "TP",
@@ -1955,11 +1955,11 @@
     },
     "spring-path_traversal-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-path_traversal-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-path_traversal-safe": {
       "outcome": "TN",
@@ -1971,7 +1971,7 @@
     },
     "spring-sqli-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-sqli-cross_file": {
       "outcome": "TP",
@@ -1979,11 +1979,11 @@
     },
     "spring-sqli-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-sqli-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-sqli-safe": {
       "outcome": "TN",
@@ -1995,7 +1995,7 @@
     },
     "spring-ssrf-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-ssrf-cross_file": {
       "outcome": "TP",
@@ -2003,11 +2003,11 @@
     },
     "spring-ssrf-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-ssrf-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-ssrf-safe": {
       "outcome": "TN",
@@ -2019,11 +2019,11 @@
     },
     "spring-ssti-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-ssti-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-ssti-safe": {
       "outcome": "TN",
@@ -2035,11 +2035,11 @@
     },
     "spring-weak_password_hash-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-weak_password_hash-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-weak_password_hash-safe": {
       "outcome": "TN",
@@ -2051,11 +2051,11 @@
     },
     "spring-weak_random_token-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-weak_random_token-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-weak_random_token-safe": {
       "outcome": "TN",
@@ -2067,7 +2067,7 @@
     },
     "spring-xss-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-xss-cross_file": {
       "outcome": "TP",
@@ -2075,11 +2075,11 @@
     },
     "spring-xss-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-xss-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "spring-xss-safe": {
       "outcome": "TN",

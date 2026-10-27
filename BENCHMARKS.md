@@ -269,7 +269,7 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 Java (v0.27–v0.28) is **regex pattern-matching, line-local** — the same tier as the
 Go rules and the JS/TS textscan rules, NOT taint analysis. The Spring rules added since are Semgrep taint
 rules: within one method, plus one call into a method of the same class, not
-across files. We publish **no Java recall/precision number**: the framework
+across files. A match of one counts as a proven flow and can block. We publish **no Java recall/precision number**: the framework
 parity corpus the rules were tuned on is a development set, and public numbers
 come only from its held-out twin. Deep, interprocedural Java taint analysis
 (what OWASP Benchmark needs) is a future phase.

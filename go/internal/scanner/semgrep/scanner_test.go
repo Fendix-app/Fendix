@@ -1050,12 +1050,11 @@ func TestBundledRuleSpecsComeFromThePack(t *testing.T) {
 	}
 }
 
-// A language is enabled only after its pack meets the precision gate recorded
-// in ADR-011, in the change that carries the evidence, and that change updates
-// this test. Task 4.3 enabled javascript and typescript; Tasks 4.4 (java) and
-// 4.5 (go) add theirs the same way.
-func TestReachabilityLanguagesAreTheProvenOnes(t *testing.T) {
-	want := map[string]bool{"javascript": true, "typescript": true}
+// The gate opens one language at a time. Tasks 4.3 (javascript, typescript),
+// 4.4 (java) and 4.5 (go) each add a language only after its pack meets the
+// precision gate recorded in ADR-011, and update this test in the same change.
+func TestReachabilityLanguagesAreTheClearedOnes(t *testing.T) {
+	want := map[string]bool{"javascript": true, "typescript": true, "java": true}
 	if !reflect.DeepEqual(ReachabilityLanguages, want) {
 		t.Errorf("ReachabilityLanguages = %v, want %v; a language is enabled only with ADR-011's evidence",
 			ReachabilityLanguages, want)
