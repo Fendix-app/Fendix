@@ -149,6 +149,7 @@ RULE_CLASS = {
     # Non-cryptographic RNG for tokens
     "JAVA_WEAK_RANDOM": "weak_random_token",
     "python-random-for-token-generation": "weak_random_token",
+    "python-random-token-assignment": "weak_random_token",
 }
 
 

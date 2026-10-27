@@ -250,6 +250,14 @@ def test_js_pattern_rule_ids_keep_their_class_after_they_gained_a_rule_id():
     assert rule_classes("", "Unsafe use of eval() in JavaScript") == frozenset()
 
 
+def test_both_random_token_rules_count_as_weak_random_token():
+    """python-random-token-assignment (v3.7.0) reports the same weakness as
+    python-random-for-token-generation; unmapped, its findings on a corpus
+    case would read as misses."""
+    for rule_id in ("python-random-for-token-generation", "python-random-token-assignment"):
+        assert _parity.rule_classes(rule_id) == frozenset({"weak_random_token"}), rule_id
+
+
 def test_committed_baseline_matches_the_corpus():
     """baseline.json holds exactly the manifest's cases, each scored as its label implies.
 

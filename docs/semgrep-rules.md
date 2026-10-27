@@ -1,6 +1,6 @@
 # Semgrep Rule Guide
 
-Fendix's white-box engine bundles 24 Semgrep rules across four files
+Fendix's white-box engine bundles 23 Semgrep rules across four files
 (auth, injection, secrets, crypto) and extracts them to a per-process
 temp directory at scan time. This guide explains the metadata Fendix
 expects, how rules are mapped into the Finding model, and the conventions

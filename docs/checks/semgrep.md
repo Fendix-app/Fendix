@@ -11,7 +11,7 @@ Security-relevant code patterns using custom Semgrep rules. Semgrep performs pat
 
 ## Built-in Rules
 
-**22 rules across four files**, embedded into the Go binary from
+**23 rules across four files**, embedded into the Go binary from
 `go/internal/scanner/semgrep/rules/` via `//go:embed rules/*.yaml`. The count is
 pinned by `rulepackTotalCount` in `scanner_rulepack_test.go` — that test is the
 authority if this page and the pack ever disagree.
@@ -25,14 +25,15 @@ authority if this page and the pack ever disagree.
 | `python-jwt-decode-no-verification` | `jwt.decode()` with verification disabled / `alg:none` | Python |
 | `flask-route-no-auth-decorator` | Flask route with no auth-style decorator below `@app.route(...)`; one placed above it does not protect the route | Python |
 
-### crypto.yaml — Weak Cryptography (4 rules)
+### crypto.yaml — Weak Cryptography (5 rules)
 
 | Rule ID | Pattern | Languages |
 |---|---|---|
 | `python-md5-used-for-password` | `hashlib.md5()` on a password-shaped variable | Python |
 | `python-sha1-used-for-password` | `hashlib.sha1()` on a password-shaped variable | Python |
 | `python-legacy-cipher-import` | DES / 3DES / RC4 / ARC2 / Blowfish imported | Python |
-| `python-random-for-token-generation` | `random` used in a security-sensitive function | Python |
+| `python-random-for-token-generation` | `random` (`random()`, `choice`, `choices`, `randint`, `randrange`, `sample`, `shuffle`, `getrandbits`, `randbytes`) used in a function whose name has a security-sensitive word (`token`, `password`, `secret`, `nonce`, `salt`, `session`, `otp`, `reset`, `csrf`, `api_key`, `access_key`) at the start of a name segment: `issue_api_key`, not `footprint` | Python |
+| `python-random-token-assignment` | The same `random` calls assigned to a variable or attribute whose name has such a word (`token = "".join(random.choices(...))`), in a function the rule above does not match or at module level, so one call is one finding | Python |
 
 ### injection.yaml — Injection Patterns (8 rules)
 

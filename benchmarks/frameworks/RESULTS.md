@@ -133,6 +133,10 @@ The `direct` and `indirect` columns include the new classes.
     - The Python frameworks detect 97 of 108 vulnerable cases, up from 93, and block on 68, up from 64. Django blocks on 24, FastAPI on 21 and Flask on 23.
     - See `CHANGELOG.md`, `[Unreleased]`.
 - **Weak random tokens are missed everywhere.** The bundled rule lists `random.choice`, but not `random.choices`, the most common token idiom.
+  - Closed after v3.6.3 for Python. `python-random-for-token-generation` now also reports `random.choices`, `randrange` and `randbytes`. It matches a security-sensitive word at the start of any segment of the function's name. Semgrep anchored the rule's regex at the start of the name, so `create_api_key` and `_generate_api_key` never matched. A new rule, `python-random-token-assignment`, reports the same calls assigned to a token-named variable.
+    - The Django, Flask and FastAPI `direct` and `indirect` weak-random-token cases are detected and warn. No safe case is flagged.
+    - The Python frameworks detect all 108 vulnerable cases, up from 102, and block on 72.
+    - See `CHANGELOG.md`, `[Unreleased]`.
 - **FastAPI findings almost never block.** Typed handler parameters are not proven reachable. The same SQLi scores 90 (HIGH, BLOCK) in Flask and 50 (MEDIUM, WARN) in FastAPI. FastAPI's `RedirectResponse` and manual `Location` headers are not redirect sinks.
   - Closed after v3.6.3 for handler parameters. A route handler's parameters are now request sources: FastAPI query, path, header, cookie and body parameters, and Flask and Django URL variables. Dependencies (`Depends(...)`, `Security(...)`, a type from a `deps` module), injected objects such as `Request`, fixed-value types (`int`, `UUID`, `Literal[...]`, a same-file Enum) and Flask or Django parameters their URL pattern does not name are not.
     - Every FastAPI SQLi, command-injection, SSRF, path-traversal and XSS case the engine detects now blocks, except the four `cross_file` ones. FastAPI blocks on 17 of 36 vulnerable cases, up from 4. No safe case is flagged or blocks.
@@ -201,7 +205,7 @@ Regex-tier findings never reach the corroboration needed to block, by design. Fo
 - At v3.6.3, `docs/security-catalog-contract.json` lists 85 checks.
 - It omits the Python engine's own rules, which produce most Python detections: `PY_SQL_INJECTION`, `PY_SSRF`, `PY_PATH_TRAVERSAL`, `PY_OPEN_REDIRECT`, `PY_XSS_HTML_SINK`, `PY_WEAK_CRYPTO_PASSWORD`, `PY_JWT_WEAK` and others.
 - It also omits the four JS pattern checks.
-- Closed after v3.6.3: the catalog lists the Python engine's AST checks and its four JS pattern checks, 105 checks in all. That counts the 16 AST checks it first listed, `python.ast/PY_SSTI` added since, and the removal of `flask-missing-login-required`. They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
+- Closed after v3.6.3: the catalog lists the Python engine's AST checks and its four JS pattern checks, 105 checks in all. That counts the 16 AST checks it first listed, `python.ast/PY_SSTI` added since, and the removal of `flask-missing-login-required`. With the Semgrep rule `python-random-token-assignment` added since, it lists 106. They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
 
 ## Speed
 

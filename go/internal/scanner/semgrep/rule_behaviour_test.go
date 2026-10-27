@@ -155,6 +155,45 @@ var ruleBehaviourFixtures = []ruleFixture{
 	// router-level APIRouter(dependencies=[...]), are not followed.
 	{"fastapi-route-missing-auth-dependency", "fastapi_imported_alias_other_module.py", true, "from typing import Annotated\nfrom fastapi import APIRouter, Depends, Security, Query, Request\nrouter = APIRouter()\n\ndef get_current_user(): ...\ndef get_db(): ...\n\nfrom app.api.security import CurrentUser\n\n@router.get(\"/me\")\ndef me(current_user: CurrentUser):\n    return current_user\n"},
 	{"fastapi-route-missing-auth-dependency", "fastapi_router_level_dependencies.py", true, "from fastapi import APIRouter, Depends\n\ndef verify(): ...\n\nrouter = APIRouter(dependencies=[Depends(verify)])\n\n@router.get(\"/items\")\ndef read_items():\n    return []\n"},
+
+	// python-random-for-token-generation: the random module inside a function
+	// whose name names a security-sensitive value. The name is matched where a
+	// name segment starts (the start, or after an underscore), so
+	// issue_api_key and _generate_api_key fire while footprint (otp) and
+	// preset_palette (reset) do not. Before, Semgrep's left-anchored
+	// metavariable-regex matched only a name that starts with the word.
+	{"python-random-for-token-generation", "random_fn_choices.py", true, "import random\nALPHA = \"abcdef\"\ndef issue_api_key():\n    return \"\".join(random.choices(ALPHA, k=40))\n"},
+	{"python-random-for-token-generation", "random_fn_private_helper.py", true, "import random\nALPHA = \"abcdef\"\ndef _generate_api_key() -> str:\n    return \"\".join(random.choices(ALPHA, k=40))\n"},
+	{"python-random-for-token-generation", "random_fn_randrange.py", true, "import random\ndef make_reset_code():\n    return random.randrange(100000, 1000000)\n"},
+	{"python-random-for-token-generation", "random_fn_randbytes.py", true, "import random\ndef new_session_key():\n    return random.randbytes(16)\n"},
+	{"python-random-for-token-generation", "random_fn_name_starts_with_word.py", true, "import random\ndef token_for(user):\n    return random.random()\n"},
+	{"python-random-for-token-generation", "random_fn_word_inside_segment.py", false, "import random\ndef footprint(items):\n    return random.choice(items)\ndef preset_palette(colours):\n    return random.choice(colours)\n"},
+	{"python-random-for-token-generation", "random_fn_featured.py", false, "import random\nPRODUCTS = [1, 2, 3, 4]\ndef featured():\n    return random.sample(PRODUCTS, k=3)\n"},
+	{"python-random-token-assignment", "random_fn_featured.py", false, ""},
+
+	// python-random-token-assignment: the random module's output assigned to a
+	// name or attribute that names a security-sensitive value, in a function
+	// whose name does not (or at module level). Inside a token-named function
+	// the call is python-random-for-token-generation's, reported once.
+	{"python-random-token-assignment", "random_assign_choices.py", true, "import random\nALPHA = \"abcdef\"\ndef create(request):\n    token = \"\".join(random.choices(ALPHA, k=40))\n    return token\n"},
+	{"python-random-for-token-generation", "random_assign_choices.py", false, ""},
+	{"python-random-token-assignment", "random_assign_module_level.py", true, "import random\nALPHA = \"abcdef\"\nSESSION_SECRET = \"\".join(random.choice(ALPHA) for _ in range(32))\n"},
+	{"python-random-token-assignment", "random_assign_attribute.py", true, "import random\nclass Form:\n    def build(self):\n        self.csrf_token = random.getrandbits(128)\n"},
+	{"python-random-token-assignment", "random_assign_subscript.py", true, "import random\ndef build(user):\n    user[\"reset_code\"] = random.randint(0, 999999)\n"},
+	{"python-random-token-assignment", "random_assign_in_token_function.py", false, "import random\nALPHA = \"abcdef\"\ndef issue_api_key():\n    token = \"\".join(random.choices(ALPHA, k=40))\n    return token\n"},
+	{"python-random-for-token-generation", "random_assign_in_token_function.py", true, ""},
+	{"python-random-token-assignment", "random_assign_harmless.py", false, "import random\nPRODUCTS = [1, 2, 3, 4]\ndef page():\n    featured = random.sample(PRODUCTS, k=3)\n    footprint = random.choice(PRODUCTS)\n    parts = [random.choice(PRODUCTS) for _ in range(3)]\n    return featured, footprint, parts\n"},
+}
+
+// ruleBehaviourResultCounts is the exact number of results the whole pack
+// reports on a fixture file, for files where a second report of the same call
+// would be a bug: a random call assigned to a token-named variable inside a
+// token-named function matches both random rules' contexts and must be one
+// finding.
+var ruleBehaviourResultCounts = map[string]int{
+	"random_assign_in_token_function.py": 1,
+	"random_assign_choices.py":           1,
+	"random_fn_choices.py":               1,
 }
 
 // requireSemgrep returns the semgrep binary, or skips the test when it is not
@@ -221,8 +260,10 @@ func TestRuleBehaviour_RepairedRulesMatchTheirIntent(t *testing.T) {
 	}
 
 	fired := map[string]map[string]bool{} // file -> rule ids
+	results := map[string]int{}           // file -> results from any rule
 	for _, r := range res.Results {
 		file := filepath.Base(r.Path)
+		results[file]++
 		if fired[file] == nil {
 			fired[file] = map[string]bool{}
 		}
@@ -236,6 +277,11 @@ func TestRuleBehaviour_RepairedRulesMatchTheirIntent(t *testing.T) {
 			}
 			sort.Strings(rules)
 			t.Errorf("%s on %s: fired=%v, want %v (rules that fired: %v)", f.rule, f.file, got, f.fires, rules)
+		}
+	}
+	for file, want := range ruleBehaviourResultCounts {
+		if got := results[file]; got != want {
+			t.Errorf("%s: %d results, want exactly %d", file, got, want)
 		}
 	}
 }

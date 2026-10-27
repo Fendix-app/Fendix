@@ -194,11 +194,11 @@
       "blocks": false
     },
     "django-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "django-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "django-weak_random_token-safe": {
@@ -658,11 +658,11 @@
       "blocks": false
     },
     "fastapi-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "fastapi-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "fastapi-weak_random_token-safe": {
@@ -890,11 +890,11 @@
       "blocks": false
     },
     "flask-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "flask-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "flask-weak_random_token-safe": {

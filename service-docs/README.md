@@ -476,7 +476,7 @@ orchestrator logs an install hint and continues.
 > deleted in TASK-118. A rule added there never runs. See `CONTRIBUTING.md` →
 > "Adding a Semgrep rule".
 
-**22 rules** across four files.
+**23 rules** across four files.
 
 ### auth.yaml (4 rules)
 
@@ -487,7 +487,7 @@ orchestrator logs an install hint and continues.
 | `python-jwt-decode-no-verification` | CRITICAL | CWE-347 | `jwt.decode()` with `verify_signature=False` or `algorithms=["none"]` |
 | `flask-route-no-auth-decorator` | MEDIUM | CWE-306 | Flask route with no auth-style decorator (`@login_required`, `@requires_auth`, `@jwt_required`, …) below `@app.route()`; one placed above it does not protect the route |
 
-### crypto.yaml (4 rules)
+### crypto.yaml (5 rules)
 
 | Rule ID | Severity | CWE | What It Catches |
 |---------|----------|-----|-----------------|
@@ -495,6 +495,7 @@ orchestrator logs an install hint and continues.
 | `python-sha1-used-for-password` | HIGH | CWE-327 | `hashlib.sha1()` on a password-shaped variable |
 | `python-legacy-cipher-import` | HIGH | CWE-327 | Legacy/broken symmetric cipher imported (DES, 3DES, RC4, ARC2, Blowfish) |
 | `python-random-for-token-generation` | HIGH | CWE-338 | `random` used inside a function whose name implies a security-sensitive value |
+| `python-random-token-assignment` | HIGH | CWE-338 | `random` output assigned to a variable whose name implies a security-sensitive value, outside such a function |
 
 ### injection.yaml (8 rules)
 

@@ -19,8 +19,9 @@ import (
 // catalog test catches accidental rule deletion. v0.13.1 dropped the
 // broken django-fbv-missing-auth-decorator rule (Sprint 18 review), and
 // flask-missing-login-required went after v3.6.4 because it duplicated
-// flask-route-no-auth-decorator on every Flask route (ADR-012).
-const rulepackTotalCount = 22
+// flask-route-no-auth-decorator on every Flask route (ADR-012). v3.7.0
+// added python-random-token-assignment.
+const rulepackTotalCount = 23
 
 // rulepackFiles is the canonical list of embedded YAML rule files. The
 // extraction tests (TestEnsureRules_ExtractsAllBundledFiles) assert this

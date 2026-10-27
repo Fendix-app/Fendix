@@ -676,7 +676,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     was already detected and blocking through the inner `os.path.join`; it
     is now also reported on the `FileResponse` call.
 
+- **A new Semgrep rule, `python-random-token-assignment`, reports the
+  `random` module's output assigned to a token-named variable.** Code like
+  `token = "".join(random.choices(ALPHABET, k=40))` inside
+  `def create(request):` was not reported, because only the enclosing
+  function's name was checked. The new rule checks the assignment target
+  instead.
+  - **What it matches.** The calls are `random.random`, `choice`, `choices`,
+    `randint`, `randrange`, `sample`, `shuffle`, `getrandbits` and
+    `randbytes`. The target can be a name, an attribute (`self.csrf_token`)
+    or a subscript (`user["token"]`), in a function or at module level. One
+    of `token`, `password`, `secret`, `nonce`, `salt`, `session`, `otp`,
+    `reset`, `csrf`, `api_key` or `access_key` must start a segment of the
+    target's name: `reset_code` and `SESSION_SECRET` match, `footprint`
+    does not.
+  - **One finding per call.** In a function whose name matches
+    `python-random-for-token-generation`, the call is that rule's finding and
+    the new rule stays silent.
+  - **Rating.** The rule is in category `secrets`, CWE-338, HIGH with MEDIUM
+    confidence, the same as `python-random-for-token-generation`. Without
+    corroboration its findings warn.
+  - **Identity.** Its findings are new, with a new SARIF `ruleId`,
+    `python-random-token-assignment`. The rule pack has 23 rules, and the
+    security catalog lists 106 checks.
+
 ### Changed
+
+- **`python-random-for-token-generation` reports more token generators.**
+  - **More calls.** `random.choices`, `random.randrange` and
+    `random.randbytes` are reported beside `random.random`, `choice`,
+    `randint`, `sample`, `shuffle` and `getrandbits`.
+    `"".join(random.choices(ALPHABET, k=40))`, the most common token idiom,
+    was missed.
+  - **More function names.** The security-sensitive word may now start any
+    segment of the function's name: `issue_api_key`, `_generate_api_key` and
+    `generate_token` are reported. Semgrep anchors a `metavariable-regex` at
+    the start of the name, so until now only a name that began with the word
+    was reported (`token_for`). The rule's own documented example,
+    `generate_token`, never fired. A word inside a segment still does not
+    count: `footprint` (otp) and `preset_palette` (reset) are not reported.
+  - **Identity.** Every finding the rule reported before keeps its rule id,
+    message, title, severity and fingerprint. The change only adds findings.
+    A call inside a nested function now gets one result per enclosing
+    function whose name matches, each naming its function. Semgrep already
+    did this when both names began with the word. The results share one
+    fingerprint.
+  - **Framework parity.** The `direct` and `indirect` weak-random-token
+    cases of Django, Flask and FastAPI are detected. They were missed in all
+    three: `create_api_key` and `_generate_api_key` call `random.choices`.
+    They warn, and the safe cases stay clean. The Python frameworks detect
+    all 108 vulnerable cases, up from 102. They still block on 72.
 
 - **A Flask route without authentication now gets one missing-auth finding
   instead of two.** The Semgrep rules `flask-missing-login-required` and

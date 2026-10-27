@@ -1208,6 +1208,24 @@
       "availability": "stable"
     },
     {
+      "id": "python-random-token-assignment",
+      "title": "random module output assigned to a variable whose name suggests a security-sensitive value.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-338"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "random module output assigned to a variable whose name suggests a security-sensitive value. The `random` module is NOT cryptographically secure. Use `secrets.token_urlsafe()`, `secrets.token_bytes()`, or `secrets.choice()` instead.",
+      "availability": "stable"
+    },
+    {
       "id": "python-sha1-used-for-password",
       "title": "hashlib.sha1() used on a password-shaped variable.",
       "analyzer": "semgrep",
