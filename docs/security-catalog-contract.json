@@ -1388,6 +1388,276 @@
       "availability": "stable"
     },
     {
+      "id": "java-jwt_no_verify-taint",
+      "title": "Claims read from a JWT whose signature was never verified.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Verify the signature before trusting any claim: JWT.require(Algorithm.HMAC256(key)).build().verify(token) with auth0, or Jwts.parser().verifyWith(key).build().parseSignedClaims(token) with jjwt. Reading only the header's key id to choose the key is fine.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-weak_password_hash-taint",
+      "title": "Password hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Hash passwords with a slow, salted password hash: bcrypt, scrypt, Argon2 or PBKDF2, for example Spring Security's BCryptPasswordEncoder.encode(password). MD5 and SHA-1 are fine for checksums, not for passwords.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-weak_random_token-taint",
+      "title": "Security token drawn from a predictable random generator.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-330"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Draw tokens, reset codes, session ids, keys and salts from java.security.SecureRandom, for example new BigInteger(130, new SecureRandom()).toString(32), or RandomStringUtils.secure().nextAlphanumeric(32).",
+      "availability": "stable"
+    },
+    {
+      "id": "java-cmdi-taint",
+      "title": "OS command built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Start a fixed program with an argument array, for example new ProcessBuilder(\"ping\", \"-c\", \"1\", host), and never pass request input through `sh -c` or as the program. Validate the value against an allowlist where you can.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-sqli-sink",
+      "title": "SQL query built from a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep the SQL text constant: use `?` placeholders and pass the argument as a query argument, or a NamedParameterJdbcTemplate with a MapSqlParameterSource. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-sqli-taint",
+      "title": "SQL query built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep the SQL text constant: use `?` placeholders and pass the request value as a query argument (jdbcTemplate.query(sql, rowMapper, value)), or a NamedParameterJdbcTemplate with a MapSqlParameterSource. Never concatenate or String.format request input into SQL.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-ssti-taint",
+      "title": "Template compiled from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Never build a template from request input. Load templates by a fixed name from the template directory and pass request values only in the data model (template.process(model, out), Context.setVariable).",
+      "availability": "stable"
+    },
+    {
+      "id": "java-open_redirect-sink",
+      "title": "Redirect to a URL taken from a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Accept the target only when it starts with \"/\" and not with \"//\" or \"/\\\", here or in every caller, or map it to a URL from an allowlist. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-open_redirect-taint",
+      "title": "Redirect to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Redirect only to a local path: accept the value when it starts with \"/\" and not with \"//\" or \"/\\\", and fall back to \"/\" otherwise; or map the value to a URL from an allowlist.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-path_traversal-sink",
+      "title": "File path built from a base directory and a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep only the file name (FilenameUtils.getName), or resolve the path against the base directory, normalize it and reject it unless the normalized java.nio.file.Path starts with the base. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-path_traversal-taint",
+      "title": "File path built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep only the file name (FilenameUtils.getName), or resolve the path against the base directory, normalize it and reject it unless target.startsWith(base) holds for the normalized java.nio.file.Path. A String startsWith check is not enough: \"/srv/files_evil\" starts with \"/srv/files\".",
+      "availability": "stable"
+    },
+    {
+      "id": "java-ssrf-sink",
+      "title": "Outbound request to a URL taken from a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Check the URL's scheme and host against an allowlist before sending, here or in every caller, or build the URL from a fixed base and accept only a path segment. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-ssrf-taint",
+      "title": "Outbound request to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Parse the URL, then check its scheme and host against an allowlist (ALLOWED_HOSTS.contains(URI.create(url).getHost())) before sending, or build the URL from a fixed base and pass request input only as a path segment or query parameter.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-xss-sink",
+      "title": "HTML built from a method argument and written to the response without encoding.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "HTML-encode the argument where it is written (HtmlUtils.htmlEscape, Encode.forHtml or StringEscapeUtils.escapeHtml4), or render the page with a template engine that escapes by default. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-xss-taint",
+      "title": "Request input written into an HTML response without encoding.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "HTML-encode the value where it is written (HtmlUtils.htmlEscape, Encode.forHtml or StringEscapeUtils.escapeHtml4), or render the page with a template engine that escapes by default, such as Thymeleaf th:text.",
+      "availability": "stable"
+    },
+    {
       "id": "js-jwt-no-verify-sink",
       "title": "JWT parameter decoded without signature verification.",
       "analyzer": "semgrep",

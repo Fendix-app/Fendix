@@ -262,13 +262,17 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 | Python | taint engine (source→sink, sanitizer-aware; within a function, plus one call into a helper in the same file or another module) | proven taint |
 | Go | regex SAST (line-local) + Go dep-CVE | regex / SCA |
 | JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function, proven and able to block) and shape rules for a helper's parameter (warn only) | regex / semgrep taint |
+| Java (Spring) | Semgrep taint rules from Spring MVC and servlet request input to SQL, command, template, XSS, SSRF, path and redirect sinks, within a method plus one call into a method of the same class; weak password hashing, unverified JWT claims and weak random tokens; shape rules for a sink in another class | Semgrep taint |
 | **Java (v0.27–v0.28)** | **regex SAST (line-local): command injection, SQLi-by-concat, weak crypto, insecure deserialization, XXE, insecure cookie, weak randomness, LDAP injection, SSRF** | **regex** |
 | any language | hardcoded-secrets scanner (15 pattern families) | regex |
 
 Java (v0.27–v0.28) is **regex pattern-matching, line-local** — the same tier as the
-Go rules and the JS/TS textscan rules, NOT taint analysis. We publish **no Java recall/precision number**:
-there is no labeled Java corpus yet, so any number would be unsourced. Deep
-Java taint analysis (what OWASP Benchmark needs) is a future phase.
+Go rules and the JS/TS textscan rules, NOT taint analysis. The Spring rules added since are Semgrep taint
+rules: within one method, plus one call into a method of the same class, not
+across files. We publish **no Java recall/precision number**: the framework
+parity corpus the rules were tuned on is a development set, and public numbers
+come only from its held-out twin. Deep, interprocedural Java taint analysis
+(what OWASP Benchmark needs) is a future phase.
 
 ---
 

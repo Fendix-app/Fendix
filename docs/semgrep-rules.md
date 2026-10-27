@@ -1,9 +1,10 @@
 # Semgrep Rule Guide
 
-Fendix's white-box engine bundles 40 Semgrep rules across seven files:
-23 Python rules in four (auth, injection, secrets, crypto) and 17
+Fendix's white-box engine bundles 55 Semgrep rules across ten files:
+23 Python rules in four (auth, injection, secrets, crypto), 17
 JavaScript/TypeScript rules in three (javascript-injection, javascript-web,
-javascript-crypto). It extracts them to a per-process temp directory at
+javascript-crypto) and 15 Java rules in three (java-injection, java-web,
+java-crypto). It extracts them to a per-process temp directory at
 scan time. This guide explains the metadata Fendix
 expects, how rules are mapped into the Finding model, and the conventions
 to follow when writing project-specific rules.
@@ -140,6 +141,40 @@ fails otherwise. It also holds two naming rules:
   in JavaScript and TypeScript, `static final String $X = ...` in Java, and
   both `const $X = ...` and a `const ( ... )` block in Go.
 
+### The Java packs
+
+`java-injection.yaml`, `java-web.yaml` and `java-crypto.yaml` hold ten
+taint rules (`java-sqli-taint`, `java-cmdi-taint`, `java-ssti-taint`,
+`java-xss-taint`, `java-ssrf-taint`, `java-path_traversal-taint`,
+`java-open_redirect-taint`, `java-weak_password_hash-taint`,
+`java-jwt_no_verify-taint`, `java-weak_random_token-taint`) and five shape
+rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
+`java-path_traversal-sink`, `java-open_redirect-sink`).
+
+- **Request sources.** A Spring handler parameter annotated
+  `@RequestParam`, `@PathVariable`, `@RequestBody`, `@RequestHeader`,
+  `@CookieValue`, `@ModelAttribute`, `@RequestPart` or `@MatrixVariable`,
+  or a plain `String` parameter of a request-mapping method; never a
+  number, boolean, date, UUID or framework object. `HttpServletRequest`'s
+  `getParameter`, `getParameterValues`, `getHeader`, `getQueryString`,
+  `getInputStream` and `getReader`.
+- **One call deep.** Open-source Semgrep follows taint within one method.
+  So a parameter of a method of the same class is a source too, when a
+  handler passes it a request value, or an expression of one, at the same
+  position (the first, second or third). Taint then follows that method's
+  body, and the finding is reported at the sink inside it.
+- **Shape rules** cover a sink in another class: a non-private method
+  whose own `String` parameter is concatenated into SQL or HTML, is the
+  URL of a request or a redirect, or is a file name joined to a directory.
+  They prove no flow, so they never count as reachable.
+- **The crypto rules' sources** are the weak value itself: a value named
+  like a password, a JWT decoded without verification, a
+  `java.util.Random`. The flow to where it is trusted is the finding.
+- Semgrep cannot share a block between rules, so the request sources are
+  repeated in every taint rule of `java-injection.yaml` and
+  `java-web.yaml`; `TestJavaTaintRulesShareTheirBlocks` keeps the copies
+  equal. The tests are `ruletests/java-*.java`.
+
 ### Why `fendix_severity` exists separately from `severity`
 
 Semgrep's `severity` (`ERROR`/`WARNING`/`INFO`) describes how the rule
@@ -163,7 +198,7 @@ A rule in the bundled pack uses one of five categories.
 | `xss` | Input written into an HTML response. |
 | `auth` | Missing or bypassable authentication: an unprotected route, a JWT decoded without verifying its signature. |
 | `secrets` | Hardcoded credentials, keys and certificates. The bundled Python rules for weak password hashing, legacy ciphers and non-cryptographic random tokens also use it. |
-| `crypto` | Weak cryptography. textscan's weak-crypto checks use it, and so do the JavaScript/TypeScript rules for weak password hashing and `Math.random()` tokens. |
+| `crypto` | Weak cryptography. textscan's weak-crypto checks use it, and so do the JavaScript/TypeScript and Java rules for weak password hashing and weak random tokens, so a finding of both on one line collapses into one. |
 
 There is no separate category for SSRF, path traversal, open redirect or
 SSTI. The engine collapses two findings on one line only when their

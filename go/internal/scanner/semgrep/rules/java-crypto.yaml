@@ -1,0 +1,222 @@
+# Java crypto pack: a password hashed with MD5 or SHA-1, the claims of a JWT
+# that was decoded without verifying its signature, and a token drawn from a
+# non-cryptographic random generator. Each is a taint rule whose source is the
+# weak value itself (a password, an unverified token, java.util.Random), not
+# request input: the flow from it to the place it is trusted is the finding.
+#
+# Written in-house for Fendix; see docs/semgrep-rules.md.
+rules:
+  - id: java-weak_password_hash-taint
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    message: >-
+      Password hashed with MD5 or SHA-1. A password reaches a fast, broken
+      digest, so a leaked hash can be reversed with precomputed tables or a
+      GPU. Hash passwords with a slow, salted function: bcrypt, scrypt, Argon2
+      or PBKDF2 (Spring Security's PasswordEncoder).
+    metadata:
+      category: crypto
+      cwe: CWE-916
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_reachability: taint
+      fendix_title: Password hashed with MD5 or SHA-1.
+      fendix_remediation: >-
+        Hash passwords with a slow, salted password hash: bcrypt, scrypt,
+        Argon2 or PBKDF2, for example Spring Security's
+        BCryptPasswordEncoder.encode(password). MD5 and SHA-1 are fine for
+        checksums, not for passwords.
+    pattern-sources:
+      # A variable or parameter named like a password, and a getter for one.
+      - patterns:
+          - pattern: $PW
+          - metavariable-regex:
+              metavariable: $PW
+              regex: (?i)^(?!\w*(hash|digest|encoded|encrypted|policy|reset|token|salt|length|expir|field|label|prompt|hint|regex|pattern|rule))\w*(passw(or)?d|passwd|passphrase|pwd)\w*$
+      - patterns:
+          - pattern: $OBJ.$GETTER()
+          - metavariable-regex:
+              metavariable: $GETTER
+              regex: (?i)^get(raw|plain|new|old|current|user)?(password|passwd|passphrase|pwd)$
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: MessageDigest.getInstance("$ALG", ...).digest($X, ...)
+              - pattern: MessageDigest.getInstance("$ALG", ...).update($X, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $MDT $MD = MessageDigest.getInstance("$ALG", ...);
+                          ...
+                      - pattern-inside: |
+                          $MD = MessageDigest.getInstance("$ALG", ...);
+                          ...
+                  - pattern-either:
+                      - pattern: $MD.digest($X, ...)
+                      - pattern: $MD.update($X, ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i)^(MD2|MD4|MD5|SHA|SHA-?1)$
+          - focus-metavariable: $X
+      - patterns:
+          - pattern-either:
+              - pattern: DigestUtils.$DIGEST($X)
+              - pattern: org.apache.commons.codec.digest.DigestUtils.$DIGEST($X)
+              - pattern: org.springframework.util.DigestUtils.$DIGEST($X)
+          - metavariable-regex:
+              metavariable: $DIGEST
+              regex: ^(md2|md2Hex|md5|md5Hex|sha|shaHex|sha1|sha1Hex|md5Digest|md5DigestAsHex)$
+          - focus-metavariable: $X
+      - patterns:
+          - pattern-either:
+              - pattern: Hashing.md5().$HASH($X, ...)
+              - pattern: Hashing.sha1().$HASH($X, ...)
+          - metavariable-regex:
+              metavariable: $HASH
+              regex: ^(hashString|hashBytes|hashUnencodedChars)$
+          - focus-metavariable: $X
+
+  - id: java-jwt_no_verify-taint
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Claims read from a JWT whose signature was never verified. The token is
+      decoded with auth0 JWT.decode, or parsed as an unsigned token by jjwt,
+      and its claims (subject, roles, ...) are then used, so anyone can forge
+      them. Verify the token with JWT.require(algorithm).build().verify(token),
+      or a jjwt parser with a signing key, and read the claims from that.
+    metadata:
+      category: auth
+      cwe: CWE-347
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_reachability: taint
+      fendix_title: Claims read from a JWT whose signature was never verified.
+      fendix_remediation: >-
+        Verify the signature before trusting any claim:
+        JWT.require(Algorithm.HMAC256(key)).build().verify(token) with auth0,
+        or Jwts.parser().verifyWith(key).build().parseSignedClaims(token) with
+        jjwt. Reading only the header's key id to choose the key is fine.
+    pattern-sources:
+      - pattern: JWT.decode(...)
+      - pattern: com.auth0.jwt.JWT.decode(...)
+      - pattern: $PARSER.parseClaimsJwt(...)
+      - pattern: $PARSER.parseUnsecuredClaims(...)
+      # A method of this class that returns an unverified decode.
+      - patterns:
+          - pattern-inside: |
+              class $HC {
+                ...
+                $HR $H(...) {
+                  ...
+                  return JWT.decode(...);
+                }
+                ...
+              }
+          - pattern: $H(...)
+    pattern-sanitizers:
+      # Verification returns the verified token, and a decoded token that was
+      # passed to verify() (which throws unless the signature holds) is
+      # verified from then on.
+      # (Two forms: a sanitizer for the whole call would keep the side effect
+      # on its argument from applying.)
+      - patterns:
+          - pattern: $VERIFIER.verify($TOKEN)
+          - metavariable-regex:
+              metavariable: $TOKEN
+              regex: ^(?!\w+$)
+      - by-side-effect: true
+        patterns:
+          - pattern: $VERIFIER.verify($DECODED)
+          - metavariable-regex:
+              metavariable: $DECODED
+              regex: ^\w+$
+          - focus-metavariable: $DECODED
+      # The header (key id, algorithm) of an unverified token is not a claim.
+      - patterns:
+          - pattern: $DECODED.$HEADER(...)
+          - metavariable-regex:
+              metavariable: $HEADER
+              regex: ^(getKeyId|getAlgorithm|getType|getContentType|getHeader|getHeaderClaim|getToken|getSignature)$
+    pattern-sinks:
+      - patterns:
+          - pattern: $DECODED.$CLAIM(...)
+          - metavariable-regex:
+              metavariable: $CLAIM
+              regex: ^(getClaim|getClaims|getSubject|getIssuer|getAudience|getExpiresAt|getExpiresAtAsInstant|getNotBefore|getIssuedAt|getId|getPayload|getBody)$
+          - focus-metavariable: $DECODED
+
+  - id: java-weak_random_token-taint
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    message: >-
+      Security token drawn from a predictable random generator. A value from
+      java.util.Random, Math.random, ThreadLocalRandom or
+      RandomStringUtils.random* becomes a token, code, key or password, and
+      these generators can be predicted from a few outputs. Use
+      java.security.SecureRandom.
+    metadata:
+      category: crypto
+      cwe: CWE-330
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_reachability: taint
+      fendix_title: Security token drawn from a predictable random generator.
+      fendix_remediation: >-
+        Draw tokens, reset codes, session ids, keys and salts from
+        java.security.SecureRandom, for example
+        new BigInteger(130, new SecureRandom()).toString(32), or
+        RandomStringUtils.secure().nextAlphanumeric(32).
+    pattern-sources:
+      - pattern: new Random(...)
+      - pattern: new java.util.Random(...)
+      - pattern: Math.random()
+      - pattern: ThreadLocalRandom.current()
+      - pattern: RandomStringUtils.insecure()
+      - patterns:
+          - pattern: RandomStringUtils.$RANDOM(...)
+          - metavariable-regex:
+              metavariable: $RANDOM
+              regex: ^random(Alphanumeric|Alphabetic|Numeric|Ascii|Graphic|Print)?$
+      # A Random held in a field or variable.
+      - patterns:
+          - pattern-either:
+              - pattern: (Random $RNG).$DRAW(...)
+              - pattern: (java.util.Random $RNG).$DRAW(...)
+          - pattern-not-inside: |
+              class $RC {
+                ...
+                Random $RNG = new SecureRandom(...);
+                ...
+              }
+          - pattern-not-inside: |
+              Random $RNG = new SecureRandom(...);
+              ...
+    pattern-sinks:
+      # Assigned to a variable or field named like a token.
+      - patterns:
+          - pattern-either:
+              - pattern: $VT $VAR = $VALUE;
+              - pattern: $VAR = $VALUE;
+              - pattern: this.$VAR = $VALUE;
+          - metavariable-regex:
+              metavariable: $VAR
+              regex: (?i)^\w*(token|secret|nonce|otp|salt|csrf|xsrf|session_?id|session_?key|api_?key|passw(or)?d|passcode|(reset|verification|verify|confirm|confirmation|activation|invite|invitation|auth|access|recovery|one_?time)_?(code|key|pin))$
+          - focus-metavariable: $VALUE
+      # Returned from a method named like one that makes a token, unless it
+      # mentions a token-named variable, already reported where it was
+      # assigned.
+      - patterns:
+          - pattern-inside: |
+              $MRT $MAKER(...) { ... }
+          - metavariable-regex:
+              metavariable: $MAKER
+              regex: (?i)^\w*(token|secret|nonce|otp|salt|csrf|xsrf|sessionid|sessionkey|apikey|password|passcode|(reset|verification|confirmation|activation|invite|invitation|recovery)code)
+          - pattern: return $VALUE;
+          - metavariable-regex:
+              metavariable: $VALUE
+              regex: (?is)^(?!.*\b\w*(token|secret|nonce|otp|salt|csrf|xsrf|session_?id|session_?key|api_?key|passw(or)?d|passcode|(reset|verification|verify|confirm|confirmation|activation|invite|invitation|auth|access|recovery|one_?time)_?(code|key|pin))\b)
+          - focus-metavariable: $VALUE

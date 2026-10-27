@@ -104,6 +104,8 @@ RULE_CLASS = {
     "GO_SQL_INJECTION": "sqli",
     "django-orm-raw-sql": "sqli",
     "python-sql-injection-string-format": "sqli",
+    "java-sqli-taint": "sqli",
+    "java-sqli-sink": "sqli",
     # Command injection
     "PY_OS_SYSTEM": "cmdi",
     "PY_OS_POPEN": "cmdi",
@@ -113,6 +115,7 @@ RULE_CLASS = {
     "GO_EXEC_COMMAND_INJECTION": "cmdi",
     "python-command-injection-shell-true": "cmdi",
     "python-subprocess-shell-true-with-variable": "cmdi",
+    "java-cmdi-taint": "cmdi",
     # XSS
     "PY_XSS_HTML_SINK": ("xss", "ssti"),
     "JS_INNER_HTML": "xss",
@@ -121,17 +124,26 @@ RULE_CLASS = {
     "JS_DOCUMENT_WRITE": "xss",
     "SEC-JS_DOCUMENT_WRITE": "xss",
     "JAVA_XSS_REFLECTED": "xss",
+    "java-xss-taint": "xss",
+    "java-xss-sink": "xss",
     # Server-side template injection (CWE-94, CWE-1336)
     "PY_SSTI": "ssti",
     "flask-render-template-string-injection": "ssti",
+    "java-ssti-taint": "ssti",
     # SSRF
     "PY_SSRF": "ssrf",
     "JAVA_SSRF": "ssrf",
+    "java-ssrf-taint": "ssrf",
+    "java-ssrf-sink": "ssrf",
     # Path traversal
     "PY_PATH_TRAVERSAL": "path_traversal",
     "JAVA_PATH_TRAVERSAL": "path_traversal",
+    "java-path_traversal-taint": "path_traversal",
+    "java-path_traversal-sink": "path_traversal",
     # Open redirect
     "PY_OPEN_REDIRECT": "open_redirect",
+    "java-open_redirect-taint": "open_redirect",
+    "java-open_redirect-sink": "open_redirect",
     # Hard-coded secrets (language-specific rules; secrets/* is handled below)
     "JS_HARDCODED_AWS_KEY": "hardcoded_secret",
     "GO_HARDCODED_AWS_KEY": "hardcoded_secret",
@@ -147,9 +159,11 @@ RULE_CLASS = {
     "JAVA_WEAK_CRYPTO": "weak_password_hash",
     "python-md5-used-for-password": "weak_password_hash",
     "python-sha1-used-for-password": "weak_password_hash",
+    "java-weak_password_hash-taint": "weak_password_hash",
     # JWT accepted without signature verification
     "PY_JWT_WEAK": "jwt_no_verify",
     "python-jwt-decode-no-verification": "jwt_no_verify",
+    "java-jwt_no_verify-taint": "jwt_no_verify",
     # Non-cryptographic RNG for tokens
     "JAVA_WEAK_RANDOM": "weak_random_token",
     "python-random-for-token-generation": "weak_random_token",
@@ -172,6 +186,7 @@ RULE_CLASS = {
     "js-jwt-no-verify-taint": "jwt_no_verify",
     "js-jwt-no-verify-sink": "jwt_no_verify",
     "js-weak-random-token-taint": "weak_random_token",
+    "java-weak_random_token-taint": "weak_random_token",
 }
 
 

@@ -1003,6 +1003,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Real-world noise:** unchanged on `node-express-realworld` (no
     finding of the pack). On `juice-shop` the SQL shape findings now
     collapse into the proven ones on the same lines.
+- **Java and Spring code now has Semgrep taint rules.** Three new rule packs
+  written in-house, `java-injection.yaml`, `java-web.yaml` and
+  `java-crypto.yaml`, add ten taint rules and five shape rules. Java is not
+  enabled in the taint gate yet, so their findings are Semgrep findings that
+  warn and never block on their own.
+  - **What they find.**
+    - SQL injection: JdbcTemplate, NamedParameterJdbcTemplate, JDBC
+      `Statement` and `Connection`, JPA `EntityManager` and Hibernate
+      `Session` queries built from request input (`java-sqli-taint`).
+    - Command injection: `Runtime.exec`, and a `ProcessBuilder` running
+      `sh -c` or a program the request chose (`java-cmdi-taint`).
+    - Template injection: FreeMarker, Velocity and Thymeleaf templates
+      compiled from request input (`java-ssti-taint`).
+    - Reflected XSS: the return value of a `@ResponseBody` handler that
+      produces `text/html`, and the servlet response writer
+      (`java-xss-taint`).
+    - SSRF: RestTemplate, WebClient and RestClient, `java.net.http`,
+      `URL.openConnection` and `openStream`, Apache HttpClient and Jsoup
+      (`java-ssrf-taint`).
+    - Path traversal: `Files`, file streams, readers and writers, and
+      `MultipartFile.transferTo` (`java-path_traversal-taint`).
+    - Open redirect: `sendRedirect`, a `"redirect:"` view, `RedirectView`
+      and the `Location` header (`java-open_redirect-taint`).
+    - A password hashed with MD5 or SHA-1, claims read from a JWT decoded
+      without verifying it (auth0 `JWT.decode`, jjwt `parseClaimsJwt`), and a
+      token, code or key drawn from `java.util.Random`, `Math.random`,
+      `ThreadLocalRandom` or `RandomStringUtils.random*`.
+  - **Sources.** A handler parameter annotated `@RequestParam`,
+    `@PathVariable`, `@RequestBody`, `@RequestHeader`, `@CookieValue`,
+    `@ModelAttribute`, `@RequestPart` or `@MatrixVariable`, or a plain
+    `String` parameter of a request-mapping method, unless it is a number, a
+    boolean, a date, a UUID or a framework object; and
+    `HttpServletRequest.getParameter`, `getHeader`, `getQueryString`,
+    `getInputStream` and `getReader`. Semgrep follows taint within one
+    method, so a method of the same class that a handler passes a request
+    value to is followed too, one call deep: the finding is at the sink
+    inside it.
+  - **Not reported.** `?` placeholders and named parameters; HTML encoding
+    (`HtmlUtils.htmlEscape`, `Encode.forHtml`,
+    `StringEscapeUtils.escapeHtml4`); a host allowlist check, or one exact
+    URL; a normalized `Path` that `startsWith` its base directory, and
+    `FilenameUtils.getName` (a String `startsWith` without a separator is
+    not containment, so it stays reported); a redirect target checked to
+    start with `/` and not `//`; the claims of a token that went through
+    `verify()`; an argument array whose program is fixed; `SecureRandom`.
+  - **Shape rules** (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
+    `java-path_traversal-sink`, `java-open_redirect-sink`) report a sink in
+    another class: a non-private method whose own `String` parameter is
+    concatenated into SQL or HTML, is the URL of a request or a redirect, or
+    is a file name joined to a directory. They exclude module constants and
+    literal arguments, prove no flow, and never count as reachable.
+  - **Rating.** SQL, command and template injection, SSRF and unverified JWT
+    claims are HIGH; XSS, path traversal, open redirect, weak password
+    hashing and weak random tokens are MEDIUM; the shape rules are MEDIUM.
+    All have MEDIUM confidence. SSRF, path traversal, open redirect and
+    template injection are category `injection`, weak hashing and random
+    tokens `crypto` and JWT `auth`, as textscan files them, so a textscan
+    finding on the same line collapses with the Semgrep one.
+  - **Identity.** The findings are new, with new rule ids. The rule pack has
+    38 rules and the security catalog lists 121 checks.
+  - **Parity.** On the Spring corpus, recall goes from 12 to 35 of 36
+    vulnerable cases (the one left is a hardcoded secret). False positives
+    stay at 2 of 22 safe cases, both textscan's, and block recall stays at 3
+    of 36: nothing new blocks yet.
+  - **Real code.** On `spring-petclinic`, nothing new. On WebGoat, 23 new
+    locations in four grouped findings, all 23 true positives (SQL injection
+    lessons, open redirects, path traversal and zip slip, predictable
+    tokens). The scan takes about one second longer.
 
 ### Changed
 
