@@ -154,6 +154,24 @@ RULE_CLASS = {
     "JAVA_WEAK_RANDOM": "weak_random_token",
     "python-random-for-token-generation": "weak_random_token",
     "python-random-token-assignment": "weak_random_token",
+    # JavaScript/TypeScript Semgrep pack (go/internal/scanner/semgrep/rules/javascript-*.yaml)
+    "js-sqli-taint": "sqli",
+    "js-sqli-sink": "sqli",
+    "js-cmdi-taint": "cmdi",
+    "js-cmdi-sink": "cmdi",
+    "js-ssti-taint": "ssti",
+    "js-ssti-sink": "ssti",
+    "js-xss-taint": "xss",
+    "js-xss-sink": "xss",
+    "js-ssrf-taint": "ssrf",
+    "js-path-traversal-taint": "path_traversal",
+    "js-open-redirect-taint": "open_redirect",
+    "js-open-redirect-sink": "open_redirect",
+    "js-weak-password-hash-taint": "weak_password_hash",
+    "js-weak-password-hash-sink": "weak_password_hash",
+    "js-jwt-no-verify-taint": "jwt_no_verify",
+    "js-jwt-no-verify-sink": "jwt_no_verify",
+    "js-weak-random-token-taint": "weak_random_token",
 }
 
 

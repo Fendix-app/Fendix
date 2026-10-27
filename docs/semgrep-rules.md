@@ -1,8 +1,10 @@
 # Semgrep Rule Guide
 
-Fendix's white-box engine bundles 23 Semgrep rules across four files
-(auth, injection, secrets, crypto) and extracts them to a per-process
-temp directory at scan time. This guide explains the metadata Fendix
+Fendix's white-box engine bundles 40 Semgrep rules across seven files:
+23 Python rules in four (auth, injection, secrets, crypto) and 17
+JavaScript/TypeScript rules in three (javascript-injection, javascript-web,
+javascript-crypto). It extracts them to a per-process temp directory at
+scan time. This guide explains the metadata Fendix
 expects, how rules are mapped into the Finding model, and the conventions
 to follow when writing project-specific rules.
 
@@ -161,13 +163,67 @@ A rule in the bundled pack uses one of five categories.
 | `xss` | Input written into an HTML response. |
 | `auth` | Missing or bypassable authentication: an unprotected route, a JWT decoded without verifying its signature. |
 | `secrets` | Hardcoded credentials, keys and certificates. The bundled Python rules for weak password hashing, legacy ciphers and non-cryptographic random tokens also use it. |
-| `crypto` | Weak cryptography. textscan's weak-crypto checks use it. |
+| `crypto` | Weak cryptography. textscan's weak-crypto checks use it, and so do the JavaScript/TypeScript rules for weak password hashing and `Math.random()` tokens. |
 
 There is no separate category for SSRF, path traversal, open redirect or
 SSTI. The engine collapses two findings on one line only when their
 categories match, and textscan reports these as `injection`. A Semgrep rule
 with its own category would be reported a second time beside textscan's
 finding for the same code.
+
+---
+
+## The JavaScript and TypeScript pack
+
+`javascript-injection.yaml`, `javascript-web.yaml` and
+`javascript-crypto.yaml` cover Express, NestJS and Next.js (App Router).
+Every rule runs on both `.js` and `.ts` files. Each has tests in
+[`ruletests/`](../go/internal/scanner/semgrep/ruletests/).
+
+**Request sources**, the same in every taint rule:
+
+- Express: `req.query`, `req.params`, `req.body`, `req.headers`,
+  `req.cookies`, `req.get(...)` and `req.header(...)`, on a request named
+  `req` or `request`.
+- NestJS: a parameter bound by `@Query()`, `@Param()`, `@Body()` or
+  `@Headers()`, and the same accessors on a `@Req()` parameter of any name.
+- Next.js: `request.nextUrl.searchParams`, `request.json()`,
+  `request.formData()`, `request.text()` and `request.headers` (on the
+  request of a `GET`, `POST`, ... route handler, of any name), and the
+  `params` of its context argument.
+
+**Taint rules** (`-taint`) report a source reaching a sink inside one
+function:
+
+| Rule | Sinks | Not a finding |
+|---|---|---|
+| `js-sqli-taint` | the query text of `query`, `execute`, `raw` (and knex's `*Raw`), `$queryRawUnsafe`, `$executeRawUnsafe` | a values array or a pg config object; a tagged template (`` sql`...${id}` ``, slonik, `Prisma.sql`, `` prisma.$queryRaw`...` ``), which is always parameterized |
+| `js-cmdi-taint` | `child_process` `exec` and `execSync` (as a member, destructured, imported or promisified); `spawn`/`execFile` with `shell: true`; `spawn("sh", ["-c", cmd])` | `execFile` or `spawn` with an argument array and no shell |
+| `js-ssti-taint` | the template argument of `ejs.render`, `pug.compile`/`render`, `Handlebars.compile`, `nunjucks.renderString` and similar | a fixed template with the input in its data |
+| `js-xss-taint` | `res.send`/`write`/`end` of a string built with markup, anything sent after the response is typed as HTML, and a `Response`/`NextResponse` typed `text/html` | `escape-html`, `he.encode`, `DOMPurify.sanitize`, `encodeURIComponent` and other escapers; a non-HTML response |
+| `js-ssrf-taint` | the URL of `fetch`, `axios`, `got`, `http(s).get`/`request`, `undici.request` | a host allowlist checked in an `if` before the request; a URL whose literal start fixes the scheme and host (`https://api.example.com/users/${id}`) or begins with a constant base |
+| `js-path-traversal-taint` | the path of `readFile`, `readFileSync`, `createReadStream` (also `fs.promises`), `res.sendFile`, `res.download` | `path.basename(...)`; an `if` that checks the path starts with the base directory plus `path.sep` (a bare `startsWith(BASE)` is not containment) |
+| `js-open-redirect-taint` | `res.redirect`, `res.location`, a `Location` header, `NextResponse.redirect` (also of `new URL(target, base)`), Next.js `redirect()`, a `Response` with a `Location` header | an `if` that rejects a target not starting with `/` or starting with `//`, and the ternary `isLocal ? target : "/"` bound to that check; a target whose literal start is a same-site path segment |
+| `js-weak-password-hash-taint` | `createHash("md5"/"sha1").update(pw)` where `pw` is named like a password, or comes from a request field named like one | `bcrypt`, `scrypt`, `argon2`, PBKDF2, SHA-256 |
+| `js-jwt-no-verify-taint` | `jwt.decode(token)` of a request token, and `decode(token, { complete: true })` when its `payload` is read | `jwt.verify`; reading only the header of a complete decode, or decoding to choose a key that `jwt.verify` then checks |
+| `js-weak-random-token-taint` | `Math.random()` output assigned to a variable, property or key named like a token (`resetToken`, `sessionId`, `apiKey`, `otp`, ...) or returned by a function named like one | `crypto.randomBytes`, `randomUUID`, `getRandomValues`; `Math.random()` for jitter or shuffling |
+
+**Shape rules** (`-sink`) report the same sink reached through a call,
+which Semgrep CE's intraprocedural taint does not follow: a helper whose
+parameter is the query text (`js-sqli-sink`), the command line
+(`js-cmdi-sink`), the template (`js-ssti-sink`), the HTML markup
+(`js-xss-sink`), the redirect target (`js-open-redirect-sink`) or the token
+it decodes without verifying (`js-jwt-no-verify-sink`); and a value named
+like a password hashed with MD5 or SHA-1 (`js-weak-password-hash-sink`). A shape finding never counts as reachability.
+SSRF and path traversal have no shape rule: helpers that fetch a URL or
+read a file by a parameter are too common in clean code.
+
+The taint rules' matches count as reachability only for a language enabled
+in `semgrep.ReachabilityLanguages`
+([ADR-011](./adr/ADR-011-semgrep-taint-reachability.md)). A reachable
+finding is escalated one severity level, so the `fendix_severity` of
+`js-sqli-taint`, `js-cmdi-taint` and `js-ssti-taint` is `HIGH` and the
+others' `MEDIUM`: proven, they report `CRITICAL` and `HIGH`.
 
 ---
 

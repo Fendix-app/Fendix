@@ -234,19 +234,19 @@
       "blocks": false
     },
     "express-cmdi-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-cmdi-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-cmdi-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-cmdi-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-cmdi-safe": {
@@ -282,11 +282,11 @@
       "blocks": false
     },
     "express-jwt_no_verify-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-jwt_no_verify-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-jwt_no_verify-safe": {
@@ -298,19 +298,19 @@
       "blocks": false
     },
     "express-open_redirect-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-open_redirect-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-open_redirect-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-open_redirect-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-open_redirect-safe": {
@@ -322,7 +322,7 @@
       "blocks": false
     },
     "express-path_traversal-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-path_traversal-cross_file": {
@@ -330,7 +330,7 @@
       "blocks": false
     },
     "express-path_traversal-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-path_traversal-indirect": {
@@ -346,7 +346,7 @@
       "blocks": false
     },
     "express-sqli-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-sqli-cross_file": {
@@ -370,7 +370,7 @@
       "blocks": true
     },
     "express-ssrf-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-ssrf-cross_file": {
@@ -378,7 +378,7 @@
       "blocks": false
     },
     "express-ssrf-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-ssrf-indirect": {
@@ -394,11 +394,11 @@
       "blocks": false
     },
     "express-ssti-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-ssti-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-ssti-safe": {
@@ -410,11 +410,11 @@
       "blocks": false
     },
     "express-weak_password_hash-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-weak_password_hash-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-weak_password_hash-safe": {
@@ -426,11 +426,11 @@
       "blocks": false
     },
     "express-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-weak_random_token-safe": {
@@ -442,19 +442,19 @@
       "blocks": false
     },
     "express-xss-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-xss-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-xss-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "express-xss-safe": {
@@ -1162,19 +1162,19 @@
       "blocks": false
     },
     "nestjs-cmdi-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-cmdi-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-cmdi-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-cmdi-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-cmdi-safe": {
@@ -1210,11 +1210,11 @@
       "blocks": false
     },
     "nestjs-jwt_no_verify-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-jwt_no_verify-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-jwt_no_verify-safe": {
@@ -1226,19 +1226,19 @@
       "blocks": false
     },
     "nestjs-open_redirect-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-open_redirect-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-open_redirect-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-open_redirect-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-open_redirect-safe": {
@@ -1250,7 +1250,7 @@
       "blocks": false
     },
     "nestjs-path_traversal-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-path_traversal-cross_file": {
@@ -1258,7 +1258,7 @@
       "blocks": false
     },
     "nestjs-path_traversal-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-path_traversal-indirect": {
@@ -1274,7 +1274,7 @@
       "blocks": false
     },
     "nestjs-sqli-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-sqli-cross_file": {
@@ -1298,7 +1298,7 @@
       "blocks": true
     },
     "nestjs-ssrf-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-ssrf-cross_file": {
@@ -1306,7 +1306,7 @@
       "blocks": false
     },
     "nestjs-ssrf-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-ssrf-indirect": {
@@ -1322,11 +1322,11 @@
       "blocks": false
     },
     "nestjs-ssti-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-ssti-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-ssti-safe": {
@@ -1338,11 +1338,11 @@
       "blocks": false
     },
     "nestjs-weak_password_hash-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-weak_password_hash-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-weak_password_hash-safe": {
@@ -1354,11 +1354,11 @@
       "blocks": false
     },
     "nestjs-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-weak_random_token-safe": {
@@ -1370,19 +1370,19 @@
       "blocks": false
     },
     "nestjs-xss-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-xss-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-xss-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nestjs-xss-safe": {
@@ -1626,19 +1626,19 @@
       "blocks": false
     },
     "nextjs-cmdi-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-cmdi-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-cmdi-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-cmdi-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-cmdi-safe": {
@@ -1674,11 +1674,11 @@
       "blocks": false
     },
     "nextjs-jwt_no_verify-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-jwt_no_verify-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-jwt_no_verify-safe": {
@@ -1690,19 +1690,19 @@
       "blocks": false
     },
     "nextjs-open_redirect-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-open_redirect-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-open_redirect-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-open_redirect-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-open_redirect-safe": {
@@ -1714,7 +1714,7 @@
       "blocks": false
     },
     "nextjs-path_traversal-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-path_traversal-cross_file": {
@@ -1722,7 +1722,7 @@
       "blocks": false
     },
     "nextjs-path_traversal-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-path_traversal-indirect": {
@@ -1738,7 +1738,7 @@
       "blocks": false
     },
     "nextjs-sqli-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-sqli-cross_file": {
@@ -1762,7 +1762,7 @@
       "blocks": true
     },
     "nextjs-ssrf-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-ssrf-cross_file": {
@@ -1770,7 +1770,7 @@
       "blocks": false
     },
     "nextjs-ssrf-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-ssrf-indirect": {
@@ -1786,11 +1786,11 @@
       "blocks": false
     },
     "nextjs-ssti-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-ssti-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-ssti-safe": {
@@ -1802,11 +1802,11 @@
       "blocks": false
     },
     "nextjs-weak_password_hash-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-weak_password_hash-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-weak_password_hash-safe": {
@@ -1818,11 +1818,11 @@
       "blocks": false
     },
     "nextjs-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-weak_random_token-safe": {
@@ -1834,19 +1834,19 @@
       "blocks": false
     },
     "nextjs-xss-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-xss-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-xss-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nextjs-xss-safe": {

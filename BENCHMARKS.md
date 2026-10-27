@@ -260,12 +260,13 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 | Language | How | Tier |
 |---|---|---|
 | Python | taint engine (source→sink, sanitizer-aware; within a function, plus one call into a helper in the same file or another module) | proven taint |
-| Go / JS / TS | regex SAST (line-local) + Go dep-CVE | regex / SCA |
+| Go | regex SAST (line-local) + Go dep-CVE | regex / SCA |
+| JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function) and shape rules for a helper's parameter | regex / semgrep taint |
 | **Java (v0.27–v0.28)** | **regex SAST (line-local): command injection, SQLi-by-concat, weak crypto, insecure deserialization, XXE, insecure cookie, weak randomness, LDAP injection, SSRF** | **regex** |
 | any language | hardcoded-secrets scanner (15 pattern families) | regex |
 
 Java (v0.27–v0.28) is **regex pattern-matching, line-local** — the same tier as the
-Go/JS rules, NOT taint analysis. We publish **no Java recall/precision number**:
+Go rules and the JS/TS textscan rules, NOT taint analysis. We publish **no Java recall/precision number**:
 there is no labeled Java corpus yet, so any number would be unsourced. Deep
 Java taint analysis (what OWASP Benchmark needs) is a future phase.
 

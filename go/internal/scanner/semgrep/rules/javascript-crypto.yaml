@@ -1,0 +1,442 @@
+# JavaScript and TypeScript crypto and auth rules (Task 4.3): weak password
+# hashing, JWTs trusted without signature verification, and tokens from a non-
+# cryptographic RNG, for Express, NestJS and Next.js. Written in-house. The
+# -taint rules are Semgrep taint rules and count as reachability for a language
+# enabled in semgrep.ReachabilityLanguages (ADR-011); the -sink rules are shape
+# rules for a helper reached through a call and never do. The request sources
+# are repeated in every taint rule because Semgrep does not resolve YAML
+# anchors. Reachable findings are escalated one severity level, so
+# fendix_severity is the level before that.
+rules:
+  - id: js-weak-password-hash-taint
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A password from the request is hashed with MD5 or SHA-1. Use a password
+      hashing function: bcrypt, scrypt, argon2 or PBKDF2.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+        label: INPUT
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+        label: INPUT
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+        label: INPUT
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+        label: INPUT
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+        label: INPUT
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+        label: INPUT
+      - label: PASSWORD
+        patterns:
+          - pattern-either:
+              - pattern: $R.body.$FIELD
+              - pattern: $R.query.$FIELD
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: (?i)^.*(password|passwd|passphrase|pwd)
+      - label: PASSWORD
+        patterns:
+          - pattern-inside: function $F(..., @Body($KEY) $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: (?i)^['"].*(password|passwd|passphrase|pwd).*['"]$
+          - pattern: $P
+    pattern-sinks:
+      # Any request input, when the hashed value is named like a password.
+      - requires: INPUT
+        patterns:
+          - pattern-either:
+              - pattern: $CRYPTO.createHash($ALG).update($PW, ...)
+              - pattern: createHash($ALG).update($PW, ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i)^['"`](md5|md4|sha-?1)['"`]$
+          - metavariable-regex:
+              metavariable: $PW
+              regex: (?i)^.*(password|passwd|passphrase|pwd)
+          - focus-metavariable: $PW
+      # A request field named like a password, under any name.
+      - requires: PASSWORD
+        patterns:
+          - pattern-either:
+              - pattern: $CRYPTO.createHash($ALG).update($PW, ...)
+              - pattern: createHash($ALG).update($PW, ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i)^['"`](md5|md4|sha-?1)['"`]$
+          - focus-metavariable: $PW
+    metadata:
+      category: crypto
+      cwe: [CWE-916, CWE-328]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Password from the request hashed with MD5 or SHA-1.
+      fendix_remediation: >-
+        A password taken from the request is hashed with MD5 or SHA-1. Both are fast
+        and unsalted, so a leaked table of these hashes is cracked offline in hours.
+        Hash passwords with a slow, salted password hashing function: bcrypt, scrypt
+        (crypto.scrypt), argon2, or PBKDF2 with a high iteration count.
+      fendix_reachability: taint
+
+  - id: js-weak-password-hash-sink
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A value named like a password is hashed with MD5 or SHA-1. Use a password
+      hashing function: bcrypt, scrypt, argon2 or PBKDF2.
+    patterns:
+      - pattern-either:
+          - pattern: $CRYPTO.createHash($ALG).update($PW, ...)
+          - pattern: createHash($ALG).update($PW, ...)
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: (?i)^['"`](md5|md4|sha-?1)['"`]$
+      - metavariable-regex:
+          metavariable: $PW
+          regex: (?i)^.*(password|passwd|passphrase|pwd)
+      - pattern-not-inside: |
+          const $PW = "...";
+          ...
+      - pattern-not: $CRYPTO.createHash($ALG).update("...", ...)
+      - pattern-not: createHash($ALG).update("...", ...)
+    metadata:
+      category: crypto
+      cwe: [CWE-916, CWE-328]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Password-named value hashed with MD5 or SHA-1.
+      fendix_remediation: >-
+        A value named like a password is hashed with MD5 or SHA-1. Both are fast and
+        unsalted, so a leaked table of these hashes is cracked offline in hours.
+        Hash passwords with a slow, salted password hashing function: bcrypt, scrypt
+        (crypto.scrypt), argon2, or PBKDF2 with a high iteration count.
+
+  - id: js-jwt-no-verify-taint
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A token from the request is decoded without verifying its signature, and its
+      claims are trusted. Use jwt.verify with the key and an explicit algorithms
+      list.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              # decode() returns the payload unverified.
+              - patterns:
+                  - pattern-either:
+                      - pattern: $JWT.decode($T, ...)
+                      - pattern: $JWT.decodeJwt($T, ...)
+                  - pattern-not: '$JWT.decode($T, {..., complete: true, ...})'
+              # complete: true returns {header, payload}; reading the header to
+              # pick a key is fine, trusting the payload is not.
+              - patterns:
+                  - pattern-inside: |
+                      $D = $JWT.decode($T, {..., complete: true, ...});
+                      ...
+                      <... $D.payload ...>;
+                  - pattern: $JWT.decode($T, ...)
+          - metavariable-regex:
+              metavariable: $JWT
+              regex: ^(jwt|jsonwebtoken|JWT|jsonWebToken|jose)$
+          # A token decoded to choose a key or read a claim, then verified.
+          - pattern-not-inside: |
+              $D = <... $JWT.decode($T, ...) ...>;
+              ...
+              <... $JWT.verify($T, ...) ...>;
+          - focus-metavariable: $T
+    metadata:
+      category: auth
+      cwe: CWE-347
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        JWT from the request decoded without signature verification.
+      fendix_remediation: >-
+        A token taken from the request is decoded with jwt.decode, which does not
+        check the signature, so anyone can forge its claims (user, role, expiry).
+        Verify it with jwt.verify(token, key, { algorithms: [...] }) and trust only
+        the claims that call returns; read the unverified header only to choose the
+        key.
+      fendix_reachability: taint
+
+  - id: js-jwt-no-verify-sink
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A function decodes the JWT it is given without verifying its signature. If a
+      caller passes a token from the request, its claims can be forged; use
+      jwt.verify.
+    patterns:
+      - pattern-either:
+          - pattern-inside: function $F(..., $T, ...) { ... }
+          - pattern-inside: (..., $T, ...) => $BODY
+      - pattern-either:
+          # decode() returns the payload unverified.
+          - patterns:
+              - pattern-either:
+                  - pattern: $JWT.decode($T, ...)
+                  - pattern: $JWT.decodeJwt($T, ...)
+              - pattern-not: '$JWT.decode($T, {..., complete: true, ...})'
+          # complete: true returns {header, payload}; reading the header to
+          # pick a key is fine, trusting the payload is not.
+          - patterns:
+              - pattern-inside: |
+                  $D = $JWT.decode($T, {..., complete: true, ...});
+                  ...
+                  <... $D.payload ...>;
+              - pattern: $JWT.decode($T, ...)
+      - metavariable-regex:
+          metavariable: $JWT
+          regex: ^(jwt|jsonwebtoken|JWT|jsonWebToken|jose)$
+      # A token decoded to choose a key or read a claim, then verified.
+      - pattern-not-inside: |
+          $D = <... $JWT.decode($T, ...) ...>;
+          ...
+          <... $JWT.verify($T, ...) ...>;
+      - pattern-not-inside: |
+          const $T = "...";
+          ...
+      - pattern-not: $JWT.decode("...", ...)
+    metadata:
+      category: auth
+      cwe: CWE-347
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        JWT parameter decoded without signature verification.
+      fendix_remediation: >-
+        This function decodes the token it is given with jwt.decode, which does not
+        check the signature. If any caller passes a token from the request and
+        trusts the claims, anyone can forge them. Verify tokens with
+        jwt.verify(token, key, { algorithms: [...] }) and trust only the claims that
+        call returns; read the unverified header only to choose the key.
+
+  - id: js-weak-random-token-taint
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Math.random() output becomes a security token. Math.random is predictable;
+      use crypto.randomBytes, crypto.randomUUID or crypto.getRandomValues.
+    # The source is the non-cryptographic RNG, not request input: its value
+    # reaching a token is the flow this rule proves.
+    pattern-sources:
+      - pattern: Math.random()
+    pattern-sinks:
+      # Assigned to a variable, property or object key named like a token.
+      - patterns:
+          - pattern-either:
+              - pattern: $T = $E
+              - pattern: '{..., $T: $E, ...}'
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?:(?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[^A-Za-z0-9](?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[a-z0-9](?:Token|TOKEN|Password|PASSWORD|Passwd|Secret|SECRET|Nonce|NONCE|Salt|SALT|Session|SESSION|Otp|OTP|Reset|RESET|Csrf|CSRF|Xsrf|XSRF|Api_?[Kk]ey|API_?KEY|Access_?[Kk]ey|ACCESS_?KEY))
+          # A token copied from another variable was reported where it was made.
+          - metavariable-regex:
+              metavariable: $E
+              regex: ^(?![A-Za-z_$][\w$]*$)
+          - focus-metavariable: $E
+      # Returned by a function named like a token generator.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $T(...) { ... }
+              - pattern-inside: |
+                  $T = (...) => { ... }
+          - metavariable-regex:
+              metavariable: $T
+              regex: ^(?:(?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[^A-Za-z0-9](?i:token|password|passwd|secret|nonce|salt|session|otp|reset|csrf|xsrf|api_?key|access_?key)|.*[a-z0-9](?:Token|TOKEN|Password|PASSWORD|Passwd|Secret|SECRET|Nonce|NONCE|Salt|SALT|Session|SESSION|Otp|OTP|Reset|RESET|Csrf|CSRF|Xsrf|XSRF|Api_?[Kk]ey|API_?KEY|Access_?[Kk]ey|ACCESS_?KEY))
+          - pattern: return $E;
+          # Returning a record that carries the token is not making it.
+          - pattern-not: 'return {...};'
+          - focus-metavariable: $E
+    metadata:
+      category: crypto
+      cwe: CWE-338
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Security token generated with Math.random().
+      fendix_remediation: >-
+        Math.random() output becomes a token (a reset link, session, API key or one-
+        time code). Math.random is not cryptographically secure: its output can be
+        predicted from a few observed values. Generate tokens with
+        crypto.randomBytes, crypto.randomUUID or crypto.getRandomValues.
+      fendix_reachability: taint

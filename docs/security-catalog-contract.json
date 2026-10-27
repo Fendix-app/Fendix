@@ -1388,6 +1388,333 @@
       "availability": "stable"
     },
     {
+      "id": "js-jwt-no-verify-sink",
+      "title": "JWT parameter decoded without signature verification.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function decodes the token it is given with jwt.decode, which does not check the signature. If any caller passes a token from the request and trusts the claims, anyone can forge them. Verify tokens with jwt.verify(token, key, { algorithms: [...] }) and trust only the claims that call returns; read the unverified header only to choose the key.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-jwt-no-verify-taint",
+      "title": "JWT from the request decoded without signature verification.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "A token taken from the request is decoded with jwt.decode, which does not check the signature, so anyone can forge its claims (user, role, expiry). Verify it with jwt.verify(token, key, { algorithms: [...] }) and trust only the claims that call returns; read the unverified header only to choose the key.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-weak-password-hash-sink",
+      "title": "Password-named value hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "A value named like a password is hashed with MD5 or SHA-1. Both are fast and unsalted, so a leaked table of these hashes is cracked offline in hours. Hash passwords with a slow, salted password hashing function: bcrypt, scrypt (crypto.scrypt), argon2, or PBKDF2 with a high iteration count.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-weak-password-hash-taint",
+      "title": "Password from the request hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "A password taken from the request is hashed with MD5 or SHA-1. Both are fast and unsalted, so a leaked table of these hashes is cracked offline in hours. Hash passwords with a slow, salted password hashing function: bcrypt, scrypt (crypto.scrypt), argon2, or PBKDF2 with a high iteration count.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-weak-random-token-taint",
+      "title": "Security token generated with Math.random().",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-338"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Math.random() output becomes a token (a reset link, session, API key or one- time code). Math.random is not cryptographically secure: its output can be predicted from a few observed values. Generate tokens with crypto.randomBytes, crypto.randomUUID or crypto.getRandomValues.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-cmdi-sink",
+      "title": "Shell command built from a non-constant value.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "child_process exec or execSync runs this command line through a shell, and the line is built from a value that is not a constant. If any caller passes request input, shell metacharacters in it run as commands. Run the program with execFile or spawn and pass the value as an element of the argument array, with no shell.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-cmdi-taint",
+      "title": "Shell command built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches a command that child_process runs through a shell (exec, execSync, their promisified forms, or spawn with shell: true), so shell metacharacters in it run as commands. Run the program with execFile or spawn and pass the input as an element of the argument array, with no shell; or check it against an allowlist first.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-sqli-sink",
+      "title": "SQL query text built from a non-constant value.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "The text of this SQL query is built by concatenation or an untagged template literal from a value that is not a constant. If any caller passes request input, it can change the query. Pass the value as a bound parameter: a placeholder with a values array, or a parameterized tagged template (sql`...`, Prisma.sql).",
+      "availability": "stable"
+    },
+    {
+      "id": "js-sqli-taint",
+      "title": "SQL query built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches the text of a SQL query, so it can change the query. Pass the value as a bound parameter: a placeholder with a values array (pool.query('... WHERE id = $1', [id])), or a parameterized tagged template (sql`...`, Prisma.sql, prisma.$queryRaw`...`). Never build the query text by concatenation or an untagged template literal.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-ssti-sink",
+      "title": "Template source taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function compiles its parameter as a template (ejs.render, pug.compile, Handlebars.compile, ...). If any caller passes request input, it runs as template code on the server. Render a fixed template from a file or a constant and pass the value only in the data object.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-ssti-taint",
+      "title": "Template source taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches the template argument of a template engine (ejs.render, pug.compile, Handlebars.compile, nunjucks.renderString, ...), so it is compiled as template code and can run arbitrary JavaScript on the server. Render a fixed template from a file or a constant and pass the input only in the data object.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-open-redirect-sink",
+      "title": "Redirect to a URL taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function redirects to its parameter. If any caller passes request input, a link to this site can send a visitor on to a phishing page. Redirect only to same-site paths (the target starts with / and not with //), or check the host against an allowlist; fall back to a fixed page otherwise.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-open-redirect-taint",
+      "title": "Redirect to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input chooses where the response redirects, so a link to this site can send a visitor on to a phishing page that inherits the site's trust. Redirect only to same-site paths (the target starts with / and not with //), or parse the URL and check its host against an allowlist; fall back to a fixed page otherwise.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-path-traversal-taint",
+      "title": "File path built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches the path of a file the server reads or sends (fs.readFile, fs.createReadStream, res.sendFile), so ../ segments or an absolute path can reach any file the process can read. Resolve the path with path.resolve and check that it starts with the base directory plus path.sep before using it, or keep only path.basename of the input.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-ssrf-taint",
+      "title": "Outbound request to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input chooses the URL of a request the server makes (fetch, axios, got, http.get, undici), so a caller can reach internal services or cloud metadata endpoints through the server. Parse the URL and check its scheme and host against an allowlist before the request; do not follow redirects to other hosts.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-xss-sink",
+      "title": "Function parameter written into an HTML response unescaped.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function writes its parameter into the markup of an HTML response as- is. If any caller passes request input, markup or a script in it runs in the visitor's browser. Escape the value for HTML before it is written (escape- html, he.encode), or render the page with an autoescaping template.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-xss-taint",
+      "title": "Request input written into an HTML response unescaped.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input is written into an HTML response body as-is, so a value holding markup or a script runs in the visitor's browser. Escape it for HTML before it is written (escape-html, he.encode, or DOMPurify.sanitize for markup that must stay), or render the page with a template engine that escapes by default.",
+      "availability": "stable"
+    },
+    {
       "id": "python-aws-access-key-id-literal",
       "title": "AWS access-key ID literal detected in a variable assignment.",
       "analyzer": "semgrep",

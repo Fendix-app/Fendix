@@ -27,8 +27,10 @@ import (
 // broken django-fbv-missing-auth-decorator rule (Sprint 18 review), and
 // flask-missing-login-required went after v3.6.4 because it duplicated
 // flask-route-no-auth-decorator on every Flask route (ADR-012). v3.7.0
-// added python-random-token-assignment.
-const rulepackTotalCount = 23
+// added python-random-token-assignment, and the JavaScript/TypeScript pack
+// (Task 4.3): 17 rules in javascript-injection.yaml, javascript-web.yaml and
+// javascript-crypto.yaml.
+const rulepackTotalCount = 40
 
 // rulepackFiles is the canonical list of embedded YAML rule files. The
 // extraction tests (TestEnsureRules_ExtractsAllBundledFiles) assert this
@@ -38,6 +40,9 @@ var rulepackFiles = []string{
 	"injection.yaml",
 	"secrets.yaml",
 	"crypto.yaml",
+	"javascript-injection.yaml",
+	"javascript-web.yaml",
+	"javascript-crypto.yaml",
 }
 
 // validFendixSeverityKeys is the set of values accepted in the
@@ -453,8 +458,8 @@ func TestEveryRuleCarriesFendixMetadata(t *testing.T) {
 }
 
 // TestRuleContractCatchesEachViolation shows each clause of the contract
-// rejects a rule that breaks it. No bundled rule is a taint or -sink rule yet,
-// so without this the clauses for them would be untested until a pack lands.
+// rejects a rule that breaks it. The bundled packs keep every clause, so
+// without this a clause that stopped rejecting anything would go unnoticed.
 func TestRuleContractCatchesEachViolation(t *testing.T) {
 	const taintRule = `
 id: js-sqli-taint
@@ -682,9 +687,9 @@ func TestRuleTestProblemsCatchesBrokenLayouts(t *testing.T) {
 // inside and outside build output and vendored code. Nothing under
 // node_modules/, dist/, build/, .next/, target/ or vendor/, at any depth, nor
 // a *.min.js file, is reported; the copies elsewhere are, so the test cannot
-// pass by finding nothing. The bundled pack has Python rules only, so the
-// JavaScript sink is reported by testdata/taint_rule.yaml, a stand-in for the
-// JavaScript pack, passed as a second --config.
+// pass by finding nothing. The JavaScript sink is reported by
+// testdata/taint_rule.yaml, passed as a second --config, as well as by the
+// bundled JavaScript pack, so the test does not depend on that pack's rules.
 //
 // Semgrep has a built-in ignore list (node_modules/, build/, dist/, vendor/,
 // *.min.js and test directories), but only for a project that has no

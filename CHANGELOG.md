@@ -891,6 +891,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     in `.parity/results.json` and prints the run's total and its slowest
     scan, to watch against the Semgrep deadline below.
 
+- **Semgrep taint rules for JavaScript and TypeScript: Express, NestJS and
+  Next.js.** 17 new bundled rules in `javascript-injection.yaml`,
+  `javascript-web.yaml` and `javascript-crypto.yaml`, written in-house, run
+  on `.js` and `.ts` files when Semgrep is installed.
+  [`docs/semgrep-rules.md`](docs/semgrep-rules.md#the-javascript-and-typescript-pack)
+  lists every source, sink and sanitiser.
+  - **Ten taint rules** (`js-<class>-taint`) report request input reaching a
+    sink within one function: SQL injection, command injection, template
+    injection, XSS, SSRF, path traversal, open redirect, a password hashed
+    with MD5 or SHA-1, and a JWT decoded without verification; and
+    `Math.random()` output that becomes a token. Request input is Express's
+    `req.query`, `req.params`, `req.body`, `req.headers`, `req.cookies` and
+    `req.get(...)`; a NestJS parameter bound by `@Query()`, `@Param()`,
+    `@Body()`, `@Headers()` or `@Req()`; and a Next.js route handler's
+    `searchParams`, `json()`, `formData()`, `headers` and context `params`.
+  - **A tagged template is never SQL injection.** `` sql`... ${id}` ``
+    (postgres.js, slonik), `Prisma.sql` and `` prisma.$queryRaw`...` `` send
+    their interpolations as bound parameters, so neither the taint rule nor
+    the shape rule reports them.
+  - **Seven shape rules** (`js-<class>-sink`) report the same sinks behind a
+    helper's parameter, which Semgrep CE's intraprocedural taint does not
+    follow: SQL text and shell commands built from a non-constant value,
+    and a template, HTML markup, redirect target or decoded JWT that is the
+    helper's parameter; and a password-named value hashed with MD5 or
+    SHA-1. A module constant or a literal is never reported. SSRF and path
+    traversal have no shape rule: helpers that fetch a URL or read a file
+    by a parameter are too common in clean code.
+  - **Warn only, for now.** `semgrep.ReachabilityLanguages` still enables
+    no language, so every finding of the pack is a `semgrep_shim` finding
+    that warns and never blocks on its own.
+  - **Framework parity (JS/TS):** recall 19.4% to 88.9% (96 of 108
+    vulnerable cases), with no new false positive: the false-positive rate
+    on safe cases stays 4.5%, the three `sqli-safe_lookalike` cases the
+    Python engine's `SEC-JS_SQL_TEMPLATE` already flagged. Block recall is
+    unchanged. Still missed: SSRF and path traversal through a helper in the
+    same or another file (12 cases).
+  - **Real-world noise:** no new finding on the clean
+    `node-express-realworld` (2.4 kLOC). On the vulnerable-by-design apps,
+    6 new findings on `juice-shop` (0.06 per kLOC) and 2 on `nodegoat` (0.65
+    per kLOC); 17 of their 19 matches are true positives. The two others
+    are path-traversal matches in `juice-shop` that a key lookup in another
+    function guards. A scan of `juice-shop` (104 kLOC) takes 26 s instead
+    of 5 s, the pack's Semgrep pass.
+  - **Catalog.** `docs/security-catalog-contract.json` gains the 17
+    `js-*` checks under the `semgrep` analyzer.
+
 ### Changed
 
 - **`python-random-for-token-generation` reports more token generators.**
