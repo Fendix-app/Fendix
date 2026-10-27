@@ -524,9 +524,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Helper parameters after `*`.** The one-hop helper check now follows a
     keyword-only parameter (`def render(*, template_name)`) to the callers
     in the file that pass it by keyword, for every rule that proves through
-    that check. Before, such a parameter was never proven. No existing
-    finding changed on the probe corpus (the parity trees, the noise
-    targets, eight Flask applications and eleven Django-family libraries).
+    that check. Before, such a parameter was never proven. A finding inside
+    such a helper whose caller passes request input is now proven: it is
+    marked reachable, carries a taint chain, takes its rule's proven title
+    and severity where it has one, and may now block.
+    - **Identity.** A finding this change proves can change identity once. A
+      baseline entry or a `.fendix-ignore` `fingerprint:` rule for it stops
+      matching, and it is reported as new once.
+      - The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+        `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+        `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+        proven, so such a finding is identified by its sink instead of its
+        evidence line. The same holds for any other rule whose sink or
+        identity depends on the proof.
+      - A proven finding bound to a route is identified by the route's file.
+        A Django route is declared in the urlconf, so a Django route-bound
+        finding this change proves is identified by the urlconf's file
+        instead of the view's.
   - **Imports.** `import a.b` now resolves `a.b.c` to `a.b.c`, as Python
     binds it, wherever the engine reads an import path: this rule, and the
     HTML-response sink's constructors, renderers, value types and redirect
