@@ -104,6 +104,9 @@ rules:
       - pattern: com.auth0.jwt.JWT.decode(...)
       - pattern: $PARSER.parseClaimsJwt(...)
       - pattern: $PARSER.parseUnsecuredClaims(...)
+      - pattern: $PARSER.parseUnsecuredContent(...)
+      # jjwt 0.12: a parser built with unsecured() accepts an unsigned token.
+      - pattern: $BUILDER.unsecured().build().parse(...)
       # A method of this class that returns an unverified decode.
       - patterns:
           - pattern-inside: |
@@ -141,11 +144,36 @@ rules:
               metavariable: $HEADER
               regex: ^(getKeyId|getAlgorithm|getType|getContentType|getHeader|getHeaderClaim|getToken|getSignature)$
     pattern-sinks:
+      # A claim that says who the caller is or what they may do. The time
+      # claims (exp, iat, nbf) are not: a client reading its own token's
+      # expiry to know when to refresh it trusts nothing.
       - patterns:
           - pattern: $DECODED.$CLAIM(...)
           - metavariable-regex:
               metavariable: $CLAIM
-              regex: ^(getClaim|getClaims|getSubject|getIssuer|getAudience|getExpiresAt|getExpiresAtAsInstant|getNotBefore|getIssuedAt|getId|getPayload|getBody)$
+              regex: ^(getClaim|getClaims|getSubject|getIssuer|getAudience|getId|getPayload|getBody)$
+          - pattern-not-inside: $DECODED.getBody().getExpiration()
+          - pattern-not-inside: $DECODED.getBody().getIssuedAt()
+          - pattern-not-inside: $DECODED.getBody().getNotBefore()
+          - pattern-not-inside: $DECODED.getPayload().getExpiration()
+          - pattern-not-inside: $DECODED.getPayload().getIssuedAt()
+          - pattern-not-inside: $DECODED.getPayload().getNotBefore()
+          # The token string that was decoded was also verified.
+          - pattern-not-inside: |
+              $DT $DECODED = JWT.decode($TOKEN);
+              ...
+              <... $VERIFIER.verify($TOKEN) ...>;
+              ...
+          - pattern-not-inside: |
+              $DECODED = JWT.decode($TOKEN);
+              ...
+              <... $VERIFIER.verify($TOKEN) ...>;
+              ...
+          - pattern-not-inside: |
+              <... $VERIFIER.verify($TOKEN) ...>;
+              ...
+              $DT $DECODED = JWT.decode($TOKEN);
+              ...
           - focus-metavariable: $DECODED
 
   - id: java-weak_random_token-taint
@@ -196,7 +224,10 @@ rules:
               Random $RNG = new SecureRandom(...);
               ...
     pattern-sinks:
-      # Assigned to a variable or field named like a token.
+      # Assigned to a variable or field whose name ends in a token word (a
+      # camel-case or snake-case segment: resetToken, RESET_TOKEN, otpCode,
+      # apiKeyHash), not one that only contains it (tokenRefreshJitter,
+      # spotPrice).
       - patterns:
           - pattern-either:
               - pattern: $VT $VAR = $VALUE;
@@ -204,9 +235,10 @@ rules:
               - pattern: this.$VAR = $VALUE;
           - metavariable-regex:
               metavariable: $VAR
-              regex: (?i)^\w*(token|secret|nonce|otp|salt|csrf|xsrf|session_?id|session_?key|api_?key|passw(or)?d|passcode|(reset|verification|verify|confirm|confirmation|activation|invite|invitation|auth|access|recovery|one_?time)_?(code|key|pin))$
+              regex: ^\w*?(?:(?<=_)|(?<=[a-z0-9])(?=[A-Z])|(?<![\w]))(?i:token|secret|password_?reset|reset_?(?:link|url)|nonce|otp|salt|csrf|xsrf|session_?id|session_?key|api_?key|passw(?:or)?d|passcode|(?:reset|verification|verify|confirm|confirmation|activation|invite|invitation|auth|access|recovery|one_?time)_?(?:code|key|pin))(?:Id|ID|Value|VALUE|Hash|HASH|Str|STR|String|STRING|_id|_value|_hash|_str)?$
           - focus-metavariable: $VALUE
-      # Returned from a method named like one that makes a token, unless it
+      # Returned from a method whose name ends the same way (resetToken(),
+      # generateOtp(), newSessionId()), unless it
       # mentions a token-named variable, already reported where it was
       # assigned.
       - patterns:
@@ -214,7 +246,7 @@ rules:
               $MRT $MAKER(...) { ... }
           - metavariable-regex:
               metavariable: $MAKER
-              regex: (?i)^\w*(token|secret|nonce|otp|salt|csrf|xsrf|sessionid|sessionkey|apikey|password|passcode|(reset|verification|confirmation|activation|invite|invitation|recovery)code)
+              regex: ^\w*?(?:(?<=_)|(?<=[a-z0-9])(?=[A-Z])|(?<![\w]))(?i:token|secret|password_?reset|reset_?(?:link|url)|nonce|otp|salt|csrf|xsrf|session_?id|session_?key|api_?key|passw(?:or)?d|passcode|(?:reset|verification|verify|confirm|confirmation|activation|invite|invitation|auth|access|recovery|one_?time)_?(?:code|key|pin))(?:Id|ID|Value|VALUE|Hash|HASH|Str|STR|String|STRING|_id|_value|_hash|_str)?$
           - pattern: return $VALUE;
           - metavariable-regex:
               metavariable: $VALUE

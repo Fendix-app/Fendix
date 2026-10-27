@@ -11,6 +11,9 @@ import java.util.List;
 import java.util.Map;
 
 import javax.persistence.EntityManager;
+import javax.persistence.criteria.CriteriaBuilder;
+import javax.persistence.criteria.CriteriaQuery;
+import javax.persistence.criteria.Root;
 import javax.servlet.http.HttpServletRequest;
 
 import freemarker.template.Configuration;
@@ -251,6 +254,123 @@ class LateFieldSqlController {
     }
 
     private final JdbcTemplate jdbcTemplate = new JdbcTemplate();
+}
+
+// Fix round 1: the helper hop matches the called method by name, number of
+// arguments and position, among the direct members of the handler's class.
+@RestController
+class HelperHopController {
+
+    private final JdbcTemplate jdbcTemplate;
+    private final EntityManager em;
+
+    HelperHopController(JdbcTemplate jdbcTemplate, EntityManager em) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.em = em;
+    }
+
+    // The handler calls find(String, int); find(String) has one parameter.
+    @GetMapping("/hop/overload")
+    List<Map<String, Object>> overload(@RequestParam String q) {
+        return find(q, 20);
+    }
+
+    private List<Map<String, Object>> find(String q, int limit) {
+        // ok: java-sqli-taint
+        return jdbcTemplate.queryForList("SELECT * FROM users WHERE name = ? LIMIT " + limit, q);
+    }
+
+    private List<Map<String, Object>> find(String column) {
+        // ok: java-sqli-taint
+        return jdbcTemplate.queryForList("SELECT * FROM users ORDER BY " + column);
+    }
+
+    List<Map<String, Object>> byName() {
+        return find("name");
+    }
+
+    // A value escaped or reduced to a file name at the call is not followed.
+    @GetMapping("/hop/sanitized")
+    List<Map<String, Object>> sanitized(@RequestParam String q) {
+        return lookup(Integer.toString(Integer.parseInt(q)));
+    }
+
+    private List<Map<String, Object>> lookup(String id) {
+        // ok: java-sqli-taint
+        return jdbcTemplate.queryForList("SELECT * FROM users WHERE id = " + id);
+    }
+
+    // The handler reassigns the value before passing it.
+    @GetMapping("/hop/reassigned")
+    List<Map<String, Object>> reassigned(@RequestParam String q) {
+        q = q.length() > 3 ? "name" : "email";
+        return order(q);
+    }
+
+    private List<Map<String, Object>> order(String column) {
+        // ok: java-sqli-taint
+        return jdbcTemplate.queryForList("SELECT * FROM users ORDER BY " + column);
+    }
+
+    // A format of the value is followed.
+    @GetMapping("/hop/format")
+    List<Map<String, Object>> formatted(@RequestParam String q) {
+        return search(String.format("%s%%", q));
+    }
+
+    private List<Map<String, Object>> search(String pattern) {
+        // ruleid: java-sqli-taint
+        return jdbcTemplate.queryForList("SELECT * FROM users WHERE name LIKE '" + pattern + "'");
+    }
+
+    @GetMapping("/hop/second-of-three")
+    List<Map<String, Object>> secondOfThree(@RequestParam String table) {
+        return page(10, table, true);
+    }
+
+    private List<Map<String, Object>> page(int size, String table, boolean asc) {
+        // ruleid: java-sqli-taint
+        return jdbcTemplate.queryForList("SELECT * FROM " + table + " LIMIT " + size);
+    }
+
+    // A Criteria query is not SQL text.
+    @GetMapping("/jpa/criteria")
+    List<?> criteria(@RequestParam String name) {
+        CriteriaBuilder cb = em.getCriteriaBuilder();
+        CriteriaQuery<Object> cq = cb.createQuery(Object.class);
+        Root<Object> root = cq.from(Object.class);
+        // ok: java-sqli-taint
+        return em.createQuery(cq.where(cb.equal(root.get("name"), name))).getResultList();
+    }
+
+    @GetMapping("/jpa/criteria-variable")
+    List<?> criteriaVariable(@RequestParam String name) {
+        CriteriaBuilder cb = em.getCriteriaBuilder();
+        CriteriaQuery<Object> cq = cb.createQuery(Object.class);
+        Root<Object> root = cq.from(Object.class);
+        cq.where(cb.equal(root.get("name"), name));
+        // ok: java-sqli-taint
+        return em.createQuery(cq).getResultList();
+    }
+
+    // Only the method of this class, not one of a nested class, is followed.
+    @GetMapping("/hop/nested")
+    Object nested(@RequestParam String q) {
+        return render(q, false);
+    }
+
+    private Object render(String q, boolean flag) {
+        return null;
+    }
+
+    static class Renderer {
+        private JdbcTemplate jdbc;
+
+        private Object render(String table) {
+            // ok: java-sqli-taint
+            return jdbc.queryForList("SELECT * FROM " + table);
+        }
+    }
 }
 
 class UserQuery {

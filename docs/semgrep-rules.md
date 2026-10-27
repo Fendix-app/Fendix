@@ -160,9 +160,20 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
   `getInputStream` and `getReader`.
 - **One call deep.** Open-source Semgrep follows taint within one method.
   So a parameter of a method of the same class is a source too, when a
-  handler passes it a request value, or an expression of one, at the same
-  position (the first, second or third). Taint then follows that method's
-  body, and the finding is reported at the sink inside it.
+  handler calls it with the same number of arguments (one to three) and
+  passes, at that position, the request value itself, a getter of it, or a
+  concatenation or `String.format` of such values. Only the class's own
+  methods count, not a nested class's, and a value the handler sanitised in
+  the call or reassigned before it is not followed. Taint then follows that
+  method's body, and the finding is reported at the sink inside it.
+- **Guards.** A host allowlist, a path containment check or a local-path
+  redirect check makes a value safe only when it exits (`return` or
+  `throw`) or replaces the value when the check fails, or when the use is
+  in the then-branch of a passing check with no `else`. The taint rules
+  apply them as sanitizers to the uses after (or inside) the check;
+  `java-ssrf-sink` and `java-open_redirect-sink` apply the same guards as
+  negations, and `TestJavaSinkRulesShareTheirTaintRulesBlocks` keeps the
+  copies equal.
 - **Shape rules** cover a sink in another class: a non-private method
   whose own `String` parameter is concatenated into SQL or HTML, is the
   URL of a request or a redirect, or is a file name joined to a directory.

@@ -1005,9 +1005,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     collapse into the proven ones on the same lines.
 - **Java and Spring code now has Semgrep taint rules.** Three new rule packs
   written in-house, `java-injection.yaml`, `java-web.yaml` and
-  `java-crypto.yaml`, add ten taint rules and five shape rules. Java is not
-  enabled in the taint gate yet, so their findings are Semgrep findings that
-  warn and never block on their own.
+  `java-crypto.yaml`, add ten taint rules and five shape rules. A taint
+  rule's match can block, because Java is enabled in the taint gate (see
+  "A proven Java flow can now block" under Changed); a shape rule's finding
+  only warns.
   - **What they find.**
     - SQL injection: JdbcTemplate, NamedParameterJdbcTemplate, JDBC
       `Statement` and `Connection`, JPA `EntityManager` and Hibernate
@@ -1027,9 +1028,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Open redirect: `sendRedirect`, a `"redirect:"` view, `RedirectView`
       and the `Location` header (`java-open_redirect-taint`).
     - A password hashed with MD5 or SHA-1, claims read from a JWT decoded
-      without verifying it (auth0 `JWT.decode`, jjwt `parseClaimsJwt`), and a
-      token, code or key drawn from `java.util.Random`, `Math.random`,
-      `ThreadLocalRandom` or `RandomStringUtils.random*`.
+      without verifying it (auth0 `JWT.decode`, jjwt `parseClaimsJwt`,
+      `parseUnsecuredClaims` and an `unsecured()` parser), and a token, code
+      or key drawn from `java.util.Random`, `Math.random`,
+      `ThreadLocalRandom` or `RandomStringUtils.random*` (a variable or
+      method whose name ends in a token word, such as `resetToken` or
+      `generateOtp`; `tokenRefreshJitterMs` and `spotPrice` do not).
   - **Sources.** A handler parameter annotated `@RequestParam`,
     `@PathVariable`, `@RequestBody`, `@RequestHeader`, `@CookieValue`,
     `@ModelAttribute`, `@RequestPart` or `@MatrixVariable`, or a plain
@@ -1038,16 +1042,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `HttpServletRequest.getParameter`, `getHeader`, `getQueryString`,
     `getInputStream` and `getReader`. Semgrep follows taint within one
     method, so a method of the same class that a handler passes a request
-    value to is followed too, one call deep: the finding is at the sink
-    inside it.
-  - **Not reported.** `?` placeholders and named parameters; HTML encoding
-    (`HtmlUtils.htmlEscape`, `Encode.forHtml`,
-    `StringEscapeUtils.escapeHtml4`); a host allowlist check, or one exact
-    URL; a normalized `Path` that `startsWith` its base directory, and
-    `FilenameUtils.getName` (a String `startsWith` without a separator is
-    not containment, so it stays reported); a redirect target checked to
-    start with `/` and not `//`; the claims of a token that went through
-    `verify()`; an argument array whose program is fixed; `SecureRandom`.
+    value to is followed too, one call deep, and the finding is at the sink
+    inside it. The called method is matched by name and number of arguments
+    (one to three) among the class's own methods, not a nested class's, and
+    the argument at that position must be the request value itself, a getter
+    of it, or a concatenation or `String.format` of such values. A value the
+    handler sanitised in the call, such as `FilenameUtils.getName(file)`, or
+    reassigned before it, is not followed.
+  - **Not reported.**
+    - `?` placeholders, named parameters and JPA Criteria queries.
+    - HTML encoding (`HtmlUtils.htmlEscape`, `Encode.forHtml`,
+      `StringEscapeUtils.escapeHtml4`), a response declared JSON, and the
+      output of a Thymeleaf template named by a constant.
+    - A URL whose host is fixed before input is appended: a literal
+      `https://host/...`, a relative `/...` path, a base-URL field or
+      constant (an `@Value` property) followed by `/`, or a
+      `UriComponentsBuilder` started from one.
+    - `FilenameUtils.getName`, and `SecureRandom`. An argument array whose
+      program is fixed. The claims of a token that went through `verify()`,
+      and a token's time claims (`exp`, `iat`, `nbf`).
+    - A value behind a guard. A guard counts only when it exits (`return` or
+      `throw`) or replaces the value when its check fails, or when the use
+      sits in the then-branch of a passing check with no `else`. A check
+      that only logs, a denylist, and a use inside the failing branch stay
+      reported. The checks are:
+      - a host allowlist on the URL, on a `URI` or host parsed from it, or
+        an exact URL (`equals`, or `matches` with every dot escaped);
+      - containment: a normalized or real `Path` that `startsWith` the base,
+        or a canonical or normalized String path, inline or in a variable,
+        that `startsWith` the base plus a separator. A String `startsWith`
+        without a separator is not containment;
+      - for a redirect, both halves: the target starts with `/` and not with
+        `//`.
   - **Shape rules** (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
     `java-path_traversal-sink`, `java-open_redirect-sink`) report a sink in
     another class: a non-private method whose own `String` parameter is
@@ -1065,12 +1091,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     38 rules and the security catalog lists 121 checks.
   - **Parity.** On the Spring corpus, recall goes from 12 to 35 of 36
     vulnerable cases (the one left is a hardcoded secret). False positives
-    stay at 2 of 22 safe cases, both textscan's, and block recall stays at 3
-    of 36: nothing new blocks yet.
-  - **Real code.** On `spring-petclinic`, nothing new. On WebGoat, 23 new
-    locations in four grouped findings, all 23 true positives (SQL injection
-    lessons, open redirects, path traversal and zip slip, predictable
-    tokens). The scan takes about one second longer.
+    stay at 2 of 22 safe cases, both textscan's.
+  - **Real code.** On `spring-petclinic`, nothing new. On WebGoat, 25 new
+    locations, all true positives (SQL injection lessons, open redirects,
+    path traversal and zip slip, predictable tokens and secrets). The scan
+    takes about one second longer.
 
 ### Changed
 

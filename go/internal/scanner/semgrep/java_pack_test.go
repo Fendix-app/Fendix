@@ -224,6 +224,111 @@ func TestJavaTaintRulesShareTheirBlocks(t *testing.T) {
 	}
 }
 
+// The -sink rules repeat blocks of their taint rule: java-sqli-sink the SQL
+// call list and the Criteria exclusions of java-sqli-taint's sink, and
+// java-ssrf-sink and java-open_redirect-sink the guards of their taint rule's
+// sanitizers (as negations, on the method's parameter $Q). A fix that lands
+// in one copy only would make the two rules disagree on what is safe.
+func TestJavaSinkRulesShareTheirTaintRulesBlocks(t *testing.T) {
+	rules := map[string]map[string]any{}
+	for _, pack := range []string{"rules/java-injection.yaml", "rules/java-web.yaml"} {
+		data, err := embeddedRules.ReadFile(pack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := decodePack(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range decoded {
+			rules[r.ID] = r.Raw
+		}
+	}
+
+	// SQL: the sink's call list and exclusions, in both rules.
+	sinks, _ := rules["java-sqli-taint"]["pattern-sinks"].([]any)
+	if len(sinks) == 0 {
+		t.Fatal("java-sqli-taint has no sinks")
+	}
+	taintSQL := sqlBlocks(t, sinks[0].(map[string]any)["patterns"].([]any))
+	shapeSQL := sqlBlocks(t, rules["java-sqli-sink"]["patterns"].([]any))
+	if taintSQL == "" || taintSQL != shapeSQL {
+		t.Errorf("java-sqli-sink's SQL calls and exclusions differ from java-sqli-taint's:\n%s\nvs\n%s", shapeSQL, taintSQL)
+	}
+
+	// Guards: each guard of the taint rule is a negation of the -sink rule.
+	for taint, shape := range map[string]string{
+		"java-ssrf-taint":          "java-ssrf-sink",
+		"java-open_redirect-taint": "java-open_redirect-sink",
+	} {
+		var sanitizerGuards []string
+		sanitizers, _ := rules[taint]["pattern-sanitizers"].([]any)
+		for _, s := range sanitizers {
+			if g := guard(t, s, "patterns"); g != "" {
+				sanitizerGuards = append(sanitizerGuards, g)
+			}
+		}
+		var negationGuards []string
+		for _, p := range rules[shape]["patterns"].([]any) {
+			if not, ok := p.(map[string]any)["pattern-not"].(map[string]any); ok {
+				if g := guard(t, not, "patterns"); g != "" {
+					negationGuards = append(negationGuards, strings.ReplaceAll(g, "$Q", "$GV"))
+				}
+			}
+		}
+		if len(sanitizerGuards) == 0 || !reflect.DeepEqual(sanitizerGuards, negationGuards) {
+			t.Errorf("%s's guards differ from %s's (%d vs %d):\n%s\nvs\n%s", shape, taint,
+				len(negationGuards), len(sanitizerGuards), strings.Join(negationGuards, "---\n"), strings.Join(sanitizerGuards, "---\n"))
+		}
+	}
+}
+
+// sqlBlocks renders the SQL call list (the pattern-either naming JdbcTemplate)
+// and the Criteria exclusions of a patterns list.
+func sqlBlocks(t *testing.T, patterns []any) string {
+	var out []string
+	for _, p := range patterns {
+		m := p.(map[string]any)
+		if either, ok := m["pattern-either"]; ok && strings.Contains(canonicalYAML(t, either), "JdbcTemplate $DB") {
+			out = append(out, canonicalYAML(t, either))
+		}
+		if not, ok := m["pattern-not"].(string); ok && strings.Contains(not, "createQuery") {
+			out = append(out, not)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// guard renders a guard (a patterns list checking metavariable $GCOND)
+// without its occurrence: the sanitizer's `pattern: $GV` and its
+// identifier regex, or the negation's sink shapes (the pattern-either that
+// holds no pattern-inside).
+func guard(t *testing.T, node any, key string) string {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return ""
+	}
+	patterns, ok := m[key].([]any)
+	if !ok || !strings.Contains(canonicalYAML(t, patterns), "metavariable: $GCOND") {
+		return ""
+	}
+	var kept []any
+	for _, p := range patterns {
+		pm := p.(map[string]any)
+		if pm["pattern"] == "$GV" {
+			continue
+		}
+		if mr, ok := pm["metavariable-regex"].(map[string]any); ok && mr["metavariable"] == "$GV" {
+			continue
+		}
+		if either, ok := pm["pattern-either"]; ok && !strings.Contains(canonicalYAML(t, either), "pattern-inside") {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return canonicalYAML(t, kept)
+}
+
 func canonicalYAML(t *testing.T, v any) string {
 	t.Helper()
 	out, err := yaml.Marshal(v)

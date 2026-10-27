@@ -12,6 +12,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.Date;
+import java.security.Key;
 
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.JWTVerifier;
@@ -166,6 +169,52 @@ class ProfileController {
     }
 }
 
+// Fix round 1: JWT.
+@RestController
+class JwtRoundOneController {
+
+    private final JWTVerifier verifier;
+    private final Key key;
+
+    JwtRoundOneController(JWTVerifier verifier, Key key) {
+        this.verifier = verifier;
+        this.key = key;
+    }
+
+    // The token string that was decoded is verified too.
+    @GetMapping("/j/decode-then-verify")
+    String decodeThenVerify(@RequestHeader("Authorization") String auth) {
+        String token = auth.substring(7);
+        DecodedJWT decoded = JWT.decode(token);
+        verifier.verify(token);
+        // ok: java-jwt_no_verify-taint
+        return decoded.getSubject();
+    }
+
+    @GetMapping("/j/unsecured-parser")
+    Object unsecuredParser(@RequestHeader("Authorization") String auth) {
+        // ruleid: java-jwt_no_verify-taint
+        return Jwts.parser().unsecured().build().parse(auth.substring(7)).getPayload();
+    }
+
+    @GetMapping("/j/signed")
+    String signed(@RequestHeader("Authorization") String auth) {
+        // ok: java-jwt_no_verify-taint
+        return Jwts.parser().verifyWith(key).build().parseSignedClaims(auth.substring(7)).getPayload().getSubject();
+    }
+
+    // A client reading its own token's expiry to know when to refresh it.
+    Date expiryOf(String accessToken) {
+        // ok: java-jwt_no_verify-taint
+        return JWT.decode(accessToken).getExpiresAt();
+    }
+
+    Date jjwtExpiryOf(String accessToken) {
+        // ok: java-jwt_no_verify-taint
+        return Jwts.parser().build().parseClaimsJwt(accessToken).getBody().getExpiration();
+    }
+}
+
 // ---------------------------------------------------------------- weak_random_token
 
 @RestController
@@ -245,6 +294,49 @@ class ResetController {
         // ok: java-weak_random_token-taint
         Collections.shuffle(products, new Random());
         return products;
+    }
+
+    // Fix round 1: the token word must end the name.
+    private long tokenRefreshJitterMs() {
+        // ok: java-weak_random_token-taint
+        return ThreadLocalRandom.current().nextLong(5_000);
+    }
+
+    double spotPrice() {
+        // ok: java-weak_random_token-taint
+        return Math.random() * 100;
+    }
+
+    int passwordExpiryJitterDays() {
+        // ok: java-weak_random_token-taint
+        return random.nextInt(7);
+    }
+
+    String resetToken() {
+        // ruleid: java-weak_random_token-taint
+        return Long.toHexString(random.nextLong());
+    }
+
+    String generateOtp() {
+        // ruleid: java-weak_random_token-taint
+        return String.format("%06d", random.nextInt(1_000_000));
+    }
+
+    String newSessionId() {
+        // ruleid: java-weak_random_token-taint
+        return Long.toString(random.nextLong(), 36);
+    }
+
+    String createPasswordReset(String username) {
+        Random seeded = new Random();
+        // ruleid: java-weak_random_token-taint
+        return username + ":" + Long.toHexString(seeded.nextLong());
+    }
+
+    void delays() {
+        // ok: java-weak_random_token-taint
+        long tokenRefreshJitter = random.nextInt(100);
+        System.out.println(tokenRefreshJitter);
     }
 
     @GetMapping("/jitter")

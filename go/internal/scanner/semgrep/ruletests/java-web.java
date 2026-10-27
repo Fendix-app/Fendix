@@ -32,6 +32,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Controller;
 import org.springframework.stereotype.Service;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
@@ -42,6 +43,12 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.servlet.ModelAndView;
 import org.springframework.web.servlet.view.RedirectView;
 import org.springframework.web.util.HtmlUtils;
+import org.springframework.web.util.UriComponentsBuilder;
+import org.springframework.beans.factory.annotation.Value;
+import org.thymeleaf.TemplateEngine;
+import org.thymeleaf.context.Context;
+import java.util.Locale;
+import java.util.Map;
 
 // ---------------------------------------------------------------- xss
 
@@ -133,6 +140,50 @@ class OverloadController {
     }
 }
 
+// Fix round 1: XSS.
+@RestController
+class XssRoundOneController {
+
+    private final TemplateEngine templateEngine;
+
+    XssRoundOneController(TemplateEngine templateEngine) {
+        this.templateEngine = templateEngine;
+    }
+
+    // The caller escaped the value before passing it.
+    @GetMapping("/x/escaped-call")
+    void escapedCall(@RequestParam String name, HttpServletResponse response) throws IOException {
+        writeHtml(response, HtmlUtils.htmlEscape(name));
+    }
+
+    private void writeHtml(HttpServletResponse response, String html) throws IOException {
+        // ok: java-xss-taint
+        response.getWriter().write("<p>" + html + "</p>");
+    }
+
+    // A response declared JSON is not rendered as HTML.
+    @GetMapping("/x/json")
+    void json(@RequestParam String q, HttpServletResponse response) throws IOException {
+        response.setContentType("application/json");
+        // ok: java-xss-taint
+        response.getWriter().write("{\"q\":\"" + q.replace("\"", "") + "\"}");
+    }
+
+    @GetMapping(value = "/x/json-produces", produces = MediaType.APPLICATION_JSON_VALUE)
+    void jsonProduces(@RequestParam String q, HttpServletResponse response) throws IOException {
+        // ok: java-xss-taint
+        response.getWriter().write("{\"q\":\"" + q + "\"}");
+    }
+
+    // A Thymeleaf template named by a constant escapes what it renders.
+    @GetMapping(value = "/x/thymeleaf", produces = MediaType.TEXT_HTML_VALUE)
+    String thymeleaf(@RequestParam String name) {
+        Context ctx = new Context(Locale.ENGLISH, Map.of("name", name));
+        // ok: java-xss-taint
+        return templateEngine.process("greeting", ctx);
+    }
+}
+
 @Controller
 class PageController {
 
@@ -179,6 +230,12 @@ class GreetingWriter {
     public void writeJson(HttpServletResponse response, String name) throws IOException {
         // ok: java-xss-sink
         response.getWriter().write("{\"name\": \"" + name + "\"}");
+    }
+
+    public void writeDeclaredJson(HttpServletResponse response, String name) throws IOException {
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        // ok: java-xss-sink
+        response.getWriter().write("<!-- " + name + " -->");
     }
 }
 
@@ -325,6 +382,126 @@ class LateFieldController {
     private final RestTemplate restTemplate = new RestTemplate();
 }
 
+// Fix round 1: SSRF guards must exit, checks may be on a URI or host parsed
+// from the URL, and a fixed base keeps the host.
+@RestController
+class SsrfRoundOneController {
+
+    private static final Set<String> ALLOWED_HOSTS = Set.of("api.example.com");
+    private static final Set<String> BLOCKED_HOSTS = Set.of("169.254.169.254");
+    private static final String API_BASE = "https://api.example.com";
+
+    private final RestTemplate restTemplate = new RestTemplate();
+    private final WebClient webClient = WebClient.create("https://api.example.com");
+
+    @Value("${partner.base-url}")
+    private String baseUrl;
+
+    @GetMapping("/s/denylist")
+    String denylist(@RequestParam String url) {
+        if (BLOCKED_HOSTS.contains(URI.create(url).getHost())) {
+            throw new IllegalArgumentException("blocked");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s/log-only")
+    String logOnly(@RequestParam String url) {
+        if (!ALLOWED_HOSTS.contains(URI.create(url).getHost())) {
+            System.out.println("unexpected host");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s/inside-failing-branch")
+    String insideFailingBranch(@RequestParam String url) {
+        if (!ALLOWED_HOSTS.contains(URI.create(url).getHost())) {
+            // ruleid: java-ssrf-taint
+            return restTemplate.getForObject(url, String.class);
+        }
+        return null;
+    }
+
+    @GetMapping("/s/parsed-then-string")
+    String parsedThenString(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!ALLOWED_HOSTS.contains(uri.getHost())) {
+            throw new IllegalArgumentException("host not allowed");
+        }
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s/host-variable")
+    String hostVariable(@RequestParam String url) throws Exception {
+        String host = new URI(url).getHost();
+        if (!ALLOWED_HOSTS.contains(host)) {
+            throw new IllegalArgumentException("host not allowed");
+        }
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s/unescaped-exact")
+    String unescapedExact(@RequestParam String url) {
+        if (!url.matches("https://api.example.com/data")) {
+            throw new IllegalArgumentException("not the data URL");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s/escaped-exact")
+    String escapedExact(@RequestParam String url) {
+        if (!url.matches("https://api\\.example\\.com/data")) {
+            throw new IllegalArgumentException("not the data URL");
+        }
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s/constant-base/{id}")
+    String constantBase(@PathVariable String id) {
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(API_BASE + "/users/" + id, String.class);
+    }
+
+    @GetMapping("/s/value-base/{id}")
+    String valueBase(@PathVariable String id) {
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(baseUrl + "/users/" + id, String.class);
+    }
+
+    // A base with no separator after it lets the input extend the host.
+    @GetMapping("/s/value-base-no-separator")
+    String valueBaseNoSeparator(@RequestParam String suffix) {
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(baseUrl + suffix, String.class);
+    }
+
+    @GetMapping("/s/relative/{id}")
+    String relative(@PathVariable String id) {
+        // ok: java-ssrf-taint
+        return webClient.get().uri("/users/" + id).retrieve().bodyToMono(String.class).block();
+    }
+
+    @GetMapping("/s/uri-builder/{id}")
+    String uriBuilder(@PathVariable String id) {
+        URI uri = UriComponentsBuilder.fromHttpUrl("https://api.example.com").path("/users/{id}").buildAndExpand(id).toUri();
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s/uri-builder-input")
+    String uriBuilderInput(@RequestParam String url) {
+        URI uri = UriComponentsBuilder.fromHttpUrl(url).path("/status").build().toUri();
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+}
+
 @Service
 class LinkPreview {
 
@@ -346,6 +523,24 @@ class LinkPreview {
     public String profile(String user) {
         // ok: java-ssrf-sink
         return restTemplate.getForObject("https://api.example.com/users/" + user, String.class);
+    }
+
+    private static final Set<String> ALLOWED = Set.of("api.example.com");
+
+    public String fetchChecked(String url) {
+        if (!ALLOWED.contains(URI.create(url).getHost())) {
+            throw new IllegalArgumentException("host not allowed");
+        }
+        // ok: java-ssrf-sink
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    public String fetchLogged(String url) {
+        if (!ALLOWED.contains(URI.create(url).getHost())) {
+            System.out.println("unexpected host");
+        }
+        // ruleid: java-ssrf-sink
+        return restTemplate.getForObject(url, String.class);
     }
 }
 
@@ -464,6 +659,88 @@ class DownloadController {
     }
 }
 
+// Fix round 1: path containment must exit when it fails.
+@RestController
+class PathRoundOneController {
+
+    private static final String FILES_DIR = "/srv/app/files";
+    private final Path base = Paths.get(FILES_DIR).toAbsolutePath().normalize();
+
+    @GetMapping("/p/log-only")
+    byte[] logOnly(@RequestParam String file) throws IOException {
+        Path target = base.resolve(file).normalize();
+        if (!target.startsWith(base)) {
+            System.out.println("traversal attempt " + file);
+        }
+        // ruleid: java-path_traversal-taint
+        return Files.readAllBytes(target);
+    }
+
+    @GetMapping("/p/inside-failing-branch")
+    byte[] insideFailingBranch(@RequestParam String file) throws IOException {
+        Path target = base.resolve(file).normalize();
+        if (!target.startsWith(base)) {
+            // ruleid: java-path_traversal-taint
+            return Files.readAllBytes(target);
+        }
+        return new byte[0];
+    }
+
+    @GetMapping("/p/contained-positive")
+    byte[] containedPositive(@RequestParam String file) throws IOException {
+        Path target = base.resolve(file).normalize();
+        if (target.startsWith(base)) {
+            // ok: java-path_traversal-taint
+            return Files.readAllBytes(target);
+        }
+        return new byte[0];
+    }
+
+    @GetMapping("/p/canonical-variable")
+    byte[] canonicalVariable(@RequestParam String file) throws IOException {
+        File f = new File(FILES_DIR, file);
+        String canonical = f.getCanonicalPath();
+        if (!canonical.startsWith(FILES_DIR + File.separator)) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ok: java-path_traversal-taint
+        return Files.readAllBytes(f.toPath());
+    }
+
+    @GetMapping("/p/canonical-variable-no-separator")
+    byte[] canonicalVariableNoSeparator(@RequestParam String file) throws IOException {
+        File f = new File(FILES_DIR, file);
+        String canonical = f.getCanonicalPath();
+        if (!canonical.startsWith(FILES_DIR)) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ruleid: java-path_traversal-taint
+        return Files.readAllBytes(f.toPath());
+    }
+
+    // The caller kept only the file name, or reassigned it first.
+    @GetMapping("/p/name-at-call")
+    byte[] nameAtCall(@RequestParam String file) throws IOException {
+        return readStored(FilenameUtils.getName(file));
+    }
+
+    @GetMapping("/p/name-reassigned")
+    byte[] nameReassigned(@RequestParam String file) throws IOException {
+        file = FilenameUtils.getName(file);
+        return readStored2(file);
+    }
+
+    private byte[] readStored(String name) throws IOException {
+        // ok: java-path_traversal-taint
+        return Files.readAllBytes(Paths.get(FILES_DIR, name));
+    }
+
+    private byte[] readStored2(String name) throws IOException {
+        // ok: java-path_traversal-taint
+        return Files.readAllBytes(Paths.get(FILES_DIR, name));
+    }
+}
+
 @Service
 class DocumentStore {
 
@@ -479,6 +756,24 @@ class DocumentStore {
     public byte[] index() throws IOException {
         // ok: java-path_traversal-sink
         return Files.readAllBytes(Paths.get(FILES_DIR, INDEX));
+    }
+
+    public byte[] readContained(String file) throws IOException {
+        // ok: java-path_traversal-sink
+        Path target = Paths.get(FILES_DIR).resolve(file).normalize();
+        if (!target.startsWith(Paths.get(FILES_DIR))) {
+            throw new IllegalArgumentException("outside the files directory");
+        }
+        return Files.readAllBytes(target);
+    }
+
+    public byte[] readLogged(String file) throws IOException {
+        // ruleid: java-path_traversal-sink
+        Path target = Paths.get(FILES_DIR).resolve(file).normalize();
+        if (!target.startsWith(Paths.get(FILES_DIR))) {
+            System.out.println("outside the files directory");
+        }
+        return Files.readAllBytes(target);
     }
 
     // A full path the caller chose is a file utility, not a name joined to a base directory.
@@ -576,6 +871,84 @@ class RedirectController {
     }
 }
 
+// Fix round 1: a local-path check needs both halves and must exit, replace
+// the target, or surround the use.
+@Controller
+class RedirectRoundOneController {
+
+    @GetMapping("/r/slash-slash-only")
+    void slashSlashOnly(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (next.startsWith("//")) {
+            throw new IllegalArgumentException("protocol-relative");
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r/view-slash-slash-only")
+    String viewSlashSlashOnly(@RequestParam String next) {
+        if (next.startsWith("//")) {
+            return "redirect:/";
+        }
+        // ruleid: java-open_redirect-taint
+        return "redirect:" + next;
+    }
+
+    @GetMapping("/r/slash-only")
+    void slashOnly(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/")) {
+            next = "/";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r/inverted")
+    void inverted(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (next.startsWith("//")) {
+            // ruleid: java-open_redirect-taint
+            response.sendRedirect(next);
+            return;
+        }
+        response.sendRedirect("/");
+    }
+
+    @GetMapping("/r/log-only")
+    void logOnly(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            System.out.println("suspicious redirect " + next);
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r/exits")
+    void exits(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            throw new IllegalArgumentException("not a local path");
+        }
+        // ok: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r/positive")
+    void positive(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (next.startsWith("/") && !next.startsWith("//")) {
+            // ok: java-open_redirect-taint
+            response.sendRedirect(next);
+            return;
+        }
+        response.sendRedirect("/");
+    }
+
+    @GetMapping("/r/settings")
+    String settings(@RequestParam String tab) {
+        String view = "redirect:/settings/" + tab;
+        // ok: java-open_redirect-taint
+        return view;
+    }
+}
+
 @Service
 class Redirects {
 
@@ -590,6 +963,23 @@ class Redirects {
     public void home(HttpServletResponse response) throws IOException {
         // ok: java-open_redirect-sink
         response.sendRedirect(HOME);
+    }
+
+    public void redirectLocal(HttpServletResponse response, String target) throws IOException {
+        if (!target.startsWith("/") || target.startsWith("//")) {
+            target = "/";
+        }
+        // ok: java-open_redirect-sink
+        response.sendRedirect(target);
+    }
+
+    public void redirectInverted(HttpServletResponse response, String target) throws IOException {
+        if (target.startsWith("//")) {
+            // ruleid: java-open_redirect-sink
+            response.sendRedirect(target);
+            return;
+        }
+        response.sendRedirect("/");
     }
 
     public void login(HttpServletResponse response) throws IOException {
