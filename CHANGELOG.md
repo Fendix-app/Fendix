@@ -728,16 +728,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       containment, escaping, an allowlist lookup, `url_for(...)` or
       `reverse(...)`, or a URL with a fixed scheme and host. Any of them
       leaves the helper's finding unproven.
+    - A template built from request input (`Template(request.GET["t"])`)
+      passed to a helper that renders it into an HTML response does not prove
+      the XSS finding, exactly as in one file: that page is reported as
+      `python.ast/PY_SSTI` where the template is built.
+    - A caller in test or fixture code (`tests/`, `test_*.py`, `conftest.py`
+      and the like) does not count.
   - **Which calls count.** `f(x)`, `m.f(x)` and `a.b.f(x)`, where an import
     binds `f`, `m` or `a`: `from a.b import f` (with or without `as`),
     `import a.b as m`, `import a.b`, or a relative import, resolved against
-    the caller's package. The name must not be rebound in the calling
-    function or module.
+    the caller's package.
+    - Names resolve as Python reads them: an import inside a function binds
+      the name for that function only, and the innermost scope that binds
+      the name decides. A name that scope binds otherwise (a parameter, an
+      assignment, a def) is not the imported function.
     - Only a module-level function is matched. A method, a nested function
       and a class attribute (`m.Store.find(x)`) are not.
-    - A keyword-only parameter is matched by its keyword alone. Positional
-      arguments are not matched once a `*args` comes at or before the
-      parameter's position.
+    - Arguments are matched as the same-file hop matches them: the positional
+      argument at the parameter's index as written, else the keyword of its
+      name. A keyword-only parameter is matched by its keyword alone.
   - **Module names.** A module's name is its path under the scan root:
     `app/services/q.py` is `app.services.q`. When the scan root sits above
     the package (`src/app/services/q.py`), an import of `app.services.q`
@@ -765,9 +774,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
       proven, so such a finding is identified by its sink instead of its
       evidence line.
-    - SSRF, open-redirect, path-traversal and XSS findings keep their
-      identity. A helper that is not itself a route handler binds no route,
-      so its finding stays in the helper's file and function.
+    - SSRF, open-redirect, path-traversal and XSS findings in a helper that
+      is not itself a route handler keep their identity: no route binds, so
+      the finding stays in the helper's file and function.
+    - A helper that is itself a Django view (a urlconf names it too) gets
+      that view's route once newly proven, like any proven finding in a
+      view. Its identity then takes the urlconf's file instead of the
+      helper's, once, whatever the rule. A Flask or FastAPI route is
+      declared in the helper's own file, so nothing moves.
     - Rules that pin their identity keep doing so:
       `python.ast/PY_JWT_WEAK` and `python.ast/PY_WEAK_CRYPTO_PASSWORD` give
       their evidence line as their sink.
@@ -775,10 +789,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       reports the inner `os.path.join(...)`, which is reported only when the
       flow is proven.
   - **Cost.** Before analysing, the Python analyzer reads every file once
-    more. It parses only the files that name `request` or `req` or hold a
-    route handler, and analyses those from the same parse. On a 217k-line
-    tree (Django, django-allauth and Django REST framework), the AST pass
-    took 3.9 s instead of 3.1 s, with the same findings.
+    more and parses the files that name `request` or `req` or hold a route
+    handler, recording each call into the project in a few bytes. It keeps
+    no parsed file beyond two caches of 256 KiB of source each: parses for
+    the analysis to reuse, and the callers a proof needs, re-parsed when
+    evicted. A helper's query stops at the first caller that proves it.
+    Measured on the Python AST pass, with the same findings (on the
+    generated application the helper's is now proven too):
+    - a 217k-line library tree (Django, django-allauth, Django REST
+      framework): 3.0 s and 35 MB peak memory before, 3.6 s and 45 MB now;
+    - a generated application of 300 Flask view modules (217k lines, each
+      module passing request input to one helper): 13.7 s and 98 MB before,
+      16.7 s and 99 MB now.
   - **Framework parity:** in Django, Flask and FastAPI, the `cross_file`
     cases for SQL injection, command injection, SSRF, path traversal, open
     redirect and XSS now block. They warned before. No safe case is flagged

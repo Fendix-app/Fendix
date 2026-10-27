@@ -1538,3 +1538,166 @@ def test_a_same_file_caller_still_comes_first():
     body = '    return helpers.ping(request.args["h"])\n'
     f = _one(_flask_cross_file(body, helper), "PY_SUBPROCESS_SHELL")
     assert f["taint_chain"][0]["file"] == "app/services/helpers.py"
+
+
+# -- fix round 1 (R-pf57 and minors) ------------------------------------------
+
+_SQL_HELPER = (
+    "import sqlite3\n"
+    "def find(name):\n"
+    "    sqlite3.connect('d').execute(f\"SELECT * FROM t WHERE n = '{name}'\")\n"
+)
+
+
+def _pkg(files: dict[str, str]) -> dict[str, str]:
+    out = dict(files)
+    for rel in files:
+        parts = rel.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            out.setdefault("/".join(parts[:i] + ["__init__.py"]), "")
+    return out
+
+
+def _sqli_in(files: dict[str, str], helper: str) -> dict:
+    found = [
+        f
+        for f in _rule(_scan(files), "PY_SQL_INJECTION")
+        if f["line"].startswith(helper + ":")
+    ]
+    assert len(found) == 1, found
+    return found[0]
+
+
+def test_a_test_file_caller_does_not_prove_the_helper():
+    files = _pkg(
+        {
+            "app/services/h.py": _SQL_HELPER,
+            "tests/test_h.py": (
+                "from django.test import RequestFactory\n"
+                "from app.services.h import find\n"
+                "def test_find():\n"
+                "    request = RequestFactory().get('/?n=x')\n"
+                "    find(request.GET['n'])\n"
+            ),
+        }
+    )
+    _assert_unproven(_sqli_in(files, "app/services/h.py"))
+
+
+def test_a_function_local_import_decides_which_helper_a_call_proves():
+    views = (
+        "from flask import Flask, request\n"
+        "from app.services.h import find\n"
+        "app = Flask(__name__)\n"
+        "def other():\n"
+        "    from app.legacy.h import find\n"
+        "    return find('c')\n"
+        "@app.route('/x')\n"
+        "def v():\n"
+        "    return find(request.args['n'])\n"
+    )
+    files = _pkg(
+        {"app/services/h.py": _SQL_HELPER, "app/legacy/h.py": _SQL_HELPER, "app/views.py": views}
+    )
+    assert _sqli_in(files, "app/services/h.py").get("reachable") is True
+    _assert_unproven(_sqli_in(files, "app/legacy/h.py"))
+
+
+_DJANGO_URLS = (
+    "from django.urls import path\n"
+    "from app import views\n"
+    "urlpatterns = [path('x/', views.v)]\n"
+)
+
+
+def test_a_template_built_from_request_input_does_not_prove_xss_across_files():
+    # The HTML response sink traces without template sources (that page is
+    # PY_SSTI's); a caller in another module is judged by the same rule as a
+    # same-file caller, so neither proves the XSS.
+    respond = (
+        "from django.http import HttpResponse\n"
+        "def respond(tpl):\n"
+        "    return HttpResponse(tpl.render({}))\n"
+    )
+    cross = _pkg(
+        {
+            "app/services/r.py": respond,
+            "app/views.py": (
+                "from django.template import Template\n"
+                "from app.services.r import respond\n"
+                "def v(request):\n"
+                "    return respond(Template(request.GET['t']))\n"
+            ),
+            "app/urls.py": _DJANGO_URLS,
+        }
+    )
+    same = _pkg(
+        {
+            "app/views.py": (
+                "from django.template import Template\n"
+                + respond
+                + "def v(request):\n"
+                + "    return respond(Template(request.GET['t']))\n"
+            ),
+            "app/urls.py": _DJANGO_URLS,
+        }
+    )
+    for files in (cross, same):
+        [xss] = _rule(_scan(files), "PY_XSS_HTML_SINK")
+        _assert_unproven(xss)
+        assert _rule(_scan(files), "PY_SSTI")[0].get("reachable") is True
+
+
+def test_a_failure_in_the_call_index_never_stops_the_helper_files_visit(monkeypatch):
+    from analyzers.call_index import ProjectCallIndex
+
+    def boom(self, rel):
+        raise RuntimeError("caller unreadable")
+
+    monkeypatch.setattr(ProjectCallIndex, "_caller", boom)
+    helper = _SQL_HELPER + "def later(cmd):\n    import os\n    os.system('ls ' + cmd)\n"
+    files = _pkg(
+        {
+            "app/services/h.py": helper,
+            "app/views.py": (
+                "from flask import Flask, request\n"
+                "from app.services.h import find\n"
+                "app = Flask(__name__)\n"
+                "@app.route('/x')\n"
+                "def v():\n"
+                "    return find(request.args['n'])\n"
+            ),
+        }
+    )
+    findings = _scan(files)
+    _assert_unproven(_sqli_in(files, "app/services/h.py"))
+    assert _rule(findings, "PY_OS_SYSTEM"), findings
+
+
+def test_a_helper_that_is_also_a_django_view_binds_its_route_once_proven():
+    # R-pf31: newly proven, it takes the urlconf's route, whose file then
+    # identifies it (the CHANGELOG says so).
+    files = _pkg(
+        {
+            "app/services/q.py": (
+                "import sqlite3\n"
+                "def find(request, name):\n"
+                "    sqlite3.connect('d').execute(f\"SELECT {name}\")\n"
+            ),
+            "app/views.py": (
+                "from app.services.q import find\n"
+                "def v(request):\n"
+                "    return find(request, request.GET['n'])\n"
+            ),
+            "app/urls.py": (
+                "from django.urls import path\n"
+                "from app import views\n"
+                "from app.services import q\n"
+                "urlpatterns = [path('x/', views.v), path('y/', q.find)]\n"
+            ),
+        }
+    )
+    f = _sqli_in(files, "app/services/q.py")
+    assert f.get("reachable") is True
+    assert f["taint_chain"][0]["file"] == "app/views.py"
+    assert f["route"]["file"] == "app/urls.py"

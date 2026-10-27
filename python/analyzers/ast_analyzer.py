@@ -272,14 +272,14 @@ class ASTAnalyzer:
         # rest of the tree. Catch, log to stderr, and continue to the next file
         # — findings already emitted for this file stay emitted (emit_fn is
         # called incrementally), and the engine still exits cleanly.
-        visitor = _PythonSecurityVisitor(
-            source.splitlines(),
+        visitor = _file_visitor(
+            source,
             rel,
             emit_fn,
+            tree,
             route_table=getattr(self, "_routes_by_func", None),
             call_index=call_index,
         )
-        visitor._module_root = tree  # enable 1-hop interprocedural call-site index
         try:
             visitor.visit(tree)
         except RecursionError:
@@ -362,6 +362,34 @@ _JS_FIX: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Python AST visitor
 # ---------------------------------------------------------------------------
+
+
+def _file_visitor(
+    source: str,
+    rel: str,
+    emit_fn: Callable[[dict], None],
+    tree: ast.Module,
+    *,
+    route_table=None,
+    call_index=None,
+    primed: bool = False,
+) -> _PythonSecurityVisitor:
+    """The visitor for one file: `_analyze_python` walks it, and the project
+    call index (Task 3.8) asks a caller file's visitor questions without
+    walking it. `tree` is the module root the 1-hop call-site index reads.
+    `primed` sets up, without the walk, what the walk would have recorded
+    that those questions read (`_PythonSecurityVisitor._prime`)."""
+    visitor = _PythonSecurityVisitor(
+        source.splitlines(),
+        rel,
+        emit_fn,
+        route_table=route_table,
+        call_index=call_index,
+    )
+    visitor._module_root = tree  # enable 1-hop interprocedural call-site index
+    if primed:
+        visitor._prime()
+    return visitor
 
 
 class _PythonSecurityVisitor(ast.NodeVisitor):
@@ -458,6 +486,18 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # `default_response_class=` its `FastAPI(...)`/`APIRouter(...)` sets
         # (None when it sets none), looked up once per name.
         self._default_response_classes: dict[str, ast.AST | None] = {}
+
+    def _prime(self) -> None:
+        """Record, without walking the file, the state the caller-side checks
+        of the helper hop read (`_caller_arg_chain`): the scope parents
+        (`_build_callsite_index`) and the file's imports, as the walk would
+        leave them."""
+        self._callsite_index = self._build_callsite_index()
+        for node in ast.walk(self._module_root):
+            if isinstance(node, ast.Import):
+                self.visit_Import(node)
+            elif isinstance(node, ast.ImportFrom):
+                self.visit_ImportFrom(node)
 
     def _line_text(self, lineno: int) -> str:
         """Return the source line (1-indexed), or empty string."""
@@ -1028,27 +1068,15 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if self._interproc_depth >= 1 or not self._func_stack:
             return
         func = self._func_stack[-1]
-        params = [a.arg for a in func.args.posonlyargs + func.args.args]
-        # A keyword-only parameter (after `*`) is passed by keyword alone.
-        if param_name in params:
-            idx: int | None = params.index(param_name)
-        elif any(a.arg == param_name for a in func.args.kwonlyargs):
-            idx = None
-        else:
+        idx = _param_position(func, param_name)
+        if idx is None:
             return
         if self._callsite_index is None:
             self._callsite_index = self._build_callsite_index()
         if isinstance(self._scope_parents.get(func), ast.ClassDef):
             return
         for call, scope in self._callsite_index.get(func.name, []):
-            arg = None
-            if idx is not None and idx < len(call.args):
-                arg = call.args[idx]
-            else:
-                for kw in call.keywords:
-                    if kw.arg == param_name:
-                        arg = kw.value
-                        break
+            arg = _call_argument(call, idx, param_name)
             if arg is not None:
                 yield call, scope, arg
 
@@ -1099,21 +1127,26 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         nested def has no callers here (R-pf50 c). A keyword-only parameter
         is matched by keyword alone (index -1). Single hop: never consulted
         while a hop is under way, and the callers' own parameters are not
-        followed."""
+        followed. The template-source rule of the trace under way
+        (`_without_template_sources`) applies in the caller too."""
         if self._call_index is None or self._interproc_depth >= 1 or not self._func_stack:
             return None
         func = self._func_stack[-1]
         if not self._is_module_level_def(func):
             return None
-        positional = [a.arg for a in func.args.posonlyargs + func.args.args]
-        if param_name in positional:
-            index = positional.index(param_name)
-        elif any(a.arg == param_name for a in func.args.kwonlyargs):
-            index = -1
-        else:
+        index = _param_position(func, param_name)
+        if index is None:
             return None
+        # The first proving caller is the one link the chain shows. The
+        # caller is judged with this trace's template-source rule
+        # (`_without_template_sources`), as a same-file caller is.
         links = self._call_index.tainted_args(
-            self._module_dotted, func.name, index, param_name
+            self._module_dotted,
+            func.name,
+            index,
+            param_name,
+            first=True,
+            skip_template_sources=self._skip_template_sources,
         )
         return [asdict(links[0])] if links else None
 
@@ -6545,6 +6578,35 @@ def _binds_name(node: ast.AST, name: str) -> bool:
     if isinstance(node, ast.MatchMapping):
         return node.rest == name
     return False
+
+
+def _param_position(
+    func: ast.FunctionDef | ast.AsyncFunctionDef, name: str
+) -> int | None:
+    """Where a call passes `func`'s parameter `name`: its index among the
+    positional parameters, -1 for a keyword-only one (after `*`, passed by
+    keyword alone), None when `name` is neither (`*args`, `**kwargs`, not a
+    parameter)."""
+    positional = [a.arg for a in (*func.args.posonlyargs, *func.args.args)]
+    if name in positional:
+        return positional.index(name)
+    if any(a.arg == name for a in func.args.kwonlyargs):
+        return -1
+    return None
+
+
+def _call_argument(call: ast.Call, index: int, name: str) -> ast.AST | None:
+    """The argument `call` passes for the parameter at positional `index`
+    (-1: keyword-only) named `name`: the positional argument at that index as
+    written, else the keyword of that name; None when it passes neither. The
+    one rule the helper hop matches callers by, in the file and across
+    files."""
+    if 0 <= index < len(call.args):
+        return call.args[index]
+    for kw in call.keywords:
+        if kw.arg == name:
+            return kw.value
+    return None
 
 
 def _param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:

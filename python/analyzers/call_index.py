@@ -10,36 +10,48 @@ of the project: a view in `app/views.py` that does
 
 is a tainted caller of `find` in `app/services/q.py`.
 
-`ProjectCallIndex.build(root, route_table)` reads every Python file once,
-honouring the analyzer's own walk (`_SKIP_DIRS`, symlinked files,
+**Building.** `ProjectCallIndex.build(root, route_table)` reads every Python
+file once, honouring the analyzer's own walk (`_SKIP_DIRS`, symlinked files,
 `_MAX_FILE_BYTES`). Request input is a `request`/`req` name, so only a file
 that names one, or that holds a route handler whose parameters are sources,
 can pass request input to a call: those files are parsed, the rest are not.
-It records two things per parsed file:
+Test and fixture code (`_is_test_path`) is never a caller. For each parsed
+file the index records:
 
-* **Imports.** Each local name an import binds, mapped to the dotted path it
-  stands for (`from a.b import f` -> `a.b.f`, `from a.b import f as g`,
-  `import a.b as m`, `import a.b`, relative imports resolved against the file's
-  package; the route extractor's `_ImportScope`). A call `f(x)`, `m.f(x)` or
-  `a.b.f(x)` whose head is such a name, and is not rebound in the calling
-  function or module, names the function `f` of module `a.b`.
-* **Call sites.** For each such call whose module is in the project, the
-  caller's file, call node and scope, kept only when some argument may carry
-  request input according to the caller's function summary: the names that
-  are request sources there (`route_param_sources` for a route handler, the
-  whole Task 3.1 rule set), plus every name assigned from request input or
-  from an already tainted name, iterated to a fixpoint (at most
-  `_MAX_TAINT_HOPS` rounds).
+* **Imports, per scope.** Each local name an import binds, in the module or
+  in the function (or class body) holding the import statement, mapped to
+  the dotted path it stands for (`from a.b import f` -> `a.b.f`,
+  `from a.b import f as g`, `import a.b as m`, `import a.b`, relative imports
+  resolved against the file's package; the route extractor's `_ImportScope`).
+  A call `f(x)`, `m.f(x)` or `a.b.f(x)` resolves its head through the scopes
+  it reads names from, innermost first: an import there names the function
+  `f` of module `a.b`; any other binding there (a parameter, an assignment, a
+  def) means it is not an imported name.
+* **Call sites.** For each call naming a function of a project module, a
+  compact record: the caller's file, the call's source span, and which of its
+  arguments may carry request input according to the caller's function
+  summary. The summary is the names that are request sources there
+  (`route_param_sources` for a route handler, the whole Task 3.1 rule set),
+  plus every name assigned from request input or from an already tainted
+  name, iterated to a fixpoint (at most `_MAX_TAINT_HOPS` rounds). A call
+  none of whose arguments passes the summary is not recorded. No tree is kept
+  for a record.
 
-`tainted_args(module, function, index, name)` then answers for one parameter.
-A call site counts when its argument for that parameter (positional at
-`index`, or the keyword `name`; a negative `index` is a keyword-only
-parameter, matched by keyword alone) passes the summary AND proves in the
-caller exactly as a same-file caller would (`_caller_arg_chain` of a visitor
-on the caller's file): the last assignment before the call decides, and the
-caller-side sanitiser union of the same-file hop (R-pf32) runs with the
-existing predicates in the caller's file and function (R-pf50 a). One link
-per proven call site, in the caller's file.
+**Answering.** `tainted_args(module, function, index, name)` takes, for each
+recorded call naming that function, the argument for the parameter (the one
+rule the same-file hop uses, `_call_argument`: positional at `index` as
+written, else the keyword `name`; a negative `index` is a keyword-only
+parameter, matched by keyword alone). When the record says it may carry
+request input, the call is proved in the caller's own file exactly as a
+same-file caller is (`_caller_arg_chain` of a visitor on that file): the last
+assignment before the call decides, and the caller-side sanitiser union of the
+same-file hop (R-pf32) runs with the existing predicates in the caller's file
+and function (R-pf50 a), under the template-source rule of the trace that
+asks. One link per proven call, in the caller's file; `first=True` stops at
+the first, which is all the taint chain shows. A caller's tree and visitor are
+built on demand and kept in a least-recently-used cache capped at
+`_CALLER_CACHE_MAX_BYTES` of source; a file evicted from it is parsed again
+when it is next needed.
 
 One hop only: a caller's own parameters are not traced into its callers, and
 the visitors this index runs on callers have no index of their own.
@@ -49,9 +61,10 @@ layout or a root above the package, a query for module `src.app.q` also tries
 each suffix of it that keeps at least two components (`app.q`), only while
 exactly one scanned module has that suffix; otherwise it gives up.
 
-Parses are cached for `ASTAnalyzer._analyze_python` to reuse
-(`take_parsed`), so the index adds no parse for a file within the cache
-budget (`_PARSE_CACHE_MAX_BYTES`), and at most one beyond it.
+Parses made while building are kept, up to `_PARSE_CACHE_MAX_BYTES` of source,
+for `ASTAnalyzer._analyze_python` to reuse (`take_parsed`): the index adds no
+parse for a file within that budget and at most one beyond it, plus one for
+each caller a proof needs that the caller cache no longer holds.
 """
 
 from __future__ import annotations
@@ -59,8 +72,9 @@ from __future__ import annotations
 import ast
 import os
 import re
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,21 +84,29 @@ from analyzers.ast_analyzer import (
     _REQUEST_NAMES,
     _SCOPE_NODES,
     _SKIP_DIRS,
+    _call_argument,
     _dotted,
+    _file_visitor,
+    _is_test_path,
     _PythonSecurityVisitor,
     _references_request_input,
     _same_scope_nodes,
 )
 from analyzers.route_extractor import _ImportScope, _module_name
 
-# Total source size of the parsed modules kept for `_analyze_python` to reuse.
-# A parsed module takes about 30 times its source in memory, so 2 MiB of
-# source (some 60k lines) holds about 60 MB of trees; past it, a file is
-# parsed again when it is analysed. A caller's tree is kept regardless: its
-# call sites point into it. Measured on a 217k-line tree, a larger budget
-# bought no time (the collector walks the trees kept alive about as long as
-# re-parsing takes) and cost about 30 MB per MiB.
-_PARSE_CACHE_MAX_BYTES = 2 * 1_048_576
+# Total source size of the parsed modules kept for `_analyze_python` to reuse;
+# past it, a file is parsed again when it is analysed. A parsed module takes
+# 30 to 90 times its source in memory (library code to dense generated
+# views), so 256 KiB holds at most about 25 MB of trees. The first files kept
+# are the first analysed, so the cache drains early in the walk. Measured,
+# a larger budget bought no time (the collector walks the trees kept alive
+# about as long as parsing them again takes) and cost memory.
+_PARSE_CACHE_MAX_BYTES = 256 * 1024
+
+# Total source size of the caller files whose tree and visitor a proof keeps
+# for the next one, least recently used out first; the latest is always kept.
+# A query stops at the first proving caller, so few are needed.
+_CALLER_CACHE_MAX_BYTES = 256 * 1024
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
@@ -93,6 +115,8 @@ _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _NAMES_THE_REQUEST = re.compile(
     r"\b(?:" + "|".join(sorted(map(re.escape, _REQUEST_NAMES))) + r")\b"
 )
+
+Span = tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -108,11 +132,40 @@ class CallSiteLink:
 
 @dataclass(frozen=True)
 class _CallSite:
+    """One recorded call: the caller's file, the call's source span, and
+    which arguments the caller's summary lets carry request input, by
+    position (as written) and by keyword."""
+
     rel: str
-    call: ast.Call
-    # Where the call runs: the innermost def, lambda, class or comprehension
-    # around it, else the module (`_PythonSecurityVisitor._build_callsite_index`).
-    scope: ast.AST
+    span: Span
+    positional: tuple[bool, ...]
+    keywords: frozenset[str]
+
+    def may_carry(self, index: int, name: str) -> bool:
+        """The summary's answer for the argument `_call_argument` takes for
+        the parameter at `index` named `name`."""
+        if 0 <= index < len(self.positional):
+            return self.positional[index]
+        return name in self.keywords
+
+
+@dataclass
+class _Caller:
+    """A caller file ready for proofs: its visitor (primed, holding the tree)
+    and the recorded calls in it, by span, each with the scope it runs in."""
+
+    size: int
+    visitor: _PythonSecurityVisitor
+    calls: dict[Span, tuple[ast.Call, ast.AST]]
+
+
+@dataclass
+class _Walk:
+    """One scope-tracking walk of a module (`_scoped_walk`)."""
+
+    imports: dict[ast.AST, list[ast.stmt]]
+    calls: list[tuple[ast.Call, ast.AST]]
+    parents: dict[ast.AST, ast.AST]
 
 
 def _discard(_finding: dict) -> None:
@@ -123,8 +176,9 @@ class ProjectCallIndex:
     """Calls into the project's own modules, by callee. See the module
     docstring."""
 
-    def __init__(self, route_table=None) -> None:
+    def __init__(self, route_table=None, root: Path | None = None) -> None:
         self._route_table = route_table
+        self._root = Path(root) if root is not None else Path(".")
         # Dotted module of every scanned file, and for every dotted suffix of
         # one, how many scanned modules end with it.
         self._modules: set[str] = set()
@@ -133,17 +187,19 @@ class ProjectCallIndex:
         # whose target is not one, nor the parent of one, names no project
         # module.
         self._key_prefixes: set[str] = set()
-        # (imported module, function name) -> the call sites naming it.
+        # (imported module, function name) -> the calls naming it.
         self._sites: dict[tuple[str, str], list[_CallSite]] = {}
-        # rel -> (source, tree) of every file holding a call site.
-        self._callers: dict[str, tuple[str, ast.Module]] = {}
+        # rel -> the spans of its recorded calls, and the path to re-read it.
+        self._spans: dict[str, set[Span]] = {}
+        self._paths: dict[str, Path] = {}
         # rel -> (source, tree) kept only for `take_parsed`.
         self._reusable: dict[str, tuple[str, ast.Module]] = {}
         self._reusable_bytes = 0
-        self._visitors: dict[str, _PythonSecurityVisitor] = {}
-        # Scope node of a caller -> the names its summary taints.
-        self._summaries: dict[ast.AST, frozenset[str]] = {}
-        self._answers: dict[tuple[str, str, int, str], tuple[CallSiteLink, ...]] = {}
+        # rel -> _Caller, least recently used first.
+        self._callers: OrderedDict[str, _Caller] = OrderedDict()
+        self._caller_bytes = 0
+        self._answers: dict[tuple, tuple[CallSiteLink, ...]] = {}
+        self._firsts: dict[tuple, CallSiteLink | None] = {}
 
     # -- building ---------------------------------------------------------
 
@@ -153,8 +209,8 @@ class ProjectCallIndex:
         pass request input to a call, and index the calls between the
         project's modules. `route_table` is the analyzer's project
         `RouteTable` (or None): it decides which callers are route handlers."""
-        index = cls(route_table)
-        files = list(_python_files(Path(root)))
+        index = cls(route_table, root)
+        files = list(_python_files(index._root))
         for _path, rel in files:
             index._learn_module(index.module_of(rel))
         index._learn_key_prefixes()
@@ -221,11 +277,14 @@ class ProjectCallIndex:
         )
 
     def _add_file(self, path: Path, rel: str, holds_handlers: bool) -> None:
-        """Index one file. Request input is a `request`/`req` name, so a file
-        that names neither, and holds no route handler whose parameters
-        could seed its summary, can pass none to a call: it is not parsed
-        here at all, and `_analyze_python` parses it as before. A parsed file
-        is kept for `take_parsed`."""
+        """Index one file. A test or fixture file is never a caller. Request
+        input is a `request`/`req` name, so a file that names neither, and
+        holds no route handler whose parameters could seed its summary, can
+        pass none to a call: it is not parsed here at all, and
+        `_analyze_python` parses it as before. A parsed file is kept for
+        `take_parsed` within `_PARSE_CACHE_MAX_BYTES`."""
+        if _is_test_path(rel):
+            return
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -236,228 +295,142 @@ class ProjectCallIndex:
             tree = ast.parse(source, filename=str(path))
         except (SyntaxError, ValueError, RecursionError, MemoryError):
             return  # `_analyze_python` reads it again and decides, as before
-        summaries: dict[ast.AST, frozenset[str]] = {}
         try:
-            sites = self._call_sites(rel, source, tree, summaries)
+            sites = self._call_sites(rel, source, tree)
         except (RecursionError, Exception):  # noqa: BLE001 — one file never aborts the index
             sites = []
-        if sites:
-            self._callers[rel] = (source, tree)
-            self._summaries.update(summaries)
-            for key, site in sites:
-                self._sites.setdefault(key, []).append(site)
-            return
-        self._visitors.pop(rel, None)
+        for key, site in sites:
+            self._sites.setdefault(key, []).append(site)
+            self._spans.setdefault(rel, set()).add(site.span)
+            self._paths[rel] = path
         if self._reusable_bytes + len(source) <= _PARSE_CACHE_MAX_BYTES:
             self._reusable[rel] = (source, tree)
             self._reusable_bytes += len(source)
 
     def _call_sites(
-        self,
-        rel: str,
-        source: str,
-        tree: ast.Module,
-        summaries: dict[ast.AST, frozenset[str]],
+        self, rel: str, source: str, tree: ast.Module
     ) -> list[tuple[tuple[str, str], _CallSite]]:
         """Every call in the file that names a function of a project module
-        and passes an argument the caller's summary says may carry request
-        input, keyed by `(module, function)` as the import names them.
-
-        One walk collects the import statements and every call with the
-        scope it runs in; the imports are then resolved by the route
-        extractor's `_ImportScope`, given those statements alone."""
-        import_nodes: list[ast.stmt] = []
-        calls: list[tuple[ast.Call, ast.AST]] = []
-        parents: dict[ast.AST, ast.AST] = {}
-        queue = deque([(tree, tree)])
-        while queue:
-            node, scope = queue.popleft()
-            if isinstance(node, ast.Call):
-                calls.append((node, scope))
-            elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                import_nodes.append(node)
-            if node is not tree and isinstance(node, _SCOPE_NODES):
-                parents[node] = scope
-                scope = node
-            queue.extend((child, scope) for child in ast.iter_child_nodes(node))
+        through an import and passes an argument the caller's summary says
+        may carry request input, keyed by `(module, function)` as the import
+        names them."""
+        walk = _scoped_walk(tree)
         imports = {
-            name: target
-            for name, target in _ImportScope(
-                ast.Module(body=import_nodes, type_ignores=[]), rel
-            ).names.items()
+            scope: _ImportScope(ast.Module(body=nodes, type_ignores=[]), rel).names
+            for scope, nodes in walk.imports.items()
+        }
+        # The names some import in the file binds to a project module or one
+        # of its functions: a call whose head is none of them names nothing
+        # of the project, whatever scope it resolves in.
+        heads = {
+            name
+            for names in imports.values()
+            for name, target in names.items()
             if target in self._key_prefixes
             or target.rpartition(".")[0] in self._key_prefixes
         }
-        if not imports:
+        if not heads:
             return []
         found = []
         bound: dict[ast.AST, frozenset[str]] = {}
-        for call, scope in calls:
-            target = self._callee(call.func, imports)
-            if target is None:
+        summaries: dict[tuple[ast.AST, bool], frozenset[str]] = {}
+        seeds = _RouteSeeds(self._route_table, source, rel, tree)
+        for call, scope in walk.calls:
+            if _dotted(call.func).partition(".")[0] not in heads:
                 continue
-            key, head = target
-            if not self._is_shadowed(head, scope, parents, bound) and any(
-                self._may_carry_input(rel, source, tree, scope, arg, summaries)
-                for arg in _argument_values(call)
-            ):
-                found.append((key, _CallSite(rel, call, scope)))
+            key = self._callee(call.func, scope, walk.parents, imports, bound)
+            if key is None:
+                continue
+
+            def carries(arg: ast.AST, scope: ast.AST = scope) -> bool:
+                return _may_carry_input(arg, scope, summaries, seeds)
+
+            positional = tuple(carries(a) for a in call.args)
+            keywords = frozenset(
+                kw.arg for kw in call.keywords if kw.arg is not None and carries(kw.value)
+            )
+            if any(positional) or keywords:
+                found.append((key, _CallSite(rel, _span(call), positional, keywords)))
         return found
 
     def _callee(
-        self, func: ast.AST, imports: dict[str, str]
-    ) -> tuple[tuple[str, str], str] | None:
-        """`((module, function), head)` for a call of `f`, `m.f` or `a.b.f`
-        whose head an import binds and whose module is in the project; else
-        None. `m.C.f` names module `m.C`, which is never a module of the
-        project, so a class's method is not matched (R-pf50 c)."""
+        self,
+        func: ast.AST,
+        scope: ast.AST,
+        parents: dict[ast.AST, ast.AST],
+        imports: dict[ast.AST, dict[str, str]],
+        bound: dict[ast.AST, frozenset[str]],
+    ) -> tuple[str, str] | None:
+        """`(module, function)` for a call of `f`, `m.f` or `a.b.f` whose head
+        resolves to an import (`_resolve_import`) and whose module is in the
+        project; else None. `m.C.f` names module `m.C`, which is never a
+        module of the project, so a class's method is not matched (R-pf50 c)."""
         dotted = _dotted(func)
         head, _, rest = dotted.partition(".")
-        if not head or head not in imports:
+        if not head:
             return None
-        full = imports[head] + (f".{rest}" if rest else "")
+        target = _resolve_import(head, scope, parents, imports, bound)
+        if target is None:
+            return None
+        full = target + (f".{rest}" if rest else "")
         module, _, function = full.rpartition(".")
         if not module or not self._is_project_module(module):
             return None
-        return (module, function), head
-
-    @staticmethod
-    def _is_shadowed(
-        head: str,
-        scope: ast.AST,
-        parents: dict[ast.AST, ast.AST],
-        bound: dict[ast.AST, frozenset[str]],
-    ) -> bool:
-        """True when `head` is bound by something other than an import in a
-        scope the call reads it from: a parameter, an assignment, a def or a
-        class of the calling function, of a function around it, or of the
-        module. A class body's names are not visible in its methods."""
-        node = scope
-        while node is not None:
-            if node is scope or not isinstance(node, ast.ClassDef):
-                names = bound.get(node)
-                if names is None:
-                    names = bound[node] = _bound_names(node)
-                if head in names:
-                    return True
-            node = parents.get(node)
-        return False
-
-    def _may_carry_input(
-        self,
-        rel: str,
-        source: str,
-        tree: ast.Module,
-        scope: ast.AST,
-        arg: ast.AST,
-        summaries: dict[ast.AST, frozenset[str]],
-    ) -> bool:
-        """The summary test: `arg` reads request input, or, in a function or
-        at module level, a name the scope's summary taints. In a lambda,
-        class or comprehension only request input passed inline counts, as
-        for a same-file caller."""
-        if _references_request_input(arg):
-            return True
-        if not isinstance(scope, (ast.Module, *_DEFS)):
-            return False
-        tainted = summaries.get(scope)
-        if tainted is None:
-            tainted = summaries[scope] = self._summary(rel, source, tree, scope)
-        return _reads_any(arg, tainted)
-
-    def _summary(
-        self, rel: str, source: str, tree: ast.Module, scope: ast.AST
-    ) -> frozenset[str]:
-        """The names a function (or the module) may hold request input in:
-        its request-carrying route parameters (`route_param_sources`, via the
-        caller visitor, which binds a route only to the def it was declared
-        for), names assigned from request input, and names assigned from a
-        tainted name, to a fixpoint capped at `_MAX_TAINT_HOPS` rounds."""
-        tainted: set[str] = set()
-        if (
-            isinstance(scope, _DEFS)
-            and self._route_table is not None
-            and self._route_table.routes_for_function(scope.name)
-        ):
-            visitor = self._visitor(rel, source, tree)
-            tainted |= visitor._route_param_sources(scope)
-        flows = [
-            (targets, value, _references_request_input(value))
-            for targets, value in _assignments(scope)
-            if targets
-        ]
-        tainted.update(n for targets, _value, direct in flows if direct for n in targets)
-        for _round in range(_MAX_TAINT_HOPS):
-            grew = False
-            for targets, value, _direct in flows:
-                if not targets <= tainted and _reads_any(value, tainted):
-                    tainted |= targets
-                    grew = True
-            if not grew:
-                break
-        return frozenset(tainted)
-
-    def _visitor(self, rel: str, source: str, tree: ast.Module) -> _PythonSecurityVisitor:
-        """A visitor on the caller's file, set up as its own walk would leave
-        it for the questions asked here: the module root, the scope parents
-        (`_build_callsite_index`) and the file's imports."""
-        visitor = self._visitors.get(rel)
-        if visitor is None:
-            visitor = _PythonSecurityVisitor(
-                source.splitlines(), rel, _discard, route_table=self._route_table
-            )
-            visitor._module_root = tree
-            visitor._callsite_index = visitor._build_callsite_index()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    visitor.visit_Import(node)
-                elif isinstance(node, ast.ImportFrom):
-                    visitor.visit_ImportFrom(node)
-            self._visitors[rel] = visitor
-        return visitor
+        return module, function
 
     # -- queries ----------------------------------------------------------
 
     def take_parsed(self, rel: str) -> tuple[str, ast.Module] | None:
         """`(source, tree)` of the file at `rel` as the index parsed it, for
         `_analyze_python` to analyse instead of parsing it again; None when
-        the index did not keep it. A tree no call site points into is
-        released once taken."""
+        the index did not keep it. Released once taken."""
         entry = self._reusable.pop(rel, None)
         if entry is not None:
             self._reusable_bytes -= len(entry[0])
-            return entry
-        return self._callers.get(rel)
+        return entry
 
     def tainted_args(
-        self, callee_module: str, callee_name: str, param_index: int, param_name: str
+        self,
+        callee_module: str,
+        callee_name: str,
+        param_index: int,
+        param_name: str,
+        *,
+        first: bool = False,
+        skip_template_sources: bool = False,
     ) -> list[CallSiteLink]:
-        """One `CallSiteLink` per call site in the project that passes request
-        input to parameter `param_name` (at position `param_index`; negative
-        for a keyword-only parameter) of the module-level function
-        `callee_name` of `callee_module`. Calls from the callee's own file
-        are the same-file hop's and are never in this index's keys unless
-        the file imports itself."""
-        key = (callee_module, callee_name, param_index, param_name)
+        """One `CallSiteLink` per call in the project that passes request input
+        to parameter `param_name` (at position `param_index`; negative for a
+        keyword-only parameter) of the module-level function `callee_name`
+        of `callee_module`, in the order the calls were indexed. `first`
+        stops at the first proving call. `skip_template_sources` proves the
+        caller as `_without_template_sources` does. Answers are cached per
+        query, the flag included."""
+        key = (callee_module, callee_name, param_index, param_name, skip_template_sources)
         answer = self._answers.get(key)
-        if answer is None:
-            answer = self._answers[key] = tuple(self._links(*key))
+        if answer is not None:
+            return list(answer[:1] if first else answer)
+        if first:
+            if key not in self._firsts:
+                self._firsts[key] = next(self._links(*key), None)
+            link = self._firsts[key]
+            return [link] if link is not None else []
+        answer = self._answers[key] = tuple(self._links(*key))
         return list(answer)
 
     def _links(
-        self, callee_module: str, callee_name: str, param_index: int, param_name: str
+        self,
+        callee_module: str,
+        callee_name: str,
+        param_index: int,
+        param_name: str,
+        skip_template_sources: bool,
     ) -> Iterator[CallSiteLink]:
         for module in self._names_for(callee_module):
             for site in self._sites.get((module, callee_name), ()):
-                arg = _argument(site.call, param_index, param_name)
-                if arg is None:
+                if not site.may_carry(param_index, param_name):
                     continue
-                source, tree = self._callers[site.rel]
-                if not self._may_carry_input(
-                    site.rel, source, tree, site.scope, arg, self._summaries
-                ):
-                    continue
-                link = self._prove(site, arg)
+                link = self._prove(site, param_index, param_name, skip_template_sources)
                 if link is not None:
                     yield link
 
@@ -472,16 +445,27 @@ class ProjectCallIndex:
                 return
             yield suffix
 
-    def _prove(self, site: _CallSite, arg: ast.AST) -> CallSiteLink | None:
-        """The link the caller proves for `arg`, judged by a visitor on the
-        caller's file exactly as a same-file caller is (`_caller_arg_chain`:
-        the caller's bindings before the call, its route parameters, and the
-        caller-side sanitiser union), or None. A failure inside the caller's
-        file proves nothing; it never aborts the callee's analysis."""
-        source, tree = self._callers[site.rel]
+    def _prove(
+        self, site: _CallSite, param_index: int, param_name: str, skip_template_sources: bool
+    ) -> CallSiteLink | None:
+        """The link the caller proves for the argument, judged by a visitor on
+        the caller's file exactly as a same-file caller is
+        (`_caller_arg_chain`: the caller's bindings before the call, its
+        route parameters, and the caller-side sanitiser union), or None. Any
+        failure, from re-reading the caller to the proof, proves nothing; it
+        never aborts the callee's analysis."""
         try:
-            visitor = self._visitor(site.rel, source, tree)
-            prefix = visitor._caller_arg_chain(site.call, site.scope, arg, None, 0)
+            caller = self._caller(site.rel)
+            if caller is None or site.span not in caller.calls:
+                return None
+            call, scope = caller.calls[site.span]
+            arg = _call_argument(call, param_index, param_name)
+            if arg is None:
+                return None
+            visitor = caller.visitor
+            rule = visitor._without_template_sources() if skip_template_sources else nullcontext()
+            with rule:
+                prefix = visitor._caller_arg_chain(call, scope, arg, None, 0)
         except (RecursionError, Exception):  # noqa: BLE001 — best-effort proof
             return None
         if not prefix:
@@ -489,8 +473,166 @@ class ProjectCallIndex:
         last = prefix[-1]
         return CallSiteLink(file=last["file"], line=last["line"], expr=last["expr"])
 
+    def _caller(self, rel: str) -> _Caller | None:
+        """The caller file at `rel`, from the cache or parsed again (its
+        build-time parse when `_analyze_python` has not taken it yet), its
+        recorded calls located by span. Inserting it evicts the least
+        recently used callers beyond `_CALLER_CACHE_MAX_BYTES`, never itself."""
+        caller = self._callers.get(rel)
+        if caller is not None:
+            self._callers.move_to_end(rel)
+            return caller
+        kept = self._reusable.get(rel)
+        if kept is not None:
+            source, tree = kept
+        else:
+            path = self._paths[rel]
+            source = path.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(source, filename=str(path))
+        wanted = self._spans.get(rel, set())
+        calls = {
+            _span(call): (call, scope)
+            for call, scope in _scoped_walk(tree).calls
+            if _span(call) in wanted
+        }
+        visitor = _file_visitor(
+            source, rel, _discard, tree, route_table=self._route_table, primed=True
+        )
+        caller = self._callers[rel] = _Caller(len(source), visitor, calls)
+        self._caller_bytes += caller.size
+        while self._caller_bytes > _CALLER_CACHE_MAX_BYTES and len(self._callers) > 1:
+            _rel, evicted = self._callers.popitem(last=False)
+            self._caller_bytes -= evicted.size
+        return caller
+
 
 # -- helpers ------------------------------------------------------------------
+
+
+class _RouteSeeds:
+    """The request-carrying parameters of a caller def that is a route
+    handler: `route_param_sources` over the routes bound to that def, through
+    a visitor on the caller's file (which binds a route only to the def it
+    was declared for). The visitor is made on the first handler asked about."""
+
+    def __init__(self, route_table, source: str, rel: str, tree: ast.Module) -> None:
+        self._route_table = route_table
+        self._source, self._rel, self._tree = source, rel, tree
+        self._visitor: _PythonSecurityVisitor | None = None
+
+    def of(self, scope: ast.AST) -> frozenset[str]:
+        if (
+            not isinstance(scope, _DEFS)
+            or self._route_table is None
+            or not self._route_table.routes_for_function(scope.name)
+        ):
+            return frozenset()
+        if self._visitor is None:
+            self._visitor = _file_visitor(
+                self._source, self._rel, _discard, self._tree, route_table=self._route_table
+            )
+        return self._visitor._route_param_sources(scope)
+
+
+def _may_carry_input(
+    arg: ast.AST,
+    scope: ast.AST,
+    summaries: dict[tuple[ast.AST, bool], frozenset[str]],
+    seeds: _RouteSeeds,
+) -> bool:
+    """The summary test: `arg` reads request input, or, in a function or at
+    module level, a name the scope's summary taints. In a lambda, class or
+    comprehension only request input passed inline counts, as for a
+    same-file caller. The route-parameter sources join the summary only when
+    the request-input assignments alone do not reach `arg` (they need a
+    look at the module, `route_param_sources`)."""
+    if _references_request_input(arg):
+        return True
+    if not isinstance(scope, (ast.Module, *_DEFS)):
+        return False
+    for with_routes in (False, True):
+        tainted = summaries.get((scope, with_routes))
+        if tainted is None:
+            route_sources = seeds.of(scope) if with_routes else frozenset()
+            tainted = summaries[(scope, with_routes)] = _summary(scope, route_sources)
+        if _reads_any(arg, tainted):
+            return True
+    return False
+
+
+def _summary(scope: ast.AST, route_sources: frozenset[str]) -> frozenset[str]:
+    """The names a function (or the module) may hold request input in: its
+    request-carrying route parameters (`route_sources`, from
+    `route_param_sources`), names assigned from request input, and names
+    assigned from a tainted name, to a fixpoint capped at `_MAX_TAINT_HOPS`
+    rounds."""
+    tainted: set[str] = set(route_sources)
+    flows = [
+        (targets, value, _references_request_input(value))
+        for targets, value in _assignments(scope)
+        if targets
+    ]
+    tainted.update(n for targets, _value, direct in flows if direct for n in targets)
+    for _round in range(_MAX_TAINT_HOPS):
+        grew = False
+        for targets, value, _direct in flows:
+            if not targets <= tainted and _reads_any(value, tainted):
+                tainted |= targets
+                grew = True
+        if not grew:
+            break
+    return frozenset(tainted)
+
+
+def _resolve_import(
+    head: str,
+    scope: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+    imports: dict[ast.AST, dict[str, str]],
+    bound: dict[ast.AST, frozenset[str]],
+) -> str | None:
+    """The dotted path an import binds `head` to, as seen from code in
+    `scope`: the scopes the code reads names from, innermost first (a class
+    body only for code directly in it). The first scope that binds `head`
+    decides: through an import, its target; through anything else (a
+    parameter, an assignment, a def or class), None."""
+    node = scope
+    while node is not None:
+        if node is scope or not isinstance(node, ast.ClassDef):
+            imported = imports.get(node)
+            if imported is not None and head in imported:
+                return imported[head]
+            names = bound.get(node)
+            if names is None:
+                names = bound[node] = _bound_names(node)
+            if head in names:
+                return None
+        node = parents.get(node)
+    return None
+
+
+def _scoped_walk(tree: ast.Module) -> _Walk:
+    """One breadth-first walk of `tree`: the import statements of each scope,
+    every call with the scope it runs in (the innermost def, lambda, class or
+    comprehension, else the module, as `_build_callsite_index` has it), and
+    each scope's parent scope."""
+    walk = _Walk({}, [], {})
+    queue = deque([(tree, tree)])
+    while queue:
+        node, scope = queue.popleft()
+        if isinstance(node, ast.Call):
+            walk.calls.append((node, scope))
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            walk.imports.setdefault(scope, []).append(node)
+        if node is not tree and isinstance(node, _SCOPE_NODES):
+            walk.parents[node] = scope
+            scope = node
+        queue.extend((child, scope) for child in ast.iter_child_nodes(node))
+    return walk
+
+
+def _span(node: ast.AST) -> Span:
+    return (node.lineno, node.col_offset, node.end_lineno or 0, node.end_col_offset or 0)
 
 
 def _python_files(root: Path) -> Iterator[tuple[Path, str]]:
@@ -508,27 +650,6 @@ def _python_files(root: Path) -> Iterator[tuple[Path, str]]:
             except OSError:
                 continue
             yield path, str(path.relative_to(root))
-
-
-def _argument_values(call: ast.Call) -> Iterator[ast.AST]:
-    for arg in call.args:
-        yield arg.value if isinstance(arg, ast.Starred) else arg
-    for kw in call.keywords:
-        yield kw.value
-
-
-def _argument(call: ast.Call, param_index: int, param_name: str) -> ast.AST | None:
-    """The argument `call` passes for a parameter: positional at
-    `param_index` when no `*args` comes at or before it, else the keyword of
-    its name. A negative index is a keyword-only parameter."""
-    if 0 <= param_index < len(call.args) and not any(
-        isinstance(a, ast.Starred) for a in call.args[: param_index + 1]
-    ):
-        return call.args[param_index]
-    for kw in call.keywords:
-        if kw.arg == param_name:
-            return kw.value
-    return None
 
 
 def _reads_any(expr: ast.AST, names: frozenset[str] | set[str]) -> bool:
