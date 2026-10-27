@@ -807,6 +807,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     or blocks. The Python frameworks block on 102 of 108 vulnerable cases,
     up from 84.
 
+- **Internal: a Semgrep taint tier, behind a per-language gate that ships
+  closed.** The engine now runs Semgrep with `--dataflow-traces` and can read
+  the trace of a taint rule's finding. A rule that sets
+  `metadata.fendix_reachability: taint` gets findings with
+  `source_tier: "semgrep_taint"`, `reachable: true` and the trace as their
+  `taint_chain` (source, intermediate variables, sink), but only when every
+  language in the rule's `languages` is enabled in
+  `semgrep.ReachabilityLanguages`. No language is enabled and no bundled rule
+  sets the key, so detection does not change.
+  - **When a language is enabled.** Only when its taint pack reaches
+    precision of at least 0.90 on the framework-parity development set,
+    within the noise budget. The release gate checks holdout precision.
+    ADR-011 records the decision. JavaScript, TypeScript, Java and Go packs
+    follow in later changes.
+  - **What a taint finding counts for.** Its reachability adds +10 to the
+    confidence score, counts as an independent corroborating signal, and
+    escalates the severity one level. It stays a Semgrep finding: the -5
+    `tier_semgrep` delta, no deterministic-detection bonus, never a Proven
+    Path, `analyzer_implementation: "semgrep"` in managed-CI evidence facts,
+    and an imported Semgrep SARIF does not corroborate it. A proven finding
+    scores 50, in the MEDIUM band, so at or above `--fail-on` it blocks on its
+    reachable path and never on its own.
+  - **Two analyzers on one line.** The tier ranks with textscan's
+    (`native_go`). When both report the same category and location, the
+    proven finding has already been escalated one level, so at equal declared
+    severity it is the one kept, with its chain.
+  - **A logged-out Semgrep sends no trace.** Semgrep 1.141.0 with no Semgrep
+    account logged in leaves `dataflow_trace` out of its JSON output, as it
+    replaces `lines` with "requires login". A taint finding from such a run
+    stays `semgrep_shim`. ADR-011 records this as open for the first
+    language that is enabled.
+  - **Schema.** `source_tier` gains the value `semgrep_taint` in
+    `docs/schema.json` and `docs/reporting-contract.json`. The change is
+    additive: `schema_version` stays 2.
+  - **Identity and cost.** Existing findings keep their identity and the
+    framework parity gate shows no case change. Asking for traces added about
+    3% to Semgrep's run time on the parity corpus, within run-to-run noise.
+
 ### Changed
 
 - **`python-random-for-token-generation` reports more token generators.**

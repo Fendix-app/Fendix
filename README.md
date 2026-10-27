@@ -906,8 +906,11 @@ a formula at report time:
 2. **Correlation escalates it.** A correlated finding goes up one level; up a
    second level when the white-box half proved a reachable taint chain; and
    straight to CRITICAL for a [Proven Path](#architecture) (route-confirmed +
-   reachable). Semgrep-tier findings are excluded from both escalations until
-   their rule pack clears the F1 gate.
+   reachable). Semgrep pattern findings are excluded from both escalations
+   until their rule pack clears the F1 gate. A Semgrep taint finding takes the
+   reachable escalation but never a Proven Path, and only for a language whose
+   taint pack cleared its precision gate; no language has yet
+   ([ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
 3. **Reachability escalates the pure-SAST case** one level when an AST taint
    chain is proven but nothing correlated.
 4. **Confidence caps it.** `LOW` confidence caps severity at MEDIUM, `MEDIUM`
@@ -1140,6 +1143,13 @@ rules:
 ```
 
 Semgrep rules are automatically picked up by the Semgrep runner.
+
+A taint rule (`mode: taint`) can set `metadata.fendix_reachability: taint`.
+Its findings then count as reachable, with Semgrep's dataflow trace as their
+`taint_chain`, once every language in the rule's `languages` is enabled in
+`semgrep.ReachabilityLanguages`. Until then they are reported like any other
+Semgrep finding. A language is enabled only when its taint pack clears the
+precision gate in [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md).
 
 ---
 

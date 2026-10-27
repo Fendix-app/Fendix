@@ -179,6 +179,9 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		"--json",
 		"--no-git-ignore",
 		"--quiet",
+		// A taint rule's trace is the proof mapResult needs to mark its
+		// finding reachable (ADR-011). Pattern rules have no trace.
+		"--dataflow-traces",
 	}
 	for _, rel := range includes {
 		args = append(args, "--include", rel)
@@ -279,6 +282,12 @@ type semgrepExtra struct {
 	// in one file, and semgrep has been sending it all along; we simply never
 	// decoded it. Without it, five unprotected Flask routes were one finding.
 	Metavars map[string]semgrepMetavar `json:"metavars"`
+	// DataflowTrace is a taint rule's source-to-sink trace, sent because Scan
+	// passes --dataflow-traces. Kept raw: it is decoded only for a rule that
+	// declares fendix_reachability: taint (see taintProof), so a trace this
+	// decoder cannot read never fails the document, and a trace on any other
+	// rule's result is never read at all.
+	DataflowTrace json.RawMessage `json:"dataflow_trace"`
 }
 
 // semgrepOutput wraps a top-level Semgrep --json document.
@@ -323,13 +332,7 @@ func mapResult(r *semgrepResult, absRoot string) (evidence.Evidence, bool) {
 	if r.CheckID == "" || r.Path == "" {
 		return evidence.Evidence{}, false
 	}
-	rel := r.Path
-	if absPath, err := filepath.Abs(r.Path); err == nil {
-		if rp, err := filepath.Rel(absRoot, absPath); err == nil && !strings.HasPrefix(rp, "..") {
-			rel = rp
-		}
-	}
-	rel = filepath.ToSlash(rel)
+	rel := relPath(r.Path, absRoot)
 	endpoint := fmt.Sprintf("%s:%d", rel, r.Start.Line)
 	endpointCopy := endpoint
 
@@ -363,7 +366,7 @@ func mapResult(r *semgrepResult, absRoot string) (evidence.Evidence, bool) {
 	ruleID := normalizeCheckID(r.CheckID)
 	id := "SEC-" + strings.ReplaceAll(strings.ReplaceAll(strings.ToUpper(ruleID), "-", "_"), ".", "_")
 
-	return evidence.Evidence{
+	ev := evidence.Evidence{
 		ID:         id,
 		Title:      title,
 		Severity:   resolveSeverity(r),
@@ -385,7 +388,30 @@ func mapResult(r *semgrepResult, absRoot string) (evidence.Evidence, bool) {
 		// one file two findings — see maskStringLiterals for why the masking
 		// is a security boundary and not tidiness.
 		Sink: maskStringLiterals(snippet),
-	}, true
+	}
+
+	// A taint rule whose trace proves the flow, for a language that cleared
+	// its gate, is the semgrep_taint tier. Every other result — every rule
+	// bundled today — stays exactly the shim finding built above.
+	if chain, ok := taintProof(r, ruleID, absRoot, rel, ev.Sink); ok {
+		ev.SourceTier = models.TierSemgrepTaint
+		ev.Reachable = true
+		ev.TaintChain = chain
+	}
+	return ev, true
+}
+
+// relPath renders a path semgrep reported relative to the scan root, with
+// forward slashes, or as reported when it lies outside the root. Endpoint and
+// every taint-chain link go through it, so they name a file the same way.
+func relPath(path, absRoot string) string {
+	rel := path
+	if absPath, err := filepath.Abs(path); err == nil {
+		if rp, err := filepath.Rel(absRoot, absPath); err == nil && !strings.HasPrefix(rp, "..") {
+			rel = rp
+		}
+	}
+	return filepath.ToSlash(rel)
 }
 
 // semgrepRedactedLines is what semgrep OSS puts in `extra.lines` (and

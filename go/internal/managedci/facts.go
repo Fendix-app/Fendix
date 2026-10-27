@@ -158,7 +158,7 @@ func analyzerImplementation(tier models.SourceTier) string {
 		return implNative
 	case models.TierTreeSitter:
 		return implTreeSitter
-	case models.TierSemgrepShim:
+	case models.TierSemgrepShim, models.TierSemgrepTaint:
 		return implSemgrep
 	default:
 		return implUnspecified

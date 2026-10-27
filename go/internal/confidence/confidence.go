@@ -209,6 +209,12 @@ func Score(ev evidence.Evidence) Result {
 		add(tierTreeSitterBump, CodeTierTreeSitter, "high-trust analyzer tier (tree-sitter taint)")
 	case models.TierSemgrepShim:
 		add(tierSemgrepPenalty, CodeTierSemgrep, "lower-trust analyzer tier (semgrep regex breadth)")
+	case models.TierSemgrepTaint:
+		// Same code and delta as the shim: still a semgrep rule, and the
+		// managed-CI policy keys tier_semgrep on analyzer_implementation
+		// "semgrep", which this tier exports. Its proof is paid for once, by
+		// reachableTaint above (ADR-011).
+		add(tierSemgrepPenalty, CodeTierSemgrep, "lower-trust analyzer tier (semgrep taint rule)")
 	}
 
 	// Strong cross-tool corroboration (engine.CorrelateCrossTool): an
@@ -301,10 +307,15 @@ func Score(ev evidence.Evidence) Result {
 //   - ConfidenceHigh: the emitting check's own claim that this is a literal
 //     match rather than a graded guess. It is the same predicate the DAST side
 //     uses, so one rule reads across both halves of the engine.
-//   - not TierSemgrepShim: that tier buys breadth at the cost of precision and
-//     has not cleared the F1 gate (see models.SourceTier.TrustRank and
-//     tierSemgrepPenalty). Letting regex breadth band HIGH on its own would
-//     hand the gate exactly the false positives band-gating exists to stop.
+//   - not a semgrep tier (models.SourceTier.IsSemgrep): the shim buys breadth
+//     at the cost of precision and has not cleared the F1 gate (see
+//     models.SourceTier.TrustRank and tierSemgrepPenalty). Letting regex
+//     breadth band HIGH on its own would hand the gate exactly the false
+//     positives band-gating exists to stop. The semgrep_taint tier is excluded
+//     too (ADR-011): its proof already counts as Reachable — +10 and an
+//     independent signal — and it must not ALSO band HIGH as a self-evident
+//     match, so a proven Semgrep taint finding stays MEDIUM and blocks on its
+//     reachable path, never on its own say-so.
 //   - not InTest, not Placeholder: 31 of the 35 catalogued instances in
 //     tasks/FP_CORPUS.md are test fixtures, and a value the placeholder
 //     classifier recognises is deterministic evidence that the match is NOT a
@@ -322,7 +333,7 @@ func HasDeterministicDetection(ev evidence.Evidence) bool {
 	hasStatic := ev.Source == models.SourceWhitebox || ev.Source == models.SourceCorrelated
 	return hasStatic &&
 		ev.Confidence == models.ConfidenceHigh &&
-		ev.SourceTier != models.TierSemgrepShim &&
+		!ev.SourceTier.IsSemgrep() &&
 		!ev.InTest &&
 		!ev.Placeholder
 }

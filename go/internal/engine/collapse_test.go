@@ -151,4 +151,10 @@ func TestTrustRankOrdering(t *testing.T) {
 		models.SourceTier("").TrustRank() > models.TierSemgrepShim.TrustRank()) {
 		t.Error("trust order must be tree_sitter > native_go > unknown > semgrep_shim")
 	}
+	// ADR-011: the Semgrep taint tier ranks with native_go — above the shim
+	// and the unknown tier, below the tree-sitter taint analyzer.
+	if models.TierSemgrepTaint.TrustRank() != models.TierNativeGo.TrustRank() {
+		t.Errorf("semgrep_taint TrustRank = %d, want native_go's %d",
+			models.TierSemgrepTaint.TrustRank(), models.TierNativeGo.TrustRank())
+	}
 }

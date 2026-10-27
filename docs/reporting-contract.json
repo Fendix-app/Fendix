@@ -312,7 +312,8 @@
               "enum": [
                 "native_go",
                 "tree_sitter_sidecar",
-                "semgrep_shim"
+                "semgrep_shim",
+                "semgrep_taint"
               ],
               "type": "string"
             },

@@ -62,7 +62,23 @@ const (
 	// TierSemgrepShim: shelled-out semgrep (breadth, lowest trust until a
 	// rule pack clears the F1 gate).
 	TierSemgrepShim SourceTier = "semgrep_shim"
+	// TierSemgrepTaint: a shelled-out semgrep TAINT rule whose dataflow trace
+	// proved a source reaching the sink, for a language whose taint pack has
+	// cleared its precision gate (semgrep.ReachabilityLanguages, ADR-011).
+	// Such a finding is Reachable and carries the trace as its TaintChain.
+	// Every other semgrep finding stays TierSemgrepShim.
+	TierSemgrepTaint SourceTier = "semgrep_taint"
 )
+
+// IsSemgrep reports whether the tier is one of semgrep's. Every rule that
+// holds for "a Semgrep-sourced finding" reads this rather than naming a tier:
+// no deterministic-detection delta (confidence.HasDeterministicDetection), one
+// tool identity with an imported Semgrep SARIF (engine.stampToolIDs), never a
+// Proven Path (engine.mergeFindings), and analyzer_implementation "semgrep" in
+// managed-CI facts. A semgrep tier added later inherits all four.
+func (t SourceTier) IsSemgrep() bool {
+	return t == TierSemgrepShim || t == TierSemgrepTaint
+}
 
 // TrustRank orders the analysis tiers by how much the engine trusts them.
 // Higher wins. Used to pick the representative when two engines report the
@@ -75,11 +91,19 @@ const (
 // precision until its rule pack clears the F1 gate. An empty tier ("unknown",
 // e.g. the SCA scanners) sorts above only semgrep — it is not a low-precision
 // regex pass, it simply predates the field.
+//
+// A semgrep taint finding ranks with native Go (ADR-011): its language's pack
+// cleared a precision gate and the finding carries a proven trace, so it must
+// not lose a shared location to the shim or an unknown tier; but its proof is
+// intraprocedural and its gate is a dev-set measurement, so it does not
+// outrank the tree-sitter analyzer. Against textscan at the same location the
+// tie falls to severity, and a proven finding has already been escalated one
+// level by then (engine.escalateNonCorrelatedReachable runs first).
 func (t SourceTier) TrustRank() int {
 	switch t {
 	case TierTreeSitter:
 		return 3
-	case TierNativeGo:
+	case TierNativeGo, TierSemgrepTaint:
 		return 2
 	case "": // unknown / pre-field (SCA and legacy emitters)
 		return 1

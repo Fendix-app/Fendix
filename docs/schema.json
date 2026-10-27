@@ -202,7 +202,7 @@
         "reachable":          { "type": "boolean" },
         "fingerprint":        { "type": "string" },
         "fingerprint_v1":     { "type": "string" },
-        "source_tier":        { "type": "string", "enum": ["native_go", "tree_sitter_sidecar", "semgrep_shim"] },
+        "source_tier":        { "type": "string", "enum": ["native_go", "tree_sitter_sidecar", "semgrep_shim", "semgrep_taint"] },
         "route":              { "$ref": "#/definitions/Route" },
         "route_confirmed":    { "type": "boolean" },
         "proven_path":        { "type": "boolean" },
