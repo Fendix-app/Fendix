@@ -106,6 +106,7 @@ The `direct` and `indirect` columns include the new classes.
   - Two forms are missed: a raw `Location` header redirect in Flask and FastAPI, and FastAPI `FileResponse(path)`.
     - Closed after v3.6.3 for the `Location` header. A `Location` header on a framework response with a redirect status is now an open-redirect sink, set in the constructor's headers, assigned afterwards, or returned in a Flask `(body, status, headers)` tuple. The Flask and FastAPI `alt_api` open-redirect cases are detected and block.
     - The FastAPI case, `FileResponse(os.path.join(REPORTS_DIR, filename))`, is detected and blocks after v3.6.3 through the inner `os.path.join`, which is reported once the flow is proven. `FileResponse` itself is still not a sink.
+    - Closed after v3.6.3 for `FileResponse` too. Starlette's and FastAPI's `FileResponse(path)` is now a path-traversal sink of its own, so the case is also reported on the `FileResponse` call. Its outcome does not change: it was already detected and blocking.
 - **Regex rules depend on one exact shape.**
   - JS SQL is found only as a template literal. mysql2 `"..." + name` concatenation is missed.
   - Spring SQL is found only through `Statement.executeQuery`. `JdbcTemplate` is missed.

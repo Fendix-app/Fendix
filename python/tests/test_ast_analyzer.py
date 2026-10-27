@@ -6362,3 +6362,262 @@ class TestOpenRedirectSinks:
             "SEC-PY_OPEN_REDIRECT",
             "SEC-PY_XSS_HTML_SINK",
         ], found
+
+
+# ---------------------------------------------------------------------------
+# Task 3.6: Starlette/FastAPI FileResponse(path) is a path-traversal sink
+# ---------------------------------------------------------------------------
+
+_FILE_ROUTE = (
+    "import os\n"
+    "from pathlib import Path\n"
+    "from fastapi import FastAPI, HTTPException\n"
+    "app = FastAPI()\n"
+    'REPORTS_DIR = "/srv/reports"\n'
+    'BASE = Path("/srv/reports")\n'
+    '@app.get("/report")\n'
+    'def report(filename: str = ""):\n'
+)
+
+
+class TestFileResponsePathSink:
+    """Task 3.6: Starlette's and FastAPI's ``FileResponse(path)`` opens and
+    sends the file at ``path``, so a path the request chooses is path
+    traversal, reported under the existing PY_PATH_TRAVERSAL rule. It must
+    resolve through the file's imports to ``starlette.responses`` or
+    ``fastapi.responses``. Django's ``FileResponse`` takes an open file, whose
+    ``open(...)`` is the sink, so it is never one itself."""
+
+    @staticmethod
+    def _pt(src: str) -> list[dict]:
+        return [f for f in _collect_src(src) if f["id"] == "SEC-PY_PATH_TRAVERSAL"]
+
+    @classmethod
+    def _file_response(cls, src: str) -> list[dict]:
+        return [f for f in cls._pt(src) if f["sink"].startswith("FileResponse(")]
+
+    def _proven(self, src: str, sink: str) -> dict:
+        found = self._file_response(src)
+        assert len(found) == 1, found
+        f = found[0]
+        assert f["sink"] == sink, f
+        assert f.get("reachable") is True, f
+        return f
+
+    # -- the brief's cases ----------------------------------------------------
+
+    def test_starlette_fileresponse_path_is_traversal(self) -> None:
+        f = self._proven(
+            "from starlette.responses import FileResponse\n"
+            + _FILE_ROUTE
+            + "    return FileResponse(os.path.join(REPORTS_DIR, filename))\n",
+            "FileResponse(os.path.join(REPORTS_DIR, filename))",
+        )
+        assert f["line"] == "mod.py:10"
+        assert f["rule_id"] == "python.ast/PY_PATH_TRAVERSAL"
+        assert f["title"] == "Path traversal — user-controlled input reaches filesystem path"
+        assert f["severity"] == "HIGH"
+        assert f["references"] == ["CWE-22"]
+        assert f["taint_chain"][0] == {"file": "mod.py", "line": 9, "expr": "filename"}
+        # The inner join keeps its own finding, as inside open(...).
+        assert {g["sink"] for g in self._pt(
+            "from starlette.responses import FileResponse\n"
+            + _FILE_ROUTE
+            + "    return FileResponse(os.path.join(REPORTS_DIR, filename))\n"
+        )} == {"FileResponse(os.path.join(REPORTS_DIR, filename))", "os.path.join(filename)"}
+
+    def test_django_fileresponse_of_open_reports_once(self) -> None:
+        found = self._pt(
+            "from django.http import FileResponse\n"
+            "def download(request):\n"
+            '    path = request.GET["f"]\n'
+            '    return FileResponse(open(path, "rb"), as_attachment=True)\n'
+        )
+        assert [(f["line"], f["sink"]) for f in found] == [("mod.py:4", "open(path)")], found
+        assert found[0].get("reachable") is True
+
+    # -- resolution -------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "imports, call",
+        [
+            ("from fastapi.responses import FileResponse\n", "FileResponse(filename)"),
+            ("from fastapi.responses import FileResponse as Download\n", "Download(filename)"),
+            ("import starlette.responses\n", "starlette.responses.FileResponse(filename)"),
+            ("from fastapi import responses\n", "responses.FileResponse(filename)"),
+            ("from fastapi.responses import FileResponse\n",
+             'FileResponse(path=filename, filename="report.pdf")'),
+            ("from fastapi.responses import FileResponse\n",
+             'FileResponse(filename, media_type="application/pdf")'),
+        ],
+        ids=["fastapi", "alias", "module-attr", "submodule-attr", "path-keyword", "media-type"],
+    )
+    def test_fileresponse_forms_are_traversal(self, imports: str, call: str) -> None:
+        self._proven(imports + _FILE_ROUTE + f"    return {call}\n", "FileResponse(filename)")
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            # Django takes an open file; a path string is not opened.
+            (
+                "from django.http import FileResponse\n"
+                "def download(request):\n"
+                '    return FileResponse(request.GET["f"])\n'
+            ),
+            # Starlette's FileResponse given an open file: the open() is the sink.
+            (
+                "from starlette.responses import FileResponse\n"
+                "def download(request):\n"
+                '    return FileResponse(open(request.query_params["f"], "rb"))\n'
+            ),
+            # A project's own class.
+            (
+                "from flask import request\n"
+                "class FileResponse:\n"
+                "    def __init__(self, path):\n"
+                "        self.path = path\n"
+                "def download():\n"
+                '    return FileResponse(request.args["f"])\n'
+            ),
+            (
+                "from flask import request\n"
+                "from app.responses import FileResponse\n"
+                "def download():\n"
+                '    return FileResponse(request.args["f"])\n'
+            ),
+            # A bare name the file does not import cannot be resolved.
+            (
+                "from flask import request\n"
+                "def download():\n"
+                '    return FileResponse(request.args["f"])\n'
+            ),
+        ],
+        ids=["django-path", "starlette-open", "same-file-class", "project-import", "unimported"],
+    )
+    def test_other_fileresponses_are_not_sinks(self, src: str) -> None:
+        assert self._file_response(src) == []
+
+    # -- what keeps it quiet ----------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'FileResponse("static/index.html")',
+            "FileResponse(os.path.join(REPORTS_DIR, 'latest.txt'))",
+            "FileResponse(BASE / 'latest.txt')",
+        ],
+        ids=["literal", "constant-join", "constant-pathlib"],
+    )
+    def test_constant_path_is_not_a_sink(self, call: str) -> None:
+        assert self._pt(
+            "from fastapi.responses import FileResponse\n" + _FILE_ROUTE + f"    return {call}\n"
+        ) == []
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            [
+                "base = os.path.realpath(REPORTS_DIR)",
+                "full = os.path.realpath(os.path.join(base, filename))",
+                "if os.path.commonpath([base, full]) != base:",
+                '    raise HTTPException(status_code=400, detail="invalid filename")',
+                "return FileResponse(full)",
+            ],
+            [
+                "full = os.path.realpath(os.path.join(REPORTS_DIR, filename))",
+                "if not full.startswith(REPORTS_DIR + os.sep):",
+                "    raise HTTPException(status_code=400)",
+                "return FileResponse(full)",
+            ],
+            [
+                "full = (BASE / filename).resolve()",
+                "if not full.is_relative_to(BASE):",
+                "    raise HTTPException(status_code=400)",
+                "return FileResponse(full)",
+            ],
+            [
+                "full = (BASE / filename).resolve()",
+                "try:",
+                "    full.relative_to(BASE)",
+                "except ValueError:",
+                "    raise HTTPException(status_code=400)",
+                "return FileResponse(full)",
+            ],
+            ["name = os.path.basename(filename)", "return FileResponse(name)"],
+        ],
+        ids=["realpath-commonpath", "startswith-sep", "is_relative_to", "relative_to-try", "basename"],
+    )
+    def test_path_containment_guard_suppresses_fileresponse(self, lines: list[str]) -> None:
+        # Task 2.2's guards, exactly as they suppress open(path).
+        body = "".join(f"    {line}\n" for line in lines)
+        src = "from fastapi.responses import FileResponse\n" + _FILE_ROUTE + body
+        assert self._pt(src) == []
+        # Control: open() on the same path is quiet under the same guard.
+        assert self._pt(src.replace("return FileResponse(", "return open(")) == []
+
+    @pytest.mark.parametrize(
+        "lines, line",
+        [
+            (
+                [
+                    "full = os.path.realpath(os.path.join(REPORTS_DIR, filename))",
+                    "if not full.startswith(REPORTS_DIR):",
+                    "    raise HTTPException(status_code=400)",
+                    "return FileResponse(full)",
+                ],
+                13,
+            ),
+            (
+                [
+                    "base = os.path.realpath(REPORTS_DIR)",
+                    "full = os.path.realpath(os.path.join(base, filename))",
+                    "if os.path.commonpath([base, full]) != base:",
+                    "    return FileResponse(full)",
+                    "return FileResponse(full)",
+                ],
+                13,
+            ),
+            (
+                [
+                    "full = os.path.join(REPORTS_DIR, filename)",
+                    "if os.path.commonpath([REPORTS_DIR, full]) != REPORTS_DIR:",
+                    "    raise HTTPException(status_code=400)",
+                    "return FileResponse(full)",
+                ],
+                13,
+            ),
+        ],
+        ids=["startswith-without-sep", "sink-in-rejecting-body", "commonpath-without-realpath"],
+    )
+    def test_incomplete_guard_does_not_suppress_fileresponse(
+        self, lines: list[str], line: int
+    ) -> None:
+        found = self._file_response(
+            "from fastapi.responses import FileResponse\n"
+            + _FILE_ROUTE
+            + "".join(f"    {ln}\n" for ln in lines)
+        )
+        assert [f["line"] for f in found if f.get("reachable")] == [f"mod.py:{line}"], found
+
+    def test_unproven_fileresponse_is_reported_unproven(self) -> None:
+        found = self._file_response(
+            "from starlette.responses import FileResponse\n"
+            "def send(path):\n"
+            "    return FileResponse(path)\n"
+        )
+        assert len(found) == 1, found
+        f = found[0]
+        assert f.get("reachable") is not True
+        assert f["severity"] == "MEDIUM"
+        assert f["title"] == "Potential unsafe dynamic filesystem path"
+
+    def test_fileresponse_through_a_same_file_helper_is_proven(self) -> None:
+        f = self._proven(
+            "from starlette.responses import FileResponse\n"
+            "def _send(name: str):\n"
+            "    return FileResponse(name)\n"
+            + _FILE_ROUTE
+            + "    return _send(filename)\n",
+            "FileResponse(name)",
+        )
+        assert f["line"] == "mod.py:3"

@@ -642,6 +642,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     from 97, and block on 72, up from 68: Django, FastAPI and Flask each block
     on 24.
 
+- **Starlette and FastAPI `FileResponse(path)` is now a path-traversal
+  sink.** `FileResponse` opens and sends the file at `path`, so a path the
+  request chooses reads any file the server can. The existing rule,
+  `python.ast/PY_PATH_TRAVERSAL`, now reports it beside `open(...)`,
+  `Path(...)`, `send_file(...)` and `send_from_directory(...)`.
+  - **Resolution.** `FileResponse` must resolve through the file's imports
+    to `starlette` or `fastapi` (`from fastapi.responses import
+    FileResponse`, an alias, or `responses.FileResponse(path)`). The path may
+    also be passed as `path=`. A class the file defines, one imported from
+    elsewhere, and a bare `FileResponse` the file never imports are not
+    sinks.
+  - **Django's `FileResponse` is not a sink itself.** It takes an open file,
+    not a path: given a string, it streams the string, not the file. In
+    `FileResponse(open(path, "rb"))` the `open(...)` call is the sink and is
+    reported once, as before. A Starlette `FileResponse(open(...))` is
+    likewise reported only on the `open(...)`.
+  - **The same checks as `open(path)`.** A constant path, a path built only
+    from constants or trusted sources, `os.path.basename(...)`, and a
+    dominating containment guard (`realpath` with `commonpath`, `startswith`
+    with a trailing separator, `is_relative_to`, or `relative_to` in a `try`)
+    keep it quiet; a sink inside the guard's rejecting branch is still
+    reported.
+  - **Severity and title.** As for `open(path)`: HIGH, titled "Path
+    traversal — user-controlled input reaches filesystem path", when the flow
+    from the request is proven; MEDIUM, titled "Potential unsafe dynamic
+    filesystem path", when it is not.
+  - **Identity.** Existing findings keep their fingerprints. The new
+    finding's sink is `FileResponse(<path>)`. An `os.path.join(...)` written
+    inside the call keeps its own finding, as it does inside `open(...)`.
+  - **Framework parity:** no case outcome changes. FastAPI's `alt_api`
+    path-traversal case, `FileResponse(os.path.join(REPORTS_DIR, filename))`,
+    was already detected and blocking through the inner `os.path.join`; it
+    is now also reported on the `FileResponse` call.
+
 ### Changed
 
 - **A Flask route without authentication now gets one missing-auth finding

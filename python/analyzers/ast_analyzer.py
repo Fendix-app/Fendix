@@ -1713,9 +1713,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         `_path_containment_guard` accepts a guard on that name, and every
         other use of the name comes after the guard's rejecting body (or after
         the whole `try`). Otherwise the join stays a sink. The resolved value
-        may go where no sink is modelled (`os.remove`, `shutil.copy`,
-        Starlette's `FileResponse`), inline or returned to the caller, so the
-        join can be the only place the flow is reported.
+        may go where no sink is modelled (`os.remove`, `shutil.copy`), inline
+        or returned to the caller, so the join can be the only place the flow
+        is reported.
         """
         resolved = self._resolved_joins.get(join)
         if resolved is None or not self._func_stack:
@@ -2717,8 +2717,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         #   - pathlib.Path(x) — the resulting Path is typically passed to
         #     open() or used as send_from_directory arg
         #   - flask.send_file(x), flask.send_from_directory(safe_dir, x)
+        #   - starlette/fastapi FileResponse(x) (Task 3.6)
         #   - django.http.FileResponse(open(x, "rb"))  — caught via the
-        #     inner open() match
+        #     inner open() match; Django's FileResponse takes an open file,
+        #     so it is never a sink itself
         #
         # When `x` comes from request input, the attacker can read (or
         # depending on mode, overwrite) arbitrary paths on the server's
@@ -2736,19 +2738,14 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             chain = None
             sink_expr = ""
             sink_name = self._path_traversal_sink_name(node)
-            if node.args:
-                # The user-controlled arg is usually the FIRST positional
-                # except for send_from_directory(safe_dir, x) and
-                # os.path.join(base, x) where it's the second.
-                # _path_traversal_arg_index handles that.
-                arg_idx = self._path_traversal_arg_index(node)
-                if arg_idx < len(node.args):
-                    sink_expr = f"{sink_name}({_ast_expr_text(node.args[arg_idx])})"
-                    chain = self._collect_taint_chain(
-                        node.args[arg_idx],
-                        node.lineno,
-                        sink_expr,
-                    )
+            # The user-controlled arg is usually the FIRST positional
+            # except for send_from_directory(safe_dir, x) and
+            # os.path.join(base, x) where it's the second.
+            # _path_traversal_target handles that.
+            target = self._path_traversal_target(node)
+            if target is not None:
+                sink_expr = f"{sink_name}({_ast_expr_text(target)})"
+                chain = self._collect_taint_chain(target, node.lineno, sink_expr)
             # `os.path.*` sinks (join/abspath/expanduser/expandvars) only
             # become path-traversal vulns when the argument actually
             # carries user input. They appear constantly in library code
@@ -5583,6 +5580,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
           - send_file(x) / flask.send_file(x) — Flask file response
           - send_from_directory(safe_dir, x) / flask.send_from_directory —
             Flask file-by-name; the path arg is the SECOND positional
+          - FileResponse(x) / FileResponse(path=x) — Starlette and FastAPI
+            open and send the file at `x` (Task 3.6), resolved through the
+            file's imports (`_is_file_response`). Given an `open(...)` call
+            instead, the open() is the sink.
 
         A constant string arg is safe — `open("config.yaml")` is fine.
         Variable args (Name, Call, BinOp, JoinedStr) are the dangerous
@@ -5592,17 +5593,22 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         sink_name = self._path_traversal_sink_name(node)
         if not sink_name:
             return False
-        if not node.args:
-            return False
         # A join resolved in place and checked by a containment guard before
         # any use is safe; the guard sits below the join's line, so it could
         # never dominate the join itself (`_resolved_join_is_guarded`).
         if sink_name == "os.path.join" and self._resolved_join_is_guarded(node):
             return False
-        arg_idx = self._path_traversal_arg_index(node)
-        if arg_idx >= len(node.args):
+        target = self._path_traversal_target(node)
+        if target is None:
             return False
-        target = node.args[arg_idx]
+        # `FileResponse(open(path, "rb"))`: the inner open() is the sink and
+        # reports the flow once.
+        if (
+            sink_name == "FileResponse"
+            and isinstance(target, ast.Call)
+            and _terminal_name(target.func) == "open"
+        ):
+            return False
         # Constant literal is safe.
         if isinstance(target, ast.Constant):
             return False
@@ -5761,9 +5767,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         Accepts bare-name calls (`open(x)`, `Path(x)`, `send_file(x)`),
         single-attribute calls (`pathlib.Path(x)`, `flask.send_file(x)`),
         and double-attribute `os.path.X` calls (`os.path.join(base, x)`,
-        `os.path.abspath(x)`, `os.path.expanduser(x)`).
+        `os.path.abspath(x)`, `os.path.expanduser(x)`). `FileResponse` counts
+        only when it resolves to Starlette's or FastAPI's
+        (`_is_file_response`), under any alias.
         """
+        if self._is_file_response(node.func):
+            return "FileResponse"
         if isinstance(node.func, ast.Name):
+            if node.func.id == "FileResponse":
+                # Django's, a project's own, or one the file never imports.
+                return ""
             if node.func.id in _PATH_TRAVERSAL_SINK_NAMES:
                 # B7 (fabricated-chain): a bare `open`/`Path` from-imported from
                 # a NON-filesystem module (webbrowser, selenium, …) is not the
@@ -5808,6 +5821,35 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if sink_name in {"send_from_directory", "os.path.join"}:
             return 1
         return 0
+
+    def _path_traversal_target(self, node: ast.Call) -> ast.AST | None:
+        """The path argument of a path-traversal sink: the positional argument
+        at `_path_traversal_arg_index`, else, for `FileResponse`, its
+        ``path=`` keyword; None when the call passes neither."""
+        arg_idx = self._path_traversal_arg_index(node)
+        if arg_idx < len(node.args):
+            return node.args[arg_idx]
+        if self._path_traversal_sink_name(node) == "FileResponse":
+            return next((kw.value for kw in node.keywords if kw.arg == "path"), None)
+        return None
+
+    def _is_file_response(self, func: ast.AST) -> bool:
+        """True when ``func`` is Starlette's or FastAPI's ``FileResponse``,
+        through the file's imports: imported from ``starlette`` or
+        ``fastapi`` (``from fastapi.responses import FileResponse as F``),
+        or reached through such a module (``responses.FileResponse``). A name
+        the file defines itself, one imported from elsewhere (Django's
+        ``django.http.FileResponse``, a project's own class) and one the file
+        never imports are not."""
+        if isinstance(func, ast.Name):
+            if func.id in self._file_defined_names():
+                return False
+            module, name = self._from_imports.get(func.id, ("", ""))
+        elif isinstance(func, ast.Attribute):
+            module, name = self._import_origin(func.value), func.attr
+        else:
+            return False
+        return name == "FileResponse" and module.split(".")[0] in _FILE_RESPONSE_PACKAGES
 
 
 # ---------------------------------------------------------------------------
@@ -6272,8 +6314,13 @@ _PATH_TRAVERSAL_SINK_NAMES: frozenset[str] = frozenset(
         "Path",
         "send_file",
         "send_from_directory",
+        # Starlette/FastAPI only, resolved through the imports
+        # (`_is_file_response`); Django's takes an open file.
+        "FileResponse",
     }
 )
+# The packages whose `FileResponse(path)` opens the file at `path` (Task 3.6).
+_FILE_RESPONSE_PACKAGES: frozenset[str] = frozenset({"starlette", "fastapi"})
 
 # `os.path.X` function names treated as path-traversal sinks when the
 # path argument is non-constant user input. `join` uses arg index 1
