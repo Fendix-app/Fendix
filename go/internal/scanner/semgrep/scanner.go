@@ -12,7 +12,9 @@
 //   - Category: rule metadata.category; default "code".
 //   - References: rule metadata.cwe (string or list).
 //   - Evidence: matched source lines, truncated at 200 chars + "...".
-//   - 120s default timeout per invocation, mirroring Python.
+//   - A 300 s deadline per invocation (defaultTimeout); Semgrep's own
+//     per-rule timeout is off (--timeout 0).
+//   - Build output and vendored code are never scanned (buildOutputExcludes).
 //
 // Distribution: rules are embedded into the binary via //go:embed
 // and extracted to a per-process temp directory on first Scan call so
@@ -66,9 +68,28 @@ var ErrCodePathMissing = errors.New("semgrep: code path does not exist")
 // rather than a generic execution error.
 var ErrTimeout = errors.New("semgrep: timed out")
 
-// defaultTimeout matches python semgrep_runner.py (120s). Bounded
-// per scan so a runaway rule can't hold the orchestrator hostage.
-const defaultTimeout = 120 * time.Second
+// defaultTimeout bounds one semgrep run, so a runaway rule can't hold the
+// orchestrator hostage. One run executes every bundled pack, and the pack is
+// growing from Python alone to Python, JavaScript/TypeScript, Java and Go, so
+// it is 300 s; it was 120 s, mirroring python semgrep_runner.py. It is the
+// only bound: Scan passes --timeout 0, because Semgrep's own per-rule,
+// per-file timeout (5 s by default) drops a slow rule's matches on that file
+// without failing the run.
+const defaultTimeout = 300 * time.Second
+
+// buildOutputExcludes keeps build output, installed dependencies and vendored
+// code out of every semgrep run, whatever the language (Review Focus 3): a
+// finding there is in code the project does not write, or a copy of code it
+// does. Each is a gitignore-style pattern matched against paths relative to
+// the scan root, so a directory of that name at any depth is skipped, but a
+// scan root that itself lies under one (/srv/build/repo) is not, and neither
+// is a file named like one (build.py).
+//
+// dist/ and build/ are also where Python packaging writes its output, so this
+// covers Python too. Semgrep skips most of these by itself, but only for a
+// project without a .semgrepignore of its own; .next/ and target/ are not on
+// its list at all.
+var buildOutputExcludes = []string{"node_modules", "dist", "build", ".next", "target", "vendor", "*.min.js"}
 
 // evidenceMaxLen mirrors python truncate-at-200-chars + "..." behaviour.
 const evidenceMaxLen = 200
@@ -113,7 +134,7 @@ var commandContext = exec.CommandContext
 // continues so a flaky semgrep run can't fail the whole scan.
 //
 // The provided ctx is honoured: cancellation kills the semgrep
-// subprocess. A 120s deadline is layered onto ctx if ctx has no
+// subprocess. A 300 s deadline is layered onto ctx if ctx has no
 // shorter deadline already.
 func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 	return ScanWithAllowlist(ctx, codePath, nil)
@@ -182,6 +203,11 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		// A taint rule's trace details a reachable finding's chain when
 		// semgrep sends it (ADR-011). Pattern rules have no trace.
 		"--dataflow-traces",
+		// No per-rule timeout: defaultTimeout bounds the run instead.
+		"--timeout", "0",
+	}
+	for _, pattern := range buildOutputExcludes {
+		args = append(args, "--exclude", pattern)
 	}
 	for _, rel := range includes {
 		args = append(args, "--include", rel)

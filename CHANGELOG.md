@@ -851,6 +851,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Asking for traces added about 3% to Semgrep's run time on the parity
     corpus, within run-to-run noise.
 
+- **Internal: every bundled Semgrep rule now carries the same metadata, and
+  rule packs get `semgrep --test` tests.** This sets the contract the
+  JavaScript/TypeScript, Java and Go packs are written to. Detection does not
+  change.
+  - **The contract.** `TestEveryRuleCarriesFendixMetadata` requires
+    `category` (one of `injection`, `xss`, `crypto`, `auth`, `secrets`),
+    `cwe` (`CWE-<number>`), `confidence`, `fendix_severity`, `fendix_title`
+    and `fendix_remediation` on every rule, with `languages` drawn from
+    `python`, `javascript`, `typescript`, `java` and `go`. A taint rule is
+    named `<lang>-<class>-taint`, declares `confidence: MEDIUM` and sets
+    `fendix_reachability: taint`. A shape rule named `<lang>-<class>-sink`
+    excludes a fully literal argument and a module constant
+    (`const`, `static final`, a Go `const ( ... )` block), so the same sink
+    with a constant does not become a false positive.
+  - **Twelve existing rules gain `fendix_title` and
+    `fendix_remediation`:** `python-jwt-decode-no-verification`,
+    `python-md5-used-for-password`, `python-sha1-used-for-password`,
+    `python-legacy-cipher-import`, `python-sql-injection-string-format`,
+    `python-command-injection-shell-true`, `python-eval-injection`,
+    `django-orm-raw-sql`, `flask-render-template-string-injection`,
+    `python-subprocess-shell-true-with-variable`,
+    `python-pickle-loads-untrusted` and `python-yaml-load-unsafe`. The text
+    is what the security catalog already derived from each rule's message,
+    so `docs/security-catalog-contract.json` does not change. A finding's
+    title and fix text come from the message, which does not change, so no
+    finding changes either.
+  - **Rule tests.** `go/internal/scanner/semgrep/ruletests/<stem>.<ext>`
+    tests `rules/<stem>.yaml`, with `// ruleid: <id>` and `// ok: <id>`
+    annotations, and the CI job `container-smoke` runs
+    `semgrep --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests`
+    with the release image's Semgrep. Semgrep skips a test file that has no
+    rule file of its stem and still reports success, so
+    `TestRuleTestsPairWithRulePacks` fails on such a file. It also requires
+    a `ruleid:` and an `ok:` line for every rule of a pack in a language
+    other than Python. There are no test files yet; each new pack brings its
+    own.
+  - **Parity run time.** `make parity` records the wall time of every scan
+    in `.parity/results.json` and prints the run's total and its slowest
+    scan, to watch against the Semgrep deadline below.
+
 ### Changed
 
 - **`python-random-for-token-generation` reports more token generators.**
@@ -944,6 +984,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     alerts close on the next upload. The route stays reported by
     `flask-route-no-auth-decorator`.
   - The security catalog lists one check fewer.
+
+- **Semgrep no longer scans build output or vendored code, in any
+  language.** Every Semgrep run now skips `node_modules/`, `dist/`, `build/`,
+  `.next/`, `target/` and `vendor/` at any depth, and every `*.min.js` file.
+  A finding there is in code the project does not write, or in a copy of
+  code it does.
+  - **Python too.** `dist/` and `build/` are also where Python packaging
+    writes its output, so they are skipped for Python as well. This is
+    deliberate. A Python package that is itself named `build`, `dist`,
+    `target` or `vendor` is skipped with them.
+  - **What changes.** Semgrep already skipped `node_modules/`, `build/`,
+    `dist/`, `vendor/` and `*.min.js` by default, but only in a project with
+    no `.semgrepignore` of its own. A project that has one had them scanned,
+    and `.next/` and `target/` were scanned in every project.
+  - **What does not.** The patterns match paths below the scanned
+    directory: a repository checked out under `/srv/build/` is scanned, and
+    so is a file named `build.py`. A `--diff` scan that changes only files
+    under these directories gets no Semgrep findings from them. Other
+    analyzers are unaffected.
+  - The framework parity gate shows no case change. The corpus has no such
+    directory.
+
+- **Semgrep's deadline is 300 seconds, up from 120, and its per-rule timeout
+  is off.** Semgrep gave up on a rule after 5 seconds on one file and dropped
+  that rule's matches there without an error. It now runs with
+  `--timeout 0`, and the 300-second deadline bounds the whole run, which
+  executes every bundled pack at once. A run that exceeds it still fails as a
+  timeout, and the scan then has no Semgrep findings. On the parity corpus
+  `make parity` took 564 seconds, against 567 before the change, and no scan
+  took longer than 1.4 seconds.
 
 ### Fixed
 

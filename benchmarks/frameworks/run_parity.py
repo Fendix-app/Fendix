@@ -39,6 +39,10 @@ between the two corpora is not reported as a drop. The development side takes
 each case's class and variant from the manifests next to this script.
 `--quiet` limits the output to those lines, for a public log.
 
+Run time: results.json records the wall time of every scan (`scan_seconds` per
+framework, `seconds` per case with --isolate) and of the whole run
+(`elapsed_seconds`), and the run prints its total and its slowest scan.
+
 Standard library only; Python 3.9+.
 """
 
@@ -682,6 +686,7 @@ def main() -> int:
 
 
 def run(args: argparse.Namespace, frameworks: List[str]) -> int:
+    started = time.perf_counter()
     root = args.corpus_root
     version = subprocess.run([args.fendix, "version"], capture_output=True, text=True).stdout.strip()
     semgrep = shutil.which("semgrep")
@@ -695,23 +700,28 @@ def run(args: argparse.Namespace, frameworks: List[str]) -> int:
         for framework in frameworks:
             scan_root = Path(tmp) / framework
             materialize(framework, scan_root, root)
-            report, _ = scan(args.fendix, scan_root, args.fail_on)
+            report, seconds = scan(args.fendix, scan_root, args.fail_on)
             results.append(score_framework(framework, report, scan_root, root))
+            # Wall time per scan, so a slow rule shows against the engine's
+            # Semgrep timeout (go/internal/scanner/semgrep defaultTimeout).
+            results[-1]["scan_seconds"] = round(seconds, 2)
             if args.isolate:
                 manifest = json.loads((root / framework / "manifest.json").read_text())
                 isolated = {}
                 for case in manifest["cases"]:
                     case_root = Path(tmp) / f"{framework}-iso" / case["id"]
                     materialize_isolated(framework, case, manifest, case_root, root)
-                    case_report, _ = scan(args.fendix, case_root, args.fail_on)
+                    case_report, seconds = scan(args.fendix, case_root, args.fail_on)
                     scored = score_framework(framework, case_report, case_root, root)
                     isolated[case["id"]] = next(c for c in scored["cases"] if c["id"] == case["id"])
+                    isolated[case["id"]]["seconds"] = round(seconds, 2)
                     shutil.rmtree(case_root)
                 for c in results[-1]["cases"]:
                     iso = isolated[c["id"]]
                     c["grouped"] = {"outcome": c["outcome"], "blocks": c["blocks"], "best_status": c["best_status"]}
                     c["outcome"], c["blocks"], c["best_status"] = iso["outcome"], iso["blocks"], iso["best_status"]
                     c["rules"], c["line_delta"] = iso["rules"], iso["line_delta"]
+                    c["seconds"] = iso["seconds"]
             if not args.no_timing:
                 results[-1]["timing"] = timing(args.fendix, framework, Path(tmp), args.fail_on, args.repeats, args.scale, root)
             m = metrics(results[-1]["cases"])
@@ -719,6 +729,12 @@ def run(args: argparse.Namespace, frameworks: List[str]) -> int:
                 print(f"{framework:9} recall={m['recall']} fpr={m['false_positive_rate']} blocks={m['block_recall']}", file=sys.stderr)
 
     all_cases = [c for r in results for c in r["cases"]]
+    elapsed = time.perf_counter() - started
+    scans = [(r["framework"], r["scan_seconds"]) for r in results]
+    scans += [(c["id"], c["seconds"]) for c in all_cases if "seconds" in c]
+    if scans and not args.quiet:
+        slowest, slowest_seconds = max(scans, key=lambda s: s[1])
+        print(f"parity: {len(scans)} scans in {elapsed:.0f}s, slowest {slowest} {slowest_seconds:.1f}s", file=sys.stderr)
     summary = {
         "by_framework": {r["framework"]: metrics(r["cases"]) for r in results},
         # The original 28 cases per framework, comparable with v1 results.
@@ -756,6 +772,7 @@ def run(args: argparse.Namespace, frameworks: List[str]) -> int:
                 "semgrep": semgrep_version,
                 "fail_on": args.fail_on,
                 "python": sys.version.split()[0],
+                "elapsed_seconds": round(elapsed, 2),
                 "summary": summary,
                 "frameworks": results,
             },

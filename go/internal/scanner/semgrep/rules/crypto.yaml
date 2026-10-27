@@ -28,6 +28,12 @@ rules:
       cwe: CWE-327
       confidence: MEDIUM
       fendix_severity: HIGH
+      fendix_title: >-
+        hashlib.md5() used on a password-shaped variable.
+      fendix_remediation: >-
+        hashlib.md5() used on a password-shaped variable.
+        MD5 is broken for cryptographic use. Use a password-hashing
+        function — bcrypt, scrypt, argon2, or PBKDF2 — never a raw hash.
 
   # Rule 2 (Sprint 18): SHA1 used on a password-shaped variable. Same
   # shape as the MD5 rule above; SHA1 is also unsuitable for password
@@ -54,6 +60,12 @@ rules:
       cwe: CWE-327
       confidence: MEDIUM
       fendix_severity: HIGH
+      fendix_title: >-
+        hashlib.sha1() used on a password-shaped variable.
+      fendix_remediation: >-
+        hashlib.sha1() used on a password-shaped variable.
+        SHA1 is unsuitable for password hashing (fast hash, no work
+        factor). Use bcrypt, scrypt, argon2, or PBKDF2 instead.
 
   # Rule 3 (Sprint 18): Legacy / broken symmetric ciphers (DES, 3DES, RC4).
   # Imports from pycryptodome's Crypto.Cipher submodule. FP class: a
@@ -82,6 +94,12 @@ rules:
       cwe: CWE-327
       confidence: HIGH
       fendix_severity: HIGH
+      fendix_title: >-
+        Legacy / broken symmetric cipher imported (DES, 3DES, RC4, ARC2, Blowfish).
+      fendix_remediation: >-
+        Legacy / broken symmetric cipher imported (DES, 3DES, RC4, ARC2,
+        Blowfish). These are no longer considered secure. Use AES-GCM,
+        AES-CCM, or ChaCha20-Poly1305 instead.
 
   # Rule 4 (Sprint 18): random.random / choice / choices / randint /
   # randrange / sample / shuffle / getrandbits / randbytes used in a

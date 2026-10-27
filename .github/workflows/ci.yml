@@ -151,6 +151,16 @@ jobs:
           python3 -c 'import json; print(json.dumps(json.load(open("smoke-container.json"))["metadata"]["scanner_status"], indent=2))'
           scripts/coverage-smoke-check.sh --deterministic smoke-container.json
 
+      # The bundled rule pack's semgrep --test cases, run with the semgrep the
+      # image ships (go/internal/scanner/semgrep/ruletests/README.md). The
+      # repository is mounted read-only at the same relative paths.
+      - name: Semgrep rule tests
+        run: |
+          set -eu
+          docker run --rm --network none --entrypoint semgrep \
+            -v "$PWD:/src:ro" -w /src fendix-ci \
+            --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests
+
   e2e:
     name: End-to-End (CLI flag regression)
     runs-on: ubuntu-latest

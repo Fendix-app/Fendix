@@ -116,7 +116,10 @@ heavy-eval-fast: build
 # PARITY_ARGS passes extra flags to run_parity.py, for example
 # `make parity PARITY_ARGS="--frameworks flask,django"` gates a subset (the
 # gate then ignores baseline entries of the frameworks that did not run).
-# Results land in $(PARITY_OUT)/results.json.
+# Results land in $(PARITY_OUT)/results.json, with the wall time of every scan
+# (scan_seconds per framework, seconds per case, elapsed_seconds in all); the
+# run prints its total and its slowest scan, to watch against the engine's
+# 300 s Semgrep deadline.
 PARITY_VENV ?= .venv-parity
 PARITY_PYTHON ?= python3
 PARITY_ARGS ?=

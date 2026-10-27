@@ -24,7 +24,12 @@ The Semgrep runner lives at
 2. Extracts the embedded `//go:embed rules/*.yaml` pack to a per-process
    temp directory on the first scan call.
 3. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet
-   <code_path>` with a 120-second timeout.
+   --dataflow-traces --timeout 0 --exclude node_modules --exclude dist
+   --exclude build --exclude .next --exclude target --exclude vendor
+   --exclude '*.min.js' <code_path>`, with a 300-second deadline on the
+   whole run. `--timeout 0` turns off Semgrep's own per-rule, per-file
+   timeout (5 seconds by default), which drops a slow rule's matches on a
+   file without failing the run.
 4. Parses the JSON output and maps each result to a Fendix `Finding` via
    `resolveSeverity`, `resolveConfidence`, `resolveCategory`,
    `resolveCWE`.
@@ -32,6 +37,17 @@ The Semgrep runner lives at
 `<rules_dir>` is the temp extraction of
 [`go/internal/scanner/semgrep/rules/`](../go/internal/scanner/semgrep/rules/);
 every `.yaml` file in that directory is loaded.
+
+**Build output and vendored code are not scanned.** The `--exclude`
+patterns skip `node_modules/`, `dist/`, `build/`, `.next/`, `target/` and
+`vendor/` at any depth, and every `*.min.js` file, for every language.
+`dist/` and `build/` are also where Python packaging writes its output.
+The patterns match paths relative to the scanned directory: a repository
+checked out under `/srv/build/` is scanned, and so is a file named
+`build.py`. A `--diff` scan that changes only files under these
+directories gets no Semgrep findings from them. Semgrep skips most of
+these directories by itself, but only in a project that has no
+`.semgrepignore` of its own, and never `.next/` or `target/`.
 
 > **Install Semgrep for full coverage.** Without it, only the
 > [AST analyzer](./checks/ast-analyzer.md) and
@@ -68,6 +84,10 @@ rules:
       cwe: CWE-352
       confidence: HIGH
       fendix_severity: HIGH
+      fendix_title: Flask route is missing CSRF protection.
+      fendix_remediation: >-
+        Flask route is missing CSRF protection. Wrap it with @csrf_protect
+        or use Flask-WTF's CSRFProtect.
 ```
 
 The mandatory keys are the standard Semgrep ones: `id`, `patterns` (or
@@ -78,10 +98,29 @@ where Fendix-specific information lives.
 
 | Key | Type | Required | Used to populate |
 |---|---|---|---|
-| `category` | string | recommended | `Finding.category` (taxonomy bucket — see below). Defaults to `whitebox` when unset. |
-| `cwe` | string or list | recommended | `Finding.references` (e.g. `"CWE-89"`). Multiple CWEs may be passed as a list. |
-| `confidence` | string enum | recommended | `Finding.confidence` (`HIGH` / `MEDIUM` / `LOW`). Defaults to `MEDIUM`. |
-| `fendix_severity` | string enum | recommended | `Finding.severity` (`CRITICAL` / `HIGH` / `MEDIUM` / `LOW` / `INFO`). When unset, Fendix falls back to mapping Semgrep's own `severity` (`ERROR`→`HIGH`, `WARNING`→`MEDIUM`, `INFO`→`LOW`). |
+| `category` | string enum | yes | `Finding.category`: one of `injection`, `xss`, `crypto`, `auth`, `secrets` (see below). Defaults to `code` when unset. |
+| `cwe` | string or list | yes | `Finding.references`, in the form `CWE-89`. Multiple CWEs may be passed as a list. |
+| `confidence` | string enum | yes | `Finding.confidence` (`HIGH` / `MEDIUM` / `LOW`). Defaults to `MEDIUM`. A taint rule declares `MEDIUM`. |
+| `fendix_severity` | string enum | yes | `Finding.severity` (`CRITICAL` / `HIGH` / `MEDIUM` / `LOW` / `INFO`). When unset, Fendix falls back to mapping Semgrep's own `severity` (`ERROR`→`HIGH`, `WARNING`→`MEDIUM`, `INFO`→`LOW`). |
+| `fendix_title` | string | yes | The check's title in the public security catalog (`docs/security-catalog-contract.json`). Static text without metavariables. A finding's own title is the first line of `message`. |
+| `fendix_remediation` | string | yes | The check's remediation in the security catalog. Static text without metavariables. A finding's fix text is `message`. |
+| `fendix_reachability` | `taint` | taint rules only | Asks for a `mode: taint` rule's matches to count as reachability (ADR-011). Only a taint rule may set it, and every taint rule does. |
+
+Every rule in the bundled pack carries all six required keys, and its
+`languages` are drawn from `python`, `javascript`, `typescript`, `java` and
+`go`. `TestEveryRuleCarriesFendixMetadata` in
+[`scanner_rulepack_test.go`](../go/internal/scanner/semgrep/scanner_rulepack_test.go)
+fails otherwise. It also holds two naming rules:
+
+- **Taint rules** (`mode: taint`) are named `<lang>-<class>-taint`, such as
+  `js-sqli-taint`, and declare `confidence: MEDIUM` and
+  `fendix_reachability: taint`.
+- **Shape rules** that report a non-constant argument reaching a sink are
+  named `<lang>-<class>-sink`. Each one excludes a fully literal argument
+  with a `pattern-not` (`"..."`), and a module constant with a
+  `pattern-not-inside` for the language's constant binding: `const $X = ...`
+  in JavaScript and TypeScript, `static final String $X = ...` in Java, and
+  both `const $X = ...` and a `const ( ... )` block in Go.
 
 ### Why `fendix_severity` exists separately from `severity`
 
@@ -96,6 +135,14 @@ a Semgrep `ERROR` for CI gating, but in Fendix's vocabulary I'm a
 ---
 
 ## Categories
+
+A rule in the bundled pack uses one of five categories: `injection`,
+`xss`, `crypto`, `auth` or `secrets`. SSRF, path traversal, open redirect
+and SSTI are `injection`. The engine collapses two findings on one line only
+when their categories match, so a new category would never merge with
+another analyzer's finding for the same code: textscan reports SSRF as
+`injection`. The other categories in the table below are not accepted in
+the bundled pack.
 
 Pick the closest category from this list. Mapping to a known category
 ensures the finding is grouped correctly in the report and counted in the
@@ -286,21 +333,26 @@ positives erode trust faster than missed findings.
    each.
 3. **Pick `confidence` honestly.** If your rule's pattern matches more
    than the actual issue, downgrade to `MEDIUM` or `LOW`.
-4. **Audit the rule pack.** Sprint 18 added a YAML-only catalog test at
+4. **Audit the rule pack.**
    [`go/internal/scanner/semgrep/scanner_rulepack_test.go`](../go/internal/scanner/semgrep/scanner_rulepack_test.go)
-   that asserts every rule carries `metadata.category`,
-   `metadata.fendix_severity`, `metadata.confidence`, and
-   `metadata.cwe`, and that no two rules share an `id`. When you add a
-   rule, bump `rulepackTotalCount` in the same commit so the count
-   assertion stays green.
-5. **Run the suite locally.**
+   checks every rule against the metadata contract above
+   (`TestEveryRuleCarriesFendixMetadata`), and that no two rules share an
+   `id`. When you add a rule, bump `rulepackTotalCount` in the same commit
+   so the count assertion stays green.
+5. **Write rule tests.** A pack for a language other than Python has a
+   test file per rule file:
+   [`go/internal/scanner/semgrep/ruletests/<stem>.<ext>`](../go/internal/scanner/semgrep/ruletests/README.md)
+   tests `rules/<stem>.yaml`, with a `ruleid:` and an `ok:` line for every
+   rule. Run them with
+   `semgrep --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests`.
+6. **Run the suite locally.**
 
    ```bash
    make test                                            # full suite
    cd go && go test ./internal/scanner/semgrep/...      # just the Semgrep package
    ```
 
-6. **Verify the rule resolves cleanly.** Semgrep itself will warn on
+7. **Verify the rule resolves cleanly.** Semgrep itself will warn on
    pattern syntax errors:
 
    ```bash

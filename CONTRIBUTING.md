@@ -236,24 +236,39 @@ rules:
     pattern: dangerous_function($INPUT)
     message: "Potentially unsafe use of dangerous_function"
     severity: WARNING
-    languages: [python]
+    languages: [python]         # python | javascript | typescript | java | go
     metadata:
-      cwe: CWE-XXX
-      category: mycategory
-      confidence: MEDIUM        # HIGH | MEDIUM | LOW — required by the rulepack audit
-      fendix_severity: HIGH     # CRITICAL | HIGH | MEDIUM | LOW | INFO — required
+      cwe: CWE-XXX              # CWE-<number>, or a list of them
+      category: injection       # injection | xss | crypto | auth | secrets
+      confidence: MEDIUM        # HIGH | MEDIUM | LOW (MEDIUM for a taint rule)
+      fendix_severity: HIGH     # CRITICAL | HIGH | MEDIUM | LOW | INFO
+      fendix_title: Potentially unsafe use of dangerous_function.
+      fendix_remediation: Replace dangerous_function with its safe variant.
 ```
 
-Rules are picked up automatically at build time — no registration needed. Two
-things you **must** do in the same commit:
+Rules are picked up automatically at build time — no registration needed.
+Things you **must** do in the same commit:
 
-1. Every rule needs `metadata.category`, `metadata.cwe`, `metadata.confidence`
-   and `metadata.fendix_severity`. `scanner_rulepack_test.go` fails the build
-   otherwise. A rule with `confidence: LOW` may not exceed
-   `fendix_severity: MEDIUM` — the orchestrator would silently downgrade it.
+1. Every rule needs all six `metadata` keys above, with a value from the set
+   shown; `fendix_title` and `fendix_remediation` are static catalog copy,
+   without metavariables. A taint rule (`mode: taint`) is named
+   `<lang>-<class>-taint` and also sets `fendix_reachability: taint`; a
+   shape rule named `<lang>-<class>-sink` excludes literal arguments and
+   module constants. `TestEveryRuleCarriesFendixMetadata` in
+   `scanner_rulepack_test.go` fails the build otherwise;
+   [`docs/semgrep-rules.md`](docs/semgrep-rules.md) has the details. A rule
+   with `confidence: LOW` may not exceed `fendix_severity: MEDIUM` — the
+   orchestrator would silently downgrade it.
 2. Bump `rulepackTotalCount` in
    `go/internal/scanner/semgrep/scanner_rulepack_test.go` and the bundled-rule
-   count in `README.md` ("Semgrep Rules" row of the white-box table).
+   count in `README.md` ("Semgrep Rules" row of the white-box table), and
+   regenerate the security catalog:
+   `cd go && go run ./cmd/catalog-contract --out ../docs/security-catalog-contract.json`.
+3. For a pack in a language other than Python, add rule tests:
+   `go/internal/scanner/semgrep/ruletests/<stem>.<ext>` tests
+   `rules/<stem>.yaml`, with a `ruleid:` and an `ok:` line for every rule
+   (see that directory's `README.md`). Run
+   `semgrep --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests`.
 
 If you add a whole new `.yaml` file, also add its name to `rulepackFiles` in
 that same test.

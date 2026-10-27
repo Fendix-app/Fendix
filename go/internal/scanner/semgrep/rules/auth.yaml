@@ -225,6 +225,12 @@ rules:
       cwe: CWE-347
       confidence: HIGH
       fendix_severity: CRITICAL
+      fendix_title: >-
+        JWT decoded with signature verification disabled.
+      fendix_remediation: >-
+        JWT decoded with signature verification disabled.
+        This allows an attacker to forge tokens.
+        Remove options={"verify_signature": False} and specify a strong algorithm.
 
   # (Rule 5 — django-fbv-missing-auth-decorator — was removed in v0.13.1.
   # The original pattern attempted to match `@urls.path(...)` as a

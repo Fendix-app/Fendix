@@ -62,7 +62,7 @@ authority if this page and the pack ever disagree.
 ## How It Works
 
 1. On the first scan of a process, `ensureRules()` extracts the embedded pack to a temp dir (cached in a `sync.Once` for the process lifetime)
-2. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet <code_path>`, with a 120 s default deadline layered onto the caller's context
+2. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet --dataflow-traces --timeout 0 --exclude node_modules --exclude dist --exclude build --exclude .next --exclude target --exclude vendor --exclude '*.min.js' <code_path>`, with a 300 s default deadline layered onto the caller's context. `--timeout 0` turns off Semgrep's per-rule, per-file timeout (5 s by default), so the deadline is the only bound. The excludes skip build output, installed dependencies and vendored code at any depth below `<code_path>`, for every language, Python's `dist/` and `build/` included
 3. Parses Semgrep JSON output and maps to Fendix Finding format (`SEC-<RULE_ID>`)
 4. Severity resolution prefers `metadata.fendix_severity`; falls back to Semgrep's own `ERROR`→`HIGH` / `WARNING`→`MEDIUM` / `INFO`→`LOW`; ultimate default `MEDIUM`
 5. If `semgrep` is not on `$PATH`, returns `ErrSemgrepUnavailable` — the orchestrator logs an install hint at INFO, records `scanner_status: {"name":"semgrep","state":"skipped"}`, and continues

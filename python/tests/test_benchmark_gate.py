@@ -409,6 +409,26 @@ def test_timing_scales_the_corpus_it_was_given(tmp_path):
     assert timed["3x"]["files"] == 6
 
 
+def test_run_records_how_long_every_scan_took(tmp_path, monkeypatch, capsys):
+    """`make parity` keeps the wall time of each scan, so a slow rule shows against the scan timeout."""
+    root = tmp_path / "corpus"
+    _write_flask_corpus(root, [("flask-h-a", "sqli", True), ("flask-h-b", "sqli", False)])
+    out = tmp_path / "out"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_parity.py", "--fendix", str(_fake_engine(tmp_path)), "--out", str(out), "--frameworks", "flask",
+         "--isolate", "--no-timing", "--corpus-root", str(root)],
+    )
+    assert _parity.main() == 0
+    doc = json.loads((out / "results.json").read_text(encoding="utf-8"))
+    flask = doc["frameworks"][0]
+    scans = [flask["scan_seconds"]] + [case["seconds"] for case in flask["cases"]]
+    assert all(isinstance(s, float) and s >= 0 for s in scans)
+    assert doc["elapsed_seconds"] >= max(scans)
+    assert re.search(r"^parity: 3 scans in \d+s, slowest (flask|flask-h-[ab]) \d+\.\ds$", capsys.readouterr().err, re.M)
+
+
 def test_main_rejects_a_corpus_root_that_lacks_a_requested_framework(tmp_path, monkeypatch, capsys):
     (tmp_path / "empty-root").mkdir()
     monkeypatch.setattr(
