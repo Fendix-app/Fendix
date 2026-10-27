@@ -667,21 +667,27 @@ jobs:
 
 The commit pins the Action's own code and cannot change; `version` pins the
 Fendix release it installs. `@v1` follows compatible stable releases of the v1
-Action, but **it still resolves to the v3.6.2 Action code** (release commit
-`b9e1fad`) until `v1` is moved, so it does not have v3.7.0's fail-closed
-required analyzers. Use `@v1` again once it is moved. Until then, a workflow
-that stays on `@v1` should set `version: v3.6.5`, the newest release tested
-with it: v3.6.2 and v3.6.3 still trust the compromised emSign intermediate
-CAs that v3.6.4 removed.
+Action. Since 2026-10-27 it resolves to the v3.7.0 release commit `90adf6a`,
+so it has v3.7.0's fail-closed required analyzers, but it moves when a later
+compatible release is published; pin the commit for a reference that cannot
+change. With `@v1`, set `version: v3.7.0`. A workflow that set
+`version: v3.6.5` while `@v1` was the v3.6.2 Action now runs the v3.7.0
+Action with that release, a pairing that has not been tested end to end;
+move it to `version: v3.7.0`.
 
 Never reference `@main`; it changes without review. The permissions above are
 all the Action needs; it uses the job token only for the SARIF upload. The
 v3.7.0 release commit with `version: v3.7.0` was tested end to end in a public
 repository on 2026-10-25 (`Fendix-app/fendix-action-e2e-public`, runs
-40225358870 to 40225440001). The v3.6.2 Action, by its release commit and as
-literal `@v1`, passed the external-user end-to-end matrix in public and private
-repositories, and literal `@v1` with `version: v3.6.5` passed the v3.6.5
-release's end-to-end run.
+40225358870 to 40225440001). After the move, literal `@v1` with
+`version: v3.7.0` repeated four of those scenarios on 2026-10-27 with the same
+outcome and exit code: no findings (0), a `BLOCK` finding (1), a scan error
+(2), and a required Semgrep with no wheel for glibc 2.31, which fails setup
+with exit 2 before any scan (runs 40568280529 to 40568281493). Before the
+move, the v3.6.2 Action, by its release commit and as literal `@v1`, passed
+the external-user end-to-end matrix in public and private repositories, and
+literal `@v1` with `version: v3.6.5` passed the v3.6.5 release's end-to-end
+run.
 
 #### What the Action does
 
@@ -715,8 +721,8 @@ release's end-to-end run.
   (`--only-binary=:all:`): nothing is built from source. `setup-python` does
   not change the rest of the job's environment, but the venv's `bin/` and
   `FENDIX_ENGINE` stay available to later steps.
-- **Required analyzers fail closed (from v3.7.0; with `@v1`, once it is
-  moved).** `require-analyzers`
+- **Required analyzers fail closed (from v3.7.0, and with `@v1` since
+  2026-10-27).** `require-analyzers`
   defaults to `auto`, which requires `semgrep` whenever `code` is set. A
   required Semgrep must install from a wheel, then pass a preflight before the
   scan: the Action runs it, offline, on a bundled rule and file and requires
