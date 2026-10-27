@@ -1237,6 +1237,74 @@ class RedirectRoundTwoController {
     }
 }
 
+// Fix round 3: the replacement or exit must be the failing branch's own last
+// statement, and a replacement must assign the guarded target.
+@Controller
+class RedirectRoundThreeController {
+
+    private boolean strict;
+    private String reason;
+
+    @GetMapping("/r3/replace-when-strict")
+    void replaceWhenStrict(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            if (strict) next = "/";
+            reason = "bad-target";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r3/return-when-strict")
+    void returnWhenStrict(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            if (strict) return;
+            reason = "bad-target";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r3/throw-when-strict")
+    void throwWhenStrict(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            if (strict) throw new IllegalArgumentException("bad");
+            reason = "bad-target";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r3/note-then-replace")
+    void noteThenReplace(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            reason = "bad-target";
+            next = "/";
+        }
+        // ok: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r3/replace-then-note")
+    void replaceThenNote(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            next = "/";
+            reason = "bad-target";
+        }
+        // ok: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r3/replace-another")
+    void replaceAnother(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            reason = "/";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+}
+
 @Service
 class Redirects {
 
@@ -1266,6 +1334,26 @@ class Redirects {
             target = target.substring(1);
         }
         // ruleid: java-open_redirect-sink
+        response.sendRedirect(target);
+    }
+
+    public void redirectReplacedWhenStrict(HttpServletResponse response, String target, boolean strict) throws IOException {
+        String reason;
+        if (!target.startsWith("/") || target.startsWith("//")) {
+            if (strict) target = "/";
+            reason = "bad-target";
+        }
+        // ruleid: java-open_redirect-sink
+        response.sendRedirect(target);
+    }
+
+    public void redirectReplacedThenNoted(HttpServletResponse response, String target) throws IOException {
+        String reason;
+        if (!target.startsWith("/") || target.startsWith("//")) {
+            target = "/";
+            reason = "bad-target";
+        }
+        // ok: java-open_redirect-sink
         response.sendRedirect(target);
     }
 

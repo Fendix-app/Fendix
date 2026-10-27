@@ -1063,7 +1063,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       and a token's time claims (`exp`, `iat`, `nbf`).
     - A value behind a guard. A guard counts only when the branch taken on a
       failing check ends with a direct `return` or `throw` (or, for a
-      redirect, a direct assignment of a literal), not one nested in an
+      redirect, a direct assignment of a literal to the target itself,
+      followed by nothing but literal assignments), not one nested in an
       `if`, `try`, loop or lambda, and the check is not under an `&&`; or
       when the use sits in the then-branch of a passing check with no
       `else`. A check that only logs or exits only sometimes, a denylist,

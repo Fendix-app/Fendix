@@ -170,7 +170,8 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
   check or a local-path redirect check (both halves, each with its
   polarity) makes a value safe only when the branch taken on a failing
   check ends with a direct `return` or `throw` (for a redirect, also a
-  direct assignment of a literal), not under an `&&`; or when the use is in
+  direct assignment of a literal to the target, followed by nothing but
+  literal assignments), not under an `&&`; or when the use is in
   the then-branch of a passing check with no `else`. The taint rules
   apply them as sanitizers to the uses after (or inside) the check;
   `java-ssrf-sink` and `java-open_redirect-sink` apply the same guards as

@@ -9,9 +9,9 @@
 #
 # A guard (a host check, a containment check, a local-path check) counts only
 # when the branch taken on a failing check ends with a direct return or
-# throw (for a redirect, also a direct assignment of a literal), not under an
-# &&; or when the use sits inside the then-branch of a passing check with no
-# else. java-ssrf-sink and java-open_redirect-sink carry the same guards as
+# throw (for a redirect, also a direct assignment of a literal to the target,
+# followed by nothing but literal assignments), not under an &&; or when the
+# use sits inside the then-branch of a passing check with no else. java-ssrf-sink and java-open_redirect-sink carry the same guards as
 # negations on their parameter; TestJavaSinkRulesShareTheirTaintRulesBlocks
 # keeps those copies equal.
 #
@@ -3147,13 +3147,43 @@ rules:
               regex: ^\w+$
           - metavariable-regex:
               metavariable: $GBODY
-              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw\b[^;{}]*|return\b[^;{}]*|\w+\s*=\s*"[^"\n]*");?\s*(?://[^\n]*\s*)*\}?\s*$
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
           - metavariable-pattern:
-              metavariable: $GBODY
-              pattern-either:
-                - pattern: throw $GE;
-                - pattern: return ...;
-                - pattern: $GV = "...";
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GV.startsWith("//")'
+                - pattern-not-inside: '!$GV.startsWith("//")'
+                - pattern-not-inside: '$GA && $GB'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.startsWith("/")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-inside: |
+              $GIF;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GV.startsWith("//") ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GIF
+              pattern: if ($GCOND) $GBODY;
+          - metavariable-regex:
+              metavariable: $GIF
+              regex: '(?s)^if\s*\((?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*?\b(\w+)\.startsWith\("//"\)(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
@@ -3283,13 +3313,49 @@ rules:
                 - pattern: new RedirectView($Q, ...)
             - metavariable-regex:
                 metavariable: $GBODY
-                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw\b[^;{}]*|return\b[^;{}]*|\w+\s*=\s*"[^"\n]*");?\s*(?://[^\n]*\s*)*\}?\s*$
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
             - metavariable-pattern:
-                metavariable: $GBODY
-                pattern-either:
-                  - pattern: throw $GE;
-                  - pattern: return ...;
-                  - pattern: $Q = "...";
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '$Q.startsWith("//")'
+                  - pattern-not-inside: '!$Q.startsWith("//")'
+                  - pattern-not-inside: '$GA && $GB'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$Q.startsWith("/")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-inside: |
+                $GIF;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $Q.startsWith("//") ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: (HttpServletResponse $RESP).sendRedirect($Q)
+                - patterns:
+                    - pattern: $RESP.sendRedirect($Q)
+                    - metavariable-regex:
+                        metavariable: $RESP
+                        regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+                - pattern: '"redirect:" + $Q'
+                - pattern: new RedirectView($Q, ...)
+            - metavariable-pattern:
+                metavariable: $GIF
+                pattern: if ($GCOND) $GBODY;
+            - metavariable-regex:
+                metavariable: $GIF
+                regex: '(?s)^if\s*\((?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*?\b(\w+)\.startsWith\("//"\)(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:
