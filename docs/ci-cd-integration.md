@@ -6,12 +6,12 @@ Fendix produces SARIF 2.1.0 output for GitHub code scanning: PR annotations and 
 
 The recommended GitHub integration is the Fendix Action
 ([Fendix Security Scan on GitHub Marketplace](https://github.com/marketplace/actions/fendix-security-scan)),
-`uses: Fendix-app/Fendix@v1` with an explicit `version: v3.6.2`, or pinned to
-the full commit of the validated release for high-assurance pipelines,
-`Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0` with
+pinned to the full commit of the v3.7.0 release,
+`Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0`, with
 `version: v3.7.0`. `@v1` still resolves to the v3.6.2 Action code until it is
-moved, so v3.7.0's fail-closed required analyzers need the v3.7.0 commit until
-then; see
+moved, so it does not have v3.7.0's fail-closed required analyzers; a workflow
+that stays on `@v1` until then should set `version: v3.6.5`, the newest release
+tested with it. See
 [INTEGRATION_GUIDE §3.1](INTEGRATION_GUIDE.md#31-recommended--the-composite-github-action).
 Never reference `@main`.
 
