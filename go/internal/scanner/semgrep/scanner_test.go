@@ -1111,3 +1111,53 @@ func TestParseRunCountsOnlyTimeoutErrors(t *testing.T) {
 		t.Errorf("timeouts = %+v; want %+v", run.Timeouts, want)
 	}
 }
+
+// Semgrep's `errors` only add timeouts to a run. Whatever shape they arrive
+// in, the results beside them are kept: a malformed entry is skipped, and an
+// `errors` that is not a list is ignored.
+func TestParseRunKeepsResultsWhateverTheErrors(t *testing.T) {
+	const result = `{"check_id": "python-eval-injection", "path": "/code/app.py", "start": {"line": 3, "col": 1},
+	  "extra": {"message": "eval()/exec() with dynamic argument", "severity": "ERROR", "lines": "eval(x)", "metadata": {}}}`
+	cases := []struct {
+		name, errors string
+		timeouts     []RuleTimeout
+	}{
+		{"rule_id of the wrong type", `[{"type": "Timeout", "rule_id": 7, "path": "a.py"}, {"type": "Timeout", "rule_id": "b", "path": "b.py"}]`,
+			[]RuleTimeout{{RuleID: "b", Path: "b.py"}}},
+		{"path of the wrong type", `[{"type": "Timeout", "rule_id": "a", "path": {"value": "a.py"}}]`, nil},
+		{"null fields", `[{"type": "Timeout", "rule_id": null, "path": null}]`, []RuleTimeout{{}}},
+		{"an object", `{"unexpected": "object"}`, nil},
+		{"a list of strings", `["a string entry"]`, nil},
+		{"a string", `"oops"`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := parseRun([]byte(`{"results": [`+result+`], "errors": `+tc.errors+`}`), "/code")
+			if len(run.Findings) != 1 || run.Findings[0].RuleID != "python-eval-injection" {
+				t.Errorf("findings = %+v; want the one result", run.Findings)
+			}
+			if !reflect.DeepEqual(run.Timeouts, tc.timeouts) {
+				t.Errorf("timeouts = %+v; want %+v", run.Timeouts, tc.timeouts)
+			}
+		})
+	}
+}
+
+// The same through a whole run, on both of ScanRun's paths: semgrep exiting 0
+// and exiting non-zero with a parseable document.
+func TestScanRunKeepsResultsBesideMalformedErrors(t *testing.T) {
+	root := t.TempDir()
+	doc := `{"results": [{"check_id": "python-eval-injection", "path": "` + filepath.ToSlash(filepath.Join(root, "app.py")) +
+		`", "start": {"line": 3, "col": 1}, "extra": {"message": "m", "severity": "ERROR", "lines": "eval(x)", "metadata": {}}}],
+	  "errors": [{"type": "Timeout", "rule_id": 7, "path": "app.py"}]}`
+	for _, exit := range []int{0, 1} {
+		installFakeSemgrep(t, doc, "", exit)
+		run, err := ScanRun(context.Background(), root, nil)
+		if err != nil {
+			t.Fatalf("exit %d: ScanRun: %v", exit, err)
+		}
+		if len(run.Findings) != 1 || run.Findings[0].Endpoint != "app.py:3" {
+			t.Errorf("exit %d: findings = %+v; want app.py:3", exit, run.Findings)
+		}
+	}
+}

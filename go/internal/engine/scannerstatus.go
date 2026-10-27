@@ -172,21 +172,36 @@ func classifyErr(err error) reporters.ScannerReason {
 	return reporters.ReasonExecutionError
 }
 
-// recordSemgrepRun records a semgrep run that succeeded. When Semgrep stopped
-// a rule on a file (its per-rule timeout), the run is still ok but its
-// findings are partial, so the detail names each rule and file whose matches
-// are missing — the way active-probes notes probes that got no response.
-func recordSemgrepRun(status *scannerStatusList, timeouts []semgrep.RuleTimeout) {
-	if len(timeouts) == 0 {
+// recordSemgrepRun records a semgrep run that completed and keeps its
+// findings. When Semgrep stopped a rule on a file at its per-rule timeout,
+// the run delivered only part of its findings: like a pass cut short by
+// Fendix's own budget, it is recorded failed with reason timeout (R-pf59), so
+// --fail-on-scanner-error and the coverage gates see it. The detail names
+// each rule and file whose matches are missing. The findings it did produce
+// are kept, as a partial dependency lookup keeps its own.
+func recordSemgrepRun(status *scannerStatusList, findings *[]evidence.Evidence, run semgrep.Run) {
+	*findings = append(*findings, run.Findings...)
+	if len(run.Timeouts) == 0 {
 		status.ok(AnalyzerSemgrep)
 		return
 	}
-	pairs := make([]string, 0, len(timeouts))
-	for _, t := range timeouts {
-		pairs = append(pairs, t.RuleID+" on "+t.Path)
+	pairs := make([]string, 0, len(run.Timeouts))
+	for _, t := range run.Timeouts {
+		rule, file := t.RuleID, t.Path
+		if rule == "" {
+			rule = "unknown rule"
+		}
+		if file == "" {
+			file = "unknown file"
+		}
+		pairs = append(pairs, rule+" on "+file)
 	}
-	status.okDetail(AnalyzerSemgrep, fmt.Sprintf("%d rule timeouts; those rules' matches in those files are missing: %s",
-		len(timeouts), strings.Join(pairs, ", ")))
+	noun := "rule timeouts"
+	if len(pairs) == 1 {
+		noun = "rule timeout"
+	}
+	status.failDetail(AnalyzerSemgrep, reporters.ReasonTimeout,
+		fmt.Sprintf("%d %s, matches missing: %s", len(pairs), noun, strings.Join(pairs, ", ")))
 }
 
 // recordDepScanResult records the outcome of a pip-style dep scan (one

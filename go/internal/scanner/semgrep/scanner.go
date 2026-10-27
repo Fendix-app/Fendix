@@ -161,8 +161,10 @@ type RuleTimeout struct {
 // Run is what one semgrep run produced.
 type Run struct {
 	Findings []evidence.Evidence
-	// Timeouts lists the rules Semgrep stopped on a file. A run with
-	// timeouts still succeeded; its findings are partial.
+	// Timeouts lists the rules Semgrep stopped on a file. ScanRun returns
+	// no error for them, since Findings holds everything else the run
+	// found; the orchestrator records such a run failed with reason
+	// timeout, its findings partial.
 	Timeouts []RuleTimeout
 }
 
@@ -352,7 +354,9 @@ type semgrepExtra struct {
 // semgrepOutput wraps a top-level Semgrep --json document.
 type semgrepOutput struct {
 	Results []semgrepResult `json:"results"`
-	Errors  []semgrepError  `json:"errors"`
+	// Errors is kept raw and decoded entry by entry (ruleTimeouts): an
+	// entry of an unexpected shape must cost that entry, never the results.
+	Errors json.RawMessage `json:"errors"`
 }
 
 // semgrepError is one entry of the document's `errors`. Semgrep 1.141.0
@@ -415,16 +419,30 @@ func parseRun(stdout []byte, codeRoot string) Run {
 		}
 		run.Findings = append(run.Findings, f)
 	}
-	for _, e := range out.Errors {
-		if !e.isTimeout() {
+	run.Timeouts = ruleTimeouts(out.Errors, absRoot)
+	return run
+}
+
+// ruleTimeouts decodes the Timeout entries of a document's `errors`, and
+// logs each one. An `errors` that is not a list, and an entry that does not
+// decode, are skipped: they only ever add timeouts to a run.
+func ruleTimeouts(raw json.RawMessage, absRoot string) []RuleTimeout {
+	var entries []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	var out []RuleTimeout
+	for _, entry := range entries {
+		var e semgrepError
+		if json.Unmarshal(entry, &e) != nil || !e.isTimeout() {
 			continue
 		}
 		t := RuleTimeout{RuleID: normalizeCheckID(e.RuleID), Path: relPath(e.Path, absRoot)}
 		slog.Warn("semgrep: rule timed out on a file; its matches there are missing",
 			"rule", t.RuleID, "path", t.Path, "timeout_seconds", ruleTimeoutSeconds)
-		run.Timeouts = append(run.Timeouts, t)
+		out = append(out, t)
 	}
-	return run
+	return out
 }
 
 // mapResult converts one Semgrep result to a fendix Finding. Returns

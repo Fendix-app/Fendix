@@ -600,8 +600,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		switch {
 		case err == nil:
 			slog.Info("native semgrep scan complete", "findings", len(semgrepRun.Findings), "rule_timeouts", len(semgrepRun.Timeouts))
-			evid = append(evid, semgrepRun.Findings...)
-			recordSemgrepRun(&scanStatus, semgrepRun.Timeouts)
+			recordSemgrepRun(&scanStatus, &evid, semgrepRun)
 		case errors.Is(err, semgrep.ErrSemgrepUnavailable):
 			slog.Info("semgrep not installed — skipping (install with: pip install semgrep)")
 			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDependencyMissing, "semgrep binary not installed")

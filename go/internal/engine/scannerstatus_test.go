@@ -170,31 +170,59 @@ func TestClassifyErr_MinimalMapping(t *testing.T) {
 	}
 }
 
-// A Semgrep run in which a rule timed out on a file succeeded, but its
-// findings are partial: the status stays ok and its detail names what is
-// missing, as active-probes does for probes that got no response.
-func TestSemgrepStatusReportsRuleTimeouts(t *testing.T) {
+// A Semgrep run in which a rule hit its per-rule timeout delivered only part
+// of its findings (R-pf59): the analyzer is recorded failed with reason
+// timeout, as a pass cut short by Fendix's own budget is, so
+// --fail-on-scanner-error and the coverage gates see it, and the findings it
+// did produce are kept, as a partial dependency lookup keeps its own.
+func TestSemgrepRunWithRuleTimeoutsFailsAndKeepsFindings(t *testing.T) {
+	found := []evidence.Evidence{{ID: "SEC-PYTHON_EVAL_INJECTION", RuleID: "python-eval-injection"}}
+
 	var clean scannerStatusList
-	recordSemgrepRun(&clean, nil)
+	var cleanEvid []evidence.Evidence
+	recordSemgrepRun(&clean, &cleanEvid, semgrep.Run{Findings: found})
 	if len(clean) != 1 || clean[0] != (reporters.ScannerStatus{Name: AnalyzerSemgrep, State: reporters.ScannerOK}) {
 		t.Errorf("run without timeouts = %+v; want a plain ok", clean)
 	}
+	if !reflect.DeepEqual(cleanEvid, found) {
+		t.Errorf("findings = %+v; want %+v", cleanEvid, found)
+	}
 
-	var partial scannerStatusList
-	recordSemgrepRun(&partial, []semgrep.RuleTimeout{
-		{RuleID: "js-sqli-taint", Path: "src/big.js"},
-		{RuleID: "python-eval-injection", Path: "app/gen.py"},
-	})
-	if len(partial) != 1 {
-		t.Fatalf("entries = %+v; want one", partial)
-	}
-	got := partial[0]
-	if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerOK || got.Reason != "" {
-		t.Errorf("entry = %+v; want semgrep, ok, no reason", got)
-	}
-	for _, want := range []string{"2 rule timeouts", "js-sqli-taint on src/big.js", "python-eval-injection on app/gen.py", "missing"} {
-		if !strings.Contains(got.Detail, want) {
-			t.Errorf("detail %q lacks %q", got.Detail, want)
-		}
+	for _, tc := range []struct {
+		name     string
+		timeouts []semgrep.RuleTimeout
+		want     []string
+	}{
+		{"two", []semgrep.RuleTimeout{
+			{RuleID: "js-sqli-taint", Path: "src/big.js"},
+			{RuleID: "python-eval-injection", Path: "app/gen.py"},
+		}, []string{"2 rule timeouts,", "js-sqli-taint on src/big.js", "python-eval-injection on app/gen.py"}},
+		{"one", []semgrep.RuleTimeout{{RuleID: "js-sqli-taint", Path: "src/big.js"}},
+			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js"}},
+		{"unnamed", []semgrep.RuleTimeout{{}}, []string{"1 rule timeout,", "unknown rule on unknown file"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var status scannerStatusList
+			var evid []evidence.Evidence
+			recordSemgrepRun(&status, &evid, semgrep.Run{Findings: found, Timeouts: tc.timeouts})
+			if len(status) != 1 {
+				t.Fatalf("entries = %+v; want one", status)
+			}
+			got := status[0]
+			if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonTimeout {
+				t.Errorf("entry = %+v; want semgrep, failed, timeout", got)
+			}
+			if !status.hasFailure() {
+				t.Error("a rule timeout must count as a scanner failure for --fail-on-scanner-error")
+			}
+			for _, want := range append(tc.want, "matches missing") {
+				if !strings.Contains(got.Detail, want) {
+					t.Errorf("detail %q lacks %q", got.Detail, want)
+				}
+			}
+			if !reflect.DeepEqual(evid, found) {
+				t.Errorf("findings = %+v; want the run's findings kept", evid)
+			}
+		})
 	}
 }

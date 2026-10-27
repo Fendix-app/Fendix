@@ -1018,13 +1018,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rules on that file.
   - **Timeouts are no longer silent.** Semgrep lists each timed-out rule
     and file in its output's `errors`, which Fendix used to ignore. Each one
-    is now logged with the rule and the file. The `semgrep` entry in
-    `scanner_status` stays `ok`, because the run succeeded, but its `detail`
-    names the timed-out rules and files, whose findings are partial. This is
-    how `active-probes` reports probes that got no response.
+    is now logged with the rule and the file. The run delivered only part of
+    its findings, so the `semgrep` entry in `scanner_status` is `failed` with
+    reason `timeout`, and its `detail` names the timed-out rules and files.
+    The findings the run did produce are kept, as for a partial dependency
+    lookup. `--fail-on-scanner-error` exits 2 on it, and
+    `coverage.configured_complete` is false.
+  - **A malformed `errors` entry is skipped.** Each entry is decoded on its
+    own, and an `errors` field that is not a list is ignored, so the results
+    beside them are always kept.
   - **Deadline.** The 300-second deadline bounds the whole run, which
     executes every bundled pack at once.
-  - On the parity corpus `make parity` took 554 seconds, against 567
+  - On the parity corpus `make parity` took 552 seconds, against 567
     before this change, and no scan took longer than 1.3 seconds.
 
 ### Fixed
