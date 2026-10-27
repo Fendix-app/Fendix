@@ -156,6 +156,19 @@
     "finding_id": "SEC-PY_SSRF"
   },
   {
+    "id": "PY_SSTI",
+    "title": "Template built from request input (server-side template injection)",
+    "cwe": "CWE-1336",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_SSTI",
+    "finding_id": "SEC-PY_SSTI"
+  },
+  {
     "id": "PY_SUBPROCESS_SHELL",
     "title": "subprocess called with shell=True — command injection risk",
     "cwe": "CWE-78",

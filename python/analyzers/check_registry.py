@@ -180,6 +180,14 @@ CHECKS: tuple[Check, ...] = (
         "MEDIUM",
     ),
     _py(
+        "PY_SSTI",
+        "Template built from request input (server-side template injection)",
+        "CWE-1336",
+        "injection",
+        "HIGH",
+        "MEDIUM",
+    ),
+    _py(
         "PY_SUBPROCESS_SHELL",
         "subprocess called with shell=True — command injection risk",
         "CWE-78",

@@ -4999,3 +4999,487 @@ class TestFlaskViewReturnedBodyFixRound2:
     ) -> None:
         src = _flask_view(f"return f'<p>{{q}}</p>', {status}, {{'Location': '/x'}}", prelude=prelude)
         assert self._xss(src) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 3.4: server-side template injection (python.ast/PY_SSTI)
+# ---------------------------------------------------------------------------
+
+_SSTI_TITLE = "Template built from request input (server-side template injection)"
+
+
+def _ssti_view(*lines: str, prelude: str = "") -> str:
+    """A function, `preview` (def on line 2 after ``prelude``), whose `src`
+    holds request input and whose further body is ``lines``."""
+    return (
+        prelude
+        + "from flask import abort, request\n"
+        + "def preview():\n"
+        + '    src = request.args.get("template", "")\n'
+        + "".join(f"    {line}\n" for line in lines)
+    )
+
+
+class TestServerSideTemplateInjection:
+    """Task 3.4: a template compiled from request input runs the attacker's
+    template code on the server (CWE-1336), reported as the new rule
+    python.ast/PY_SSTI. The sinks are `jinja2.Template(src)`,
+    `<Environment>.from_string(src)` (a sandboxed environment too),
+    `django.template.Template(src)`, `django.template.engines[...]
+    .from_string(src)` and `mako.template.Template(src)` /
+    `Template(text=src)`, each resolved through the file's imports. Loading a
+    template by name, or from a file, is not one; nor is a constant template or
+    one picked from constant templates. Flask's `render_template_string`
+    keeps its existing rule, PY_XSS_HTML_SINK."""
+
+    @staticmethod
+    def _ssti(src: str) -> list[dict]:
+        return [f for f in _collect_src(src) if f["id"] == "SEC-PY_SSTI"]
+
+    def _proven(self, src: str, source: str = "request") -> dict:
+        found = self._ssti(src)
+        assert len(found) == 1, found
+        f = found[0]
+        assert f.get("reachable") is True, f
+        assert any(source in link["expr"] for link in f["taint_chain"]), f["taint_chain"]
+        return f
+
+    def _clean(self, src: str) -> None:
+        found = self._ssti(src)
+        assert found == [], found
+
+    # -- the brief's cases ----------------------------------------------------
+
+    def test_jinja2_template_from_request_is_ssti(self) -> None:
+        f = self._proven(
+            _ssti_view("return jinja2.Template(src).render()", prelude="import jinja2\n"),
+            "request.args",
+        )
+        assert f["rule_id"] == "python.ast/PY_SSTI"
+        assert f["title"] == _SSTI_TITLE
+        assert f["severity"] == "CRITICAL"
+        assert f["confidence"] == "HIGH"
+        assert f["category"] == "injection"
+        assert f["references"] == ["CWE-1336"]
+        assert f["line"] == "mod.py:5"
+        assert f["sink"] == "jinja2.Template(src)"
+        assert f["taint_chain"][-1] == {"file": "mod.py", "line": 5, "expr": "jinja2.Template(src)"}
+
+    def test_environment_from_string_is_ssti(self) -> None:
+        f = self._proven(
+            _ssti_view(
+                "return env.from_string(src).render()",
+                prelude="from jinja2 import Environment, FileSystemLoader\n"
+                'env = Environment(loader=FileSystemLoader("templates"))\n',
+            ),
+            "request.args",
+        )
+        assert f["sink"] == "jinja2.Environment.from_string(src)"
+
+    def test_django_template_from_request_is_ssti(self) -> None:
+        f = self._proven(
+            "from django.http import JsonResponse\n"
+            "from django.template import Context, Template\n"
+            "def preview(request):\n"
+            '    src = request.GET.get("template", "")\n'
+            '    return JsonResponse({"p": Template(src).render(Context({}))})\n',
+            "request.GET",
+        )
+        assert f["sink"] == "django.template.Template(src)"
+
+    @pytest.mark.parametrize(
+        "prelude, lines",
+        [
+            (
+                'NOTIFICATION = "Hi {{ name }}, your order has shipped."\n',
+                ['name = request.args.get("name", "")',
+                 "return jinja2.Template(NOTIFICATION).render(name=name)"],
+            ),
+            ("", ['return jinja2.Template("Hi {{ name }}").render(name=src)']),
+            ('HEAD = "<h1>{{ title }}</h1>"\n', ['return jinja2.Template(HEAD + "<p>{{ body }}</p>").render()']),
+            (
+                'SHORT = "Hi"\nLONG = "Hello there, {{ name }}"\n',
+                ["return jinja2.Template(SHORT if src else LONG).render(name=src)"],
+            ),
+            (
+                'BANNER = "{{ service }} is down"\n',
+                ['tpl = BANNER', "return jinja2.Environment().from_string(tpl).render(service=src)"],
+            ),
+        ],
+        ids=["module-constant", "literal", "constant-concat", "constant-choice", "bound-constant"],
+    )
+    def test_constant_template_is_not_ssti(self, prelude: str, lines: list[str]) -> None:
+        self._clean(_ssti_view(*lines, prelude="import jinja2\n" + prelude))
+
+    def test_render_template_string_keeps_existing_rule(self) -> None:
+        found = _collect_src(
+            "from flask import render_template_string, request\n"
+            "def preview():\n"
+            '    src = request.args.get("template", "")\n'
+            "    return render_template_string(src)\n"
+        )
+        ids = [f["id"] for f in found]
+        assert ids.count("SEC-PY_XSS_HTML_SINK") == 1, ids
+        assert "SEC-PY_SSTI" not in ids, ids
+
+    # -- the sink set, resolved through imports --------------------------------
+
+    @pytest.mark.parametrize(
+        "imports, call, sink",
+        [
+            ("from jinja2 import Template", "Template(src)", "jinja2.Template(src)"),
+            ("from jinja2 import Template as T", "T(src)", "jinja2.Template(src)"),
+            ("import jinja2 as j2", "j2.Template(src)", "jinja2.Template(src)"),
+            ("from jinja2 import Template", "Template(source=src)", "jinja2.Template(src)"),
+            (
+                "from jinja2 import Environment",
+                "Environment(autoescape=True).from_string(src)",
+                "jinja2.Environment.from_string(src)",
+            ),
+            (
+                "import jinja2",
+                "jinja2.Environment().from_string(source=src)",
+                "jinja2.Environment.from_string(src)",
+            ),
+            (
+                "from jinja2.sandbox import SandboxedEnvironment",
+                "SandboxedEnvironment().from_string(src)",
+                "jinja2.sandbox.SandboxedEnvironment.from_string(src)",
+            ),
+            (
+                "from jinja2 import sandbox",
+                "sandbox.ImmutableSandboxedEnvironment().from_string(src)",
+                "jinja2.sandbox.ImmutableSandboxedEnvironment.from_string(src)",
+            ),
+            (
+                "from jinja2.nativetypes import NativeEnvironment",
+                "NativeEnvironment().from_string(src)",
+                "jinja2.nativetypes.NativeEnvironment.from_string(src)",
+            ),
+            ("from jinja2.environment import Template", "Template(src)", "jinja2.Template(src)"),
+            (
+                "from jinja2.nativetypes import NativeTemplate",
+                "NativeTemplate(src)",
+                "jinja2.nativetypes.NativeTemplate(src)",
+            ),
+            ("import django.template", "django.template.Template(src)", "django.template.Template(src)"),
+            (
+                "from django.template import Template",
+                "Template(template_string=src)",
+                "django.template.Template(src)",
+            ),
+            (
+                "from django.template import engines",
+                'engines["django"].from_string(src)',
+                "django.template.engines.from_string(src)",
+            ),
+            ("from mako.template import Template", "Template(src)", "mako.template.Template(src)"),
+            ("from mako.template import Template", "Template(text=src)", "mako.template.Template(src)"),
+            ("import mako.template", "mako.template.Template(src)", "mako.template.Template(src)"),
+        ],
+        ids=[
+            "jinja2-Template", "jinja2-Template-as", "jinja2-module-alias", "jinja2-source-kw",
+            "Environment-inline", "jinja2.Environment-source-kw", "SandboxedEnvironment",
+            "ImmutableSandboxedEnvironment", "NativeEnvironment", "jinja2.environment.Template",
+            "NativeTemplate",
+            "django.template.Template", "django-template_string-kw", "django-engines",
+            "mako-Template", "mako-text-kw", "mako-dotted-import",
+        ],
+    )
+    def test_template_built_from_request_is_ssti(self, imports: str, call: str, sink: str) -> None:
+        f = self._proven(_ssti_view(f"return {call}", prelude=imports + "\n"), "request.args")
+        assert f["sink"] == sink
+
+    @pytest.mark.parametrize(
+        "prelude, lines, sink",
+        [
+            (
+                "from jinja2 import Environment\n",
+                ["env = Environment()", "return env.from_string(src).render()"],
+                "jinja2.Environment.from_string(src)",
+            ),
+            (
+                "from jinja2.sandbox import SandboxedEnvironment\nsandbox = SandboxedEnvironment()\n",
+                ["return sandbox.from_string(src).render()"],
+                "jinja2.sandbox.SandboxedEnvironment.from_string(src)",
+            ),
+            (
+                "from django.template import engines\n",
+                ['engine = engines["jinja2"]', "return engine.from_string(src).render()"],
+                "django.template.engines.from_string(src)",
+            ),
+        ],
+        ids=["local-Environment", "module-SandboxedEnvironment", "bound-engines"],
+    )
+    def test_from_string_on_a_bound_environment_is_ssti(
+        self, prelude: str, lines: list[str], sink: str
+    ) -> None:
+        f = self._proven(_ssti_view(*lines, prelude=prelude), "request.args")
+        assert f["sink"] == sink
+        if "Sandboxed" in sink:
+            assert "SandboxedEnvironment" in f["fix"]
+
+    @pytest.mark.parametrize(
+        "prelude, line",
+        [
+            (
+                "class Template:\n    def __init__(self, text):\n        self.text = text\n",
+                "return Template(src)",
+            ),
+            ("from .templating import Template\n", "return Template(src)"),
+            ("from string import Template\n", "return Template(src).substitute()"),
+            ("from .cache import loader\n", "return loader.from_string(src)"),
+            ("import jinja2\n", "return jinja2.Environment.from_string(src)"),
+        ],
+        ids=["own-class", "own-module", "string.Template", "unknown-receiver", "unbound-method"],
+    )
+    def test_a_template_class_that_is_not_a_template_engine_is_not_ssti(
+        self, prelude: str, line: str
+    ) -> None:
+        self._clean(_ssti_view(line, prelude=prelude))
+
+    @pytest.mark.parametrize(
+        "prelude, line",
+        [
+            (
+                (
+                    "from jinja2 import Environment, FileSystemLoader\n"
+                    'env = Environment(loader=FileSystemLoader("templates"))\n'
+                ),
+                "return env.get_template(src).render()",
+            ),
+            ("from django.template import loader\n", "return loader.get_template(src).render({})"),
+            ("from flask import render_template\n", "return render_template(src)"),
+            (
+                "from mako.lookup import TemplateLookup\n",
+                'return TemplateLookup(directories=["t"]).get_template(src).render()',
+            ),
+            ("from mako.template import Template\n", "return Template(filename=src).render()"),
+        ],
+        ids=["jinja2-get_template", "django-loader", "flask-render_template", "mako-lookup", "mako-filename"],
+    )
+    def test_loading_a_template_by_name_is_not_ssti(self, prelude: str, line: str) -> None:
+        self._clean(_ssti_view(line, prelude=prelude))
+
+    # -- sanitisers -----------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ['tpl = TEMPLATES[src]', "return Template(tpl).render()"],
+            ["return Template(TEMPLATES.get(src, DEFAULT)).render()"],
+            ["if src not in ALLOWED:", "    abort(404)", "return Template(src).render()"],
+        ],
+        ids=["dict-lookup", "dict-get-default", "membership-guard"],
+    )
+    def test_template_picked_among_constant_templates_is_not_ssti(self, lines: list[str]) -> None:
+        self._clean(
+            _ssti_view(
+                *lines,
+                prelude="from jinja2 import Template\n"
+                'TEMPLATES = {"welcome": "Hi {{ n }}", "bye": "Bye {{ n }}"}\n'
+                'DEFAULT = "Hello"\n'
+                'ALLOWED = {"Hi {{ n }}", "Bye {{ n }}"}\n',
+            )
+        )
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["return Template(html.escape(src)).render()"],
+            ["return Template(LAYOUTS[src]).render()"],
+            ["t = Template(src).render()", "if src not in ALLOWED:", "    abort(404)", "return t"],
+        ],
+        ids=["html-escape", "lookup-of-non-constant-templates", "guard-after-sink"],
+    )
+    def test_what_does_not_pick_a_constant_template_is_ssti(self, lines: list[str]) -> None:
+        self._proven(
+            _ssti_view(
+                *lines,
+                prelude="import html\nfrom jinja2 import Template\n"
+                'ALLOWED = {"Hi {{ n }}"}\n'
+                "LAYOUTS = {'a': load_layout('a')}\n",
+            ),
+            "request.args",
+        )
+
+    @pytest.mark.parametrize(
+        "prelude, body",
+        [
+            (
+                "from pathlib import Path\n",
+                [
+                    "def render_email_template(*, template_name, context):",
+                    '    template_str = (Path(__file__).parent / "email-templates" / template_name).read_text()',
+                    "    template: Template = Template(template_str)",
+                    "    return template.render(context)",
+                    "def send(request):",
+                    '    return render_email_template(template_name=request.GET["t"], context={})',
+                ],
+            ),
+            (
+                "",
+                [
+                    "def render(path, ctx):",
+                    "    with open(path) as fh:",
+                    "        return Template(fh.read()).render(ctx)",
+                ],
+            ),
+            (
+                "import pkgutil\n",
+                ['def render(ctx):', '    return Template(pkgutil.get_data("app", "t.html").decode()).render(ctx)'],
+            ),
+            (
+                "import importlib.resources\n",
+                ["def render(name, ctx):", '    return Template(importlib.resources.read_text("app", name)).render(ctx)'],
+            ),
+        ],
+        ids=["fastapi-template-email", "open-read", "package-data", "importlib-resources"],
+    )
+    def test_template_read_from_a_file_is_not_ssti(self, prelude: str, body: list[str]) -> None:
+        self._clean("from jinja2 import Template\n" + prelude + "\n".join(body) + "\n")
+
+    def test_uploaded_template_is_ssti(self) -> None:
+        self._proven(
+            _ssti_view(
+                'upload = request.files["template"]',
+                "return Template(upload.read().decode()).render()",
+                prelude="from jinja2 import Template\n",
+            ),
+            "request.files",
+        )
+
+    # -- proof ----------------------------------------------------------------
+
+    def test_unproven_template_source_is_reported_at_high(self) -> None:
+        found = self._ssti(
+            "from jinja2 import Template\n"
+            "def build(src):\n"
+            "    return Template(src)\n"
+        )
+        assert len(found) == 1, found
+        f = found[0]
+        assert f["severity"] == "HIGH"
+        assert f["confidence"] == "MEDIUM"
+        assert f["title"] == _SSTI_TITLE
+        assert f.get("reachable") is None, f
+        assert "taint_chain" not in f, f
+        assert f["sink"] == "jinja2.Template(src)"
+
+    def test_same_file_helper_is_proven_through_the_caller(self) -> None:
+        # The parity corpus's `indirect` shape.
+        f = self._proven(
+            "from django.http import JsonResponse\n"
+            "from django.template import Context, Template\n"
+            "def _render_preview(template_src, name):\n"
+            '    return Template(template_src).render(Context({"name": name}))\n'
+            "def preview_notification(request):\n"
+            '    template_src = request.GET.get("template", "")\n'
+            '    name = request.GET.get("name", "")\n'
+            '    return JsonResponse({"preview": _render_preview(template_src, name)})\n',
+            "request.GET",
+        )
+        assert f["line"] == "mod.py:4"
+
+    def test_fastapi_route_parameter_is_proven(self) -> None:
+        # The parity corpus's FastAPI `direct` shape: an aliased query parameter.
+        f = self._proven(
+            "from typing import Annotated\n"
+            "from fastapi import APIRouter, Query\n"
+            "from jinja2 import Template\n"
+            "router = APIRouter()\n"
+            '@router.get("/ssti/direct")\n'
+            'def preview(template_src: Annotated[str, Query(alias="template")] = "", name: str = ""):\n'
+            "    rendered = Template(template_src).render(name=name)\n"
+            '    return {"preview": rendered}\n',
+            "template_src",
+        )
+        assert f["taint_chain"][0] == {"file": "mod.py", "line": 6, "expr": "template_src"}
+
+    # -- one finding per flow with the HTML response sink (Task 3.2) ----------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["return HTMLResponse(Template(template).render())"],
+            ["t = Template(template)", "return HTMLResponse(t.render())"],
+            ["page = Template(template).render()", "return HTMLResponse(content=page)"],
+        ],
+        ids=["inline", "bound-template", "bound-page"],
+    )
+    def test_template_source_reaching_an_html_response_is_ssti_only(
+        self, lines: list[str]
+    ) -> None:
+        found = _collect_src(
+            "from fastapi import FastAPI\n"
+            "from fastapi.responses import HTMLResponse\n"
+            "from jinja2 import Template\n"
+            "app = FastAPI()\n"
+            '@app.get("/preview")\n'
+            'def preview(template: str = ""):\n'
+            + "".join(f"    {line}\n" for line in lines)
+        )
+        assert [f["id"] for f in found] == ["SEC-PY_SSTI"], found
+        assert found[0]["reachable"] is True
+
+    def test_flask_view_returning_a_template_built_from_request_is_ssti_only(self) -> None:
+        found = _collect_src(
+            _FLASK_APP
+            + "from jinja2 import Template\n"
+            + '@app.route("/preview")\n'
+            + "def preview():\n"
+            + '    src = request.args.get("template", "")\n'
+            + "    return Template(src).render()\n"
+        )
+        assert [f["id"] for f in found] == ["SEC-PY_SSTI"], found
+
+    def test_render_args_tainted_separately_keep_the_xss_finding(self) -> None:
+        found = _collect_src(
+            "from fastapi import FastAPI\n"
+            "from fastapi.responses import HTMLResponse\n"
+            "from jinja2 import Template\n"
+            "app = FastAPI()\n"
+            '@app.get("/preview")\n'
+            'def preview(template: str = "", name: str = ""):\n'
+            "    return HTMLResponse(Template(template).render(name=name))\n"
+        )
+        by_id = {f["id"]: f for f in found}
+        assert sorted(by_id) == ["SEC-PY_SSTI", "SEC-PY_XSS_HTML_SINK"], found
+        assert by_id["SEC-PY_SSTI"]["taint_chain"][0]["expr"] == "template"
+        xss = by_id["SEC-PY_XSS_HTML_SINK"]
+        assert xss["reachable"] is True
+        assert xss["taint_chain"][0] == {"file": "mod.py", "line": 6, "expr": "name"}
+        assert xss["sink"] == "HTMLResponse(Template(template).render(name=name))"
+
+    def test_xss_is_not_proven_through_the_template_source(self) -> None:
+        # The template source is request input and the render argument is not
+        # proven: the page is reported (its argument may carry text) but only
+        # PY_SSTI is proven.
+        found = _collect_src(
+            "from django.http import HttpResponse\n"
+            "from jinja2 import Template\n"
+            "def page(src, name):\n"
+            "    return HttpResponse(Template(src).render(name=name))\n"
+            "def view(request):\n"
+            '    return page(request.GET["t"], load_name())\n'
+        )
+        by_id = {f["id"]: f for f in found}
+        assert sorted(by_id) == ["SEC-PY_SSTI", "SEC-PY_XSS_HTML_SINK"], found
+        assert by_id["SEC-PY_SSTI"]["reachable"] is True
+        assert by_id["SEC-PY_XSS_HTML_SINK"].get("reachable") is None
+        assert "taint_chain" not in by_id["SEC-PY_XSS_HTML_SINK"]
+
+    # -- import resolution ----------------------------------------------------
+
+    def test_plain_dotted_import_binds_the_top_package(self) -> None:
+        # `import django.template.loader` binds `django`, so
+        # `django.template.loader.get_template` is Django's: its `.render`
+        # autoescapes (R-pf40), and the HTML response is not XSS.
+        found = _collect_src(
+            "import django.template.loader\n"
+            "from django.http import HttpResponse\n"
+            "def v(request):\n"
+            '    q = request.GET.get("q", "")\n'
+            '    return HttpResponse(django.template.loader.get_template("s.html").render({"q": q}))\n'
+        )
+        assert found == [], found

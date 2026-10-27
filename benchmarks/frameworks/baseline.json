@@ -162,12 +162,12 @@
       "blocks": false
     },
     "django-ssti-direct": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "django-ssti-indirect": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "django-ssti-safe": {
       "outcome": "TN",
@@ -626,12 +626,12 @@
       "blocks": false
     },
     "fastapi-ssti-direct": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-ssti-indirect": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "fastapi-ssti-safe": {
       "outcome": "TN",

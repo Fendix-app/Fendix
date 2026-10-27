@@ -1694,6 +1694,24 @@
       "availability": "stable"
     },
     {
+      "id": "python.ast/PY_SSTI",
+      "finding_id": "SEC-PY_SSTI",
+      "title": "Template built from request input (server-side template injection)",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
       "id": "python.ast/PY_SUBPROCESS_SHELL",
       "finding_id": "SEC-PY_SUBPROCESS_SHELL",
       "title": "subprocess called with shell=True — command injection risk",

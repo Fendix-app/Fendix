@@ -364,6 +364,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # Maps local alias → canonical module name, populated by visit_Import.
         # Lets `import pickle as p; p.loads(data)` be detected despite the alias.
         self._module_aliases: dict[str, str] = {}
+        # Task 3.4: local name → the module an `import` binds it to, which
+        # `_import_origin` resolves dotted names through. Unlike the aliases
+        # above, `import a.b` binds `a` to the top package `a`, not to `a.b`.
+        self._imported_modules: dict[str, str] = {}
+        # Task 3.4: while set, the taint trace does not enter the source of a
+        # template built from a string (`_without_template_sources`).
+        self._skip_template_sources = False
         # 1-hop interprocedural taint: func-name → call sites in this file
         # (built lazily on first need). When a sink uses a function PARAMETER
         # whose taint must come from a caller, we check whether any call site
@@ -659,7 +666,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # Inline case: the sink's argument is itself a request-input
         # reference (no intermediate variables). The chain is two links:
         # source @ sink-lineno → sink @ sink-lineno.
-        if _is_taint_source(sink_arg, extra_source):
+        if self._is_source(sink_arg, extra_source):
             return [
                 self._link(sink_lineno, _ast_expr_text(sink_arg)),
                 self._link(sink_lineno, sink_expr),
@@ -749,6 +756,51 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return scope[key]
         return None
 
+    def _is_source(self, expr: ast.AST, extra_source=None) -> bool:
+        """`_is_taint_source`, except that while `_skip_template_sources` is
+        set, request input inside a template's source does not count."""
+        if not self._skip_template_sources:
+            return _is_taint_source(expr, extra_source)
+        return any(
+            _is_request_input_node(n) for n in self._walk_outside_template_sources(expr)
+        ) or (extra_source is not None and extra_source(expr))
+
+    def _taint_walk(self, expr: ast.AST) -> Iterator[ast.AST]:
+        """The nodes the taint trace reads in ``expr``: `ast.walk`, without
+        the template sources while `_skip_template_sources` is set."""
+        if not self._skip_template_sources:
+            return ast.walk(expr)
+        return self._walk_outside_template_sources(expr)
+
+    def _walk_outside_template_sources(self, expr: ast.AST) -> Iterator[ast.AST]:
+        """`ast.walk(expr)` (the same breadth-first order) without the source
+        argument of any template built from a string in it
+        (`_template_construction`), nor anything inside that argument."""
+        skipped: set[ast.AST] = set()
+        todo = deque([expr])
+        while todo:
+            node = todo.popleft()
+            if isinstance(node, ast.Call):
+                built = self._template_construction(node)
+                if built is not None and built[1] is not None:
+                    skipped.add(built[1])
+            todo.extend(c for c in ast.iter_child_nodes(node) if c not in skipped)
+            yield node
+
+    @contextmanager
+    def _without_template_sources(self):
+        """Trace taint for the HTML response sink (Task 3.2) without entering
+        the source of a template built from a string. That source is the
+        template-injection rule's (PY_SSTI, Task 3.4): the page an attacker's
+        template renders is reported once, as SSTI, and an XSS finding on the
+        same page is proven only by what its `.render(...)` is passed."""
+        saved = self._skip_template_sources
+        self._skip_template_sources = True
+        try:
+            yield
+        finally:
+            self._skip_template_sources = saved
+
     def _trace_names(
         self,
         expr: ast.AST,
@@ -766,7 +818,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         about a bare Name that ``lookup`` does not resolve."""
         if depth >= _MAX_TAINT_HOPS:
             return None
-        for n in ast.walk(expr):
+        for n in self._taint_walk(expr):
             key = None
             if isinstance(n, ast.Name):
                 key = n.id
@@ -778,7 +830,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             if assigned is not None:
                 lineno = getattr(assigned, "lineno", 0)
                 link = self._link(lineno, _ast_expr_text(assigned))
-                if _is_taint_source(assigned, extra_source):
+                if self._is_source(assigned, extra_source):
                     return [link]
                 deeper = self._trace_names(
                     assigned,
@@ -979,7 +1031,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         parameter of a caller that is a route handler) and followed by the
         call itself. None as well when a sanitiser accepts the argument in
         the caller."""
-        if _is_taint_source(arg, extra_source):
+        if self._is_source(arg, extra_source):
             prefix = [self._link(call.lineno, _ast_expr_text(arg))]
         else:
             prefix = self._trace_in_bindings(
@@ -2519,6 +2571,33 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 sink=sink_expr,
             )
 
+        # Server-side template injection (Task 3.4): a template compiled from a
+        # string the request controls runs the attacker's template code on
+        # the server (CWE-1336): `{{ cycler.__init__.__globals__.os.popen(...) }}`
+        # in Jinja2, `${...}` in Mako. The sink is the construction, by
+        # `_ssti_template_arg`: jinja2.Template, Environment(...).from_string
+        # (sandboxed too), django.template.Template, engines[...].from_string
+        # and mako.template.Template, resolved through the file's imports.
+        # Flask's render_template_string keeps its own rule (PY_XSS_HTML_SINK,
+        # below). Proven flows are CRITICAL; an unproven source stays HIGH.
+        elif (template_src := self._ssti_template_arg(node)) is not None:
+            sink_expr = (
+                f"{self._template_construction(node)[0]}({_ast_expr_text(template_src)})"
+            )
+            chain = self._collect_taint_chain(template_src, node.lineno, sink_expr)
+            self._emit_finding(
+                "PY_SSTI",
+                "Template built from request input (server-side template injection)",
+                "HIGH",
+                "HIGH",
+                "CWE-1336",
+                _SSTI_FIX,
+                node.lineno,
+                taint_chain=chain,
+                proven_severity="CRITICAL",
+                sink=sink_expr,
+            )
+
         # XSS HTML-render sinks (TASK-120). Three patterns:
         #   - Markup(x) / flask.Markup(x) / markupsafe.Markup(x) — bypasses
         #     Jinja2 auto-escaping; equivalent to inserting `|safe` in a
@@ -2574,7 +2653,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             ctor = self._html_response_ctor(node)
             body = self._html_response_body(node, ctor)
             sink_expr = f"{ctor}({_ast_expr_text(body)})"
-            chain = self._collect_taint_chain(body, node.lineno, sink_expr)
+            with self._without_template_sources():
+                chain = self._collect_taint_chain(body, node.lineno, sink_expr)
             self._emit_finding(
                 "PY_XSS_HTML_SINK",
                 _XSS_HTML_SINK_TITLE,
@@ -3083,6 +3163,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         for alias in node.names:
             local_name = alias.asname if alias.asname else alias.name.split(".")[0]
             self._module_aliases[local_name] = alias.name
+            self._imported_modules[local_name] = alias.name if alias.asname else local_name
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
@@ -4366,7 +4447,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # The body alone names the sink: a status or headers added to the
         # returned tuple do not re-identify the finding.
         sink_expr = f"return {_ast_expr_text(body)}"
-        chain = self._collect_taint_chain(body, node.lineno, sink_expr)
+        with self._without_template_sources():
+            chain = self._collect_taint_chain(body, node.lineno, sink_expr)
         if not chain:
             return
         self._emit_finding(
@@ -4454,12 +4536,14 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         """The dotted import path a Name/Attribute chain stands for, through the
         file's imports (``flask``, ``fastapi.responses``), or "" when its head
         is not an imported name, or is shadowed by a local binding
-        (``import html`` then ``html = f"<p>{x}</p>"``)."""
+        (``import html`` then ``html = f"<p>{x}</p>"``). ``import a.b`` binds
+        ``a``, so ``a.b.c`` is ``a.b.c``; ``import a.b as x`` binds ``x`` to
+        ``a.b``."""
         head, _, rest = _dotted(expr).partition(".")
         if not head or self._scope_binding(head) is not None:
             return ""
-        if head in self._module_aliases:
-            base = self._module_aliases[head]
+        if head in self._imported_modules:
+            base = self._imported_modules[head]
         elif head in self._from_imports:
             module, symbol = self._from_imports[head]
             base = f"{module}.{symbol}" if module else symbol
@@ -4907,6 +4991,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return True  # a parameter or a global: whatever was passed in
             return same(expr.value)
         if isinstance(expr, ast.Call):
+            if self._template_construction(expr) is not None:
+                # A template object. Its source is the template-injection
+                # rule's (PY_SSTI, Task 3.4); the page it renders carries
+                # what its `.render(...)` is passed.
+                return False
             verdict = self._renderer_verdict(expr)
             if verdict == "safe":
                 return False
@@ -4964,6 +5053,179 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return any(part(a) for a in args)
             return False
         return True
+
+    # ─── Server-side template injection (Task 3.4) ─────────────────────
+
+    def _ssti_template_arg(self, node: ast.Call) -> ast.AST | None:
+        """The template source of ``node`` when it compiles a template from a
+        string (`_template_construction`) and that string may be the
+        request's: not constant and not otherwise trusted
+        (`_template_source_is_trusted`). None for any other call."""
+        built = self._template_construction(node)
+        if built is None or built[1] is None:
+            return None
+        source = built[1]
+        if self._template_source_is_trusted(source, node.lineno):
+            return None
+        return source
+
+    def _template_construction(self, node: ast.Call) -> tuple[str, ast.AST | None] | None:
+        """``(sink name, source argument)`` when ``node`` compiles a template
+        from a string, else None. The source is the first positional argument
+        or the constructor's own keyword for it (``source=``,
+        ``template_string=``, ``text=``, ``template_code=``); None when the
+        call passes neither, as Mako's ``Template(filename=...)`` does.
+
+        - ``jinja2.Template``, ``django.template.Template`` and
+          ``mako.template.Template`` (`_TEMPLATE_CONSTRUCTORS`), the callee
+          resolved through the file's imports (`_callee_origin`): a class the
+          file defines, or one imported from anywhere else
+          (``from .templating import Template``, ``string.Template``), is
+          not one.
+        - ``<env>.from_string(...)`` on a Jinja2 environment or a Django
+          ``engines[...]`` backend (`_template_environment`).
+
+        Loading a template by name (``get_template``, ``render_template``,
+        ``TemplateLookup``) compiles the developer's file, so it is not one."""
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "from_string":
+            env = self._template_environment(func.value)
+            if not env:
+                return None
+            keyword = "template_code" if env == _DJANGO_ENGINES else "source"
+            return f"{env}.from_string", _source_argument(node, keyword)
+        if not isinstance(func, (ast.Name, ast.Attribute)):
+            return None
+        known = _TEMPLATE_CONSTRUCTORS.get(self._callee_origin(func))
+        if known is None:
+            return None
+        name, keyword = known
+        return name, _source_argument(node, keyword)
+
+    def _callee_origin(self, func: ast.AST) -> str:
+        """`_import_origin` of a callee, or "" for a bare name the file binds
+        with ``def`` or ``class`` itself."""
+        if isinstance(func, ast.Name) and func.id in self._file_defined_names():
+            return ""
+        return self._import_origin(func)
+
+    def _template_environment(
+        self, expr: ast.AST, _seen: frozenset[str] = frozenset(), _depth: int = 0
+    ) -> str:
+        """The name of the template environment ``expr`` is, directly or
+        through the names it is bound to, or "": a Jinja2 ``Environment`` or
+        one of its subclasses built by a call (`_TEMPLATE_ENVIRONMENTS`), or a
+        Django ``engines[...]`` backend."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return ""
+        if isinstance(expr, ast.Name):
+            if expr.id in _seen:
+                return ""
+            bound = self._scope_binding(expr.id)
+            if bound is None:
+                return ""
+            return self._template_environment(bound, _seen | {expr.id}, _depth + 1)
+        if isinstance(expr, ast.Subscript):
+            return _DJANGO_ENGINES if self._import_origin(expr.value) == _DJANGO_ENGINES else ""
+        if isinstance(expr, ast.Call):
+            return _TEMPLATE_ENVIRONMENTS.get(self._callee_origin(expr.func), "")
+        return ""
+
+    def _template_source_is_trusted(
+        self,
+        expr: ast.AST,
+        sink_line: int,
+        _seen: frozenset[str] = frozenset(),
+        _depth: int = 0,
+    ) -> bool:
+        """True when the template source ``expr`` cannot be text the request
+        chose:
+
+        - a constant (`_expr_folds_to_constant`): a literal, a name bound to
+          one, or a concatenation, format, f-string or conditional of
+          constants;
+        - one of a literal collection of constant templates, picked by key
+          (`_picks_constant_template`);
+        - a name a dominating guard keeps inside a literal collection
+          (`_name_is_membership_guarded`);
+        - a file's or a package resource's content (`_is_file_read`);
+
+        or a conditional, or a name bound to a value, that is one of these.
+        Escaping is not a sanitiser here: ``html.escape`` leaves ``{{ }}``
+        intact."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if (
+            self._expr_folds_to_constant(expr)
+            or self._picks_constant_template(expr)
+            or self._is_file_read(expr)
+        ):
+            return True
+        if isinstance(expr, ast.IfExp):
+            return all(
+                self._template_source_is_trusted(b, sink_line, _seen, _depth + 1)
+                for b in (expr.body, expr.orelse)
+            )
+        if isinstance(expr, ast.Name) and expr.id not in _seen:
+            if self._name_is_membership_guarded(expr.id, sink_line):
+                return True
+            bound = self._scope_binding(expr.id)
+            return bound is not None and self._template_source_is_trusted(
+                bound, sink_line, _seen | {expr.id}, _depth + 1
+            )
+        return False
+
+    def _picks_constant_template(self, expr: ast.AST) -> bool:
+        """True for ``<name>[key]`` or ``<name>.get(key[, default])`` where
+        ``name`` is bound to a literal dict (or, by index, a list or tuple)
+        whose every value is a constant, and so is the default: whatever the
+        key, the result is one of the developer's templates."""
+        default = None
+        if isinstance(expr, ast.Subscript):
+            holder = expr.value
+        elif (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == "get"
+            and not expr.keywords
+        ):
+            holder = expr.func.value
+            default = expr.args[1] if len(expr.args) > 1 else None
+        else:
+            return False
+        if not isinstance(holder, ast.Name):
+            return False
+        collection = self._scope_binding(holder.id)
+        if isinstance(collection, ast.Dict) and None not in collection.keys:
+            values = collection.values
+        elif isinstance(collection, (ast.List, ast.Tuple)) and isinstance(expr, ast.Subscript):
+            values = collection.elts
+        else:
+            return False
+        return all(self._expr_folds_to_constant(v) for v in values) and (
+            default is None or self._expr_folds_to_constant(default)
+        )
+
+    def _is_file_read(self, expr: ast.AST) -> bool:
+        """True for a file's or a package resource's content: ``.read()``,
+        ``.read_text()`` or ``.read_bytes()`` (awaited or ``.decode()``d too)
+        on a value that is not read off the request and holds no request
+        input (an uploaded file is the attacker's text), or
+        ``pkgutil.get_data``/``importlib.resources.read_text``. Which file is
+        read is the path-traversal rule's concern."""
+        if isinstance(expr, ast.Await):
+            expr = expr.value
+        if not isinstance(expr, ast.Call):
+            return False
+        func = expr.func
+        if isinstance(func, ast.Attribute):
+            if func.attr == "decode":
+                return self._is_file_read(func.value)
+            if func.attr in _FILE_READ_METHODS:
+                return not (
+                    self._is_request_rooted(func.value) or _references_request_input(func.value)
+                )
+        return self._import_origin(func) in _FILE_READ_CALLS
 
     def _xss_sink_name(self, node: ast.Call) -> str:
         """Return the canonical sink-function name, or '' if not an XSS sink.
@@ -5403,6 +5665,44 @@ _DJANGO_TEMPLATE_FACTORIES: frozenset[str] = frozenset(
         "django.template.Template",
         "django.template.base.Template",
     }
+)
+# Task 3.4: calls that compile a template from a string, by the import path
+# they resolve to, each with the name the sink is reported under and the
+# keyword its source may be passed by (`_template_construction`). A template
+# the attacker writes runs on the server: Jinja2 and Mako evaluate Python
+# expressions, and a Django template reads what its context exposes.
+_TEMPLATE_CONSTRUCTORS: dict[str, tuple[str, str]] = {
+    "jinja2.Template": ("jinja2.Template", "source"),
+    "jinja2.environment.Template": ("jinja2.Template", "source"),
+    "jinja2.nativetypes.NativeTemplate": ("jinja2.nativetypes.NativeTemplate", "source"),
+    "django.template.Template": ("django.template.Template", "template_string"),
+    "django.template.base.Template": ("django.template.Template", "template_string"),
+    "mako.template.Template": ("mako.template.Template", "text"),
+}
+# Template environments whose `from_string(source)` compiles a template: a
+# Jinja2 `Environment` and its subclasses, a sandboxed one too (the sandbox
+# limits what a template can reach; an attacker's template still runs), and
+# Django's `engines[...]` backends, whose argument is `template_code`.
+_TEMPLATE_ENVIRONMENTS: dict[str, str] = {
+    "jinja2.Environment": "jinja2.Environment",
+    "jinja2.environment.Environment": "jinja2.Environment",
+    "jinja2.sandbox.SandboxedEnvironment": "jinja2.sandbox.SandboxedEnvironment",
+    "jinja2.sandbox.ImmutableSandboxedEnvironment": "jinja2.sandbox.ImmutableSandboxedEnvironment",
+    "jinja2.nativetypes.NativeEnvironment": "jinja2.nativetypes.NativeEnvironment",
+}
+_DJANGO_ENGINES = "django.template.engines"
+# What reads a file's or a package resource's content: a template loaded from
+# one is the developer's, like a template loaded by name (`_is_file_read`).
+_FILE_READ_METHODS: frozenset[str] = frozenset({"read", "read_text", "read_bytes"})
+_FILE_READ_CALLS: frozenset[str] = frozenset(
+    {"pkgutil.get_data", "importlib.resources.read_text", "importlib.resources.read_binary"}
+)
+_SSTI_FIX = (
+    "Never compile a template from request input. Load templates by name from "
+    "a trusted directory (render_template, get_template, a TemplateLookup) and "
+    "pass request values only as render variables. A SandboxedEnvironment "
+    "limits what a template can reach but does not make an attacker's "
+    "template safe."
 )
 # The content type assigned in a branch that may not run: unknown, so HTML.
 _UNKNOWN_CONTENT_TYPE: ast.AST = ast.Name(id="<content type set in a branch>")
@@ -6385,35 +6685,47 @@ def _references_request_input(arg: ast.AST) -> bool:
     Recognizes the global `request`, the handler-arg name `req`, and the
     method-call accessors request.get_json()/get_data() (audit #5).
     """
-    for n in ast.walk(arg):
-        # request.get_json() / request.get_data() — Flask body accessors.
-        if (
-            isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr in _REQUEST_INPUT_METHODS
-            and isinstance(n.func.value, ast.Name)
-            and n.func.value.id in _REQUEST_NAMES
-        ):
-            return True
-        if isinstance(n, ast.Attribute):
-            if (
-                isinstance(n.value, ast.Name)
-                and n.value.id in _REQUEST_NAMES
-                and n.attr in _REQUEST_INPUT_ATTRS
-            ):
-                return True
-            # request.GET.get(...), request.args.get(...) — the .get is on
-            # the inner attribute. Walk handles both via the outer iteration.
-        if isinstance(n, ast.Subscript):
-            value = n.value
-            if (
-                isinstance(value, ast.Attribute)
-                and isinstance(value.value, ast.Name)
-                and value.value.id in _REQUEST_NAMES
-                and value.attr in _REQUEST_INPUT_ATTRS
-            ):
-                return True
+    return any(_is_request_input_node(n) for n in ast.walk(arg))
+
+
+def _is_request_input_node(n: ast.AST) -> bool:
+    """The node-level test of `_references_request_input`: ``n`` itself reads
+    request input."""
+    # request.get_json() / request.get_data() — Flask body accessors.
+    if (
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr in _REQUEST_INPUT_METHODS
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id in _REQUEST_NAMES
+    ):
+        return True
+    if isinstance(n, ast.Attribute):
+        # request.GET.get(...), request.args.get(...) — the .get is on the
+        # inner attribute, which the walk reaches on its own.
+        return (
+            isinstance(n.value, ast.Name)
+            and n.value.id in _REQUEST_NAMES
+            and n.attr in _REQUEST_INPUT_ATTRS
+        )
+    if isinstance(n, ast.Subscript):
+        value = n.value
+        return (
+            isinstance(value, ast.Attribute)
+            and isinstance(value.value, ast.Name)
+            and value.value.id in _REQUEST_NAMES
+            and value.attr in _REQUEST_INPUT_ATTRS
+        )
     return False
+
+
+def _source_argument(call: ast.Call, keyword: str) -> ast.AST | None:
+    """The first positional argument of ``call``, else its ``keyword=``
+    argument; None when neither is given or the first is ``*args``."""
+    if call.args:
+        first = call.args[0]
+        return None if isinstance(first, ast.Starred) else first
+    return next((kw.value for kw in call.keywords if kw.arg == keyword), None)
 
 
 # Datastore/retrieval read methods whose RESULTS are second-order (stored)

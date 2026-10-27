@@ -269,6 +269,7 @@ import os
 import pickle
 
 import yaml
+from jinja2 import Template
 
 
 def lookup(cursor, name):
@@ -285,6 +286,10 @@ def restore(data):
 
 def parse(text):
     return yaml.load(text)
+
+
+def build(source):
+    return Template(source)
 """
 
 _JS_SOURCE = """
@@ -300,8 +305,9 @@ def test_registry_matches_what_the_analyzer_actually_emits():
 
     Both emitters (Python _emit_finding and the JS pattern loop) must produce
     the id, rule_id, category, severity and confidence the registry publishes.
-    The Python fixture covers a chain-attempted sink (SQL, os.system: HIGH
-    demoted to MEDIUM) and sinks that attempt none (pickle, yaml: HIGH kept).
+    The Python fixture covers chain-attempted sinks (SQL, os.system, a
+    template built from a string: HIGH demoted to MEDIUM) and sinks that
+    attempt none (pickle, yaml: HIGH kept).
     """
     with tempfile.TemporaryDirectory() as td:
         (Path(td) / "repo.py").write_text(_PY_SOURCE)
@@ -325,6 +331,7 @@ def test_registry_matches_what_the_analyzer_actually_emits():
         "PY_OS_SYSTEM",
         "PY_PICKLE_LOAD",
         "PY_YAML_UNSAFE_LOAD",
+        "PY_SSTI",
         "JS_EVAL",
         "JS_INNER_HTML",
         "JS_DOCUMENT_WRITE",

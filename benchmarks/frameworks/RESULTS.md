@@ -126,6 +126,10 @@ The `direct` and `indirect` columns include the new classes.
     - See `CHANGELOG.md`, `[Unreleased]`.
   - A string a Flask or Quart view returns (`return f"<p>{name}</p>"`) is now an HTML response body too, judged by the same rules as `make_response(...)`. No corpus case returns a string from a view, so these numbers do not change.
 - **Template injection is found only in Flask.** `render_template_string` is modelled. Django `Template(src)` and `jinja2.Template(src)` are not.
+  - Closed after v3.6.3. A template compiled from a string is now a sink of its own rule, `python.ast/PY_SSTI`: `jinja2.Template`, `from_string` on a Jinja2 environment (a sandboxed one too) or a Django `engines[...]` backend, `django.template.Template` and Mako's `Template`. Flask's `render_template_string` keeps `python.ast/PY_XSS_HTML_SINK`.
+    - The Django and FastAPI `direct` and `indirect` SSTI cases are detected and block. No safe case is flagged.
+    - The Python frameworks detect 97 of 108 vulnerable cases, up from 93, and block on 68, up from 64. Django blocks on 24, FastAPI on 21 and Flask on 23.
+    - See `CHANGELOG.md`, `[Unreleased]`.
 - **Weak random tokens are missed everywhere.** The bundled rule lists `random.choice`, but not `random.choices`, the most common token idiom.
 - **FastAPI findings almost never block.** Typed handler parameters are not proven reachable. The same SQLi scores 90 (HIGH, BLOCK) in Flask and 50 (MEDIUM, WARN) in FastAPI. FastAPI's `RedirectResponse` and manual `Location` headers are not redirect sinks.
   - Closed after v3.6.3 for handler parameters. A route handler's parameters are now request sources: FastAPI query, path, header, cookie and body parameters, and Flask and Django URL variables. Dependencies (`Depends(...)`, `Security(...)`, a type from a `deps` module), injected objects such as `Request`, fixed-value types (`int`, `UUID`, `Literal[...]`, a same-file Enum) and Flask or Django parameters their URL pattern does not name are not.
@@ -191,7 +195,7 @@ Regex-tier findings never reach the corroboration needed to block, by design. Fo
 - At v3.6.3, `docs/security-catalog-contract.json` lists 85 checks.
 - It omits the Python engine's own rules, which produce most Python detections: `PY_SQL_INJECTION`, `PY_SSRF`, `PY_PATH_TRAVERSAL`, `PY_OPEN_REDIRECT`, `PY_XSS_HTML_SINK`, `PY_WEAK_CRYPTO_PASSWORD`, `PY_JWT_WEAK` and others.
 - It also omits the four JS pattern checks.
-- Closed after v3.6.3: the catalog lists the Python engine's 16 AST checks and its four JS pattern checks, 105 checks in all (104 since `flask-missing-login-required` was removed). They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
+- Closed after v3.6.3: the catalog lists the Python engine's AST checks and its four JS pattern checks, 105 checks in all. That counts the 16 AST checks it first listed, `python.ast/PY_SSTI` added since, and the removal of `flask-missing-login-required`. They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
 
 ## Speed
 

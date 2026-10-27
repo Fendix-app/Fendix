@@ -117,7 +117,8 @@ RULE_CLASS = {
     "JS_DOCUMENT_WRITE": "xss",
     "SEC-JS_DOCUMENT_WRITE": "xss",
     "JAVA_XSS_REFLECTED": "xss",
-    # Server-side template injection (CWE-94)
+    # Server-side template injection (CWE-94, CWE-1336)
+    "PY_SSTI": "ssti",
     "flask-render-template-string-injection": "ssti",
     # SSRF
     "PY_SSRF": "ssrf",

@@ -259,7 +259,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       - `.render(...)` on a raw Jinja2 or Mako template is not a renderer
         either: neither autoescapes by default. Raw Jinja2 means
         `jinja2.Template`, or an `Environment`'s `from_string`/`get_template`.
-        So `HttpResponse(Template(src).render(name=name))` is reported;
+        So `HttpResponse(Template(src).render(name=name))` is reported when
+        `name` is request input. A template whose own source is request
+        input is reported as template injection (`python.ast/PY_SSTI`,
+        below), not as XSS;
     - Flask's `make_response(...)` of a dict or list, which Flask sends as
       JSON: a literal, a comprehension, a `.split()`, `.rsplit()` or
       `.splitlines()` list, request data read whole (`request.get_json()`,
@@ -418,6 +421,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       `MethodView`, which is not read as a route.
   - **Framework parity:** no corpus case returns a string from a view, so the
     parity results do not change.
+- **Server-side template injection is now detected in Jinja2, Django and Mako
+  templates.** A template compiled from request input runs the attacker's
+  template code on the server: in Jinja2,
+  `{{ cycler.__init__.__globals__.os.popen("id").read() }}` runs a shell
+  command. Only Flask's `render_template_string` was reported. The engine now
+  reports a template built from a string under a new rule,
+  `python.ast/PY_SSTI` (finding id `SEC-PY_SSTI`, CWE-1336, category
+  `injection`). Its SARIF results carry a new `ruleId`,
+  `fendix.injection.python-ast-py-ssti`.
+  - **Sinks.** Each callee is resolved through the file's imports, aliases
+    included:
+    - `jinja2.Template(src)`, and Jinja2's `NativeTemplate(src)`;
+    - `from_string(src)` on a Jinja2 `Environment(...)`, called on the
+      constructor directly or on a name the function or module binds to it
+      (`env = Environment(...)`). Its subclasses count too:
+      `SandboxedEnvironment`, `ImmutableSandboxedEnvironment` and
+      `NativeEnvironment`. A sandbox limits what a template can reach, but
+      the attacker's template still runs;
+    - `django.template.Template(src)`, and `from_string(src)` on a Django
+      `engines[...]` backend;
+    - `mako.template.Template(src)` and `Template(text=src)`.
+
+    The source may also be passed by keyword (`source=`, `template_string=`,
+    `text=`, `template_code=`).
+  - **Severity.** A flow proven from request input is CRITICAL. It is marked
+    reachable, carries a taint chain and may block. A source the engine cannot
+    trace to the request is reported at HIGH with MEDIUM confidence, and does
+    not block: a helper's parameter that no caller in the file passes request
+    input to, a database value, or a configuration value such as a Django
+    setting.
+  - **Not reported:**
+    - a template loaded by name: `get_template(...)`, Flask's
+      `render_template(...)`, a Mako `TemplateLookup`, or
+      `Template(filename=...)`;
+    - a class that is not one of these, even one named `Template`: a class
+      the file defines, one imported from the project
+      (`from .templating import Template`), or `string.Template`;
+    - a constant source: a literal, a name bound to one, or a concatenation,
+      `format`, f-string or conditional of constants;
+    - a template picked among constant templates: `TEMPLATES[key]` or
+      `TEMPLATES.get(key, DEFAULT)` on a literal dict whose values are
+      constants, or a name that a preceding `if name not in ALLOWED:` guard
+      with an early exit keeps inside a literal collection;
+    - a template read from a file or a package resource: `.read()`,
+      `.read_text()` or `.read_bytes()`, decoded or not, on a value that is
+      not the request's own data, `pkgutil.get_data(...)` and
+      `importlib.resources.read_text(...)`. Which file is read is the
+      path-traversal rule's concern. An uploaded file
+      (`request.files["t"].read()`) is reported.
+
+    Escaping is not a sanitiser here: `html.escape` leaves `{{ }}` intact.
+  - **`render_template_string` keeps its rule.** Flask's
+    `render_template_string(src)` is still reported as
+    `python.ast/PY_XSS_HTML_SINK`, as before, and never as `PY_SSTI`.
+  - **One finding per flow.** A template built from request input and
+    rendered into an HTML response, such as
+    `HTMLResponse(Template(src).render())`, is reported once, as `PY_SSTI`.
+    The HTML-response XSS finding now follows only what `.render(...)` is
+    passed. It is reported when a render argument can carry text, as in
+    `HTMLResponse(Template(src).render(name=name))`, and proven only when
+    that argument is request input. This applies to a Flask view's returned
+    string too.
+  - **Imports.** `import a.b` now resolves `a.b.c` to `a.b.c`, as Python
+    binds it, wherever the engine reads an import path: this rule, and the
+    HTML-response sink's constructors, renderers, value types and redirect
+    statuses. It used to read `a.b.b.c`. So
+    `django.template.loader.get_template(...).render(...)` after
+    `import django.template.loader` is now recognised as Django's
+    autoescaped render, and is no longer reported as XSS.
+  - **Identity.** Existing findings keep their fingerprints. The new findings
+    are new. Their sink names the constructor and the source, as in
+    `jinja2.Template(template_src)` or `jinja2.Environment.from_string(src)`,
+    whatever the import style.
+  - **Catalog.** The security catalog lists `python.ast/PY_SSTI`, 105 checks
+    in all.
+  - **Not covered:**
+    - Flask's `app.jinja_env.from_string(...)`, Starlette's and FastAPI's
+      `Jinja2Templates(...).env.from_string(...)`, and Django's
+      `Engine(...).from_string(...)`;
+    - an environment bound to `self` in another method, or built in another
+      file.
+  - **Framework parity:** the Django and FastAPI `direct` and `indirect` SSTI
+    cases are now detected and block. Flask's are still found by
+    `render_template_string` and block, as before. No safe case is flagged.
+    The Python frameworks detect 97 of 108 vulnerable cases, up from 93, and
+    block on 68, up from 64: Django on 24, FastAPI on 21 and Flask on 23.
 
 ### Changed
 
@@ -439,7 +528,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `flask-missing-login-required` stop matching, and its GitHub Code Scanning
     alerts close on the next upload. The route stays reported by
     `flask-route-no-auth-decorator`.
-  - The security catalog lists 104 checks, one fewer.
+  - The security catalog lists one check fewer.
 
 ### Fixed
 
