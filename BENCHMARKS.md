@@ -261,7 +261,7 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 |---|---|---|
 | Python | taint engine (source→sink, sanitizer-aware; within a function, plus one call into a helper in the same file or another module) | proven taint |
 | Go | regex SAST (line-local) + Go dep-CVE | regex / SCA |
-| JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function) and shape rules for a helper's parameter | regex / semgrep taint |
+| JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function, proven and able to block) and shape rules for a helper's parameter (warn only) | regex / semgrep taint |
 | **Java (v0.27–v0.28)** | **regex SAST (line-local): command injection, SQLi-by-concat, weak crypto, insecure deserialization, XXE, insecure cookie, weak randomness, LDAP injection, SSRF** | **regex** |
 | any language | hardcoded-secrets scanner (15 pattern families) | regex |
 

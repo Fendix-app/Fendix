@@ -24,9 +24,15 @@ import (
 // precision. Keys are Semgrep's canonical language names ("javascript",
 // "typescript", "java", "go").
 //
-// Empty: no language has met the gate, so every Semgrep finding is a
-// models.TierSemgrepShim finding.
-var ReachabilityLanguages = map[string]bool{}
+// JavaScript and TypeScript met it with Task 4.3's pack
+// (rules/javascript-*.yaml): precision 0.97 on the corpus v2 JS/TS cases
+// (96 true and 3 false positives, none of the three from the pack) and no new
+// finding on the clean node-express-realworld application. Every rule of that
+// pack declares both, so neither is enabled without the other.
+var ReachabilityLanguages = map[string]bool{
+	"javascript": true,
+	"typescript": true,
+}
 
 // A rule asks for its matches to count as reachability with this metadata.
 const (

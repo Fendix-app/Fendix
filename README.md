@@ -909,7 +909,7 @@ a formula at report time:
    reachable). Semgrep pattern findings are excluded from both escalations
    until their rule pack clears the F1 gate. A Semgrep taint finding takes the
    reachable escalation but never a Proven Path, and only for a language whose
-   taint pack cleared its precision gate; no language has yet
+   taint pack cleared its precision gate: JavaScript and TypeScript have
    ([ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
 3. **Reachability escalates the pure-SAST case** one level when an AST taint
    chain is proven but nothing correlated.
@@ -1150,7 +1150,8 @@ Its findings then count as reachable once every language in the rule's
 a dataflow trace (only to a logged-in account), it becomes the finding's
 `taint_chain`. Until the language is enabled, they are reported like any other
 Semgrep finding. A language is enabled only when its taint pack clears the
-precision gate in [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md).
+precision gate in [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md);
+JavaScript and TypeScript are.
 
 ---
 

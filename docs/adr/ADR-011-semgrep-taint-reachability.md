@@ -8,7 +8,8 @@ controller's ruling R-pf56 amends the brief's condition on the trace: a
 taint-mode match is the proof, and the trace only adds detail. Task 4.1 adds
 the mechanism with every language disabled. Tasks 4.3 (JavaScript and
 TypeScript), 4.4 (Java) and 4.5 (Go) add the taint rules and enable a
-language once it meets the gate below.
+language once it meets the gate below. Task 4.3 enabled `javascript` and
+`typescript`; the evidence is under [Enabled languages](#enabled-languages).
 
 ## Context
 
@@ -67,7 +68,8 @@ spike's trace is all `CliLoc`. The decoder reads both variants.
 languages in `semgrep.ReachabilityLanguages`. A language is enabled when its
 taint pack reaches precision >= 0.90 on the corpus v2 development set
 (`benchmarks/frameworks/`) and stays within the plan's noise budget (its
-Task 0.5). The release gate checks holdout precision. The map ships empty.
+Task 0.5). The release gate checks holdout precision. Task 4.1 shipped the
+map empty; each language is added in the change that carries its evidence.
 
 **R-pf56: the match is the proof, the trace is detail.** Semgrep reports a
 match of a `mode: taint` rule only when one of the rule's declared sources
@@ -200,8 +202,8 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
   follow-up.
 
 **Mitigations:**
-- `TestReachabilityLanguagesShipEmpty` fails when a language is added, so
-  the change that enables one must also update that test.
+- `TestReachabilityLanguagesAreTheProvenOnes` pins the enabled set, so the
+  change that enables a language must also update that test.
 - `TestLoggedOutTaintResultIsReachableWithoutATrace` runs on Semgrep's real
   logged-out output, and `TestTraceNeverMovesIdentity` checks that both
   recorded runs, gate open and closed, have one fingerprint.
@@ -222,3 +224,14 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
   `TestNoIndependence_FendixSemgrepTaintVsImportedSemgrep` and
   `TestSemgrepTaintTierExportsAsSemgrep` pin the Semgrep-tier limits and the
   escalation.
+
+## Enabled languages
+
+| Language | Task | Corpus v2 precision | Noise on the clean application |
+|---|---|---|---|
+| `javascript`, `typescript` | 4.3 | 0.97: 96 TP, 3 FP over the 174 Express, NestJS and Next.js cases. The 3 FPs are the `sqli-safe_lookalike` cases the Python engine's `SEC-JS_SQL_TEMPLATE` already flagged; the pack's own findings are 84 TP and no FP. | No new finding on `node-express-realworld` (2.4 kLOC). Of the pack's 19 matches on `juice-shop` and `nodegoat`, 17 are true positives. |
+
+The two languages are enabled together: every rule of the JavaScript and
+TypeScript pack declares both, and a rule counts only when all its languages
+are enabled. Holdout precision is checked by the controller after the Java and
+Go packs are integrated, and may disable a language.

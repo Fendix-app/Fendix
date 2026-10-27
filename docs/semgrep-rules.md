@@ -220,10 +220,16 @@ read a file by a parameter are too common in clean code.
 
 The taint rules' matches count as reachability only for a language enabled
 in `semgrep.ReachabilityLanguages`
-([ADR-011](./adr/ADR-011-semgrep-taint-reachability.md)). A reachable
-finding is escalated one severity level, so the `fendix_severity` of
-`js-sqli-taint`, `js-cmdi-taint` and `js-ssti-taint` is `HIGH` and the
-others' `MEDIUM`: proven, they report `CRITICAL` and `HIGH`.
+([ADR-011](./adr/ADR-011-semgrep-taint-reachability.md)). JavaScript and
+TypeScript are: the pack's precision on the framework-parity development set
+is 0.97, and it adds no finding to the clean `node-express-realworld`
+application. A taint finding is therefore reachable, in the
+`semgrep_taint` tier, and blocks at or above `--fail-on` on its reachable
+path. A shape finding stays a `semgrep_shim` finding that warns. The
+`fendix_severity` of `js-sqli-taint`, `js-cmdi-taint` and `js-ssti-taint`
+is `HIGH` and the others' `MEDIUM`. A reachable finding is escalated one
+level, and a taint rule's `MEDIUM` confidence caps severity at `HIGH`, so
+every proven finding of the pack reports `HIGH`.
 
 ---
 

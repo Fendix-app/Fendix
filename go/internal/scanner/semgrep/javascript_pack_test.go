@@ -132,3 +132,48 @@ func TestScanReportsAJavaScriptTaintFindingAsReachable(t *testing.T) {
 	enableReachability(t, "javascript", "typescript")
 	requireTaint(t, find())
 }
+
+// The shipped gate, with no test override: JavaScript and TypeScript are
+// enabled (Task 4.3), so a match of a taint rule of the pack is reachable and
+// a match of one of its shape rules is not, whatever its metadata says.
+func TestShippedGateOpensForTheJavaScriptTaintRulesOnly(t *testing.T) {
+	result := func(ruleID string) semgrepResult {
+		return semgrepResult{
+			CheckID: "tmp.fendix-semgrep-rules-1072928901." + ruleID,
+			Path:    "routes/users.js",
+			Start:   semgrepLineCol{Line: 9, Col: 3},
+			Extra: semgrepExtra{
+				Message:  "finding",
+				Severity: "ERROR",
+				Lines:    semgrepRedactedLines,
+				Metadata: bundledMetadata(t, ruleID),
+			},
+		}
+	}
+	for _, id := range []string{
+		"js-sqli-taint", "js-cmdi-taint", "js-ssti-taint", "js-xss-taint", "js-ssrf-taint",
+		"js-path-traversal-taint", "js-open-redirect-taint", "js-weak-password-hash-taint",
+		"js-jwt-no-verify-taint", "js-weak-random-token-taint",
+	} {
+		r := result(id)
+		ev, ok := mapResult(&r, "/code")
+		if !ok {
+			t.Fatalf("%s: mapResult dropped the result", id)
+		}
+		if !ev.Reachable {
+			t.Errorf("%s: not reachable with the shipped gate", id)
+		}
+	}
+	for _, id := range []string{
+		"js-sqli-sink", "js-cmdi-sink", "js-ssti-sink", "js-xss-sink", "js-open-redirect-sink",
+		"js-weak-password-hash-sink", "js-jwt-no-verify-sink",
+	} {
+		r := result(id)
+		r.Extra.Metadata[reachabilityMetadataKey] = reachabilityTaint
+		ev, ok := mapResult(&r, "/code")
+		if !ok {
+			t.Fatalf("%s: mapResult dropped the result", id)
+		}
+		requireShim(t, ev)
+	}
+}

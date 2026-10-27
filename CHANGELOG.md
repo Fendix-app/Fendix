@@ -918,9 +918,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     SHA-1. A module constant or a literal is never reported. SSRF and path
     traversal have no shape rule: helpers that fetch a URL or read a file
     by a parameter are too common in clean code.
-  - **Warn only, for now.** `semgrep.ReachabilityLanguages` still enables
-    no language, so every finding of the pack is a `semgrep_shim` finding
-    that warns and never blocks on its own.
+  - **Proven taint findings block.** The taint rules' findings are
+    reachable; see the next entry. Shape findings warn.
   - **Framework parity (JS/TS):** recall 19.4% to 88.9% (96 of 108
     vulnerable cases), with no new false positive: the false-positive rate
     on safe cases stays 4.5%, the three `sqli-safe_lookalike` cases the
@@ -936,6 +935,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     of 5 s, the pack's Semgrep pass.
   - **Catalog.** `docs/security-catalog-contract.json` gains the 17
     `js-*` checks under the `semgrep` analyzer.
+
+- **Proven JavaScript and TypeScript flows can block.**
+  `semgrep.ReachabilityLanguages` now enables `javascript` and `typescript`,
+  so a match of a JS/TS taint rule is a `semgrep_taint` finding:
+  `reachable: true`, one severity level higher, and at or above `--fail-on`
+  it blocks on its reachable path. A shape (`-sink`) finding still warns.
+  - **Why now.** ADR-011's gate: the pack's precision on the
+    framework-parity development set is 0.97 (96 true positives and 3 false
+    positives over the 174 Express, NestJS and Next.js cases; the 3 are the
+    Python engine's `SEC-JS_SQL_TEMPLATE` on `sqli-safe_lookalike`, the
+    pack's own findings have none), and the pack adds no finding to the
+    clean `node-express-realworld` application. The evidence is recorded in
+    ADR-011.
+  - **Severity.** `js-sqli-taint`, `js-cmdi-taint` and `js-ssti-taint`
+    declare HIGH and the other taint rules MEDIUM. Proven, they are
+    escalated one level, and MEDIUM confidence caps every one at HIGH.
+  - **Framework parity (JS/TS):** block recall 19.4% to 63.9% (69 of 108
+    vulnerable cases). 16 cases per framework newly block: the `direct`
+    case of the nine classes besides SQL injection and secrets, the
+    `alt_api` case of SQL injection, command injection, XSS, SSRF, path
+    traversal and open redirect, and the token generator of
+    `weak_random_token-indirect`. Other sinks inside a helper (`indirect`,
+    `cross_file`) still warn. Recall stays 88.9% and the false-positive
+    rate 4.5%. No safe case newly blocks; the three `sqli-safe_lookalike`
+    cases that the Python engine's `SEC-JS_SQL_TEMPLATE` already blocked
+    still do.
+  - **Real-world noise:** unchanged on `node-express-realworld` (no
+    finding of the pack). On `juice-shop` the SQL shape findings now
+    collapse into the proven ones on the same lines.
 
 ### Changed
 

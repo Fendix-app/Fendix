@@ -7,9 +7,10 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
-// The semgrep_taint tier (ADR-011) in the engine's tier-aware steps. While
-// semgrep.ReachabilityLanguages is empty no producer emits it; these tests pin
-// what the tier means once a language is enabled.
+// The semgrep_taint tier (ADR-011) in the engine's tier-aware steps. The
+// semgrep scanner emits it for a taint rule of a language enabled in
+// semgrep.ReachabilityLanguages (JavaScript and TypeScript since Task 4.3);
+// these tests pin what the tier means in the engine.
 
 // TrustRank 2 ties the taint tier with native_go (textscan). Escalation runs
 // before the collapse, so a proven Semgrep taint finding declared at the same
