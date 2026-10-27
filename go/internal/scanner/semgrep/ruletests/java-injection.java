@@ -7,8 +7,12 @@ import java.io.StringWriter;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.persistence.EntityManager;
 import javax.persistence.criteria.CriteriaBuilder;
@@ -416,6 +420,461 @@ class UserDirectory {
     public Map<String, Object> findById(long id) {
         // ok: java-sqli-sink
         return jdbcTemplate.queryForMap("SELECT * FROM users WHERE id = " + id);
+    }
+}
+
+// SQL identifiers (a sort column, a direction, IN-list placeholders) that
+// cannot carry request text: a constant producer, or a value checked against
+// an allowlist or a set of literals.
+@RestController
+class SqlIdentifierController {
+
+    private static final Set<String> SORTABLE = Set.of("name", "created_at");
+    private static final Map<String, String> SORT_COLUMNS = Map.of("name", "name", "created", "created_at");
+    private static final Map<String, String> ENTRY_COLUMNS = Map.ofEntries(Map.entry("name", "name"));
+    private final Map<String, String> aliases = new HashMap<>();
+    private final JdbcTemplate jdbc;
+    private boolean strict;
+
+    SqlIdentifierController(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    private String direction(String d) {
+        switch (d.toLowerCase()) {
+            case "asc":
+                return "ASC";
+            default:
+                return "DESC";
+        }
+    }
+
+    private String order(String d) {
+        return "asc".equals(d) ? "ASC" : "DESC";
+    }
+
+    private String column(String c) {
+        if (c.isEmpty()) {
+            return "id";
+        }
+        return c;
+    }
+
+    private String label(String c) {
+        return "name";
+    }
+
+    private String label(String c, String fallback) {
+        return fallback;
+    }
+
+    // ---- constant producers
+
+    @GetMapping("/sqlid/helper")
+    List<Map<String, Object>> helper(@RequestParam String dir) {
+        String d = direction(dir);
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY name " + d);
+    }
+
+    @GetMapping("/sqlid/helper-ternary")
+    List<Map<String, Object>> helperTernary(@RequestParam String dir) {
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY name " + order(dir));
+    }
+
+    @GetMapping("/sqlid/helper-passthrough")
+    List<Map<String, Object>> helperPassthrough(@RequestParam String sort) {
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + column(sort));
+    }
+
+    @GetMapping("/sqlid/helper-overload")
+    List<Map<String, Object>> helperOverload(@RequestParam String sort) {
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + label("x", sort));
+    }
+
+    @GetMapping("/sqlid/map")
+    List<Map<String, Object>> map(@RequestParam String sort) {
+        String col = SORT_COLUMNS.getOrDefault(sort, "id");
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + col);
+    }
+
+    @GetMapping("/sqlid/map-get")
+    List<Map<String, Object>> mapGet(@RequestParam String sort) {
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + ENTRY_COLUMNS.get(sort));
+    }
+
+    @GetMapping("/sqlid/map-default-raw")
+    List<Map<String, Object>> mapDefaultRaw(@RequestParam String sort) {
+        String col = SORT_COLUMNS.getOrDefault(sort, sort);
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + col);
+    }
+
+    @GetMapping("/sqlid/map-mutable")
+    List<Map<String, Object>> mapMutable(@RequestParam String sort, @RequestParam String alias) {
+        aliases.put(alias, sort);
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + aliases.get(alias));
+    }
+
+    @GetMapping("/sqlid/in-copies")
+    List<Map<String, Object>> inCopies(@RequestParam List<Long> ids) {
+        String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users WHERE id IN (" + placeholders + ")", ids.toArray());
+    }
+
+    @GetMapping("/sqlid/in-stream")
+    List<Map<String, Object>> inStream(@RequestParam List<String> ids) {
+        String placeholders = ids.stream().map(x -> "?").collect(Collectors.joining(","));
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users WHERE id IN (" + placeholders + ")", ids.toArray());
+    }
+
+    @GetMapping("/sqlid/limit")
+    List<Map<String, Object>> limit(@RequestParam List<String> ids) {
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users LIMIT " + ids.size());
+    }
+
+    @GetMapping("/sqlid/in-raw")
+    List<Map<String, Object>> inRaw(@RequestParam List<String> ids) {
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users WHERE id IN (" + String.join(",", ids) + ")");
+    }
+
+    @GetMapping("/sqlid/in-copies-raw")
+    List<Map<String, Object>> inCopiesRaw(@RequestParam String id) {
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users WHERE id IN (" + String.join(",", Collections.nCopies(2, id)) + ")");
+    }
+
+    @GetMapping("/sqlid/in-stream-raw")
+    List<Map<String, Object>> inStreamRaw(@RequestParam List<String> ids) {
+        String quoted = ids.stream().map(x -> "'" + x + "'").collect(Collectors.joining(","));
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users WHERE id IN (" + quoted + ")");
+    }
+
+    @GetMapping("/sqlid/length-and-value")
+    List<Map<String, Object>> lengthAndValue(@RequestParam String sort) {
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort.length() + sort);
+    }
+
+    // ---- allowlist guards
+
+    @GetMapping("/sqlid/member-throw")
+    List<Map<String, Object>> memberThrow(@RequestParam String sort) {
+        if (!SORTABLE.contains(sort)) {
+            throw new IllegalArgumentException("sort");
+        }
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-key-return")
+    List<Map<String, Object>> memberKeyReturn(@RequestParam String sort) {
+        if (!SORT_COLUMNS.containsKey(sort)) return List.of();
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-replace")
+    List<Map<String, Object>> memberReplace(@RequestParam String sort) {
+        if (!SORTABLE.contains(sort)) {
+            System.out.println("unknown sort");
+            sort = "id";
+        }
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-positive")
+    List<Map<String, Object>> memberPositive(@RequestParam String sort) {
+        if (SORTABLE.contains(sort)) {
+            // ok: java-sqli-taint
+            return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+        }
+        return List.of();
+    }
+
+    @GetMapping("/sqlid/member-and")
+    List<Map<String, Object>> memberAnd(@RequestParam String sort) {
+        if (!SORTABLE.contains(sort) && strict) {
+            throw new IllegalArgumentException("sort");
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-other")
+    List<Map<String, Object>> memberOther(@RequestParam String sort, @RequestParam String dir) {
+        if (!SORTABLE.contains(dir)) {
+            throw new IllegalArgumentException("dir");
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-no-exit")
+    List<Map<String, Object>> memberNoExit(@RequestParam String sort) {
+        if (!SORTABLE.contains(sort)) {
+            System.out.println("unknown sort");
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-nested-exit")
+    List<Map<String, Object>> memberNestedExit(@RequestParam String sort) {
+        if (!SORTABLE.contains(sort)) {
+            if (strict) throw new IllegalArgumentException("sort");
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-replace-other")
+    List<Map<String, Object>> memberReplaceOther(@RequestParam String sort, @RequestParam String dir) {
+        if (!SORTABLE.contains(sort) || !SORTABLE.contains(dir)) sort = "id";
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + dir);
+    }
+
+    @GetMapping("/sqlid/member-replace-then-raw")
+    List<Map<String, Object>> memberReplaceThenRaw(@RequestParam String sort, @RequestParam String fallback) {
+        if (!SORTABLE.contains(sort)) {
+            sort = "id";
+            sort = fallback;
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-replace-else")
+    List<Map<String, Object>> memberReplaceElse(@RequestParam String sort) {
+        if (!SORTABLE.contains(sort)) {
+            System.out.println("unknown sort");
+        } else {
+            sort = "id";
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/member-positive-else")
+    List<Map<String, Object>> memberPositiveElse(@RequestParam String sort) {
+        if (SORTABLE.contains(sort)) {
+            return List.of();
+        } else {
+            // ruleid: java-sqli-taint
+            return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+        }
+    }
+
+    @GetMapping("/sqlid/member-positive-or")
+    List<Map<String, Object>> memberPositiveOr(@RequestParam String sort) {
+        if (SORTABLE.contains(sort) || strict) {
+            // ruleid: java-sqli-taint
+            return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+        }
+        return List.of();
+    }
+
+    @GetMapping("/sqlid/member-after-use")
+    List<Map<String, Object>> memberAfterUse(@RequestParam String sort) {
+        // ruleid: java-sqli-taint
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+        if (!SORTABLE.contains(sort)) {
+            throw new IllegalArgumentException("sort");
+        }
+        return rows;
+    }
+
+    @GetMapping("/sqlid/equals-replace")
+    List<Map<String, Object>> equalsReplace(@RequestParam String dir) {
+        if (!"asc".equalsIgnoreCase(dir) && !"desc".equalsIgnoreCase(dir)) {
+            dir = "asc";
+        }
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY name " + dir);
+    }
+
+    @GetMapping("/sqlid/equals-throw")
+    List<Map<String, Object>> equalsThrow(@RequestParam String dir) {
+        if (!dir.equals("ASC") && !"DESC".equals(dir)) throw new IllegalArgumentException("dir");
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY name " + dir);
+    }
+
+    @GetMapping("/sqlid/equals-extra-term")
+    List<Map<String, Object>> equalsExtraTerm(@RequestParam String dir) {
+        if (!"asc".equalsIgnoreCase(dir) && !"desc".equalsIgnoreCase(dir) && strict) {
+            dir = "asc";
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY name " + dir);
+    }
+
+    @GetMapping("/sqlid/equals-other")
+    List<Map<String, Object>> equalsOther(@RequestParam String dir, @RequestParam String other) {
+        if (!"asc".equalsIgnoreCase(dir) && !"desc".equalsIgnoreCase(other)) throw new IllegalArgumentException("dir");
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY name " + dir);
+    }
+
+    @GetMapping("/sqlid/equals-nested-replace")
+    List<Map<String, Object>> equalsNestedReplace(@RequestParam String dir) {
+        if (!"asc".equalsIgnoreCase(dir) && !"desc".equalsIgnoreCase(dir)) {
+            if (strict) dir = "asc";
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY name " + dir);
+    }
+
+    @GetMapping("/sqlid/ternary")
+    List<Map<String, Object>> ternary(@RequestParam String sort) {
+        String col = SORTABLE.contains(sort) ? sort : "id";
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + col);
+    }
+
+    @GetMapping("/sqlid/ternary-other")
+    List<Map<String, Object>> ternaryOther(@RequestParam String sort, @RequestParam String other) {
+        String col = SORTABLE.contains(sort) ? other : "id";
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + col);
+    }
+
+    @GetMapping("/sqlid/ternary-raw-fallback")
+    List<Map<String, Object>> ternaryRawFallback(@RequestParam String sort, @RequestParam String other) {
+        String col = SORTABLE.contains(sort) ? sort : other;
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + col);
+    }
+
+    @GetMapping("/sqlid/switch-in-place")
+    List<Map<String, Object>> switchInPlace(@RequestParam String sort) {
+        switch (sort) {
+            case "name":
+            case "created_at":
+                break;
+            default:
+                sort = "id";
+        }
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/switch-throw")
+    List<Map<String, Object>> switchThrow(@RequestParam String sort) {
+        switch (sort) {
+            case "name", "created_at":
+                break;
+            default:
+                throw new IllegalArgumentException("sort");
+        }
+        // ok: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/switch-assigns-raw")
+    List<Map<String, Object>> switchAssignsRaw(@RequestParam String sort, @RequestParam String other) {
+        switch (sort) {
+            case "name":
+                sort = other;
+                break;
+            default:
+                sort = "id";
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/switch-no-default-replace")
+    List<Map<String, Object>> switchNoDefaultReplace(@RequestParam String sort) {
+        switch (sort) {
+            case "name":
+                break;
+            default:
+                System.out.println("unknown sort");
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    @GetMapping("/sqlid/switch-other")
+    List<Map<String, Object>> switchOther(@RequestParam String sort, @RequestParam String dir) {
+        switch (dir) {
+            case "asc":
+                break;
+            default:
+                dir = "desc";
+        }
+        // ruleid: java-sqli-taint
+        return jdbc.queryForList("SELECT * FROM users ORDER BY " + sort + " " + dir);
+    }
+}
+
+// The same guards on a method's own parameter.
+@Service
+class SortedUserDirectory {
+
+    private static final Set<String> SORTABLE = Set.of("name", "created_at");
+
+    private final JdbcTemplate jdbcTemplate;
+
+    SortedUserDirectory(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    public List<Map<String, Object>> sorted(String sort) {
+        if (!SORTABLE.contains(sort)) {
+            throw new IllegalArgumentException("sort");
+        }
+        // ok: java-sqli-sink
+        return jdbcTemplate.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    public List<Map<String, Object>> directed(String dir) {
+        if (!"asc".equalsIgnoreCase(dir) && !"desc".equalsIgnoreCase(dir)) {
+            dir = "asc";
+        }
+        // ok: java-sqli-sink
+        return jdbcTemplate.queryForList("SELECT * FROM users ORDER BY name " + dir);
+    }
+
+    public List<Map<String, Object>> switched(String sort) {
+        switch (sort) {
+            case "name":
+                break;
+            default:
+                sort = "id";
+        }
+        // ok: java-sqli-sink
+        return jdbcTemplate.queryForList("SELECT * FROM users ORDER BY " + sort);
+    }
+
+    public List<Map<String, Object>> sortedWithFilter(String sort, String filter) {
+        if (!SORTABLE.contains(sort)) {
+            throw new IllegalArgumentException("sort");
+        }
+        // ruleid: java-sqli-sink
+        return jdbcTemplate.queryForList("SELECT * FROM users WHERE " + filter + " ORDER BY " + sort);
+    }
+
+    public List<Map<String, Object>> unchecked(String sort) {
+        if (!SORTABLE.contains(sort)) {
+            System.out.println("unknown sort");
+        }
+        // ruleid: java-sqli-sink
+        return jdbcTemplate.queryForList("SELECT * FROM users ORDER BY " + sort);
     }
 }
 

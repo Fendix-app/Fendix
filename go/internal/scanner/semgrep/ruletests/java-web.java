@@ -927,6 +927,80 @@ class PathRoundTwoController {
     }
 }
 
+// Fix round 4: a String path is contained only when the value itself is the
+// canonical or normalized path, not a canonical base joined with the input.
+@RestController
+class PathRoundFourController {
+
+    private static final String FILES_DIR = "/srv/app/files";
+    private final File baseDir = new File(FILES_DIR);
+    private final Path base = Paths.get(FILES_DIR);
+
+    @GetMapping("/p4/canonical-base-joined")
+    byte[] canonicalBaseJoined(@RequestParam String file) throws IOException {
+        String full = baseDir.getCanonicalPath() + File.separator + file;
+        if (!full.startsWith(FILES_DIR + File.separator)) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ruleid: java-path_traversal-taint
+        return Files.readAllBytes(Paths.get(full));
+    }
+
+    @GetMapping("/p4/normalized-base-joined")
+    byte[] normalizedBaseJoined(@RequestParam String file) throws IOException {
+        String full = Paths.get(FILES_DIR).normalize() + "/" + file;
+        if (!full.startsWith(FILES_DIR + "/")) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ruleid: java-path_traversal-taint
+        try (InputStream in = new FileInputStream(full)) {
+            return in.readAllBytes();
+        }
+    }
+
+    @GetMapping("/p4/canonical-base-joined-positive")
+    byte[] canonicalBaseJoinedPositive(@RequestParam String file) throws IOException {
+        String full = baseDir.getCanonicalPath() + File.separator + file;
+        if (full.startsWith(FILES_DIR + File.separator)) {
+            // ruleid: java-path_traversal-taint
+            return Files.readAllBytes(Paths.get(full));
+        }
+        return new byte[0];
+    }
+
+    @GetMapping("/p4/canonical")
+    byte[] canonical(@RequestParam String file) throws IOException {
+        String full = new File(FILES_DIR, file).getCanonicalPath();
+        if (!full.startsWith(FILES_DIR + File.separator)) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ok: java-path_traversal-taint
+        return Files.readAllBytes(Paths.get(full));
+    }
+
+    @GetMapping("/p4/normalized")
+    byte[] normalized(@RequestParam String file) throws IOException {
+        String full = base.resolve(file).normalize().toString();
+        if (!full.startsWith(FILES_DIR + "/")) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ok: java-path_traversal-taint
+        try (InputStream in = new FileInputStream(full)) {
+            return in.readAllBytes();
+        }
+    }
+
+    @GetMapping("/p4/canonical-positive")
+    byte[] canonicalPositive(@RequestParam String file) throws IOException {
+        String full = new File(FILES_DIR, file).getCanonicalPath();
+        if (full.startsWith(FILES_DIR + File.separator)) {
+            // ok: java-path_traversal-taint
+            return Files.readAllBytes(Paths.get(full));
+        }
+        return new byte[0];
+    }
+}
+
 @Service
 class DocumentStore {
 
@@ -1305,6 +1379,78 @@ class RedirectRoundThreeController {
     }
 }
 
+// Fix round 4: the replacing if has no else, and the value it replaces is
+// the one its condition tests with startsWith("//").
+@Controller
+class RedirectRoundFourController {
+
+    private String reason;
+
+    @GetMapping("/r4/third-term-replaced")
+    void thirdTermReplaced(@RequestParam String next, @RequestParam String other, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//") || other.startsWith("//")) other = "/";
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r4/first-term-replaced")
+    void firstTermReplaced(@RequestParam String next, @RequestParam String other, HttpServletResponse response) throws IOException {
+        if (other.startsWith("//") || !next.startsWith("/") || next.startsWith("//")) {
+            other = "/";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r4/replaced-on-else")
+    void replacedOnElse(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            reason = "bad";
+        } else {
+            next = "/";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r4/replaced-on-else-if")
+    void replacedOnElseIf(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            reason = "bad";
+        } else if (next.length() > 100) {
+            next = "/";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r4/replaced-on-unbraced-else")
+    void replacedOnUnbracedElse(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) reason = "bad"; else next = "/";
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r4/replaced-with-else")
+    void replacedWithElse(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) next = "/"; else reason = "ok";
+        // An if with an else is not taken as a replacement guard, even when
+        // the replacement is on the failing branch.
+        // todook: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r4/raw-then-literal")
+    void rawThenLiteral(@RequestParam String next, @RequestParam String fallback, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            next = fallback;
+            next = "/";
+        }
+        // ok: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+}
+
 @Service
 class Redirects {
 
@@ -1354,6 +1500,25 @@ class Redirects {
             reason = "bad-target";
         }
         // ok: java-open_redirect-sink
+        response.sendRedirect(target);
+    }
+
+    public void redirectAnotherReplaced(HttpServletResponse response, String target, String fallback) throws IOException {
+        if (!target.startsWith("/") || target.startsWith("//") || fallback.startsWith("//")) {
+            fallback = "/";
+        }
+        // ruleid: java-open_redirect-sink
+        response.sendRedirect(target);
+    }
+
+    public void redirectReplacedOnElse(HttpServletResponse response, String target) throws IOException {
+        String reason;
+        if (!target.startsWith("/") || target.startsWith("//")) {
+            reason = "bad-target";
+        } else {
+            target = "/";
+        }
+        // ruleid: java-open_redirect-sink
         response.sendRedirect(target);
     }
 

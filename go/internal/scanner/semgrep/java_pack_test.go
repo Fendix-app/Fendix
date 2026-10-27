@@ -224,10 +224,141 @@ func TestJavaTaintRulesShareTheirBlocks(t *testing.T) {
 	}
 }
 
+// javaPacks are the Java rule files.
+var javaPacks = []string{"rules/java-injection.yaml", "rules/java-web.yaml", "rules/java-crypto.yaml"}
+
+// javaTestPathExcludes is the paths.exclude list every Java rule carries:
+// test, fixture and mock code, which no user runs.
+var javaTestPathExcludes = []any{
+	"**/src/test/**",
+	"**/src/integrationTest/**",
+	"**/src/testFixtures/**",
+	"**/src/it/**",
+	"*Test.java",
+	"*Tests.java",
+	"*IT.java",
+	"**/mock/**",
+	"**/mocks/**",
+	"**/fake/**",
+	"**/fakes/**",
+}
+
+// Every rule of the Java packs, taint and shape alike, carries the same
+// paths block: exactly the exclude list, nothing included. A rule added
+// without it, or a copy edited alone, would report test code again.
+func TestJavaRulesShareTheTestPathExcludes(t *testing.T) {
+	want := canonicalYAML(t, map[string]any{"exclude": javaTestPathExcludes})
+	count := 0
+	for _, pack := range javaPacks {
+		data, err := embeddedRules.ReadFile(pack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rules, err := decodePack(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rules {
+			count++
+			if got := canonicalYAML(t, r.Raw["paths"]); got != want {
+				t.Errorf("%s: paths =\n%s\nwant\n%s", r.ID, got, want)
+			}
+		}
+	}
+	if count != 15 {
+		t.Fatalf("rules in the Java packs = %d, want 15", count)
+	}
+}
+
+// Real semgrep, through Scan: the same vulnerable controller is reported in
+// main code (and under names that only look like a test or mock location),
+// and not under any excluded path. Semgrep skips test/ and tests/ by itself,
+// but only for a project without a .semgrepignore of its own, so the tree is
+// scanned both ways.
+func TestJavaTestAndMockCodeIsNotScanned(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+	t.Cleanup(resetRulesCacheForTesting)
+
+	// javaGateApp's query is on line 22.
+	reported := []string{
+		"src/main/java/com/example/UserController.java",
+		"src/main/java/com/example/Contest.java",
+		"src/main/java/com/example/TestData.java",
+		"src/main/java/com/example/ITer.java",
+		"src/main/java/com/example/it/UserController.java",
+		"src/main/java/com/example/testing/UserController.java",
+		"src/main/java/com/example/mockito/UserController.java",
+		"src/main/java/com/example/fakery/UserController.java",
+	}
+	excluded := []string{
+		"src/test/java/com/example/UserController.java",
+		"src/integrationTest/java/com/example/UserController.java",
+		"src/testFixtures/java/com/example/UserController.java",
+		"src/it/java/com/example/UserController.java",
+		"services/api/src/test/java/com/example/UserController.java",
+		"src/main/java/com/example/UserControllerTest.java",
+		"src/main/java/com/example/UserControllerTests.java",
+		"src/main/java/com/example/UserControllerIT.java",
+		"src/main/java/com/example/mock/UserController.java",
+		"src/main/java/com/example/mocks/UserController.java",
+		"src/main/java/com/example/fake/UserController.java",
+		"src/main/java/com/example/fakes/UserController.java",
+	}
+	files := map[string]string{}
+	want := map[string]bool{}
+	for _, rel := range reported {
+		files[rel] = javaGateApp
+		want[rel+":22"] = true
+	}
+	for _, rel := range excluded {
+		files[rel] = javaGateApp
+	}
+
+	for _, project := range []struct{ name, semgrepignore string }{
+		{"without a project .semgrepignore", ""},
+		{"with a project .semgrepignore", "# project ignores\nlegacy/\n"},
+	} {
+		t.Run(project.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTree(t, root, files)
+			if project.semgrepignore != "" {
+				writeTree(t, root, map[string]string{".semgrepignore": project.semgrepignore})
+			}
+			got, err := Scan(context.Background(), root)
+			if err != nil {
+				t.Fatalf("Scan: %v", err)
+			}
+			assertEndpoints(t, got, want)
+		})
+	}
+
+	// The patterns match paths below the scan root, so a checkout that lies
+	// under a directory of an excluded name is scanned.
+	t.Run("root under an excluded directory", func(t *testing.T) {
+		base := t.TempDir()
+		for _, root := range []string{
+			filepath.Join(base, "src", "test", "repo"),
+			filepath.Join(base, "mocks", "repo"),
+			filepath.Join(base, "checkout", "fakes"),
+		} {
+			writeTree(t, root, map[string]string{
+				".semgrepignore": "# project ignores\n",
+				"src/main/java/com/example/UserController.java": javaGateApp,
+			})
+			got, err := Scan(context.Background(), root)
+			if err != nil {
+				t.Fatalf("Scan(%s): %v", root, err)
+			}
+			assertEndpoints(t, got, map[string]bool{"src/main/java/com/example/UserController.java:22": true})
+		}
+	})
+}
+
 // The -sink rules repeat blocks of their taint rule: java-sqli-sink the SQL
 // call list and the Criteria exclusions of java-sqli-taint's sink, and
-// java-ssrf-sink and java-open_redirect-sink the guards of their taint rule's
-// sanitizers (as negations, on the method's parameter $Q). A fix that lands
+// java-sqli-sink, java-ssrf-sink and java-open_redirect-sink the guards of
+// their taint rule's sanitizers (as negations, on the method's parameter $Q). A fix that lands
 // in one copy only would make the two rules disagree on what is safe.
 func TestJavaSinkRulesShareTheirTaintRulesBlocks(t *testing.T) {
 	rules := map[string]map[string]any{}
@@ -258,6 +389,7 @@ func TestJavaSinkRulesShareTheirTaintRulesBlocks(t *testing.T) {
 
 	// Guards: each guard of the taint rule is a negation of the -sink rule.
 	for taint, shape := range map[string]string{
+		"java-sqli-taint":          "java-sqli-sink",
 		"java-ssrf-taint":          "java-ssrf-sink",
 		"java-open_redirect-taint": "java-open_redirect-sink",
 	} {
@@ -366,17 +498,21 @@ func sqlBlocks(t *testing.T, patterns []any) string {
 	return strings.Join(out, "\n")
 }
 
-// guard renders a guard (a patterns list checking metavariable $GCOND)
-// without its occurrence: the sanitizer's `pattern: $GV` and its
-// identifier regex, or the negation's sink shapes (the pattern-either that
-// holds no pattern-inside).
+// guard renders a guard (a patterns list checking metavariable $GCOND, or
+// the switch $GSW) without its occurrence: the sanitizer's `pattern: $GV` and
+// its identifier regex, or the negation's sink shapes (the pattern-either
+// that holds no pattern-inside, and the checks on the SQL text $GSQL).
 func guard(t *testing.T, node any, key string) string {
 	m, ok := node.(map[string]any)
 	if !ok {
 		return ""
 	}
 	patterns, ok := m[key].([]any)
-	if !ok || !strings.Contains(canonicalYAML(t, patterns), "metavariable: $GCOND") {
+	if !ok {
+		return ""
+	}
+	if text := canonicalYAML(t, patterns); !strings.Contains(text, "metavariable: $GCOND") &&
+		!strings.Contains(text, "metavariable: $GSW") {
 		return ""
 	}
 	var kept []any
@@ -385,7 +521,10 @@ func guard(t *testing.T, node any, key string) string {
 		if pm["pattern"] == "$GV" {
 			continue
 		}
-		if mr, ok := pm["metavariable-regex"].(map[string]any); ok && mr["metavariable"] == "$GV" {
+		if mr, ok := pm["metavariable-regex"].(map[string]any); ok && (mr["metavariable"] == "$GV" || mr["metavariable"] == "$GSQL") {
+			continue
+		}
+		if mp, ok := pm["metavariable-pattern"].(map[string]any); ok && mp["metavariable"] == "$GSQL" {
 			continue
 		}
 		if either, ok := pm["pattern-either"]; ok && !strings.Contains(canonicalYAML(t, either), "pattern-inside") {

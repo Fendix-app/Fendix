@@ -4,11 +4,30 @@
 # weak value itself (a password, an unverified token, java.util.Random), not
 # request input: the flow from it to the place it is trusted is the finding.
 #
-# Written in-house for Fendix; see docs/semgrep-rules.md.
+# Written in-house for Fendix; see docs/semgrep-rules.md. Every rule skips
+# test, fixture and mock code (TestJavaRulesShareTheTestPathExcludes).
 rules:
   - id: java-weak_password_hash-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       Password hashed with MD5 or SHA-1. A password reaches a fast, broken
@@ -80,6 +99,24 @@ rules:
   - id: java-jwt_no_verify-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: ERROR
     message: >-
       Claims read from a JWT whose signature was never verified. The token is
@@ -179,6 +216,24 @@ rules:
   - id: java-weak_random_token-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       Security token drawn from a predictable random generator. A value from

@@ -10,10 +10,16 @@
 # A guard (a host check, a containment check, a local-path check) counts only
 # when the branch taken on a failing check ends with a direct return or
 # throw (for a redirect, also a direct assignment of a literal to the target,
-# followed by nothing but literal assignments), not under an &&; or when the
-# use sits inside the then-branch of a passing check with no else. java-ssrf-sink and java-open_redirect-sink carry the same guards as
+# followed by nothing but literal assignments, in an if with no else whose
+# every startsWith("//") tests the target), not under an &&; or when the use
+# sits inside the then-branch of a passing check with no else. A String path
+# is contained only when it is itself the canonical or normalized path.
+# java-ssrf-sink and java-open_redirect-sink carry the same guards as
 # negations on their parameter; TestJavaSinkRulesShareTheirTaintRulesBlocks
 # keeps those copies equal.
+#
+# Every rule skips test, fixture and mock code (the paths block at the top of
+# each rule; TestJavaRulesShareTheTestPathExcludes keeps the copies equal).
 #
 # SSRF, path traversal and open redirect are category injection, as the
 # textscan Java rules already file them, so a finding of both collapses into
@@ -22,6 +28,24 @@ rules:
   - id: java-xss-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       Request input written into an HTML response without encoding (reflected
@@ -535,6 +559,24 @@ rules:
 
   - id: java-xss-sink
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       HTML built from a method argument and written to the servlet response
@@ -614,6 +656,24 @@ rules:
   - id: java-ssrf-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: ERROR
     message: >-
       Outbound request to a URL taken from request input (SSRF). A request
@@ -1397,6 +1457,24 @@ rules:
 
   - id: java-ssrf-sink
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       Outbound request to a URL taken from a method argument. This method sends
@@ -1815,6 +1893,24 @@ rules:
   - id: java-path_traversal-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       File path built from request input (path traversal). A request value
@@ -2338,22 +2434,22 @@ rules:
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  $GT $GV = <... $GN.getCanonicalPath() ...>;
+                  $GT $GV = $GN.getCanonicalPath();
                   ...
                   if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GV = <... $GN.getCanonicalPath() ...>;
+                  $GV = $GN.getCanonicalPath();
                   ...
                   if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GT $GV = <... $GN.normalize() ...>;
+                  $GT $GV = $GN.normalize().toString();
                   ...
                   if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GV = <... $GN.normalize() ...>;
+                  $GV = $GN.normalize().toString();
                   ...
                   if ($GCOND) $GBODY;
                   ...
@@ -2364,19 +2460,19 @@ rules:
           - pattern-not-inside: |
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GT $GV = <... $GN.getCanonicalPath() ...>;
+              $GT $GV = $GN.getCanonicalPath();
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GV = <... $GN.getCanonicalPath() ...>;
+              $GV = $GN.getCanonicalPath();
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GT $GV = <... $GN.normalize() ...>;
+              $GT $GV = $GN.normalize().toString();
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GV = <... $GN.normalize() ...>;
+              $GV = $GN.normalize().toString();
               ...
               if ($GCOND) { ... }
           - pattern: $GV
@@ -2398,19 +2494,19 @@ rules:
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  $GT $GV = <... $GN.getCanonicalPath() ...>;
+                  $GT $GV = $GN.getCanonicalPath();
                   ...
                   if ($GCOND) { ... }
               - pattern-inside: |
-                  $GV = <... $GN.getCanonicalPath() ...>;
+                  $GV = $GN.getCanonicalPath();
                   ...
                   if ($GCOND) { ... }
               - pattern-inside: |
-                  $GT $GV = <... $GN.normalize() ...>;
+                  $GT $GV = $GN.normalize().toString();
                   ...
                   if ($GCOND) { ... }
               - pattern-inside: |
-                  $GV = <... $GN.normalize() ...>;
+                  $GV = $GN.normalize().toString();
                   ...
                   if ($GCOND) { ... }
           - pattern-inside: |
@@ -2520,6 +2616,24 @@ rules:
 
   - id: java-path_traversal-sink
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       File path built from a base directory and a method argument. This method
@@ -2713,6 +2827,24 @@ rules:
   - id: java-open_redirect-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       Redirect to a URL taken from request input (open redirect). A request
@@ -3183,7 +3315,10 @@ rules:
               pattern: if ($GCOND) $GBODY;
           - metavariable-regex:
               metavariable: $GIF
-              regex: '(?s)^if\s*\((?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*?\b(\w+)\.startsWith\("//"\)(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+              regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*(?<![\w.])(\w+)\.startsWith\("//"\)(?:(?!(?<![\w.])(?!\1\.)\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+          - metavariable-pattern:
+              metavariable: $GBODY
+              pattern: '$GV = "...";'
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
@@ -3245,6 +3380,24 @@ rules:
 
   - id: java-open_redirect-sink
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       Redirect to a URL taken from a method argument. This method redirects to
@@ -3355,7 +3508,10 @@ rules:
                 pattern: if ($GCOND) $GBODY;
             - metavariable-regex:
                 metavariable: $GIF
-                regex: '(?s)^if\s*\((?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*?\b(\w+)\.startsWith\("//"\)(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).)*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+                regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*(?<![\w.])(\w+)\.startsWith\("//"\)(?:(?!(?<![\w.])(?!\1\.)\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+            - metavariable-pattern:
+                metavariable: $GBODY
+                pattern: '$Q = "...";'
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:

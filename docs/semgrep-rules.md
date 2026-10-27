@@ -167,16 +167,35 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
   the call or reassigned before it is not followed. Taint then follows that
   method's body, and the finding is reported at the sink inside it.
 - **Guards.** A host allowlist (on the host itself), a path containment
-  check or a local-path redirect check (both halves, each with its
-  polarity) makes a value safe only when the branch taken on a failing
-  check ends with a direct `return` or `throw` (for a redirect, also a
-  direct assignment of a literal to the target, followed by nothing but
-  literal assignments), not under an `&&`; or when the use is in
-  the then-branch of a passing check with no `else`. The taint rules
-  apply them as sanitizers to the uses after (or inside) the check;
-  `java-ssrf-sink` and `java-open_redirect-sink` apply the same guards as
-  negations, and `TestJavaSinkRulesShareTheirTaintRulesBlocks` keeps the
-  copies equal.
+  check (a String path only when it is itself the canonical or normalized
+  path), a local-path redirect check (both halves, each with its
+  polarity) or a SQL identifier allowlist (a membership, or every operand
+  a negated equality with a literal) makes a value safe only when the
+  branch taken on a failing check ends with a direct `return` or `throw`
+  (for a redirect or a SQL identifier, also a direct assignment of a
+  literal to the value itself, followed by nothing but literal
+  assignments, in an `if` with no `else`), not under an `&&`; or when the
+  use is in the then-branch of a passing check with no `else`. A SQL
+  identifier is also safe after an allowlist ternary
+  (`ALLOWED.contains(sort) ? sort : "id"`) or a `switch` on it whose cases
+  only `break` and whose `default` replaces it with a literal or exits.
+  The taint rules apply them as sanitizers to the uses after (or inside)
+  the check; `java-sqli-sink`, `java-ssrf-sink` and
+  `java-open_redirect-sink` apply the same guards as negations, and
+  `TestJavaSinkRulesShareTheirTaintRulesBlocks` keeps the copies equal.
+- **Constant SQL identifiers.** `java-sqli-taint` does not follow a count
+  or length, `Collections.nCopies` of a literal, a stream mapped to a
+  literal, a lookup with a literal default in a final `Map.of` of
+  literals, or a call of a method of the same class whose every `return`
+  is a literal.
+- **Test code.** Every Java rule carries the same `paths: exclude:` list:
+  `**/src/test/**`, `**/src/integrationTest/**`, `**/src/testFixtures/**`,
+  `**/src/it/**`, `*Test.java`, `*Tests.java`, `*IT.java`, `**/mock/**`,
+  `**/mocks/**`, `**/fake/**` and `**/fakes/**`. Semgrep matches them below
+  the scan root, so a checkout under such a directory is still scanned.
+  `TestJavaRulesShareTheTestPathExcludes` keeps the copies equal and
+  `TestJavaTestAndMockCodeIsNotScanned` runs Semgrep over a tree with every
+  location.
 - **Shape rules** cover a sink in another class: a non-private method
   whose own `String` parameter is concatenated into SQL or HTML, is the
   URL of a request or a redirect, or is a file name joined to a directory.

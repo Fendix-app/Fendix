@@ -24,10 +24,40 @@
 #     that method;
 #   - HttpServletRequest.getParameter, getParameterValues, getHeader,
 #     getQueryString, getInputStream and getReader.
+#
+# A SQL identifier (a sort column, a direction, IN-list placeholders) is not
+# request text when it is a count, copies or a stream map of a literal, a
+# lookup in a final map of literals with a literal default, or a call of a
+# method of this class that returns only literals; or when it passed an
+# allowlist or a set of literals (a membership or negated-equalities check
+# that exits or replaces it with a literal, a ternary, or a switch that
+# replaces it in its default). java-sqli-sink carries the same guards as
+# negations.
+#
+# Every rule skips test, fixture and mock code (the paths block at the top of
+# each rule; TestJavaRulesShareTheTestPathExcludes keeps the copies equal).
 rules:
   - id: java-sqli-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: ERROR
     message: >-
       SQL query built from request input. A request value reaches the SQL text
@@ -438,6 +468,255 @@ rules:
           - pattern: Long.parseLong(...)
           - pattern: Long.valueOf(...)
           - pattern: UUID.fromString(...)
+      # Values that hold no request text whatever the request: a count or a length;
+      # n copies of a literal (IN-list placeholders); a stream mapped to a literal;
+      # a lookup in a final map of literals, with a literal default; a call of a
+      # method of this class whose every return is a literal.
+      - pattern-either:
+          - pattern: $GX.size()
+          - pattern: $GX.length()
+          - pattern: $GX.length
+          - pattern: Collections.nCopies($GN, "...")
+      - patterns:
+          # A lambda's expression body is bound whole: "..." in its place would
+          # also match a concatenation that holds the element.
+          - pattern: $GX.map($GL -> $GLIT)
+          - metavariable-regex:
+              metavariable: $GLIT
+              regex: ^"[^"\\\n]*"$
+      - patterns:
+          - pattern-either:
+              - pattern: $GM.get($GK)
+              - pattern: $GM.getOrDefault($GK, "...")
+          - pattern-inside: |
+              class $GC {
+                ...
+                final $GMT $GM = $GMINIT;
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $GMINIT
+              regex: '(?s)^(?:Map|ImmutableMap)\s*\.\s*of\s*\(\s*(?:"[^"\\\n]*"\s*(?:,\s*"[^"\\\n]*"\s*)*)?\)$|^Map\s*\.\s*ofEntries\s*\(\s*(?:(?:Map\s*\.\s*)?entry\s*\(\s*"[^"\\\n]*"\s*,\s*"[^"\\\n]*"\s*\)\s*(?:,\s*(?:Map\s*\.\s*)?entry\s*\(\s*"[^"\\\n]*"\s*,\s*"[^"\\\n]*"\s*\)\s*)*)?\)$'
+      - patterns:
+          - pattern: $GH(...)
+          - pattern-inside: |
+              class $GC {
+                ...
+                $GRT $GH(...) {
+                  ...
+                  return "...";
+                }
+                ...
+              }
+          # No method of that name returns anything but a literal (or a choice
+          # between two literals).
+          - pattern-not:
+              patterns:
+                - pattern: $GH(...)
+                - pattern-inside: |
+                    class $GC {
+                      ...
+                      $GRT $GH(...) {
+                        ...
+                        return $GRET;
+                      }
+                      ...
+                    }
+                - metavariable-regex:
+                    metavariable: $GRET
+                    regex: '(?s)^(?!"[^"\\\n]*"$)(?![^?]*\?\s*"[^"\\\n]*"\s*:\s*"[^"\\\n]*"$)'
+      # An identifier checked against an allowlist or a set of literals: the
+      # same guards as java-sqli-sink's negations.
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GALLOW.contains($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GALLOW.containsKey($GV) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GALLOW.contains($GV)'
+                    - pattern: '!$GALLOW.containsKey($GV)'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-inside: |
+              $GIF;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GALLOW.contains($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GALLOW.containsKey($GV) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GIF
+              pattern: if ($GCOND) $GBODY;
+          - metavariable-regex:
+              metavariable: $GIF
+              regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\.\s*contains(?:Key)?\s*\(\s*)(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\.\s*contains(?:Key)?\s*\(\s*(\w+)\s*\)(?:(?!\.\s*contains(?:Key)?\s*\(\s*(?!\1\s*\)))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\\\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\\\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+          - metavariable-pattern:
+              metavariable: $GBODY
+              pattern: '$GV = "...";'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GALLOW.contains($GV)'
+                    - pattern: '!$GALLOW.containsKey($GV)'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) { ... }
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GALLOW.contains($GV) ...>) { ... }
+              - pattern-inside: |
+                  if (<... $GALLOW.containsKey($GV) ...>) { ... }
+          - pattern-not-inside: |
+              if ($GCOND) { ... } else { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GALLOW.contains($GV)'
+                    - pattern: '$GALLOW.containsKey($GV)'
+                - pattern-not-inside: '!$GALLOW.contains($GV)'
+                - pattern-not-inside: '!$GALLOW.containsKey($GV)'
+                - pattern-not-inside: '$GA || $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... "...".equals($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... "...".equalsIgnoreCase($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GV.equals("...") ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GV.equalsIgnoreCase("...") ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!"...".equals($GV)'
+                    - pattern: '!"...".equalsIgnoreCase($GV)'
+                    - pattern: '!$GV.equals("...")'
+                    - pattern: '!$GV.equalsIgnoreCase("...")'
+          - metavariable-regex:
+              metavariable: $GCOND
+              regex: '(?s)^\s*(?:!\s*"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*(\w+)\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\1\s*\)|\1\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*|!\s*(\w+)\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\2\s*\)|\2\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*)\s*$'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-inside: |
+              $GIF;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... "...".equals($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... "...".equalsIgnoreCase($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GV.equals("...") ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GV.equalsIgnoreCase("...") ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GIF
+              pattern: if ($GCOND) $GBODY;
+          - metavariable-regex:
+              metavariable: $GIF
+              regex: '(?s)^(?!.*\belse\b)if\s*\(\s*(?:!\s*"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*(\w+)\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\1\s*\)|\1\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*|!\s*(\w+)\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\2\s*\)|\2\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*)\s*\)\s*(?:\{(?:.*[;{}])?\s*)?(?:\1|\2)\s*=\s*"[^"\\\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\\\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+          - metavariable-pattern:
+              metavariable: $GBODY
+              pattern: '$GV = "...";'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!"...".equals($GV)'
+                    - pattern: '!"...".equalsIgnoreCase($GV)'
+                    - pattern: '!$GV.equals("...")'
+                    - pattern: '!$GV.equalsIgnoreCase("...")'
+      - patterns:
+          - pattern-inside: |
+              switch ($GV) { case $GSC: ... }
+              ...
+          - pattern-inside: |
+              $GSW;
+              ...
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GSW
+              pattern: 'switch ($GV) { case $GSC: ... }'
+          - metavariable-regex:
+              metavariable: $GSW
+              regex: '(?s)^switch\s*\(\s*(\w+)\s*\)\s*\{\s*(?:case\s+"[^"\\\n]*"(?:\s*,\s*"[^"\\\n]*")*\s*:\s*(?:break\s*;?\s*)?)*default\s*:\s*(?:\1\s*=\s*"[^"\\\n]*"\s*;?\s*(?:break\s*;?\s*)?|(?:throw|return)\b[^;{}]*;?\s*)(?:case\s+"[^"\\\n]*"(?:\s*,\s*"[^"\\\n]*")*\s*:\s*(?:break\s*;?\s*)?)*\}?\s*$'
+      - pattern-either:
+          - pattern: '$GALLOW.contains($GX) ? $GX : "..."'
+          - pattern: '$GALLOW.containsKey($GX) ? $GX : "..."'
+          - pattern: '!$GALLOW.contains($GX) ? "..." : $GX'
+          - pattern: '!$GALLOW.containsKey($GX) ? "..." : $GX'
+          - pattern: '"...".equals($GX) ? $GX : "..."'
+          - pattern: '"...".equalsIgnoreCase($GX) ? $GX : "..."'
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -483,6 +762,24 @@ rules:
 
   - id: java-sqli-sink
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: WARNING
     message: >-
       SQL query built from a method argument. This method concatenates or
@@ -565,10 +862,380 @@ rules:
             ...
           }
       - pattern-not: $DB.$QM("...", ...)
+      # The same allowlist guards as java-sqli-taint's, on the parameter.
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $GALLOW.contains($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $GALLOW.containsKey($Q) ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: (JdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (JdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (Statement $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Statement $DB).$QM($GSQL, ...)
+                - pattern: (Connection $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Connection $DB).$QM($GSQL, ...)
+                - pattern: (EntityManager $DB).$QM($GSQL, ...)
+                # Hibernate's Session also has update(entity) and the like; only its query
+                # factories take SQL or HQL text.
+                - patterns:
+                    - pattern: (Session $DB).$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $QM
+                        regex: ^(createQuery|createNativeQuery|createSQLQuery)$
+                - pattern: $DAO.getJdbcTemplate().$QM($GSQL, ...)
+                - pattern: getJdbcTemplate().$QM($GSQL, ...)
+                # A receiver whose type is not known here, by its name.
+                - patterns:
+                    - pattern: $DB.$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $DB
+                        regex: (?i)^(\w*jdbc\w*|stmt|statement|\w*Statement|conn|connection|\w*Connection|em|entityManager|\w*EntityManager)$
+            - metavariable-regex:
+                metavariable: $GSQL
+                regex: '(?s)^\s*"[^"\\\n]*"\s*\+\s*\w+\s*(?:\+\s*"[^"\\\n]*"\s*)?$'
+            - metavariable-pattern:
+                metavariable: $GSQL
+                pattern: $Q
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GALLOW.contains($Q)'
+                      - pattern: '!$GALLOW.containsKey($Q)'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-inside: |
+                $GIF;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $GALLOW.contains($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $GALLOW.containsKey($Q) ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: (JdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (JdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (Statement $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Statement $DB).$QM($GSQL, ...)
+                - pattern: (Connection $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Connection $DB).$QM($GSQL, ...)
+                - pattern: (EntityManager $DB).$QM($GSQL, ...)
+                # Hibernate's Session also has update(entity) and the like; only its query
+                # factories take SQL or HQL text.
+                - patterns:
+                    - pattern: (Session $DB).$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $QM
+                        regex: ^(createQuery|createNativeQuery|createSQLQuery)$
+                - pattern: $DAO.getJdbcTemplate().$QM($GSQL, ...)
+                - pattern: getJdbcTemplate().$QM($GSQL, ...)
+                # A receiver whose type is not known here, by its name.
+                - patterns:
+                    - pattern: $DB.$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $DB
+                        regex: (?i)^(\w*jdbc\w*|stmt|statement|\w*Statement|conn|connection|\w*Connection|em|entityManager|\w*EntityManager)$
+            - metavariable-regex:
+                metavariable: $GSQL
+                regex: '(?s)^\s*"[^"\\\n]*"\s*\+\s*\w+\s*(?:\+\s*"[^"\\\n]*"\s*)?$'
+            - metavariable-pattern:
+                metavariable: $GSQL
+                pattern: $Q
+            - metavariable-pattern:
+                metavariable: $GIF
+                pattern: if ($GCOND) $GBODY;
+            - metavariable-regex:
+                metavariable: $GIF
+                regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\.\s*contains(?:Key)?\s*\(\s*)(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\.\s*contains(?:Key)?\s*\(\s*(\w+)\s*\)(?:(?!\.\s*contains(?:Key)?\s*\(\s*(?!\1\s*\)))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\\\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\\\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+            - metavariable-pattern:
+                metavariable: $GBODY
+                pattern: '$Q = "...";'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GALLOW.contains($Q)'
+                      - pattern: '!$GALLOW.containsKey($Q)'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $GALLOW.contains($Q) ...>) { ... }
+                - pattern-inside: |
+                    if (<... $GALLOW.containsKey($Q) ...>) { ... }
+            - pattern-not-inside: |
+                if ($GCOND) { ... } else { ... }
+            - pattern-either:
+                - pattern: (JdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (JdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (Statement $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Statement $DB).$QM($GSQL, ...)
+                - pattern: (Connection $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Connection $DB).$QM($GSQL, ...)
+                - pattern: (EntityManager $DB).$QM($GSQL, ...)
+                # Hibernate's Session also has update(entity) and the like; only its query
+                # factories take SQL or HQL text.
+                - patterns:
+                    - pattern: (Session $DB).$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $QM
+                        regex: ^(createQuery|createNativeQuery|createSQLQuery)$
+                - pattern: $DAO.getJdbcTemplate().$QM($GSQL, ...)
+                - pattern: getJdbcTemplate().$QM($GSQL, ...)
+                # A receiver whose type is not known here, by its name.
+                - patterns:
+                    - pattern: $DB.$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $DB
+                        regex: (?i)^(\w*jdbc\w*|stmt|statement|\w*Statement|conn|connection|\w*Connection|em|entityManager|\w*EntityManager)$
+            - metavariable-regex:
+                metavariable: $GSQL
+                regex: '(?s)^\s*"[^"\\\n]*"\s*\+\s*\w+\s*(?:\+\s*"[^"\\\n]*"\s*)?$'
+            - metavariable-pattern:
+                metavariable: $GSQL
+                pattern: $Q
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '$GALLOW.contains($Q)'
+                      - pattern: '$GALLOW.containsKey($Q)'
+                  - pattern-not-inside: '!$GALLOW.contains($Q)'
+                  - pattern-not-inside: '!$GALLOW.containsKey($Q)'
+                  - pattern-not-inside: '$GA || $GB'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... "...".equals($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... "...".equalsIgnoreCase($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $Q.equals("...") ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $Q.equalsIgnoreCase("...") ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: (JdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (JdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (Statement $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Statement $DB).$QM($GSQL, ...)
+                - pattern: (Connection $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Connection $DB).$QM($GSQL, ...)
+                - pattern: (EntityManager $DB).$QM($GSQL, ...)
+                # Hibernate's Session also has update(entity) and the like; only its query
+                # factories take SQL or HQL text.
+                - patterns:
+                    - pattern: (Session $DB).$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $QM
+                        regex: ^(createQuery|createNativeQuery|createSQLQuery)$
+                - pattern: $DAO.getJdbcTemplate().$QM($GSQL, ...)
+                - pattern: getJdbcTemplate().$QM($GSQL, ...)
+                # A receiver whose type is not known here, by its name.
+                - patterns:
+                    - pattern: $DB.$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $DB
+                        regex: (?i)^(\w*jdbc\w*|stmt|statement|\w*Statement|conn|connection|\w*Connection|em|entityManager|\w*EntityManager)$
+            - metavariable-regex:
+                metavariable: $GSQL
+                regex: '(?s)^\s*"[^"\\\n]*"\s*\+\s*\w+\s*(?:\+\s*"[^"\\\n]*"\s*)?$'
+            - metavariable-pattern:
+                metavariable: $GSQL
+                pattern: $Q
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!"...".equals($Q)'
+                      - pattern: '!"...".equalsIgnoreCase($Q)'
+                      - pattern: '!$Q.equals("...")'
+                      - pattern: '!$Q.equalsIgnoreCase("...")'
+            - metavariable-regex:
+                metavariable: $GCOND
+                regex: '(?s)^\s*(?:!\s*"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*(\w+)\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\1\s*\)|\1\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*|!\s*(\w+)\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\2\s*\)|\2\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*)\s*$'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-inside: |
+                $GIF;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... "...".equals($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... "...".equalsIgnoreCase($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $Q.equals("...") ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $Q.equalsIgnoreCase("...") ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: (JdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (JdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (Statement $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Statement $DB).$QM($GSQL, ...)
+                - pattern: (Connection $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Connection $DB).$QM($GSQL, ...)
+                - pattern: (EntityManager $DB).$QM($GSQL, ...)
+                # Hibernate's Session also has update(entity) and the like; only its query
+                # factories take SQL or HQL text.
+                - patterns:
+                    - pattern: (Session $DB).$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $QM
+                        regex: ^(createQuery|createNativeQuery|createSQLQuery)$
+                - pattern: $DAO.getJdbcTemplate().$QM($GSQL, ...)
+                - pattern: getJdbcTemplate().$QM($GSQL, ...)
+                # A receiver whose type is not known here, by its name.
+                - patterns:
+                    - pattern: $DB.$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $DB
+                        regex: (?i)^(\w*jdbc\w*|stmt|statement|\w*Statement|conn|connection|\w*Connection|em|entityManager|\w*EntityManager)$
+            - metavariable-regex:
+                metavariable: $GSQL
+                regex: '(?s)^\s*"[^"\\\n]*"\s*\+\s*\w+\s*(?:\+\s*"[^"\\\n]*"\s*)?$'
+            - metavariable-pattern:
+                metavariable: $GSQL
+                pattern: $Q
+            - metavariable-pattern:
+                metavariable: $GIF
+                pattern: if ($GCOND) $GBODY;
+            - metavariable-regex:
+                metavariable: $GIF
+                regex: '(?s)^(?!.*\belse\b)if\s*\(\s*(?:!\s*"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*(\w+)\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\1\s*\)|\1\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*|!\s*(\w+)\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)(?:\s*&&\s*!\s*(?:"[^"\\\n]*"\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*\2\s*\)|\2\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*"[^"\\\n]*"\s*\)))*)\s*\)\s*(?:\{(?:.*[;{}])?\s*)?(?:\1|\2)\s*=\s*"[^"\\\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\\\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+            - metavariable-pattern:
+                metavariable: $GBODY
+                pattern: '$Q = "...";'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!"...".equals($Q)'
+                      - pattern: '!"...".equalsIgnoreCase($Q)'
+                      - pattern: '!$Q.equals("...")'
+                      - pattern: '!$Q.equalsIgnoreCase("...")'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                switch ($Q) { case $GSC: ... }
+                ...
+            - pattern-inside: |
+                $GSW;
+                ...
+            - pattern-either:
+                - pattern: (JdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (JdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcTemplate $DB).$QM($GSQL, ...)
+                - pattern: (NamedParameterJdbcOperations $DB).$QM($GSQL, ...)
+                - pattern: (Statement $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Statement $DB).$QM($GSQL, ...)
+                - pattern: (Connection $DB).$QM($GSQL, ...)
+                - pattern: (java.sql.Connection $DB).$QM($GSQL, ...)
+                - pattern: (EntityManager $DB).$QM($GSQL, ...)
+                # Hibernate's Session also has update(entity) and the like; only its query
+                # factories take SQL or HQL text.
+                - patterns:
+                    - pattern: (Session $DB).$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $QM
+                        regex: ^(createQuery|createNativeQuery|createSQLQuery)$
+                - pattern: $DAO.getJdbcTemplate().$QM($GSQL, ...)
+                - pattern: getJdbcTemplate().$QM($GSQL, ...)
+                # A receiver whose type is not known here, by its name.
+                - patterns:
+                    - pattern: $DB.$QM($GSQL, ...)
+                    - metavariable-regex:
+                        metavariable: $DB
+                        regex: (?i)^(\w*jdbc\w*|stmt|statement|\w*Statement|conn|connection|\w*Connection|em|entityManager|\w*EntityManager)$
+            - metavariable-regex:
+                metavariable: $GSQL
+                regex: '(?s)^\s*"[^"\\\n]*"\s*\+\s*\w+\s*(?:\+\s*"[^"\\\n]*"\s*)?$'
+            - metavariable-pattern:
+                metavariable: $GSQL
+                pattern: $Q
+            - metavariable-pattern:
+                metavariable: $GSW
+                pattern: 'switch ($Q) { case $GSC: ... }'
+            - metavariable-regex:
+                metavariable: $GSW
+                regex: '(?s)^switch\s*\(\s*(\w+)\s*\)\s*\{\s*(?:case\s+"[^"\\\n]*"(?:\s*,\s*"[^"\\\n]*")*\s*:\s*(?:break\s*;?\s*)?)*default\s*:\s*(?:\1\s*=\s*"[^"\\\n]*"\s*;?\s*(?:break\s*;?\s*)?|(?:throw|return)\b[^;{}]*;?\s*)(?:case\s+"[^"\\\n]*"(?:\s*,\s*"[^"\\\n]*")*\s*:\s*(?:break\s*;?\s*)?)*\}?\s*$'
 
   - id: java-cmdi-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: ERROR
     message: >-
       OS command built from request input. A request value reaches a shell
@@ -1041,6 +1708,24 @@ rules:
   - id: java-ssti-taint
     mode: taint
     languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
     severity: ERROR
     message: >-
       Template compiled from request input (server-side template injection). A

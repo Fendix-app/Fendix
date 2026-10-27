@@ -1061,33 +1061,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `FilenameUtils.getName`, and `SecureRandom`. An argument array whose
       program is fixed. The claims of a token that went through `verify()`,
       and a token's time claims (`exp`, `iat`, `nbf`).
+    - In SQL, a value that cannot hold request text: a count or length
+      (`size()`, `length`), `Collections.nCopies` of a literal or a stream
+      mapped to a literal (IN-list placeholders), a `get` or a
+      `getOrDefault` with a literal default on a final `Map.of` or
+      `Map.ofEntries` of literals, and a call of a method of the same class
+      whose every `return` is a literal (or a choice between two literals).
+      `"... ORDER BY " + sort` and `String.join(",", ids)` stay reported.
+    - Test, fixture and mock code: every Java rule skips `src/test`,
+      `src/integrationTest`, `src/testFixtures` and `src/it`, files named
+      `*Test.java`, `*Tests.java` and `*IT.java`, and `mock`, `mocks`, `fake`
+      and `fakes` directories. The patterns are matched below the scan root,
+      so a checkout that lies under such a directory is still scanned.
     - A value behind a guard. A guard counts only when the branch taken on a
       failing check ends with a direct `return` or `throw` (or, for a
-      redirect, a direct assignment of a literal to the target itself,
-      followed by nothing but literal assignments), not one nested in an
-      `if`, `try`, loop or lambda, and the check is not under an `&&`; or
-      when the use sits in the then-branch of a passing check with no
-      `else`. A check that only logs or exits only sometimes, a denylist,
-      and a use inside the failing branch stay reported. The checks are:
+      redirect or a SQL identifier, a direct assignment of a literal to the
+      value itself, followed by nothing but literal assignments, in an `if`
+      with no `else`), not one nested in an `if`, `try`, loop or lambda, and
+      the check is not under an `&&`; or when the use sits in the
+      then-branch of a passing check with no `else`. A check that only logs
+      or exits only sometimes, a denylist, and a use inside the failing
+      branch stay reported. The checks are:
       - a host allowlist or a literal host comparison on the URL's host:
         `getHost()` of a `URI` or `URL` parsed from it, or a variable
         holding that host; or one exact URL (`equals`, or `matches` with
         every dot escaped). A check on the scheme, path or port alone is
         not a host check, though it may sit beside one in an `||`;
       - containment: a normalized or real `Path` that `startsWith` the base,
-        or a canonical or normalized String path, inline or in a variable,
-        that `startsWith` the base plus a separator. A String `startsWith`
-        without a separator is not containment;
+        or a String that is itself a canonical or normalized path
+        (`getCanonicalPath()`, `normalize().toString()`), inline or in a
+        variable, that `startsWith` the base plus a separator. A String
+        `startsWith` without a separator is not containment, and neither is
+        a canonical base joined with the input;
       - for a redirect, both halves, each with its polarity: a failing
         check holds `!t.startsWith("/")` and `t.startsWith("//")` as `||`
         operands, and a passing one `t.startsWith("/")` and
-        `!t.startsWith("//")` as `&&` operands.
+        `!t.startsWith("//")` as `&&` operands. A replacing check tests
+        `startsWith("//")` on the target only;
+      - for a SQL identifier: membership in an allowlist (`contains`,
+        `containsKey`); a condition whose every operand is a negated
+        equality of the value with a literal
+        (`!"asc".equalsIgnoreCase(dir) && !"desc".equalsIgnoreCase(dir)`);
+        the ternary `ALLOWED.contains(sort) ? sort : "id"`; and a `switch`
+        on the value whose cases only `break` and whose `default` assigns it
+        a literal or exits.
   - **Shape rules** (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
     `java-path_traversal-sink`, `java-open_redirect-sink`) report a sink in
     another class: a non-private method whose own `String` parameter is
     concatenated into SQL or HTML, is the URL of a request or a redirect, or
     is a file name joined to a directory. They exclude module constants and
-    literal arguments, prove no flow, and never count as reachable.
+    literal arguments, apply their taint rule's guards (for SQL, only when
+    the parameter is the one value in the SQL text), prove no flow, and
+    never count as reachable.
   - **Rating.** SQL, command and template injection, SSRF and unverified JWT
     claims are HIGH; XSS, path traversal, open redirect, weak password
     hashing and weak random tokens are MEDIUM; the shape rules are MEDIUM.
