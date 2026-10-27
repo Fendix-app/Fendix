@@ -2,9 +2,11 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/models"
@@ -168,6 +170,23 @@ func classifyErr(err error) reporters.ScannerReason {
 		return reporters.ReasonNetworkError
 	}
 	return reporters.ReasonExecutionError
+}
+
+// recordSemgrepRun records a semgrep run that succeeded. When Semgrep stopped
+// a rule on a file (its per-rule timeout), the run is still ok but its
+// findings are partial, so the detail names each rule and file whose matches
+// are missing — the way active-probes notes probes that got no response.
+func recordSemgrepRun(status *scannerStatusList, timeouts []semgrep.RuleTimeout) {
+	if len(timeouts) == 0 {
+		status.ok(AnalyzerSemgrep)
+		return
+	}
+	pairs := make([]string, 0, len(timeouts))
+	for _, t := range timeouts {
+		pairs = append(pairs, t.RuleID+" on "+t.Path)
+	}
+	status.okDetail(AnalyzerSemgrep, fmt.Sprintf("%d rule timeouts; those rules' matches in those files are missing: %s",
+		len(timeouts), strings.Join(pairs, ", ")))
 }
 
 // recordDepScanResult records the outcome of a pip-style dep scan (one

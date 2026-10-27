@@ -1006,14 +1006,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The framework parity gate shows no case change. The corpus has no such
     directory.
 
-- **Semgrep's deadline is 300 seconds, up from 120, and its per-rule timeout
-  is off.** Semgrep gave up on a rule after 5 seconds on one file and dropped
-  that rule's matches there without an error. It now runs with
-  `--timeout 0`, and the 300-second deadline bounds the whole run, which
-  executes every bundled pack at once. A run that exceeds it still fails as a
-  timeout, and the scan then has no Semgrep findings. On the parity corpus
-  `make parity` took 564 seconds, against 567 before the change, and no scan
-  took longer than 1.4 seconds.
+- **Semgrep's deadline is 300 seconds, up from 120, a rule may run for 30
+  seconds on one file, up from 5, and a rule that times out is reported.**
+  - **Per-rule timeout.** Semgrep gives up on a rule after `--timeout`
+    seconds on one file and drops that rule's matches there. The default, 5
+    seconds, can cut a taint rule off on a large file. Fendix now passes
+    `--timeout 30`. The bound stays: without one, a single pathological file
+    could use up the whole deadline, and a run past the deadline fails with
+    no Semgrep findings at all. Semgrep's `--timeout-threshold` (3) still
+    applies: after three rules time out on one file, it skips the remaining
+    rules on that file.
+  - **Timeouts are no longer silent.** Semgrep lists each timed-out rule
+    and file in its output's `errors`, which Fendix used to ignore. Each one
+    is now logged with the rule and the file. The `semgrep` entry in
+    `scanner_status` stays `ok`, because the run succeeded, but its `detail`
+    names the timed-out rules and files, whose findings are partial. This is
+    how `active-probes` reports probes that got no response.
+  - **Deadline.** The 300-second deadline bounds the whole run, which
+    executes every bundled pack at once.
+  - On the parity corpus `make parity` took 554 seconds, against 567
+    before this change, and no scan took longer than 1.3 seconds.
 
 ### Fixed
 

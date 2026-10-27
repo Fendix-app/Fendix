@@ -60,35 +60,47 @@ var validConfidenceKeys = map[string]bool{
 	"LOW":    true,
 }
 
-// ruleYAML is the subset of each rule's YAML we assert on. Unknown fields
-// in real semgrep YAML (e.g. patterns, message) are ignored — this is a
-// catalog audit, not a semgrep parser.
-type ruleYAML struct {
-	ID        string `yaml:"id"`
-	Severity  string `yaml:"severity"`
-	Languages []any  `yaml:"languages"`
-	Message   string `yaml:"message"`
-	Metadata  struct {
-		Category          string `yaml:"category"`
-		CWE               any    `yaml:"cwe"` // string or []string per resolveCWE
-		Confidence        string `yaml:"confidence"`
-		FendixSeverity    string `yaml:"fendix_severity"`
-		FendixTitle       string `yaml:"fendix_title"`
-		FendixRemediation string `yaml:"fendix_remediation"`
-	} `yaml:"metadata"`
+// packRule is one rule of a pack file: the fields tests read by name, and
+// the whole rule as decoded YAML for the metadata contract. Every test in
+// this package that reads a rule file decodes it with decodePack.
+type packRule struct {
+	ID        string
+	Message   string
+	Languages []string
+	Raw       map[string]any
 }
 
-type ruleFileYAML struct {
-	Rules []ruleYAML `yaml:"rules"`
+// decodePack decodes one rule file.
+func decodePack(data []byte) ([]packRule, error) {
+	var doc struct {
+		Rules []map[string]any `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	out := make([]packRule, 0, len(doc.Rules))
+	for _, raw := range doc.Rules {
+		r := packRule{Raw: raw}
+		r.ID, _ = raw["id"].(string)
+		r.Message, _ = raw["message"].(string)
+		langs, _ := raw["languages"].([]any)
+		for _, l := range langs {
+			name, _ := l.(string)
+			r.Languages = append(r.Languages, name)
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // loadAllRules walks the embedded FS, parses every YAML file, and returns
 // every rule it finds keyed by ID. Duplicate IDs across files (or within
 // one file) are reported as an error — semgrep merges rule packs by ID,
 // so a duplicate is a silent override.
-func loadAllRules(t *testing.T) map[string]ruleYAML {
+func loadAllRules(t *testing.T) map[string]packRule {
 	t.Helper()
-	out := make(map[string]ruleYAML)
+	out := make(map[string]packRule)
+	seenIn := make(map[string]string)
 	err := fs.WalkDir(embeddedRules, "rules", func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -100,19 +112,20 @@ func loadAllRules(t *testing.T) map[string]ruleYAML {
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		var doc ruleFileYAML
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		rules, err := decodePack(data)
+		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
-		for _, r := range doc.Rules {
+		for _, r := range rules {
 			if r.ID == "" {
 				t.Errorf("%s: rule with empty id", path)
 				continue
 			}
-			if existing, ok := out[r.ID]; ok {
-				t.Errorf("duplicate rule id %q (also in %v)", r.ID, existing)
+			if other, ok := seenIn[r.ID]; ok {
+				t.Errorf("duplicate rule id %q in %s (also in %s)", r.ID, path, other)
 				continue
 			}
+			seenIn[r.ID] = path
 			out[r.ID] = r
 		}
 		return nil
@@ -139,101 +152,6 @@ func TestRulepack_TotalCountMatchesConstant(t *testing.T) {
 // semgrepMetavariable matches a metavariable Semgrep fills in at match time
 // ($FUNC, $...ARGS). Rule messages may use them; published copy may not.
 var semgrepMetavariable = regexp.MustCompile(`\$(?:\.\.\.)?[A-Z_][A-Z0-9_]*\b`)
-
-// TestRulepack_MetavariableMessagesHaveStaticCopy requires every rule whose
-// runtime message interpolates a metavariable to ship placeholder-free
-// metadata.fendix_title and fendix_remediation. The public security catalog
-// prints those instead of the raw message (v3.6.3: eleven rules published
-// '$VAR', '$FUNC' and similar on the documentation site).
-func TestRulepack_MetavariableMessagesHaveStaticCopy(t *testing.T) {
-	for id, r := range loadAllRules(t) {
-		if !semgrepMetavariable.MatchString(r.Message) {
-			continue
-		}
-		for field, value := range map[string]string{"fendix_title": r.Metadata.FendixTitle, "fendix_remediation": r.Metadata.FendixRemediation} {
-			if strings.TrimSpace(value) == "" {
-				t.Errorf("rule %q: message interpolates %v but metadata.%s is empty", id, semgrepMetavariable.FindAllString(r.Message, -1), field)
-			} else if token := semgrepMetavariable.FindString(value); token != "" {
-				t.Errorf("rule %q: metadata.%s carries metavariable %q; static copy must read without interpolation", id, field, token)
-			}
-		}
-	}
-}
-
-func TestRulepack_EveryRuleHasFendixSeverity(t *testing.T) {
-	for id, r := range loadAllRules(t) {
-		got := strings.ToUpper(r.Metadata.FendixSeverity)
-		if !validFendixSeverityKeys[got] {
-			t.Errorf("rule %q: metadata.fendix_severity = %q; want one of CRITICAL/HIGH/MEDIUM/LOW/INFO",
-				id, r.Metadata.FendixSeverity)
-		}
-	}
-}
-
-func TestRulepack_EveryRuleHasCategory(t *testing.T) {
-	for id, r := range loadAllRules(t) {
-		if strings.TrimSpace(r.Metadata.Category) == "" {
-			t.Errorf("rule %q: metadata.category is empty", id)
-		}
-	}
-}
-
-func TestRulepack_EveryRuleHasCWE(t *testing.T) {
-	for id, r := range loadAllRules(t) {
-		switch v := r.Metadata.CWE.(type) {
-		case string:
-			if strings.TrimSpace(v) == "" {
-				t.Errorf("rule %q: metadata.cwe is empty string", id)
-			}
-		case []any:
-			if len(v) == 0 {
-				t.Errorf("rule %q: metadata.cwe is empty list", id)
-			}
-		case nil:
-			t.Errorf("rule %q: metadata.cwe is absent", id)
-		default:
-			t.Errorf("rule %q: metadata.cwe has unexpected type %T", id, v)
-		}
-	}
-}
-
-func TestRulepack_EveryRuleHasValidConfidence(t *testing.T) {
-	for id, r := range loadAllRules(t) {
-		got := strings.ToUpper(r.Metadata.Confidence)
-		if !validConfidenceKeys[got] {
-			t.Errorf("rule %q: metadata.confidence = %q; want HIGH/MEDIUM/LOW",
-				id, r.Metadata.Confidence)
-		}
-	}
-}
-
-func TestRulepack_EveryRuleHasLanguage(t *testing.T) {
-	for id, r := range loadAllRules(t) {
-		if len(r.Languages) == 0 {
-			t.Errorf("rule %q: languages list is empty", id)
-		}
-	}
-}
-
-func TestRulepack_LowConfidenceCappedAtMediumSeverity(t *testing.T) {
-	// Mirrors the consistency rule in docs/semgrep-rules.md:
-	// "a finding with confidence: LOW cannot have severity higher than
-	// MEDIUM. The orchestrator will downgrade and warn."
-	// At write time the rule is enforced at the orchestrator layer, not in
-	// the rule pack — but a rule that ships with LOW+HIGH is shipping a
-	// finding that will be silently downgraded, which is a docs-drift bug
-	// of its own. Catch it here.
-	rank := map[string]int{"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
-	for id, r := range loadAllRules(t) {
-		conf := strings.ToUpper(r.Metadata.Confidence)
-		sev := strings.ToUpper(r.Metadata.FendixSeverity)
-		if conf == "LOW" && rank[sev] > rank["MEDIUM"] {
-			t.Errorf("rule %q: confidence=LOW but fendix_severity=%s. "+
-				"Downgrade severity or raise confidence — the orchestrator "+
-				"will downgrade this to MEDIUM anyway.", id, sev)
-		}
-	}
-}
 
 // TestRulepack_ValidatesViaSemgrepCLI invokes `semgrep --validate` against
 // the bundled rules. Skipped when semgrep is not on PATH (the common dev
@@ -432,6 +350,11 @@ func ruleContractViolations(rule map[string]any) []string {
 	if s := str("fendix_severity"); !validFendixSeverityKeys[s] {
 		bad("metadata.fendix_severity %q is not CRITICAL, HIGH, MEDIUM, LOW or INFO", s)
 	}
+	// docs/semgrep-rules.md: a finding with confidence LOW cannot be more
+	// severe than MEDIUM; the orchestrator would downgrade it silently.
+	if str("confidence") == "LOW" && (str("fendix_severity") == "HIGH" || str("fendix_severity") == "CRITICAL") {
+		bad("confidence LOW caps fendix_severity at MEDIUM, not %s", str("fendix_severity"))
+	}
 	for _, key := range []string{"fendix_title", "fendix_remediation"} {
 		v := strings.TrimSpace(str(key))
 		if v == "" {
@@ -512,37 +435,20 @@ func textsUnder(node any, key string) []string {
 // TestEveryRuleCarriesFendixMetadata holds every bundled rule to the
 // metadata contract: category (one of five), cwe, confidence,
 // fendix_severity, fendix_title and fendix_remediation; languages drawn from
-// python, javascript, typescript, java and go; and for a taint rule,
-// fendix_reachability: taint, confidence MEDIUM and a <lang>-<class>-taint id.
+// python, javascript, typescript, java and go; confidence LOW only up to
+// fendix_severity MEDIUM; and for a taint rule, fendix_reachability: taint,
+// confidence MEDIUM and a <lang>-<class>-taint id. It is the one definition
+// of a valid rule; TestRulepack_TotalCountMatchesConstant checks the count
+// and duplicate ids.
 func TestEveryRuleCarriesFendixMetadata(t *testing.T) {
-	rules := 0
-	err := fs.WalkDir(embeddedRules, "rules", func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() {
-			return walkErr
-		}
-		data, err := embeddedRules.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		var doc struct {
-			Rules []map[string]any `yaml:"rules"`
-		}
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		for _, rule := range doc.Rules {
-			rules++
-			for _, v := range ruleContractViolations(rule) {
-				t.Errorf("%s: rule %v: %s", path, rule["id"], v)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	rules := loadAllRules(t)
+	if len(rules) == 0 {
+		t.Fatal("no bundled rules")
 	}
-	if rules != rulepackTotalCount {
-		t.Errorf("checked %d rules; rulepackTotalCount = %d", rules, rulepackTotalCount)
+	for id, r := range rules {
+		for _, v := range ruleContractViolations(r.Raw) {
+			t.Errorf("rule %s: %s", id, v)
+		}
 	}
 }
 
@@ -601,6 +507,8 @@ metadata:
 		{"language alias", taintRule, "[javascript, typescript]", "[js, typescript]", `language "js"`},
 		{"taint rule without reachability", taintRule, "  fendix_reachability: taint\n", "", "must set metadata.fendix_reachability"},
 		{"taint rule at HIGH confidence", taintRule, "confidence: MEDIUM", "confidence: HIGH", "must be MEDIUM"},
+		{"LOW confidence at MEDIUM severity", sinkRule, "confidence: MEDIUM", "confidence: LOW", ""},
+		{"LOW confidence at HIGH severity", taintRule, "confidence: MEDIUM", "confidence: LOW", "caps fendix_severity at MEDIUM"},
 		{"taint rule misnamed", taintRule, "js-sqli-taint", "express-sqli", "<lang>-<class>-taint"},
 		{"pattern rule claiming reachability", sinkRule, "  fendix_title:", "  fendix_reachability: taint\n  fendix_title:", "not mode: taint"},
 		{"pattern rule named -taint", sinkRule, "go-sqli-sink", "go-sqli-taint", "not mode: taint"},
@@ -639,19 +547,25 @@ metadata:
 var ruleTestAnnotation = regexp.MustCompile(`(?m)(?:#|//)\s*(ruleid|ok):\s*([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)\s*$`)
 
 // ruleTestProblems checks the layout `semgrep --test --config rules ruletests`
-// relies on. Semgrep pairs ruletests/<stem>.<ext> with rules/<stem>.yaml and
-// silently skips a test file that has no rule file of its stem, so a misnamed
-// test passes without running. Every rule in a pack that targets a language
+// relies on. Semgrep pairs a test file with the rule file whose name is the
+// test file's name up to its FIRST dot, so ruletests/javascript-x.spec.ts
+// tests rules/javascript-x.yaml. It silently skips a test file that has no
+// rule file of its stem, so a misnamed test passes without running. Autofix
+// expectations (<stem>.fixed.<ext>) and dotfiles (.gitkeep) are not tests. Every rule in a pack that targets a language
 // other than Python must have a `ruleid:` and an `ok:` annotation in its pack's
 // test files.
 func ruleTestProblems(rules, tests fs.FS) []string {
 	var out []string
 	annotations := map[string]map[string]map[string]bool{} // stem -> kind -> rule id
 	err := fs.WalkDir(tests, ".", func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() || p == "README.md" {
+		if walkErr != nil || d.IsDir() {
 			return walkErr
 		}
-		stem := strings.TrimSuffix(p, path.Ext(p))
+		dir, base := path.Split(p)
+		if base == "README.md" || strings.HasPrefix(base, ".") || strings.Contains(base, ".fixed.") {
+			return nil
+		}
+		stem := dir + strings.SplitN(base, ".", 2)[0]
 		if _, err := fs.Stat(rules, stem+".yaml"); err != nil {
 			out = append(out, fmt.Sprintf("ruletests/%s has no rules/%s.yaml; semgrep --test skips it", p, stem))
 			return nil
@@ -682,17 +596,12 @@ func ruleTestProblems(rules, tests fs.FS) []string {
 		if err != nil {
 			return append(out, err.Error())
 		}
-		var doc struct {
-			Rules []struct {
-				ID        string   `yaml:"id"`
-				Languages []string `yaml:"languages"`
-			} `yaml:"rules"`
-		}
-		if err := yaml.Unmarshal(data, &doc); err != nil {
+		rules, err := decodePack(data)
+		if err != nil {
 			return append(out, fmt.Sprintf("parse %s: %v", pack, err))
 		}
 		stem := strings.TrimSuffix(pack, ".yaml")
-		for _, r := range doc.Rules {
+		for _, r := range rules {
 			if len(r.Languages) == 0 || (len(r.Languages) == 1 && r.Languages[0] == "python") {
 				continue
 			}
@@ -730,6 +639,18 @@ func TestRuleTestProblemsCatchesBrokenLayouts(t *testing.T) {
 			"README.md":         {Data: []byte("docs")},
 			"javascript-web.ts": {Data: []byte("// ruleid: js-xss-taint\nres.send(q)\n// ok: other-rule, js-xss-taint\nres.send(esc(q))\n")},
 		}, nil},
+		// Semgrep pairs on the name up to the first dot.
+		{"multi-dot names", fstest.MapFS{
+			".gitkeep":                {Data: nil},
+			"javascript-web.spec.js":  {Data: []byte("// ruleid: js-xss-taint\nres.send(q)\n")},
+			"javascript-web.e2e.ts":   {Data: []byte("// ok: js-xss-taint\nres.send(esc(q))\n")},
+			"javascript-web.fixed.ts": {Data: []byte("res.send(esc(q))\n")},
+			"injection.fixed.py":      {Data: []byte("eval('1')\n")},
+		}, nil},
+		{"misnamed multi-dot file", fstest.MapFS{
+			"javascript-web.ts":      {Data: []byte("// ruleid: js-xss-taint\n// ok: js-xss-taint\n")},
+			"javascript.web.spec.ts": {Data: []byte("// ruleid: js-xss-taint\n")},
+		}, []string{"ruletests/javascript.web.spec.ts has no rules/javascript.yaml"}},
 		{"misnamed test file", fstest.MapFS{
 			"javascript-web.ts": {Data: []byte("// ruleid: js-xss-taint\n// ok: js-xss-taint\n")},
 			"js-web.ts":         {Data: []byte("// ruleid: js-xss-taint\n")},
@@ -806,21 +727,9 @@ func TestBuildOutputIsExcluded(t *testing.T) {
 	} {
 		t.Run(project.name, func(t *testing.T) {
 			root := t.TempDir()
-			tree := files
+			writeTree(t, root, files)
 			if project.semgrepignore != "" {
-				tree = map[string]string{".semgrepignore": project.semgrepignore}
-				for rel, body := range files {
-					tree[rel] = body
-				}
-			}
-			for rel, body := range tree {
-				p := filepath.Join(root, filepath.FromSlash(rel))
-				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-					t.Fatal(err)
-				}
+				writeTree(t, root, map[string]string{".semgrepignore": project.semgrepignore})
 			}
 
 			got, err := Scan(context.Background(), root)
@@ -838,6 +747,36 @@ func TestBuildOutputIsExcluded(t *testing.T) {
 			}
 			assertEndpoints(t, got, map[string]bool{"app/views.py:5": true})
 		})
+	}
+
+	// The patterns match paths below the scan root, so a root that lies
+	// under a directory of an excluded name, or is one, is scanned. Pinned
+	// so a Semgrep upgrade that matched them against the whole path, and
+	// silently scanned nothing in such a checkout, fails here.
+	t.Run("root under or named like an excluded directory", func(t *testing.T) {
+		base := t.TempDir()
+		for _, root := range []string{filepath.Join(base, "build", "repo"), filepath.Join(base, "checkout", "build")} {
+			writeTree(t, root, map[string]string{"app/views.py": pySink, "src/app.js": spikeApp})
+			got, err := Scan(context.Background(), root)
+			if err != nil {
+				t.Fatalf("Scan(%s): %v", root, err)
+			}
+			assertEndpoints(t, got, map[string]bool{"app/views.py:5": true, "src/app.js:9": true})
+		}
+	})
+}
+
+// writeTree writes files, by slash-separated path relative to root.
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -867,11 +806,12 @@ func withExtraSemgrepConfig(t *testing.T, config string) {
 	t.Cleanup(func() { commandContext = orig })
 }
 
-// TestScanArgsExcludeBuildOutputAndLiftRuleTimeout pins the arguments without
-// needing semgrep: the excludes, and --timeout 0. Semgrep's own per-rule,
-// per-file timeout is 5 s and drops a slow rule's matches on that file
-// silently; the run as a whole stays bounded by defaultTimeout.
-func TestScanArgsExcludeBuildOutputAndLiftRuleTimeout(t *testing.T) {
+// TestScanArgsExcludeBuildOutputAndBoundRuleTimeout pins the arguments
+// without needing semgrep: the excludes, and --timeout 30. Semgrep's own
+// per-rule, per-file default (5 s) cuts a taint rule off on a large file; no
+// bound (--timeout 0) would let one file use up defaultTimeout and lose every
+// finding of the run.
+func TestScanArgsExcludeBuildOutputAndBoundRuleTimeout(t *testing.T) {
 	argv := filepath.Join(t.TempDir(), "argv")
 	installArgRecordingSemgrep(t, argv)
 	if _, err := Scan(context.Background(), t.TempDir()); err != nil {
@@ -884,7 +824,7 @@ func TestScanArgsExcludeBuildOutputAndLiftRuleTimeout(t *testing.T) {
 	args := "\n" + string(raw)
 	for _, pair := range []string{
 		"--exclude\nnode_modules\n", "--exclude\ndist\n", "--exclude\nbuild\n", "--exclude\n.next\n",
-		"--exclude\ntarget\n", "--exclude\nvendor\n", "--exclude\n*.min.js\n", "--timeout\n0\n",
+		"--exclude\ntarget\n", "--exclude\nvendor\n", "--exclude\n*.min.js\n", "--timeout\n30\n",
 	} {
 		if !strings.Contains(args, "\n"+pair) {
 			t.Errorf("semgrep argv lacks %q:\n%s", strings.ReplaceAll(pair, "\n", " "), raw)

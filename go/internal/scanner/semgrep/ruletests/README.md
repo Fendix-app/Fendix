@@ -17,6 +17,12 @@ release image.
 `ruletests/javascript-injection.ts` tests `rules/javascript-injection.yaml`.
 Several test files may share a stem, such as a `.js` and a `.ts` file.
 
+The stem is the file name up to its first dot, so
+`javascript-injection.spec.ts` also tests `rules/javascript-injection.yaml`,
+and a stem cannot contain a dot. `<stem>.fixed.<ext>` is not a test file:
+Semgrep reads it as the expected output of a rule's `fix:` on
+`<stem>.<ext>`. Dotfiles such as `.gitkeep` are ignored.
+
 Semgrep skips a test file that has no rule file of its stem and still
 reports success, so a misnamed test never runs. `TestRuleTestsPairWithRulePacks`
 in `../scanner_rulepack_test.go` fails on such a file. It also requires every

@@ -595,13 +595,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		// recorded diff_unchanged above
 	default:
 		started := time.Now()
-		semgrepFindings, err := semgrep.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
+		semgrepRun, err := semgrep.ScanRun(ctx, o.cfg.CodePath, allow)
 		o.recordAnalyzerTime(AnalyzerSemgrep, started)
 		switch {
 		case err == nil:
-			slog.Info("native semgrep scan complete", "findings", len(semgrepFindings))
-			evid = append(evid, semgrepFindings...)
-			scanStatus.ok("semgrep")
+			slog.Info("native semgrep scan complete", "findings", len(semgrepRun.Findings), "rule_timeouts", len(semgrepRun.Timeouts))
+			evid = append(evid, semgrepRun.Findings...)
+			recordSemgrepRun(&scanStatus, semgrepRun.Timeouts)
 		case errors.Is(err, semgrep.ErrSemgrepUnavailable):
 			slog.Info("semgrep not installed — skipping (install with: pip install semgrep)")
 			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDependencyMissing, "semgrep binary not installed")

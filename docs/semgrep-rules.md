@@ -24,12 +24,11 @@ The Semgrep runner lives at
 2. Extracts the embedded `//go:embed rules/*.yaml` pack to a per-process
    temp directory on the first scan call.
 3. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet
-   --dataflow-traces --timeout 0 --exclude node_modules --exclude dist
+   --dataflow-traces --timeout 30 --exclude node_modules --exclude dist
    --exclude build --exclude .next --exclude target --exclude vendor
    --exclude '*.min.js' <code_path>`, with a 300-second deadline on the
-   whole run. `--timeout 0` turns off Semgrep's own per-rule, per-file
-   timeout (5 seconds by default), which drops a slow rule's matches on a
-   file without failing the run.
+   whole run. A run that exceeds the deadline fails, and the scan has no
+   Semgrep findings.
 4. Parses the JSON output and maps each result to a Fendix `Finding` via
    `resolveSeverity`, `resolveConfidence`, `resolveCategory`,
    `resolveCWE`.
@@ -38,13 +37,27 @@ The Semgrep runner lives at
 [`go/internal/scanner/semgrep/rules/`](../go/internal/scanner/semgrep/rules/);
 every `.yaml` file in that directory is loaded.
 
+**Per-rule timeouts.** `--timeout 30` lets one rule run for up to 30
+seconds on one file. Semgrep's default, 5 seconds, can cut a taint rule off
+on a large file, and no bound at all would let one pathological file use up
+the whole deadline. When a rule hits the bound, Semgrep skips that rule on
+that file, keeps going, and lists the pair in its output's `errors` as a
+`Timeout`. Fendix logs each one with the rule and the file, and the
+`semgrep` entry in `scanner_status` stays `ok` with a detail naming them:
+the run succeeded, but its findings are partial. Semgrep's
+`--timeout-threshold` (3 by default) also applies: after three rules time
+out on one file, it skips the remaining rules on that file.
+
 **Build output and vendored code are not scanned.** The `--exclude`
 patterns skip `node_modules/`, `dist/`, `build/`, `.next/`, `target/` and
 `vendor/` at any depth, and every `*.min.js` file, for every language.
 `dist/` and `build/` are also where Python packaging writes its output.
-The patterns match paths relative to the scanned directory: a repository
-checked out under `/srv/build/` is scanned, and so is a file named
-`build.py`. A `--diff` scan that changes only files under these
+A directory of the project's own source that has one of these names, such
+as a Python package called `build` or `vendor`, is skipped too. textscan
+skips the same directories, and the secrets scanner all of them but
+`.next/` and `target/`. The patterns match paths relative to the scanned
+directory: a repository checked out under `/srv/build/` is scanned, and so
+is a file named `build.py`. A `--diff` scan that changes only files under these
 directories gets no Semgrep findings from them. Semgrep skips most of
 these directories by itself, but only in a project that has no
 `.semgrepignore` of its own, and never `.next/` or `target/`.
@@ -136,32 +149,22 @@ a Semgrep `ERROR` for CI gating, but in Fendix's vocabulary I'm a
 
 ## Categories
 
-A rule in the bundled pack uses one of five categories: `injection`,
-`xss`, `crypto`, `auth` or `secrets`. SSRF, path traversal, open redirect
-and SSTI are `injection`. The engine collapses two findings on one line only
-when their categories match, so a new category would never merge with
-another analyzer's finding for the same code: textscan reports SSRF as
-`injection`. The other categories in the table below are not accepted in
-the bundled pack.
-
-Pick the closest category from this list. Mapping to a known category
-ensures the finding is grouped correctly in the report and counted in the
-right summary bucket.
+A rule in the bundled pack uses one of five categories.
+`TestEveryRuleCarriesFendixMetadata` rejects any other.
 
 | Category | Use for |
 |----------|---------|
-| `auth_bypass` | Missing or bypassable authentication, `verify=False` JWT, `alg:none`. |
-| `injection` | SQL, command, LDAP, XPath injection patterns. |
-| `secrets` | Hardcoded credentials, API keys, certificates, weak crypto for password storage. |
-| `idor` | Direct object references that don't enforce ownership. |
-| `data_exposure` | Sensitive data in responses, logs, error messages. |
-| `cors` | Permissive `Access-Control-Allow-Origin`, credential leakage. |
-| `headers` | Missing or weak security headers. |
-| `info_disclosure` | Stack traces, version banners, internal paths. |
-| `auth` | Auth-related findings that aren't full bypasses (missing decorator, weak session config). |
+| `injection` | Input reaching an interpreter or a resource: SQL, command, code (`eval`), template (SSTI) and deserialization, and also SSRF, path traversal and open redirect. |
+| `xss` | Input written into an HTML response. |
+| `auth` | Missing or bypassable authentication: an unprotected route, a JWT decoded without verifying its signature. |
+| `secrets` | Hardcoded credentials, keys and certificates. The bundled Python rules for weak password hashing, legacy ciphers and non-cryptographic random tokens also use it. |
+| `crypto` | Weak cryptography. textscan's weak-crypto checks use it. |
 
-Unrecognised categories pass through unchanged but won't be counted in the
-sources/severity summary correctly.
+There is no separate category for SSRF, path traversal, open redirect or
+SSTI. The engine collapses two findings on one line only when their
+categories match, and textscan reports these as `injection`. A Semgrep rule
+with its own category would be reported a second time beside textscan's
+finding for the same code.
 
 ---
 

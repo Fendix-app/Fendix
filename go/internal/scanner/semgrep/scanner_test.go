@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1055,5 +1056,58 @@ func TestBundledRuleSpecsComeFromThePack(t *testing.T) {
 func TestReachabilityLanguagesShipEmpty(t *testing.T) {
 	if len(ReachabilityLanguages) != 0 {
 		t.Errorf("ReachabilityLanguages = %v; a language is enabled only with ADR-011's evidence", ReachabilityLanguages)
+	}
+}
+
+// testdata/timeout_result.json is byte-for-byte what Semgrep 1.141.0 printed
+// for `semgrep --config <tmp>/fendix-semgrep-rules-1234 --json --quiet
+// --no-git-ignore --timeout 1 src`, where the one rule (slow-rule) needs more
+// than a second on src/big.py: no result, one error of type Timeout, exit 0.
+// The scan succeeds, and the timeout is surfaced and logged, not dropped.
+func TestScanRunSurfacesRuleTimeouts(t *testing.T) {
+	installFakeSemgrep(t, string(loadFixture(t, "timeout_result.json")), "", 0)
+	var logged strings.Builder
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	root := t.TempDir()
+	t.Chdir(root) // the recorded path is relative to where semgrep ran
+
+	run, err := ScanRun(context.Background(), root, nil)
+	if err != nil {
+		t.Fatalf("ScanRun: %v", err)
+	}
+	if len(run.Findings) != 0 {
+		t.Errorf("findings = %+v; want none", run.Findings)
+	}
+	want := []RuleTimeout{{RuleID: "slow-rule", Path: "src/big.py"}}
+	if !reflect.DeepEqual(run.Timeouts, want) {
+		t.Errorf("timeouts = %+v; want %+v", run.Timeouts, want)
+	}
+	for _, s := range []string{"rule timed out", "rule=slow-rule", "path=src/big.py"} {
+		if !strings.Contains(logged.String(), s) {
+			t.Errorf("log lacks %q:\n%s", s, logged.String())
+		}
+	}
+
+	// ScanWithAllowlist, the findings alone, still succeeds.
+	if _, err := ScanWithAllowlist(context.Background(), root, nil); err != nil {
+		t.Errorf("ScanWithAllowlist: %v", err)
+	}
+}
+
+// Only a Timeout error is a rule timeout; other errors in the document are
+// not, whatever their shape.
+func TestParseRunCountsOnlyTimeoutErrors(t *testing.T) {
+	doc := `{"results": [], "errors": [
+	  {"type": "Timeout", "rule_id": "a", "path": "x.py"},
+	  {"type": "Syntax error", "rule_id": "b", "path": "y.py"},
+	  {"type": ["PartialParsing", [{"path": "z.py"}]], "path": "z.py"},
+	  {"type": ["Timeout"], "rule_id": "c", "path": "w.py"}
+	]}`
+	run := parseRun([]byte(doc), "/code")
+	want := []RuleTimeout{{RuleID: "a", Path: "x.py"}, {RuleID: "c", Path: "w.py"}}
+	if !reflect.DeepEqual(run.Timeouts, want) {
+		t.Errorf("timeouts = %+v; want %+v", run.Timeouts, want)
 	}
 }

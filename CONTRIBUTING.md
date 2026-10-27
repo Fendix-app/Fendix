@@ -238,7 +238,7 @@ rules:
     severity: WARNING
     languages: [python]         # python | javascript | typescript | java | go
     metadata:
-      cwe: CWE-XXX              # CWE-<number>, or a list of them
+      cwe: CWE-676              # CWE-<number> for the weakness, or a list of them
       category: injection       # injection | xss | crypto | auth | secrets
       confidence: MEDIUM        # HIGH | MEDIUM | LOW (MEDIUM for a taint rule)
       fendix_severity: HIGH     # CRITICAL | HIGH | MEDIUM | LOW | INFO

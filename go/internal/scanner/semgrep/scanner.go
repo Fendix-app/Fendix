@@ -12,8 +12,9 @@
 //   - Category: rule metadata.category; default "code".
 //   - References: rule metadata.cwe (string or list).
 //   - Evidence: matched source lines, truncated at 200 chars + "...".
-//   - A 300 s deadline per invocation (defaultTimeout); Semgrep's own
-//     per-rule timeout is off (--timeout 0).
+//   - A 300 s deadline per invocation (defaultTimeout), and a 30 s bound
+//     per rule and file (ruleTimeoutSeconds); a rule that hits it is
+//     reported in Run.Timeouts, not dropped silently.
 //   - Build output and vendored code are never scanned (buildOutputExcludes).
 //
 // Distribution: rules are embedded into the binary via //go:embed
@@ -45,6 +46,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,11 +73,19 @@ var ErrTimeout = errors.New("semgrep: timed out")
 // defaultTimeout bounds one semgrep run, so a runaway rule can't hold the
 // orchestrator hostage. One run executes every bundled pack, and the pack is
 // growing from Python alone to Python, JavaScript/TypeScript, Java and Go, so
-// it is 300 s; it was 120 s, mirroring python semgrep_runner.py. It is the
-// only bound: Scan passes --timeout 0, because Semgrep's own per-rule,
-// per-file timeout (5 s by default) drops a slow rule's matches on that file
-// without failing the run.
+// it is 300 s; it was 120 s, mirroring python semgrep_runner.py. A run that
+// exceeds it fails, and the scan has no Semgrep findings at all.
 const defaultTimeout = 300 * time.Second
+
+// ruleTimeoutSeconds is Semgrep's --timeout: how long one rule may run on one
+// file before Semgrep gives up on that pair and moves on. Semgrep's default,
+// 5 s, is short enough to cut a taint rule off on a large file; no bound at
+// all would let one pathological file use up defaultTimeout and fail the
+// whole run. At 30 s a slow pair costs only its own matches, and Semgrep
+// reports it in its errors, which ScanRun surfaces as Run.Timeouts. Semgrep's
+// --timeout-threshold (3 by default) still applies: after three rules time
+// out on one file, it skips the remaining rules on that file.
+const ruleTimeoutSeconds = 30
 
 // buildOutputExcludes keeps build output, installed dependencies and vendored
 // code out of every semgrep run, whatever the language (Review Focus 3): a
@@ -140,34 +150,57 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 	return ScanWithAllowlist(ctx, codePath, nil)
 }
 
-// ScanWithAllowlist is Scan scoped to a diff-aware file allowlist. A nil
-// allowlist scans the whole codePath (full-scan parity). When set, the
-// changed files are passed to semgrep as `--include` path filters so the
-// engine only analyses the diff — the semgrep half of `fendix scan --diff`.
+// RuleTimeout is one rule Semgrep gave up on for one file, after
+// ruleTimeoutSeconds. The rule's matches in that file are missing from the
+// run's findings.
+type RuleTimeout struct {
+	RuleID string // the bundled rule id, as a finding's RuleID
+	Path   string // relative to the scan root, forward slashes
+}
+
+// Run is what one semgrep run produced.
+type Run struct {
+	Findings []evidence.Evidence
+	// Timeouts lists the rules Semgrep stopped on a file. A run with
+	// timeouts still succeeded; its findings are partial.
+	Timeouts []RuleTimeout
+}
+
+// ScanWithAllowlist is ScanRun without the timeouts: the findings alone.
+func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
+	run, err := ScanRun(ctx, codePath, allow)
+	return run.Findings, err
+}
+
+// ScanRun is Scan scoped to a diff-aware file allowlist, returning the rules
+// Semgrep timed out on beside the findings. A nil allowlist scans the whole
+// codePath (full-scan parity). When set, the changed files are passed to
+// semgrep as `--include` path filters so the engine only analyses the diff —
+// the semgrep half of `fendix scan --diff`.
 //
 // semgrep's --include takes a glob/path relative to the scan root; passing
 // the exact relative path of each changed file restricts the run to those
 // files. An empty (non-nil) allowlist scopes to zero files, so we return
 // nothing rather than run semgrep with no --include — which would scan the
 // WHOLE tree, the exact opposite of the diff intent (the historical footgun).
-func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
+func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Run, error) {
 	if codePath == "" {
-		return nil, ErrCodePathMissing
+		return Run{}, ErrCodePathMissing
 	}
 	if info, err := os.Stat(codePath); err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrCodePathMissing
+			return Run{}, ErrCodePathMissing
 		}
-		return nil, fmt.Errorf("semgrep: stat %q: %w", codePath, err)
+		return Run{}, fmt.Errorf("semgrep: stat %q: %w", codePath, err)
 	} else if !info.IsDir() {
-		return nil, fmt.Errorf("semgrep: %q is not a directory", codePath)
+		return Run{}, fmt.Errorf("semgrep: %q is not a directory", codePath)
 	}
 
 	// A diff that matched zero scannable files → nothing to do. Guard here too
 	// (not just in the orchestrator) because this function is exported and
 	// callable directly; without it an empty allowlist scans everything.
 	if allow.Empty() {
-		return nil, nil
+		return Run{}, nil
 	}
 
 	// Diff scoping: one --include per changed file, relative to codePath.
@@ -176,19 +209,19 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 	// and widens to a full scan instead; this guards direct callers.
 	includes, err := allow.RelPaths(codePath)
 	if err != nil {
-		return nil, fmt.Errorf("semgrep: diff scope: %w", err)
+		return Run{}, fmt.Errorf("semgrep: diff scope: %w", err)
 	}
 
 	bin, err := LookPath("semgrep")
 	if err != nil {
-		return nil, ErrSemgrepUnavailable
+		return Run{}, ErrSemgrepUnavailable
 	}
 
 	// Hold a reference for the whole run: a concurrent Cleanup (process
 	// shutdown) must not remove the --config dir while semgrep reads it.
 	rules, release, err := acquireRules()
 	if err != nil {
-		return nil, fmt.Errorf("semgrep: extract rules: %w", err)
+		return Run{}, fmt.Errorf("semgrep: extract rules: %w", err)
 	}
 	defer release()
 
@@ -203,8 +236,8 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		// A taint rule's trace details a reachable finding's chain when
 		// semgrep sends it (ADR-011). Pattern rules have no trace.
 		"--dataflow-traces",
-		// No per-rule timeout: defaultTimeout bounds the run instead.
-		"--timeout", "0",
+		// A slow rule loses its matches on one file, not the whole run.
+		"--timeout", strconv.Itoa(ruleTimeoutSeconds),
 	}
 	for _, pattern := range buildOutputExcludes {
 		args = append(args, "--exclude", pattern)
@@ -220,10 +253,10 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		// Context errors (cancel/deadline) are always real failures —
 		// surface them so the orchestrator can stop the scan.
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w after %s", ErrTimeout, defaultTimeout)
+			return Run{}, fmt.Errorf("%w after %s", ErrTimeout, defaultTimeout)
 		}
 		if errors.Is(runCtx.Err(), context.Canceled) {
-			return nil, runCtx.Err()
+			return Run{}, runCtx.Err()
 		}
 		// If semgrep emitted parseable JSON we accept it regardless of
 		// exit code. Semgrep returns 1 for "matches found" (success
@@ -232,8 +265,8 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		// `results` field is meaningful (often empty when rules
 		// failed to parse). Matches python semgrep_runner.py which
 		// silently absorbs non-{0,1} exits as long as stdout parses.
-		if findings, perr := parseAndMap(stdout, codePath); perr == nil && (len(findings) > 0 || isParseableEmpty(stdout)) {
-			return findings, nil
+		if run := parseRun(stdout, codePath); len(run.Findings) > 0 || isParseableEmpty(stdout) {
+			return run, nil
 		}
 		// Truly broken: no parseable output AND non-zero exit.
 		var exitErr *exec.ExitError
@@ -244,10 +277,10 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 				stderr = stderr[:200] + "..."
 			}
 		}
-		return nil, fmt.Errorf("semgrep: %w (stderr: %s)", err, stderr)
+		return Run{}, fmt.Errorf("semgrep: %w (stderr: %s)", err, stderr)
 	}
 
-	return parseAndMap(stdout, codePath)
+	return parseRun(stdout, codePath), nil
 }
 
 // isParseableEmpty reports whether stdout decodes as a Semgrep JSON
@@ -319,6 +352,34 @@ type semgrepExtra struct {
 // semgrepOutput wraps a top-level Semgrep --json document.
 type semgrepOutput struct {
 	Results []semgrepResult `json:"results"`
+	Errors  []semgrepError  `json:"errors"`
+}
+
+// semgrepError is one entry of the document's `errors`. Semgrep 1.141.0
+// reports a rule it stopped on a file at --timeout as
+//
+//	{"code": 2, "level": "warn", "type": "Timeout", "rule_id": "<id>",
+//	 "message": "Timeout when running <id> on <path>:", "path": "<path>"}
+//
+// and still exits 0. Type is kept raw: other error types are ATD variants,
+// encoded as an array whose first element is the tag.
+type semgrepError struct {
+	Type   json.RawMessage `json:"type"`
+	RuleID string          `json:"rule_id"`
+	Path   string          `json:"path"`
+}
+
+// isTimeout reports whether the error is a rule timing out on a file.
+func (e semgrepError) isTimeout() bool {
+	var tag string
+	if json.Unmarshal(e.Type, &tag) == nil {
+		return tag == "Timeout"
+	}
+	var variant []json.RawMessage
+	if json.Unmarshal(e.Type, &variant) == nil && len(variant) > 0 && json.Unmarshal(variant[0], &tag) == nil {
+		return tag == "Timeout"
+	}
+	return false
 }
 
 // parseAndMap decodes Semgrep's stdout JSON and converts each result
@@ -329,26 +390,41 @@ type semgrepOutput struct {
 // responsible for surfacing real failures (timeout, ctx cancel,
 // non-success exit with no parseable output).
 func parseAndMap(stdout []byte, codeRoot string) ([]evidence.Evidence, error) {
+	return parseRun(stdout, codeRoot).Findings, nil
+}
+
+// parseRun is parseAndMap with the run's rule timeouts, each logged here, so
+// a rule that lost its matches on a file is never silent.
+func parseRun(stdout []byte, codeRoot string) Run {
 	if len(stdout) == 0 {
-		return nil, nil
+		return Run{}
 	}
 	var out semgrepOutput
 	if err := json.Unmarshal(stdout, &out); err != nil {
-		return nil, nil
+		return Run{}
 	}
 	absRoot, err := filepath.Abs(codeRoot)
 	if err != nil {
 		absRoot = codeRoot
 	}
-	findings := make([]evidence.Evidence, 0, len(out.Results))
+	run := Run{Findings: make([]evidence.Evidence, 0, len(out.Results))}
 	for i := range out.Results {
 		f, ok := mapResult(&out.Results[i], absRoot)
 		if !ok {
 			continue
 		}
-		findings = append(findings, f)
+		run.Findings = append(run.Findings, f)
 	}
-	return findings, nil
+	for _, e := range out.Errors {
+		if !e.isTimeout() {
+			continue
+		}
+		t := RuleTimeout{RuleID: normalizeCheckID(e.RuleID), Path: relPath(e.Path, absRoot)}
+		slog.Warn("semgrep: rule timed out on a file; its matches there are missing",
+			"rule", t.RuleID, "path", t.Path, "timeout_seconds", ruleTimeoutSeconds)
+		run.Timeouts = append(run.Timeouts, t)
+	}
+	return run
 }
 
 // mapResult converts one Semgrep result to a fendix Finding. Returns

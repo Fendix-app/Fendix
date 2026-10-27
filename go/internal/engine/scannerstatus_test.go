@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
@@ -166,5 +167,34 @@ func TestClassifyErr_MinimalMapping(t *testing.T) {
 	}
 	if got := classifyErr(&neterr.StatusError{Host: "h", Code: 404}); got != reporters.ReasonExecutionError {
 		t.Errorf("404 → %s, want execution_error (never transient)", got)
+	}
+}
+
+// A Semgrep run in which a rule timed out on a file succeeded, but its
+// findings are partial: the status stays ok and its detail names what is
+// missing, as active-probes does for probes that got no response.
+func TestSemgrepStatusReportsRuleTimeouts(t *testing.T) {
+	var clean scannerStatusList
+	recordSemgrepRun(&clean, nil)
+	if len(clean) != 1 || clean[0] != (reporters.ScannerStatus{Name: AnalyzerSemgrep, State: reporters.ScannerOK}) {
+		t.Errorf("run without timeouts = %+v; want a plain ok", clean)
+	}
+
+	var partial scannerStatusList
+	recordSemgrepRun(&partial, []semgrep.RuleTimeout{
+		{RuleID: "js-sqli-taint", Path: "src/big.js"},
+		{RuleID: "python-eval-injection", Path: "app/gen.py"},
+	})
+	if len(partial) != 1 {
+		t.Fatalf("entries = %+v; want one", partial)
+	}
+	got := partial[0]
+	if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerOK || got.Reason != "" {
+		t.Errorf("entry = %+v; want semgrep, ok, no reason", got)
+	}
+	for _, want := range []string{"2 rule timeouts", "js-sqli-taint on src/big.js", "python-eval-injection on app/gen.py", "missing"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("detail %q lacks %q", got.Detail, want)
+		}
 	}
 }
