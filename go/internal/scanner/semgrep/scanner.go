@@ -179,8 +179,8 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 		"--json",
 		"--no-git-ignore",
 		"--quiet",
-		// A taint rule's trace is the proof mapResult needs to mark its
-		// finding reachable (ADR-011). Pattern rules have no trace.
+		// A taint rule's trace details a reachable finding's chain when
+		// semgrep sends it (ADR-011). Pattern rules have no trace.
 		"--dataflow-traces",
 	}
 	for _, rel := range includes {
@@ -283,10 +283,10 @@ type semgrepExtra struct {
 	// decoded it. Without it, five unprotected Flask routes were one finding.
 	Metavars map[string]semgrepMetavar `json:"metavars"`
 	// DataflowTrace is a taint rule's source-to-sink trace, sent because Scan
-	// passes --dataflow-traces. Kept raw: it is decoded only for a rule that
-	// declares fendix_reachability: taint (see taintProof), so a trace this
-	// decoder cannot read never fails the document, and a trace on any other
-	// rule's result is never read at all.
+	// passes --dataflow-traces — to a logged-in account only (ADR-011). Kept
+	// raw: it is decoded only for a finding already reachable (see
+	// taintChain), so a trace this decoder cannot read never fails the
+	// document, and a trace on any other result is never read at all.
 	DataflowTrace json.RawMessage `json:"dataflow_trace"`
 }
 
@@ -366,6 +366,25 @@ func mapResult(r *semgrepResult, absRoot string) (evidence.Evidence, bool) {
 	ruleID := normalizeCheckID(r.CheckID)
 	id := "SEC-" + strings.ReplaceAll(strings.ReplaceAll(strings.ToUpper(ruleID), "-", "_"), ".", "_")
 
+	// What the rule captured, when semgrep sends it. Absent from OSS
+	// output, which is why the sink below carries the discriminator.
+	symbol := identifierMetavars(r.Extra.Metavars)
+	// The matched construct, with string literals masked, as the finding's
+	// vulnerable operation. This is what makes two matches of one rule in
+	// one file two findings — see maskStringLiterals for why the masking
+	// is a security boundary and not tidiness.
+	sink := maskStringLiterals(snippet)
+	if declaresTaintReachability(r.Extra.Metadata) {
+		// A rule that asks for reachability (ADR-011) takes its identity
+		// only from what every run has: the match's own line, and no
+		// metavariables, which semgrep sends only to a logged-in account.
+		// Its identity is then the same logged in or out, trace or no
+		// trace, gate open or closed. No rule bundled before ADR-011 sets
+		// the key, so no existing identity moves.
+		symbol = ""
+		sink = taintRuleSink(r)
+	}
+
 	ev := evidence.Evidence{
 		ID:         id,
 		Title:      title,
@@ -380,23 +399,19 @@ func mapResult(r *semgrepResult, absRoot string) (evidence.Evidence, bool) {
 		Confidence: resolveConfidence(r),
 		Line:       &endpointCopy,
 		RuleID:     ruleID,
-		// What the rule captured, when semgrep sends it. Absent from OSS
-		// output, which is why the sink below carries the discriminator.
-		Symbol: identifierMetavars(r.Extra.Metavars),
-		// The matched construct, with string literals masked, as the finding's
-		// vulnerable operation. This is what makes two matches of one rule in
-		// one file two findings — see maskStringLiterals for why the masking
-		// is a security boundary and not tidiness.
-		Sink: maskStringLiterals(snippet),
+		Symbol:     symbol,
+		Sink:       sink,
 	}
 
-	// A taint rule whose trace proves the flow, for a language that cleared
-	// its gate, is the semgrep_taint tier. Every other result — every rule
-	// bundled today — stays exactly the shim finding built above.
-	if chain, ok := taintProof(r, ruleID, absRoot, rel, ev.Sink); ok {
+	// A taint-mode rule's match, for a language that cleared its gate, is the
+	// semgrep_taint tier (R-pf56); a dataflow trace, when semgrep sends one,
+	// only adds detail to its chain. Every other result — every rule bundled
+	// today — stays exactly the shim finding built above.
+	if taintReachable(r, ruleID) {
 		ev.SourceTier = models.TierSemgrepTaint
 		ev.Reachable = true
-		ev.TaintChain = chain
+		ev.TaintChain = taintChain(r.Extra.DataflowTrace, absRoot,
+			models.TaintLink{File: rel, Line: r.Start.Line, Expr: sink})
 	}
 	return ev, true
 }

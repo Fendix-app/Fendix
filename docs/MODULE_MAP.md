@@ -151,7 +151,7 @@ textscan rules, and an optional semgrep shim.
 |---|---|---|---|
 | `go/internal/scanner/secrets` | Hardcoded-secret detection (17 general patterns + `ENV_SECRET`) | `pattern` (private), `models.Finding` | Walk codePath (skip vendor/build dirs + non-scanned exts), apply 18 detectors, 1MB cap, skip >500-char minified lines, redact credential material at CAPTURE time (`[REDACTED len=N sha256:…]`) over the union of every pattern's value spans on the line, classify fixture-shaped values onto `Evidence.Placeholder`, manual boundary validation (RE2 lacks lookarounds), diff-aware via `gitdiff.Allowlist` |
 | `go/internal/scanner/textscan` | Unified regex SAST: Go + JS/TS + Java + Docker/K8s IaC | `Rule` (ID/Severity/Confidence/CWE/Pattern/NegPattern/Applies) | `AllRules`/`GoRules`(4)/`JSRules`(6)/`JavaRules`(11)/`IaCRules`(8), 29 total; line-by-line walk with `Applies()` routing; skip 1MB+/symlinks/build dirs; binary sniff (NUL byte); NegPattern exclusions; whole-file pre-passes for `IAC_DOCKER_RUNS_AS_ROOT` (any USER directive, whole-file channel) and Dockerfile stage aliases (per-LINE channel, feeding `IAC_DOCKER_LATEST_TAG` suppression + `IAC_DOCKER_FLOATING_TAG`'s digest-pin judgement); truncate evidence to 200 runes; diff-aware; `SourceTier=TierNativeGo` |
-| `go/internal/scanner/semgrep` | Shim to host semgrep binary + bundled YAML rule pack | `semgrepResult`, `semgrepExtra`, `semgrepOutput` | `go:embed` 4 YAML rules → temp dir; invoke semgrep `--config --json --no-git-ignore --dataflow-traces`; map `check_id`→`SEC-*`, `fendix_severity` high-trust override else ERROR/WARNING/INFO mapping; resolve confidence/category/CWE; 120s timeout; gracefully absent (`ErrSemgrepUnavailable`); `SourceTier=TierSemgrepShim` (lowest trust until F1≥0.95 gate), or `TierSemgrepTaint` + `Reachable` + the decoded trace as `TaintChain` for a `fendix_reachability: taint` rule whose languages are all in `ReachabilityLanguages` (empty; ADR-011) |
+| `go/internal/scanner/semgrep` | Shim to host semgrep binary + bundled YAML rule pack | `semgrepResult`, `semgrepExtra`, `semgrepOutput` | `go:embed` 4 YAML rules → temp dir; invoke semgrep `--config --json --no-git-ignore --dataflow-traces`; map `check_id`→`SEC-*`, `fendix_severity` high-trust override else ERROR/WARNING/INFO mapping; resolve confidence/category/CWE; 120s timeout; gracefully absent (`ErrSemgrepUnavailable`); `SourceTier=TierSemgrepShim` (lowest trust until F1≥0.95 gate), or `TierSemgrepTaint` + `Reachable` for a `mode: taint` rule with `fendix_reachability: taint` whose languages are all in `ReachabilityLanguages` (empty; ADR-011); a trace, when semgrep sends one, details its `TaintChain` |
 
 ---
 
@@ -433,8 +433,8 @@ wrapper / namespace / docstring).
 - **`SourceTier` provenance enforcement (TASK-125)** prevents confidence escalation via
   correlated findings when the whitebox source is low-trust (semgrep regex vs. AST taint
   analyzer); semgrep findings are pinned to `TierSemgrepShim` until a rule pack clears the
-  F1≥0.95 gate. A Semgrep taint rule's finding is `TierSemgrepTaint` and `Reachable` only
-  for a language in `semgrep.ReachabilityLanguages` (empty until a pack clears its precision
+  F1≥0.95 gate. A Semgrep taint rule's match is `TierSemgrepTaint` and `Reachable`, trace or
+  no trace, only for a language in `semgrep.ReachabilityLanguages` (empty until a pack clears its precision
   gate, ADR-011); it ranks with `TierNativeGo` and is still a Semgrep tier
   (`SourceTier.IsSemgrep`): no deterministic-detection bonus, no Proven Path.
 - **Proven Path v1** is the highest-fidelity proof: a route binding + traced taint chain in

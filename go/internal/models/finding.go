@@ -62,10 +62,11 @@ const (
 	// TierSemgrepShim: shelled-out semgrep (breadth, lowest trust until a
 	// rule pack clears the F1 gate).
 	TierSemgrepShim SourceTier = "semgrep_shim"
-	// TierSemgrepTaint: a shelled-out semgrep TAINT rule whose dataflow trace
-	// proved a source reaching the sink, for a language whose taint pack has
-	// cleared its precision gate (semgrep.ReachabilityLanguages, ADR-011).
-	// Such a finding is Reachable and carries the trace as its TaintChain.
+	// TierSemgrepTaint: a match of a shelled-out semgrep TAINT-mode rule —
+	// semgrep reports one only when a declared source reached the sink — for
+	// a language whose taint pack has cleared its precision gate
+	// (semgrep.ReachabilityLanguages, ADR-011). Such a finding is Reachable;
+	// semgrep's dataflow trace, when it sends one, details its TaintChain.
 	// Every other semgrep finding stays TierSemgrepShim.
 	TierSemgrepTaint SourceTier = "semgrep_taint"
 )
@@ -93,7 +94,7 @@ func (t SourceTier) IsSemgrep() bool {
 // regex pass, it simply predates the field.
 //
 // A semgrep taint finding ranks with native Go (ADR-011): its language's pack
-// cleared a precision gate and the finding carries a proven trace, so it must
+// cleared a precision gate and its match is a proven flow, so it must
 // not lose a shared location to the shim or an unknown tier; but its proof is
 // intraprocedural and its gate is a dev-set measurement, so it does not
 // outrank the tree-sitter analyzer. Against textscan at the same location the

@@ -87,3 +87,47 @@ func TestProvenPathNeverFromASemgrepTier(t *testing.T) {
 		})
 	}
 }
+
+// R-pf56 / Global Constraint: a correlated semgrep_taint finding takes the
+// correlator's reachable escalation on top of the correlation bump, as a
+// non-correlated one takes escalateNonCorrelatedReachable's. The shim never
+// carries Reachable and gets the correlation bump only. Semgrep findings bind
+// no Route, so this is the path a real one correlates through.
+func TestCorrelatedSemgrepTaintTakesTheReachableEscalation(t *testing.T) {
+	for tier, want := range map[models.SourceTier]models.Severity{
+		models.TierSemgrepShim:  models.SeverityHigh,     // MEDIUM → HIGH (correlation)
+		models.TierSemgrepTaint: models.SeverityCritical, // MEDIUM → HIGH → CRITICAL (correlation + reachable)
+	} {
+		t.Run(string(tier), func(t *testing.T) {
+			bb := models.Finding{
+				Title: "SQL injection confirmed by live scan", Severity: models.SeverityMedium,
+				Source: models.SourceBlackbox, Category: "injection", Endpoint: "http://example.com/users",
+				Evidence: "500 on payload", References: []string{"CWE-89"}, Confidence: models.ConfidenceHigh,
+			}
+			wb := models.Finding{
+				Title: "SQL injection: request input reaches db.query()", Severity: models.SeverityMedium,
+				Source: models.SourceWhitebox, Category: "injection", Endpoint: "routes/users.js:9",
+				Evidence: "db.query(sql)", References: []string{"CWE-89"}, Confidence: models.ConfidenceHigh,
+				Line: linePtr("routes/users.js:9"), SourceTier: tier,
+			}
+			if tier == models.TierSemgrepTaint {
+				wb.Reachable = true
+				wb.TaintChain = []models.TaintLink{{File: "routes/users.js", Line: 9, Expr: "db.query(sql)"}}
+			}
+
+			result := Correlate([]models.Finding{bb, wb})
+			if len(result) != 1 || result[0].Source != models.SourceCorrelated {
+				t.Fatalf("precondition: want one correlated finding, got %+v", result)
+			}
+			if result[0].Severity != want {
+				t.Errorf("Severity = %s, want %s", result[0].Severity, want)
+			}
+			if result[0].ProvenPath {
+				t.Error("ProvenPath = true for a Semgrep tier")
+			}
+			if result[0].Reachable != (tier == models.TierSemgrepTaint) {
+				t.Errorf("Reachable = %v, want it carried from the whitebox half", result[0].Reachable)
+			}
+		})
+	}
+}

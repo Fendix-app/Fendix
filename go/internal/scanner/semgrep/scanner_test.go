@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 	"github.com/Fendix-app/Fendix/go/internal/models"
@@ -535,21 +533,10 @@ func TestScanWithAllowlist_EmptyReturnsNothingWithoutRunning(t *testing.T) {
 	}
 }
 
-// ── Taint traces and the semgrep_taint tier (ADR-011) ───────────────────────
+// ── Taint findings and the semgrep_taint tier (ADR-011) ──────────────────────
 //
 // The fixtures in testdata/ come from one Semgrep 1.141.0 run of the rule in
-// testdata/taint_rule.yaml over this one-file Express app:
-//
-//	1  const express = require("express");
-//	2  const db = require("./db");
-//	3
-//	4  const app = express();
-//	5
-//	6  app.get("/users", (req, res) => {
-//	7    const name = req.query.name;
-//	8    const sql = "SELECT * FROM users WHERE name = '" + name + "'";
-//	9    db.query(sql, (err, rows) => res.json(rows));
-//	10 });
+// testdata/taint_rule.yaml over the one-file Express app in spikeApp below.
 //
 // taint_result_logged_out.json is byte-for-byte what
 // `semgrep --config taint_rule.yaml --json --dataflow-traces app.js` prints
@@ -558,37 +545,70 @@ func TestScanWithAllowlist_EmptyReturnsNothingWithoutRunning(t *testing.T) {
 //
 // taint_result.json is the same run with the JSON document serialized by
 // Semgrep's own encoder for its output schema (semgrep_output_v1, CliOutput),
-// which is the document the formatter withholds the trace from. It carries
-// extra.dataflow_trace as Semgrep computed it.
+// which is the document the formatter withholds the trace from — what a
+// logged-in run receives. It carries extra.dataflow_trace as Semgrep computed
+// it, and the real `lines`.
 
 const spikeRuleID = "express-sqli-taint-spike"
 
-// spikeRuleLanguages reads the `languages` of the rules in
-// testdata/taint_rule.yaml, keyed by rule id, with the same YAML shape the
-// bundled pack is parsed with.
-func spikeRuleLanguages(t *testing.T) map[string][]string {
+const spikeApp = `const express = require("express");
+const db = require("./db");
+
+const app = express();
+
+app.get("/users", (req, res) => {
+  const name = req.query.name;
+  const sql = "SELECT * FROM users WHERE name = '" + name + "'";
+  db.query(sql, (err, rows) => res.json(rows));
+});
+
+app.listen(3000);
+`
+
+// spikeSink is the finding's Sink: line 9 of spikeApp, the match's own line.
+const spikeSink = "db.query(sql, (err, rows) => res.json(rows));"
+
+// testdataDir is resolved before any test changes directory.
+var testdataDir, _ = filepath.Abs("testdata")
+
+func loadFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "taint_rule.yaml"))
+	data, err := os.ReadFile(filepath.Join(testdataDir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc catalogRuleFileYAML
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
-	}
-	out := map[string][]string{}
-	for _, r := range doc.Rules {
-		out[r.ID] = r.Languages
-	}
-	return out
+	return data
 }
 
-// useRuleLanguages points the rule-languages lookup at langs for the test.
-func useRuleLanguages(t *testing.T, langs map[string][]string) {
+// inSpikeApp makes a directory holding spikeApp as app.js the working
+// directory, so the fixtures' relative path "app.js" names a real file — as it
+// does in a real scan, where the finding's line is read from disk.
+func inSpikeApp(t *testing.T) {
 	t.Helper()
-	orig := ruleLanguages
-	ruleLanguages = func(id string) []string { return langs[id] }
-	t.Cleanup(func() { ruleLanguages = orig })
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte(spikeApp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+}
+
+// spikeRuleSpecs reads testdata/taint_rule.yaml with the parser the bundled
+// pack is read with.
+func spikeRuleSpecs(t *testing.T) map[string]ruleSpec {
+	t.Helper()
+	specs, err := parseRuleSpecs(loadFixture(t, "taint_rule.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return specs
+}
+
+// useRuleSpecs points the rule lookup at specs for the test.
+func useRuleSpecs(t *testing.T, specs map[string]ruleSpec) {
+	t.Helper()
+	orig := ruleSpecs
+	ruleSpecs = func(id string) (ruleSpec, bool) { s, ok := specs[id]; return s, ok }
+	t.Cleanup(func() { ruleSpecs = orig })
 }
 
 // enableReachability replaces the per-language gate for the test.
@@ -600,15 +620,6 @@ func enableReachability(t *testing.T, langs ...string) {
 		ReachabilityLanguages[l] = true
 	}
 	t.Cleanup(func() { ReachabilityLanguages = orig })
-}
-
-func loadFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
 }
 
 // mapOne maps a fixture document that must hold exactly one result.
@@ -642,64 +653,168 @@ func rewriteFixture(t *testing.T, name string, edit func(result map[string]any))
 
 func extraOf(result map[string]any) map[string]any { return result["extra"].(map[string]any) }
 
+func requireShim(t *testing.T, ev evidence.Evidence) {
+	t.Helper()
+	if ev.Reachable || ev.SourceTier != models.TierSemgrepShim || ev.TaintChain != nil {
+		t.Errorf("got Reachable=%v SourceTier=%q TaintChain=%v; want a shim finding (false, %q, nil)",
+			ev.Reachable, ev.SourceTier, ev.TaintChain, models.TierSemgrepShim)
+	}
+}
+
+func requireTaint(t *testing.T, ev evidence.Evidence) {
+	t.Helper()
+	if !ev.Reachable || ev.SourceTier != models.TierSemgrepTaint || len(ev.TaintChain) == 0 {
+		t.Errorf("got Reachable=%v SourceTier=%q TaintChain=%v; want a reachable %q finding with a chain",
+			ev.Reachable, ev.SourceTier, ev.TaintChain, models.TierSemgrepTaint)
+	}
+}
+
+// A logged-in run: Semgrep sends the trace, and it becomes the chain.
 func TestTaintResultBecomesReachableWhenLanguageEnabled(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
+	useRuleSpecs(t, spikeRuleSpecs(t))
 	enableReachability(t, "javascript")
+	doc := loadFixture(t, "taint_result.json")
+	inSpikeApp(t)
 
-	ev := mapOne(t, loadFixture(t, "taint_result.json"))
+	ev := mapOne(t, doc)
 
-	if !ev.Reachable {
-		t.Error("Reachable = false, want true for a taint rule of an enabled language with a traced source")
-	}
-	if ev.SourceTier != models.TierSemgrepTaint {
-		t.Errorf("SourceTier = %q, want %q", ev.SourceTier, models.TierSemgrepTaint)
-	}
+	requireTaint(t, ev)
 	want := []models.TaintLink{
 		{File: "app.js", Line: 7, Expr: "req.query.name"},
 		{File: "app.js", Line: 7, Expr: "name"},
 		{File: "app.js", Line: 8, Expr: "sql"},
 		// The trace's sink step is the finding's own location, so the link
 		// states the operation as the finding does (its Sink).
-		{File: "app.js", Line: 9, Expr: "db.query(sql, (err, rows) => res.json(rows));"},
+		{File: "app.js", Line: 9, Expr: spikeSink},
 	}
 	if !reflect.DeepEqual(ev.TaintChain, want) {
 		t.Errorf("TaintChain =\n  %+v\nwant (source, intermediate variables, sink)\n  %+v", ev.TaintChain, want)
 	}
-	if ev.Sink != want[len(want)-1].Expr {
-		t.Errorf("Sink = %q, want the chain's last link %q", ev.Sink, want[len(want)-1].Expr)
+	if ev.Sink != spikeSink {
+		t.Errorf("Sink = %q, want the match's own line %q", ev.Sink, spikeSink)
+	}
+}
+
+// What Semgrep 1.141.0 actually prints with no account logged in: no trace.
+// The match of a taint-mode rule is the proof (R-pf56), so the finding is
+// reachable all the same; its chain holds only the finding's own location.
+func TestLoggedOutTaintResultIsReachableWithoutATrace(t *testing.T) {
+	useRuleSpecs(t, spikeRuleSpecs(t))
+	enableReachability(t, "javascript")
+	doc := loadFixture(t, "taint_result_logged_out.json")
+	inSpikeApp(t)
+
+	ev := mapOne(t, doc)
+
+	requireTaint(t, ev)
+	want := []models.TaintLink{{File: "app.js", Line: 9, Expr: spikeSink}}
+	if !reflect.DeepEqual(ev.TaintChain, want) {
+		t.Errorf("TaintChain = %+v, want only the finding's own location %+v", ev.TaintChain, want)
+	}
+	if ev.Sink != spikeSink {
+		t.Errorf("Sink = %q, want the match's own line %q", ev.Sink, spikeSink)
 	}
 }
 
 func TestTaintResultStaysShimWhenLanguageDisabled(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
+	useRuleSpecs(t, spikeRuleSpecs(t))
 	enableReachability(t) // the shipped state: no language enabled
 
-	ev := mapOne(t, loadFixture(t, "taint_result.json"))
+	for _, name := range []string{"taint_result.json", "taint_result_logged_out.json"} {
+		t.Run(name, func(t *testing.T) {
+			requireShim(t, mapOne(t, loadFixture(t, name)))
+		})
+	}
+}
 
-	if ev.Reachable || ev.SourceTier != models.TierSemgrepShim || ev.TaintChain != nil {
-		t.Errorf("got Reachable=%v SourceTier=%q TaintChain=%v; want false, %q, nil",
-			ev.Reachable, ev.SourceTier, ev.TaintChain, models.TierSemgrepShim)
+// A trace adds detail and nothing else: the logged-in and the logged-out run
+// of one finding, with the gate open or closed, have one identity. Without
+// this a login, or enabling a language, would file the finding as
+// fixed-plus-new.
+func TestTraceNeverMovesIdentity(t *testing.T) {
+	useRuleSpecs(t, spikeRuleSpecs(t))
+	traced := loadFixture(t, "taint_result.json")
+	loggedOut := loadFixture(t, "taint_result_logged_out.json")
+	inSpikeApp(t)
+
+	type run struct {
+		name string
+		ev   evidence.Evidence
+	}
+	var runs []run
+	for _, gate := range [][]string{nil, {"javascript"}} {
+		enableReachability(t, gate...)
+		runs = append(runs,
+			run{fmt.Sprintf("traced, gate %v", gate), mapOne(t, traced)},
+			run{fmt.Sprintf("logged out, gate %v", gate), mapOne(t, loggedOut)})
+	}
+	for _, r := range runs[:2] {
+		if r.ev.Reachable {
+			t.Errorf("%s: Reachable with the gate closed", r.name)
+		}
+	}
+	for _, r := range runs[2:] {
+		if !r.ev.Reachable {
+			t.Errorf("%s: not Reachable with the gate open", r.name)
+		}
+	}
+	first := runs[0]
+	want := models.Fingerprint(first.ev.ToFinding())
+	for _, r := range runs[1:] {
+		if got := models.Fingerprint(r.ev.ToFinding()); got != want {
+			t.Errorf("fingerprint of %q = %s, want %s (%q)\n %v\n %v", r.name, got, want, first.name,
+				models.FingerprintIdentityComponents(r.ev.ToFinding()),
+				models.FingerprintIdentityComponents(first.ev.ToFinding()))
+		}
+		if r.ev.ID != first.ev.ID || r.ev.Title != first.ev.Title || r.ev.Severity != first.ev.Severity ||
+			r.ev.Endpoint != first.ev.Endpoint || r.ev.Sink != first.ev.Sink || r.ev.RuleID != first.ev.RuleID ||
+			r.ev.Symbol != first.ev.Symbol {
+			t.Errorf("%q differs from %q beyond tier, reachability and chain:\n %+v\n %+v",
+				r.name, first.name, r.ev, first.ev)
+		}
 	}
 }
 
 func TestNonTaintRuleNeverReachable(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
 	enableReachability(t, "javascript")
+	taintSpec := ruleSpec{Mode: "taint", Languages: []string{"javascript"}}
 
-	for name, edit := range map[string]func(map[string]any){
-		"no fendix_reachability": func(r map[string]any) {
-			delete(extraOf(r)["metadata"].(map[string]any), "fendix_reachability")
+	for name, tc := range map[string]struct {
+		spec  map[string]ruleSpec
+		edit  func(map[string]any)
+		fixed string
+	}{
+		"no fendix_reachability": {
+			spec: map[string]ruleSpec{spikeRuleID: taintSpec},
+			edit: func(r map[string]any) {
+				delete(extraOf(r)["metadata"].(map[string]any), "fendix_reachability")
+			},
 		},
-		"another fendix_reachability value": func(r map[string]any) {
-			extraOf(r)["metadata"].(map[string]any)["fendix_reachability"] = "pattern"
+		"another fendix_reachability value": {
+			spec: map[string]ruleSpec{spikeRuleID: taintSpec},
+			edit: func(r map[string]any) {
+				extraOf(r)["metadata"].(map[string]any)["fendix_reachability"] = "pattern"
+			},
 		},
-		"no metadata at all": func(r map[string]any) { delete(extraOf(r), "metadata") },
+		"no metadata at all": {
+			spec: map[string]ruleSpec{spikeRuleID: taintSpec},
+			edit: func(r map[string]any) { delete(extraOf(r), "metadata") },
+		},
+		// fendix_reachability on a rule that is not a taint rule: a pattern
+		// match proves no flow, whatever its metadata says.
+		"search-mode rule": {
+			spec: map[string]ruleSpec{spikeRuleID: {Mode: "", Languages: []string{"javascript"}}},
+			edit: func(map[string]any) {},
+		},
+		"rule not in the pack": {
+			spec: map[string]ruleSpec{},
+			edit: func(map[string]any) {},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ev := mapOne(t, rewriteFixture(t, "taint_result.json", edit))
-			if ev.Reachable || ev.SourceTier != models.TierSemgrepShim || ev.TaintChain != nil {
-				t.Errorf("got Reachable=%v SourceTier=%q TaintChain=%v; want false, %q, nil",
-					ev.Reachable, ev.SourceTier, ev.TaintChain, models.TierSemgrepShim)
+			useRuleSpecs(t, tc.spec)
+			for _, fixture := range []string{"taint_result.json", "taint_result_logged_out.json"} {
+				requireShim(t, mapOne(t, rewriteFixture(t, fixture, tc.edit)))
 			}
 		})
 	}
@@ -712,16 +827,11 @@ func TestTaintRuleWithALanguageNotEnabledStaysShim(t *testing.T) {
 
 	for name, langs := range map[string][]string{
 		"one of two languages enabled": {"javascript", "typescript"},
-		"rule languages unknown":       nil,
 		"rule declares no language":    {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			useRuleLanguages(t, map[string][]string{spikeRuleID: langs})
-			ev := mapOne(t, loadFixture(t, "taint_result.json"))
-			if ev.Reachable || ev.SourceTier != models.TierSemgrepShim || ev.TaintChain != nil {
-				t.Errorf("languages %v: got Reachable=%v SourceTier=%q; want a shim finding",
-					langs, ev.Reachable, ev.SourceTier)
-			}
+			useRuleSpecs(t, map[string]ruleSpec{spikeRuleID: {Mode: "taint", Languages: langs}})
+			requireShim(t, mapOne(t, loadFixture(t, "taint_result.json")))
 		})
 	}
 }
@@ -729,44 +839,18 @@ func TestTaintRuleWithALanguageNotEnabledStaysShim(t *testing.T) {
 // Semgrep's language aliases name the same language as the gate's key.
 func TestTaintGateAcceptsSemgrepLanguageAliases(t *testing.T) {
 	enableReachability(t, "javascript", "typescript")
-	useRuleLanguages(t, map[string][]string{spikeRuleID: {"JS", "ts"}})
+	useRuleSpecs(t, map[string]ruleSpec{spikeRuleID: {Mode: "Taint", Languages: []string{"JS", "ts"}}})
 
-	if ev := mapOne(t, loadFixture(t, "taint_result.json")); !ev.Reachable {
-		t.Error("languages [JS, ts] with javascript and typescript enabled: want Reachable")
-	}
+	requireTaint(t, mapOne(t, loadFixture(t, "taint_result.json")))
 }
 
-// What Semgrep 1.141.0 actually prints with no account logged in: no trace.
-// The gate's "the trace has a source" condition fails, so the finding stays a
-// shim finding even for an enabled language — ADR-011 records this.
-func TestLoggedOutTaintResultStaysShim(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
+// A trace Fendix cannot read, or one without a source, costs detail and
+// nothing else: the finding is still reachable, its chain is the finding's own
+// location, and every other result in the document is still mapped.
+func TestUnreadableTaintTraceOnlyLosesDetail(t *testing.T) {
+	useRuleSpecs(t, spikeRuleSpecs(t))
 	enableReachability(t, "javascript")
-
-	ev := mapOne(t, loadFixture(t, "taint_result_logged_out.json"))
-	if ev.Reachable || ev.SourceTier != models.TierSemgrepShim || ev.TaintChain != nil {
-		t.Errorf("got Reachable=%v SourceTier=%q TaintChain=%v; want a shim finding",
-			ev.Reachable, ev.SourceTier, ev.TaintChain)
-	}
-}
-
-func TestTaintTraceWithoutSourceStaysShim(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
-	enableReachability(t, "javascript")
-
-	ev := mapOne(t, rewriteFixture(t, "taint_result.json", func(r map[string]any) {
-		delete(extraOf(r)["dataflow_trace"].(map[string]any), "taint_source")
-	}))
-	if ev.Reachable || ev.SourceTier != models.TierSemgrepShim || ev.TaintChain != nil {
-		t.Errorf("got Reachable=%v SourceTier=%q; want a shim finding", ev.Reachable, ev.SourceTier)
-	}
-}
-
-// A trace Fendix cannot read must never cost a finding: the result is still
-// reported (as a shim finding), and so is every other result in the document.
-func TestUnreadableTaintTraceNeverDropsFindings(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
-	enableReachability(t, "javascript")
+	own := []models.TaintLink{{File: "app.js", Line: 9, Expr: spikeSink}}
 
 	for name, trace := range map[string]any{
 		"unknown variant tag": map[string]any{"taint_source": []any{"CliSomethingNew", []any{}}},
@@ -774,6 +858,8 @@ func TestUnreadableTaintTraceNeverDropsFindings(t *testing.T) {
 		"source not an array": map[string]any{"taint_source": map[string]any{"path": "app.js"}},
 		"location without a path": map[string]any{"taint_source": []any{"CliLoc", []any{
 			map[string]any{"start": map[string]any{"line": 7}}, "req.query.name"}}},
+		"no source": map[string]any{"taint_sink": []any{"CliLoc", []any{
+			map[string]any{"path": "app.js", "start": map[string]any{"line": 9}}, "db.query(sql)"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			doc := rewriteFixture(t, "taint_result.json", func(r map[string]any) {
@@ -794,9 +880,9 @@ func TestUnreadableTaintTraceNeverDropsFindings(t *testing.T) {
 			if err != nil || len(evs) != 2 {
 				t.Fatalf("got %d findings (err %v), want both results mapped", len(evs), err)
 			}
-			if evs[0].Reachable || evs[0].SourceTier != models.TierSemgrepShim {
-				t.Errorf("unreadable trace: got Reachable=%v SourceTier=%q; want a shim finding",
-					evs[0].Reachable, evs[0].SourceTier)
+			requireTaint(t, evs[0])
+			if !reflect.DeepEqual(evs[0].TaintChain, own) {
+				t.Errorf("TaintChain = %+v, want only the finding's own location %+v", evs[0].TaintChain, own)
 			}
 		})
 	}
@@ -806,9 +892,9 @@ func TestUnreadableTaintTraceNeverDropsFindings(t *testing.T) {
 // dataflow order: a source reached through a call starts at the innermost
 // source and ends at the call; a sink reached through a call starts at the call
 // and ends at the innermost sink. The chain then ends at the finding's own
-// location, which keeps its identity (see TestTaintGateKeepsFindingIdentity).
+// location, which keeps its identity (see TestTraceNeverMovesIdentity).
 func TestTaintTraceCallVariantsFlattenInDataflowOrder(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
+	useRuleSpecs(t, spikeRuleSpecs(t))
 	enableReachability(t, "javascript")
 
 	loc := func(path string, line int) map[string]any {
@@ -844,7 +930,7 @@ func TestTaintTraceCallVariantsFlattenInDataflowOrder(t *testing.T) {
 		{File: "lib/db.js", Line: 4, Expr: "q"},
 		{File: "lib/db.js", Line: 5, Expr: "db.query(q)"},
 		// The finding is reported in app.js; the chain ends where it is reported.
-		{File: "app.js", Line: 9, Expr: ev.Sink},
+		{File: "app.js", Line: 9, Expr: spikeSink},
 	}
 	if !reflect.DeepEqual(ev.TaintChain, want) {
 		t.Errorf("TaintChain =\n  %+v\nwant\n  %+v", ev.TaintChain, want)
@@ -852,16 +938,12 @@ func TestTaintTraceCallVariantsFlattenInDataflowOrder(t *testing.T) {
 }
 
 // Trace locations are made relative the way Endpoint is, and a trace link
-// never carries a credential-shaped literal: the chain is published and its
-// last link can be an identity input.
+// never carries a credential-shaped literal: the chain is published.
 func TestTaintChainLinksAreRelativeAndMasked(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
+	useRuleSpecs(t, spikeRuleSpecs(t))
 	enableReachability(t, "javascript")
 
-	root, err := filepath.Abs("testdata")
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := testdataDir
 	abs := filepath.Join(root, "src", "app.js")
 	const token = "sk_live_51H8xQeLkdIwHu7ix0aBcDeFgHiJ"
 	doc := rewriteFixture(t, "taint_result.json", func(r map[string]any) {
@@ -894,31 +976,29 @@ func TestTaintChainLinksAreRelativeAndMasked(t *testing.T) {
 	}
 }
 
-// Turning the gate on must not move a finding's identity: the fingerprint of
-// the same result is the same as a shim finding and as a semgrep_taint
-// finding. Without this, enabling a language would file every existing
-// finding of its taint rules as fixed-plus-new.
-func TestTaintGateKeepsFindingIdentity(t *testing.T) {
-	useRuleLanguages(t, spikeRuleLanguages(t))
-	doc := loadFixture(t, "taint_result.json")
-
-	enableReachability(t)
-	off := mapOne(t, doc)
+// The Sink of a rule that declares fendix_reachability is the match's own
+// first line — read from disk, else the first line semgrep sent — never the
+// whole multi-line `lines` a logged-in run sends and never the trace. So the
+// Sink, an identity input, is the same text logged in or out.
+func TestTaintRuleSinkIsTheMatchLine(t *testing.T) {
+	useRuleSpecs(t, spikeRuleSpecs(t))
 	enableReachability(t, "javascript")
-	on := mapOne(t, doc)
+	multiLine := func(r map[string]any) {
+		extraOf(r)["lines"] = "  db.query(sql, (err, rows) => res.json(rows));\n  // and the next line"
+	}
 
-	if !on.Reachable || off.Reachable {
-		t.Fatalf("precondition: gate on Reachable=%v, gate off Reachable=%v", on.Reachable, off.Reachable)
-	}
-	if a, b := models.Fingerprint(off.ToFinding()), models.Fingerprint(on.ToFinding()); a != b {
-		t.Errorf("fingerprint moved when the gate opened: %s -> %s\n off: %v\n on:  %v", a, b,
-			models.FingerprintIdentityComponents(off.ToFinding()),
-			models.FingerprintIdentityComponents(on.ToFinding()))
-	}
-	if on.ID != off.ID || on.Title != off.Title || on.Severity != off.Severity ||
-		on.Endpoint != off.Endpoint || on.Sink != off.Sink || on.RuleID != off.RuleID {
-		t.Errorf("gate changed more than tier, reachability and chain:\n off: %+v\n on:  %+v", off, on)
-	}
+	t.Run("file not on disk", func(t *testing.T) {
+		if ev := mapOne(t, rewriteFixture(t, "taint_result.json", multiLine)); ev.Sink != spikeSink {
+			t.Errorf("Sink = %q, want the first matched line %q", ev.Sink, spikeSink)
+		}
+	})
+	t.Run("file on disk", func(t *testing.T) {
+		doc := rewriteFixture(t, "taint_result.json", multiLine)
+		inSpikeApp(t)
+		if ev := mapOne(t, doc); ev.Sink != spikeSink {
+			t.Errorf("Sink = %q, want line 9 of app.js %q", ev.Sink, spikeSink)
+		}
+	})
 }
 
 // Existing rules carry no fendix_reachability, so a trace on their results —
@@ -954,12 +1034,18 @@ func TestScanRequestsDataflowTraces(t *testing.T) {
 	}
 }
 
-func TestBundledRuleLanguagesComeFromThePack(t *testing.T) {
-	if got := ruleLanguages("django-view-missing-login-required"); !reflect.DeepEqual(got, []string{"python"}) {
-		t.Errorf("languages of a bundled python rule = %v, want [python]", got)
+// Semgrep's result names neither the rule's mode nor its languages, so both
+// come from the bundled rule pack.
+func TestBundledRuleSpecsComeFromThePack(t *testing.T) {
+	spec, ok := ruleSpecs("django-view-missing-login-required")
+	if !ok || spec.Mode != "" || !reflect.DeepEqual(spec.Languages, []string{"python"}) {
+		t.Errorf("bundled pattern rule = %+v (found %v), want mode \"\" and languages [python]", spec, ok)
 	}
-	if got := ruleLanguages("no-such-rule"); got != nil {
-		t.Errorf("languages of an unknown rule = %v, want nil (the gate fails closed)", got)
+	if _, ok := ruleSpecs("no-such-rule"); ok {
+		t.Error("an unknown rule was found; the gate must fail closed for it")
+	}
+	if spec := spikeRuleSpecs(t)[spikeRuleID]; spec.Mode != "taint" || !reflect.DeepEqual(spec.Languages, []string{"javascript"}) {
+		t.Errorf("testdata taint rule = %+v, want mode taint and languages [javascript]", spec)
 	}
 }
 

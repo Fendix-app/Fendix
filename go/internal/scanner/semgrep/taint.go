@@ -4,16 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
-// ReachabilityLanguages is the per-language gate on Semgrep taint proofs
-// (ADR-011, owner decision D1). A finding of a taint rule counts as Reachable,
-// in tier models.TierSemgrepTaint with its dataflow trace as the TaintChain,
+// ReachabilityLanguages is the per-language gate on Semgrep taint findings
+// (ADR-011, owner decision D1). A match of a taint-mode rule that sets
+// fendix_reachability: taint is Reachable, in tier models.TierSemgrepTaint,
 // only when EVERY language the rule declares is in this set. A language is
 // added only after its taint pack reaches precision >= 0.90 on the corpus v2
 // development set within the noise budget; the release gate checks holdout
@@ -24,7 +28,7 @@ import (
 // models.TierSemgrepShim finding.
 var ReachabilityLanguages = map[string]bool{}
 
-// A rule asks for its trace to count as reachability with this metadata.
+// A rule asks for its matches to count as reachability with this metadata.
 const (
 	reachabilityMetadataKey = "fendix_reachability"
 	reachabilityTaint       = "taint"
@@ -39,99 +43,100 @@ var semgrepLanguageAliases = map[string]string{
 	"golang": "go",
 }
 
-// ruleLanguages returns the `languages` a rule declares, by rule id, or nil
-// when the bundled pack has no such rule. Semgrep's result carries no
-// language, so the rule pack is the only place to read it from. A var so
-// tests can stand in a rule that is not bundled.
-var ruleLanguages = bundledRuleLanguages
+// ruleSpec is what the gate reads from a rule's YAML. Semgrep's result names
+// neither: it carries the rule's metadata, but not its `mode` or its
+// `languages`.
+type ruleSpec struct {
+	Mode      string   `yaml:"mode"`
+	Languages []string `yaml:"languages"`
+}
 
-var bundledLanguages = sync.OnceValue(func() map[string][]string {
-	rules, err := CatalogRules()
-	if err != nil {
-		slog.Warn("semgrep: cannot read the rule pack's languages; no taint finding counts as reachable", "error", err)
-		return nil
+// parseRuleSpecs reads the mode and languages of every rule in one rule file,
+// keyed by rule id.
+func parseRuleSpecs(data []byte) (map[string]ruleSpec, error) {
+	var doc struct {
+		Rules []struct {
+			ID       string `yaml:"id"`
+			ruleSpec `yaml:",inline"`
+		} `yaml:"rules"`
 	}
-	out := make(map[string][]string, len(rules))
-	for _, r := range rules {
-		out[r.ID] = r.Languages
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	out := make(map[string]ruleSpec, len(doc.Rules))
+	for _, r := range doc.Rules {
+		out[r.ID] = r.ruleSpec
+	}
+	return out, nil
+}
+
+// ruleSpecs returns the mode and languages of a rule by id, and false for a
+// rule the bundled pack does not contain. A var so tests can stand in a rule
+// that is not bundled.
+var ruleSpecs = bundledRuleSpec
+
+var bundledSpecs = sync.OnceValue(func() map[string]ruleSpec {
+	out := map[string]ruleSpec{}
+	err := fs.WalkDir(embeddedRules, "rules", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || filepath.Ext(path) != ".yaml" {
+			return walkErr
+		}
+		data, err := embeddedRules.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		specs, err := parseRuleSpecs(data)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		for id, spec := range specs {
+			out[id] = spec
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Warn("semgrep: cannot read the rule pack; no taint finding counts as reachable", "error", err)
+		return nil
 	}
 	return out
 })
 
-func bundledRuleLanguages(ruleID string) []string { return bundledLanguages()[ruleID] }
-
-// taintProof decides whether a result's dataflow trace counts as
-// reachability and, when it does, returns the trace as a TaintChain: the
-// source first, then the intermediate variables, then the sink.
-//
-// All three must hold, in this order:
-//
-//  1. the rule declares fendix_reachability: taint;
-//  2. every language in the rule's `languages` is in ReachabilityLanguages
-//     (a rule with no known languages fails: an empty "every" must not pass);
-//  3. the trace has a source that decodes.
-//
-// The chain is decoded ONLY when all three hold. A shim finding therefore
-// never carries a chain, and the chain can never become an identity input of
-// a finding that is not reachable.
-//
-// The chain always ends at the finding's own location and operation (rel,
-// the result's line, sink). The trace's sink step is replaced by it when it is
-// that location, and it is appended otherwise (a sink reached through a call,
-// or no sink in the trace). models.Fingerprint reads the file and, when the
-// finding has no Sink, the operation off the last link, so ending there is
-// what keeps a finding's identity the same whether or not its language is
-// enabled.
-func taintProof(r *semgrepResult, ruleID, absRoot, rel, sink string) ([]models.TaintLink, bool) {
-	if !declaresTaintReachability(r.Extra.Metadata) {
-		return nil, false
-	}
-	if !languagesEnabled(ruleLanguages(ruleID)) {
-		return nil, false
-	}
-	if len(r.Extra.DataflowTrace) == 0 {
-		return nil, false
-	}
-	var trace semgrepTrace
-	if err := json.Unmarshal(r.Extra.DataflowTrace, &trace); err != nil {
-		return nil, false
-	}
-	steps, ok := sourceSteps(trace.TaintSource, 0)
-	if !ok {
-		return nil, false
-	}
-	steps = append(steps, trace.IntermediateVars...)
-	if trace.TaintSink != nil {
-		sinkPart, ok := sinkSteps(trace.TaintSink, 0)
-		if !ok {
-			return nil, false
-		}
-		steps = append(steps, sinkPart...)
-	}
-
-	chain := make([]models.TaintLink, 0, len(steps)+1)
-	for _, s := range steps {
-		if s.Location.Path == "" || s.Location.Start.Line <= 0 {
-			return nil, false
-		}
-		chain = append(chain, models.TaintLink{
-			File: relPath(s.Location.Path, absRoot),
-			Line: s.Location.Start.Line,
-			Expr: traceExpr(s.Content),
-		})
-	}
-	own := models.TaintLink{File: rel, Line: r.Start.Line, Expr: sink}
-	if last := chain[len(chain)-1]; trace.TaintSink != nil && last.File == own.File && last.Line == own.Line {
-		chain[len(chain)-1] = own
-	} else {
-		chain = append(chain, own)
-	}
-	return chain, true
+func bundledRuleSpec(ruleID string) (ruleSpec, bool) {
+	spec, ok := bundledSpecs()[ruleID]
+	return spec, ok
 }
 
+// declaresTaintReachability reports whether a rule's metadata asks for its
+// matches to count as reachability. It is a property of the rule alone, never
+// of the gate or of what semgrep sent, so the identity rules keyed on it
+// (taintRuleSink) hold whether or not the finding ends up reachable.
 func declaresTaintReachability(metadata map[string]interface{}) bool {
 	v, ok := metadata[reachabilityMetadataKey].(string)
 	return ok && strings.EqualFold(strings.TrimSpace(v), reachabilityTaint)
+}
+
+// taintReachable decides whether a match counts as reachability (R-pf56).
+// All three must hold:
+//
+//  1. the rule declares fendix_reachability: taint;
+//  2. the rule is a taint-mode rule (`mode: taint` in the bundled pack): a
+//     taint match exists only because a declared source reached the sink
+//     within one function, which is the proof — a pattern match proves no
+//     flow whatever its metadata says;
+//  3. every language in the rule's `languages` is in ReachabilityLanguages (a
+//     rule with no languages fails: an empty "every" must not pass).
+//
+// The dataflow trace is NOT a condition. A logged-out Semgrep never sends one,
+// and a finding must not be reachable or not depending on a login.
+func taintReachable(r *semgrepResult, ruleID string) bool {
+	if !declaresTaintReachability(r.Extra.Metadata) {
+		return false
+	}
+	spec, ok := ruleSpecs(ruleID)
+	if !ok || !strings.EqualFold(strings.TrimSpace(spec.Mode), "taint") {
+		return false
+	}
+	return languagesEnabled(spec.Languages)
 }
 
 func languagesEnabled(languages []string) bool {
@@ -150,14 +155,95 @@ func languagesEnabled(languages []string) bool {
 	return true
 }
 
+// taintRuleSink is the Sink of a rule that declares fendix_reachability: the
+// match's own first line — read from disk, else the first line semgrep sent —
+// masked, then bounded.
+//
+// Not the trace's sink and not the whole `extra.lines`: a logged-in run sends
+// every line of a multi-line match there, a logged-out run sends
+// "requires login" and the scanner reads one line from disk. The Sink is an
+// identity input, so it must be the same text either way. Masking runs before
+// the cut, so a literal the cut splits cannot slip through unmasked.
+func taintRuleSink(r *semgrepResult) string {
+	line := readSourceLine(r.Path, r.Start.Line)
+	if line == "" {
+		if sent := strings.TrimSpace(r.Extra.Lines); sent != semgrepRedactedLines {
+			line, _, _ = strings.Cut(sent, "\n")
+			line = strings.TrimSpace(line)
+		}
+	}
+	return boundExpr(maskStringLiterals(line))
+}
+
+// taintChain is a reachable finding's chain. It always ends at the finding's
+// own location and operation (own): models.Fingerprint reads the file, and the
+// operation when there is no Sink, off the last link, so ending there keeps
+// identity the same with or without a trace.
+//
+// A trace, when semgrep sends one (a logged-in run), adds the detail before
+// it: the source, the intermediate variables, then the sink. The trace's sink
+// step is replaced by own when it is that location, and own follows it
+// otherwise (a sink reached through a call). A trace this decoder cannot read,
+// or one without a source, adds nothing: the chain is own alone.
+func taintChain(raw json.RawMessage, absRoot string, own models.TaintLink) []models.TaintLink {
+	steps, ok := traceLinks(raw, absRoot)
+	if !ok {
+		return []models.TaintLink{own}
+	}
+	if last := steps[len(steps)-1]; last.File == own.File && last.Line == own.Line {
+		steps[len(steps)-1] = own
+		return steps
+	}
+	return append(steps, own)
+}
+
+// traceLinks decodes a dataflow trace into chain links in dataflow order. It
+// fails for an absent or unreadable trace, a trace without a source, and a
+// step without a file or line.
+func traceLinks(raw json.RawMessage, absRoot string) ([]models.TaintLink, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var trace semgrepTrace
+	if err := json.Unmarshal(raw, &trace); err != nil {
+		return nil, false
+	}
+	steps, ok := sourceSteps(trace.TaintSource, 0)
+	if !ok {
+		return nil, false
+	}
+	steps = append(steps, trace.IntermediateVars...)
+	if trace.TaintSink != nil {
+		sinkPart, ok := sinkSteps(trace.TaintSink, 0)
+		if !ok {
+			return nil, false
+		}
+		steps = append(steps, sinkPart...)
+	}
+	links := make([]models.TaintLink, 0, len(steps)+1)
+	for _, s := range steps {
+		if s.Location.Path == "" || s.Location.Start.Line <= 0 {
+			return nil, false
+		}
+		links = append(links, models.TaintLink{
+			File: relPath(s.Location.Path, absRoot),
+			Line: s.Location.Start.Line,
+			Expr: traceExpr(s.Content),
+		})
+	}
+	return links, true
+}
+
 // traceExpr renders a trace step's matched code as a chain link's Expr: on
 // one line, credential-shaped literals masked (the chain is published, like
-// Sink), then bounded like the evidence snippet. Masking runs before the cut
-// so a literal split by it cannot slip through unmasked.
+// Sink), then bounded like the evidence snippet.
 func traceExpr(content string) string {
-	expr := maskStringLiterals(strings.Join(strings.Fields(content), " "))
+	return boundExpr(maskStringLiterals(strings.Join(strings.Fields(content), " ")))
+}
+
+func boundExpr(expr string) string {
 	if len(expr) > evidenceMaxLen {
-		expr = expr[:evidenceMaxLen] + "..."
+		return expr[:evidenceMaxLen] + "..."
 	}
 	return expr
 }

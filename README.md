@@ -1145,9 +1145,10 @@ rules:
 Semgrep rules are automatically picked up by the Semgrep runner.
 
 A taint rule (`mode: taint`) can set `metadata.fendix_reachability: taint`.
-Its findings then count as reachable, with Semgrep's dataflow trace as their
-`taint_chain`, once every language in the rule's `languages` is enabled in
-`semgrep.ReachabilityLanguages`. Until then they are reported like any other
+Its findings then count as reachable once every language in the rule's
+`languages` is enabled in `semgrep.ReachabilityLanguages`. When Semgrep sends
+a dataflow trace (only to a logged-in account), it becomes the finding's
+`taint_chain`. Until the language is enabled, they are reported like any other
 Semgrep finding. A language is enabled only when its taint pack clears the
 precision gate in [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md).
 

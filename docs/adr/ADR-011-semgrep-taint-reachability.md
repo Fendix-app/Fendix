@@ -3,7 +3,9 @@
 ## Status
 
 Accepted (2026-10-27). Owner decision D1 of the framework parity gap-closure
-plan (2026-10-24), ruled as R-D1, implemented in its Task 4.1. Task 4.1 adds
+plan (2026-10-24), ruled as R-D1, implemented in its Task 4.1. The
+controller's ruling R-pf56 amends the brief's condition on the trace: a
+taint-mode match is the proof, and the trace only adds detail. Task 4.1 adds
 the mechanism with every language disabled. Tasks 4.3 (JavaScript and
 TypeScript), 4.4 (Java) and 4.5 (Go) add the taint rules and enable a
 language once it meets the gate below.
@@ -67,28 +69,55 @@ taint pack reaches precision >= 0.90 on the corpus v2 development set
 (`benchmarks/frameworks/`) and stays within the plan's noise budget (its
 Task 0.5). The release gate checks holdout precision. The map ships empty.
 
+**R-pf56: the match is the proof, the trace is detail.** Semgrep reports a
+match of a `mode: taint` rule only when one of the rule's declared sources
+reached its sink within one function. That match is the reachability claim.
+The per-language precision gate (R-D1) is what protects its quality. A trace
+is not required, because a logged-out Semgrep never sends one, and a finding
+must not be reachable or not depending on a login.
+
 **The tier.** `models.TierSemgrepTaint` (`semgrep_taint`) is the tier of such
-a finding. `semgrep.mapResult` assigns it only when all three hold:
+a finding. `semgrep.mapResult` assigns it when all three hold:
 
 1. The rule sets `metadata.fendix_reachability: taint`.
-2. Every language in the rule's `languages` is in `ReachabilityLanguages`.
-   Semgrep's results do not name a language, so the languages are read from
-   the bundled rule pack. A rule whose languages are unknown or empty fails
-   this check. Semgrep's aliases `js`, `ts` and `golang` count as
-   `javascript`, `typescript` and `go`.
-3. The result's `dataflow_trace` has a source that decodes.
+2. The rule is a taint rule: `mode: taint` in the bundled rule pack. A
+   pattern rule's match proves no flow, whatever its metadata says.
+3. Every language in the rule's `languages` is in `ReachabilityLanguages`.
+   Semgrep accepts the aliases `js`, `ts` and `golang`; they count as
+   `javascript`, `typescript` and `go`. A rule whose languages are unknown or
+   empty fails this check.
 
-The finding then gets `Reachable`, the new tier, and the trace as its
-`TaintChain`: the source, the intermediate variables, then the sink. A
-`CliCall` is flattened in dataflow order. Each link's file is made relative
-the way `Endpoint` is, and its expression is masked for credential-shaped
-literals the way `Sink` is. The chain always ends at the finding's own file,
-line and `Sink`.
+Semgrep's result carries the rule's metadata, but neither its `mode` nor its
+`languages`. Both are read from the rule YAML embedded in the binary
+(`ruleSpecs`), and a rule the pack does not contain fails the check.
+
+The finding then gets `Reachable` and the new tier. Its `TaintChain` always
+ends at the finding's own file, line and `Sink`:
+
+- **With a trace** (a logged-in run), the chain is the source, the
+  intermediate variables, then the sink. A `CliCall` is flattened in
+  dataflow order. Each link's file is made relative the way `Endpoint` is,
+  and its expression is masked for credential-shaped literals the way `Sink`
+  is. The trace's sink step is replaced by the finding's own link when it is
+  the same location, and is followed by it otherwise.
+- **Without a trace**, or with one that does not decode or has no source, the
+  chain is the finding's own link alone.
 
 When any condition fails, the finding is the `semgrep_shim` finding it was
 before, and the trace is never decoded. Scan passes `--dataflow-traces` on
 every run. No bundled rule sets `fendix_reachability` yet, so no finding
 changes.
+
+**Identity does not depend on the trace, the login or the gate.** A rule that
+sets `fendix_reachability: taint` takes its identity only from what every run
+has. Its `Sink` is the match's own first line, read from disk, or else the
+first line of `extra.lines`. It is never the trace's sink, and never the
+whole `extra.lines`: a logged-in run sends every line of a multi-line match
+there. Its `Symbol` is empty, because Semgrep sends metavariables only to a
+logged-in account. `models.Fingerprint` reads the file, the symbol and the
+operation, and for these findings all three are the same logged in or out,
+with or without a trace, gate open or closed. No rule bundled before this ADR
+sets the key, so no existing identity moves.
 
 **Still a Semgrep tier.** `models.SourceTier.IsSemgrep` is true for both
 Semgrep tiers. Every rule that limits a Semgrep finding reads it:
@@ -108,9 +137,14 @@ Semgrep tiers. Every rule that limits a Semgrep finding reads it:
 A proven `semgrep_taint` finding scores 35 base + 10 static + 10 reachable -
 5 tier = 50, in the MEDIUM band. At or above `--fail-on` it blocks through
 the reachable-path signal, never on its own say-so: the gate's invariant that
-a MEDIUM band needs an independent signal is unchanged. Its reachability also
-takes the correlator's reachable escalation, as it takes the non-correlated
-one.
+a MEDIUM band needs an independent signal is unchanged.
+
+**Severity.** A `Reachable` finding is escalated one severity level by
+`engine.escalateNonCorrelatedReachable`. A correlated one gets the
+correlation bump and the reachable bump from `engine.mergeFindings`. A taint
+rule declared `fendix_severity: HIGH` therefore reports CRITICAL once its
+language is enabled. Rule authors declare a taint rule at the severity they
+want before that bump.
 
 **TrustRank 2.** `CollapseDuplicateLocations` keeps one finding per
 (Category, Endpoint) when different analyzer tiers report the same location.
@@ -123,9 +157,8 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
   proof would be dropped, which is the proof Phase 4 exists to add.
 - At rank 2 the two tie. `escalateNonCorrelatedReachable` runs before the
   collapse, so a proven finding declared at textscan's severity arrives one
-  level higher and is kept with its chain. Rule authors declare a taint rule
-  at the severity they want before that bump (a plan constraint), so a taint
-  rule declared below textscan's severity loses the tie on purpose.
+  level higher and is kept with its chain. A taint rule declared below
+  textscan's severity loses the tie on purpose.
 - Rank 2 also puts it above the shim and the unknown tier, so a proven finding
   is kept over a Semgrep pattern finding on the same line.
 - Not rank 3: that is the Python AST analyzer, which cleared the F1 >= 0.95
@@ -137,26 +170,24 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
 **Positive:**
 - A language becomes provable by adding one key to `ReachabilityLanguages`,
   with its precision evidence in that change. No other code moves.
-- A proven Semgrep taint finding carries the same `reachable`, `taint_chain`
-  and SARIF `codeFlows` a Python finding does.
-- Turning a language on does not change a finding's identity
-  (`TestTaintGateKeepsFindingIdentity`). The chain ends at the finding's own
-  file and `Sink`, which are the identity inputs `models.Fingerprint` reads.
+- It works on a default run. A logged-out Semgrep run proves the same
+  findings a logged-in one does.
+- Turning a language on, logging in or out, and the trace arriving or not do
+  not change a finding's identity (`TestTraceNeverMovesIdentity`).
 - No detection changes in Task 4.1. The framework parity gate shows no case
   change.
 
 **Negative:**
-- **A logged-out Semgrep sends no trace.** Condition 3 fails for every
-  finding of a run with no Semgrep account logged in. That is the default for
-  the CLI and the GitHub Action, neither of which logs in to Semgrep, and of
-the parity harness. Enabling a language under
-  this ADR has no effect on such runs until the trace reaches Fendix. Task 4.3
-  must choose how before it enables a language. The candidates are reading
-  the trace from Semgrep's text output, written alongside the JSON in the
-  same run; or treating a taint-mode match as the proof, since Semgrep
-  reports one only when a source reaches the sink, with a chain that holds
-  only the finding's own location. This ADR records the problem. It does not
-  choose.
+- **A logged-out run shows no path.** Semgrep 1.141.0 with no account logged
+  in leaves `dataflow_trace` out of `--json`, so a default run's chain is the
+  finding's own location alone. That is the CLI and the GitHub Action, neither
+  of which logs in to Semgrep, and the parity harness. A reader sees where
+  the sink is, but not the source line. Fendix does not parse Semgrep's text
+  output to recover it.
+- The proof is Semgrep's, not Fendix's. Whether a match is a real flow
+  depends on the rule's sources, sinks and sanitizers. The per-language
+  precision gate is the only measurement of that, so a language must not be
+  enabled without it.
 - `--dataflow-traces` is passed on every run. Measured with Semgrep 1.141.0
   over the parity corpus, three runs each way: one run over the whole corpus
   took 1.52 s without the flag and 1.55 s with it, and one run per framework
@@ -171,15 +202,23 @@ the parity harness. Enabling a language under
 **Mitigations:**
 - `TestReachabilityLanguagesShipEmpty` fails when a language is added, so
   the change that enables one must also update that test.
-- The trace is decoded only for a rule that asks for it, and never fails the
-  document. `TestUnreadableTaintTraceNeverDropsFindings` covers an unknown
-  variant tag, a trace of the wrong type, and a location without a path.
-- `TestTaintRuleWithALanguageNotEnabledStaysShim` covers a rule with one of
-  its two languages enabled, a rule of unknown languages and a rule with none.
+- `TestLoggedOutTaintResultIsReachableWithoutATrace` runs on Semgrep's real
+  logged-out output, and `TestTraceNeverMovesIdentity` checks that both
+  recorded runs, gate open and closed, have one fingerprint.
+- `TestNonTaintRuleNeverReachable` covers a rule without the metadata, a
+  pattern rule with it, and a rule the pack does not contain.
+  `TestTaintRuleWithALanguageNotEnabledStaysShim` covers a rule with one of
+  its two languages enabled and a rule with none.
+- A trace is decoded only for a reachable finding and never fails the
+  document. `TestUnreadableTaintTraceOnlyLosesDetail` covers an unknown
+  variant tag, a trace of the wrong type, a location without a path and a
+  trace without a source.
 - `TestSemgrepTaintNeverDeterministic`, `TestSemgrepTaintMediumWithReachableBlocks`
   and `TestSemgrepTaintWithoutReachableWarns` pin the scoring and the gate.
   `TestNoBlockWithoutCorroboration` checks the block invariant for the new
   tier too.
 - `TestProvenPathNeverFromASemgrepTier`,
+  `TestCorrelatedSemgrepTaintTakesTheReachableEscalation`,
   `TestNoIndependence_FendixSemgrepTaintVsImportedSemgrep` and
-  `TestSemgrepTaintTierExportsAsSemgrep` pin the Semgrep-tier limits.
+  `TestSemgrepTaintTierExportsAsSemgrep` pin the Semgrep-tier limits and the
+  escalation.
