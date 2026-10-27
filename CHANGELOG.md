@@ -1061,19 +1061,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `FilenameUtils.getName`, and `SecureRandom`. An argument array whose
       program is fixed. The claims of a token that went through `verify()`,
       and a token's time claims (`exp`, `iat`, `nbf`).
-    - A value behind a guard. A guard counts only when it exits (`return` or
-      `throw`) or replaces the value when its check fails, or when the use
-      sits in the then-branch of a passing check with no `else`. A check
-      that only logs, a denylist, and a use inside the failing branch stay
-      reported. The checks are:
-      - a host allowlist on the URL, on a `URI` or host parsed from it, or
-        an exact URL (`equals`, or `matches` with every dot escaped);
+    - A value behind a guard. A guard counts only when the branch taken on a
+      failing check ends with a direct `return` or `throw` (or, for a
+      redirect, a direct assignment of a literal), not one nested in an
+      `if`, `try`, loop or lambda, and the check is not under an `&&`; or
+      when the use sits in the then-branch of a passing check with no
+      `else`. A check that only logs or exits only sometimes, a denylist,
+      and a use inside the failing branch stay reported. The checks are:
+      - a host allowlist or a literal host comparison on the URL's host:
+        `getHost()` of a `URI` or `URL` parsed from it, or a variable
+        holding that host; or one exact URL (`equals`, or `matches` with
+        every dot escaped). A check on the scheme, path or port alone is
+        not a host check, though it may sit beside one in an `||`;
       - containment: a normalized or real `Path` that `startsWith` the base,
         or a canonical or normalized String path, inline or in a variable,
         that `startsWith` the base plus a separator. A String `startsWith`
         without a separator is not containment;
-      - for a redirect, both halves: the target starts with `/` and not with
-        `//`.
+      - for a redirect, both halves, each with its polarity: a failing
+        check holds `!t.startsWith("/")` and `t.startsWith("//")` as `||`
+        operands, and a passing one `t.startsWith("/")` and
+        `!t.startsWith("//")` as `&&` operands.
   - **Shape rules** (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
     `java-path_traversal-sink`, `java-open_redirect-sink`) report a sink in
     another class: a non-private method whose own `String` parameter is

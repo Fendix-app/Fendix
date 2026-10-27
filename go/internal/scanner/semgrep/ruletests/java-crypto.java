@@ -191,6 +191,25 @@ class JwtRoundOneController {
         return decoded.getSubject();
     }
 
+    @GetMapping("/j/verify-then-decode")
+    String verifyThenDecode(@RequestHeader("Authorization") String auth) {
+        String token = auth.substring(7);
+        verifier.verify(token);
+        DecodedJWT decoded = JWT.decode(token);
+        // ok: java-jwt_no_verify-taint
+        return decoded.getSubject();
+    }
+
+    // A different string was verified.
+    @GetMapping("/j/verify-other")
+    String verifyOther(@RequestHeader("Authorization") String auth) {
+        String token = auth.substring(7);
+        DecodedJWT decoded = JWT.decode(token);
+        verifier.verify(auth);
+        // ruleid: java-jwt_no_verify-taint
+        return decoded.getSubject();
+    }
+
     @GetMapping("/j/unsecured-parser")
     Object unsecuredParser(@RequestHeader("Authorization") String auth) {
         // ruleid: java-jwt_no_verify-taint

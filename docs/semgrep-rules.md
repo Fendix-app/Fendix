@@ -166,10 +166,12 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
   methods count, not a nested class's, and a value the handler sanitised in
   the call or reassigned before it is not followed. Taint then follows that
   method's body, and the finding is reported at the sink inside it.
-- **Guards.** A host allowlist, a path containment check or a local-path
-  redirect check makes a value safe only when it exits (`return` or
-  `throw`) or replaces the value when the check fails, or when the use is
-  in the then-branch of a passing check with no `else`. The taint rules
+- **Guards.** A host allowlist (on the host itself), a path containment
+  check or a local-path redirect check (both halves, each with its
+  polarity) makes a value safe only when the branch taken on a failing
+  check ends with a direct `return` or `throw` (for a redirect, also a
+  direct assignment of a literal), not under an `&&`; or when the use is in
+  the then-branch of a passing check with no `else`. The taint rules
   apply them as sanitizers to the uses after (or inside) the check;
   `java-ssrf-sink` and `java-open_redirect-sink` apply the same guards as
   negations, and `TestJavaSinkRulesShareTheirTaintRulesBlocks` keeps the

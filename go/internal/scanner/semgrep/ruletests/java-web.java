@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -535,6 +536,14 @@ class LinkPreview {
         return restTemplate.getForObject(url, String.class);
     }
 
+    public String fetchSchemeChecked(String url) {
+        if (!"https".equals(URI.create(url).getScheme())) {
+            throw new IllegalArgumentException("https only");
+        }
+        // ruleid: java-ssrf-sink
+        return restTemplate.getForObject(url, String.class);
+    }
+
     public String fetchLogged(String url) {
         if (!ALLOWED.contains(URI.create(url).getHost())) {
             System.out.println("unexpected host");
@@ -659,6 +668,142 @@ class DownloadController {
     }
 }
 
+// Fix round 2: a host check must check the host (or one exact URL), and the
+// exit must be a direct statement of the failing branch.
+@RestController
+class SsrfRoundTwoController {
+
+    private static final Set<String> ALLOWED_HOSTS = Set.of("api.example.com");
+    private static final Set<String> ALLOWED_SCHEMES = Set.of("http", "https");
+
+    private final RestTemplate restTemplate = new RestTemplate();
+    private ExecutorService executor;
+    private boolean strict;
+
+    @GetMapping("/s2/scheme-equals")
+    String schemeEquals(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!"https".equals(uri.getScheme())) {
+            return null;
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s2/scheme-allowlist")
+    String schemeAllowlist(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!ALLOWED_SCHEMES.contains(uri.getScheme())) {
+            throw new IllegalArgumentException("scheme");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s2/scheme-allowlist-inline")
+    String schemeAllowlistInline(@RequestParam String url) {
+        if (!ALLOWED_SCHEMES.contains(URI.create(url).getScheme())) {
+            throw new IllegalArgumentException("scheme");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s2/path-allowlist")
+    String pathAllowlist(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!ALLOWED_HOSTS.contains(uri.getPath())) {
+            throw new IllegalArgumentException("path");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s2/and")
+    String and(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!ALLOWED_HOSTS.contains(uri.getHost()) && strict) {
+            throw new IllegalArgumentException("host");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s2/port-and")
+    String portAnd(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (uri.getPort() != 443 && !ALLOWED_HOSTS.contains(uri.getHost())) {
+            throw new IllegalArgumentException("host");
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s2/lambda-return")
+    String lambdaReturn(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!ALLOWED_HOSTS.contains(uri.getHost())) {
+            executor.submit(() -> {
+                return null;
+            });
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s2/nested-exit")
+    String nestedExit(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!ALLOWED_HOSTS.contains(uri.getHost())) {
+            System.out.println("host not allowed: " + uri.getHost());
+            if (strict) {
+                throw new IllegalArgumentException("host not allowed");
+            }
+        }
+        // ruleid: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s2/scheme-or-host")
+    String schemeOrHost(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!"https".equals(uri.getScheme()) || !ALLOWED_HOSTS.contains(uri.getHost())) {
+            System.out.println("rejected " + url);
+            throw new IllegalArgumentException("not allowed");
+        }
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(uri, String.class);
+    }
+
+    @GetMapping("/s2/exact-url")
+    String exactUrl(@RequestParam String url) {
+        if (!"https://api.example.com/data".equals(url)) {
+            throw new IllegalArgumentException("exact");
+        }
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s2/literal-host-inline")
+    String literalHostInline(@RequestParam String url) {
+        if (!"api.example.com".equals(URI.create(url).getHost())) {
+            return null;
+        }
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+
+    @GetMapping("/s2/literal-host-derived")
+    String literalHostDerived(@RequestParam String url) {
+        URI uri = URI.create(url);
+        if (!"api.example.com".equals(uri.getHost())) {
+            return null;
+        }
+        // ok: java-ssrf-taint
+        return restTemplate.getForObject(url, String.class);
+    }
+}
+
 // Fix round 1: path containment must exit when it fails.
 @RestController
 class PathRoundOneController {
@@ -741,6 +886,47 @@ class PathRoundOneController {
     }
 }
 
+// Fix round 2: path.
+@RestController
+class PathRoundTwoController {
+
+    private static final String FILES_DIR = "/srv/app/files";
+    private final Path base = Paths.get(FILES_DIR).toAbsolutePath().normalize();
+    private boolean strict;
+
+    @GetMapping("/p2/and")
+    byte[] and(@RequestParam String file) throws IOException {
+        Path target = base.resolve(file).normalize();
+        if (!target.startsWith(base) && strict) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ruleid: java-path_traversal-taint
+        return Files.readAllBytes(target);
+    }
+
+    @GetMapping("/p2/nested-exit")
+    byte[] nestedExit(@RequestParam String file) throws IOException {
+        Path target = base.resolve(file).normalize();
+        if (!target.startsWith(base)) {
+            if (strict) {
+                throw new IllegalArgumentException("outside");
+            }
+        }
+        // ruleid: java-path_traversal-taint
+        return Files.readAllBytes(target);
+    }
+
+    @GetMapping("/p2/root-base")
+    byte[] rootBase(@RequestParam String file) throws IOException {
+        Path target = base.resolve(file).normalize();
+        if (!target.startsWith(target.getRoot())) {
+            throw new IllegalArgumentException("outside");
+        }
+        // ruleid: java-path_traversal-taint
+        return Files.readAllBytes(target);
+    }
+}
+
 @Service
 class DocumentStore {
 
@@ -763,6 +949,17 @@ class DocumentStore {
         Path target = Paths.get(FILES_DIR).resolve(file).normalize();
         if (!target.startsWith(Paths.get(FILES_DIR))) {
             throw new IllegalArgumentException("outside the files directory");
+        }
+        return Files.readAllBytes(target);
+    }
+
+    public byte[] readNestedExit(String file, boolean strict) throws IOException {
+        // ruleid: java-path_traversal-sink
+        Path target = Paths.get(FILES_DIR).resolve(file).normalize();
+        if (!target.startsWith(Paths.get(FILES_DIR))) {
+            if (strict) {
+                throw new IllegalArgumentException("outside the files directory");
+            }
         }
         return Files.readAllBytes(target);
     }
@@ -949,6 +1146,97 @@ class RedirectRoundOneController {
     }
 }
 
+// Fix round 2: a direct exit or literal replacement, and both halves with
+// their own polarity.
+@Controller
+class RedirectRoundTwoController {
+
+    private ExecutorService executor;
+    private boolean strict;
+
+    @GetMapping("/r2/literal-unbraced")
+    void literalUnbraced(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) next = "/";
+        // ok: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/not-literal-unbraced")
+    void notLiteralUnbraced(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) next = next.substring(1);
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/not-literal")
+    void notLiteral(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            next = next.substring(1);
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/and")
+    void and(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if ((!next.startsWith("/") || next.startsWith("//")) && strict) {
+            next = "/";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/slash-half-under-and")
+    void slashHalfUnderAnd(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if ((!next.startsWith("/") && strict) || next.startsWith("//")) {
+            next = "/";
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/lambda-return")
+    void lambdaReturn(@RequestParam String next, HttpServletResponse response) throws Exception {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            executor.submit(() -> {
+                return null;
+            });
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/nested-replace")
+    void nestedReplace(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            if (strict) {
+                next = "/";
+            }
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/nested-throw")
+    void nestedThrow(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") || next.startsWith("//")) {
+            if (strict) {
+                throw new IllegalArgumentException("bad");
+            }
+        }
+        // ruleid: java-open_redirect-taint
+        response.sendRedirect(next);
+    }
+
+    @GetMapping("/r2/external-only")
+    void externalOnly(@RequestParam String next, HttpServletResponse response) throws IOException {
+        if (!next.startsWith("/") && !next.startsWith("//")) {
+            // ruleid: java-open_redirect-taint
+            response.sendRedirect(next);
+        }
+    }
+}
+
 @Service
 class Redirects {
 
@@ -970,6 +1258,14 @@ class Redirects {
             target = "/";
         }
         // ok: java-open_redirect-sink
+        response.sendRedirect(target);
+    }
+
+    public void redirectNotLiteral(HttpServletResponse response, String target) throws IOException {
+        if (!target.startsWith("/") || target.startsWith("//")) {
+            target = target.substring(1);
+        }
+        // ruleid: java-open_redirect-sink
         response.sendRedirect(target);
     }
 

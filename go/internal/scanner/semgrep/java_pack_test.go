@@ -281,6 +281,73 @@ func TestJavaSinkRulesShareTheirTaintRulesBlocks(t *testing.T) {
 				len(negationGuards), len(sanitizerGuards), strings.Join(negationGuards, "---\n"), strings.Join(sanitizerGuards, "---\n"))
 		}
 	}
+
+	// Path: java-path_traversal-sink matches the join in the declaration of
+	// the path that is then checked, so its guards have their own prefixes;
+	// their checks (on $GCOND) and the exit they require (on $GBODY) must be
+	// ones java-path_traversal-taint's sanitizers use.
+	taintChecks := map[string]bool{}
+	for _, s := range rules["java-path_traversal-taint"]["pattern-sanitizers"].([]any) {
+		for _, c := range guardChecks(t, s, "patterns") {
+			taintChecks[c] = true
+		}
+	}
+	var sinkChecks []string
+	for _, p := range rules["java-path_traversal-sink"]["patterns"].([]any) {
+		if not, ok := p.(map[string]any)["pattern-not"].(map[string]any); ok {
+			sinkChecks = append(sinkChecks, guardChecks(t, not, "patterns")...)
+		}
+	}
+	if len(sinkChecks) == 0 {
+		t.Error("java-path_traversal-sink has no guard negations")
+	}
+	for _, c := range sinkChecks {
+		if !taintChecks[c] {
+			t.Errorf("java-path_traversal-sink check is not one of java-path_traversal-taint's:\n%s", c)
+		}
+	}
+
+	// XSS: the JSON-response exclusions of the writer sink, in both rules.
+	var taintJSON, shapeJSON []string
+	for _, sink := range rules["java-xss-taint"]["pattern-sinks"].([]any) {
+		taintJSON = append(taintJSON, jsonExclusions(sink.(map[string]any)["patterns"])...)
+	}
+	shapeJSON = jsonExclusions(rules["java-xss-sink"]["patterns"])
+	if len(taintJSON) == 0 || !reflect.DeepEqual(taintJSON, shapeJSON) {
+		t.Errorf("java-xss-sink's JSON-response exclusions differ from java-xss-taint's:\n%v\nvs\n%v", shapeJSON, taintJSON)
+	}
+}
+
+// guardChecks returns a guard's $GCOND checks and $GBODY exit, each rendered.
+func guardChecks(t *testing.T, node any, key string) []string {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return nil
+	}
+	patterns, _ := m[key].([]any)
+	var out []string
+	for _, p := range patterns {
+		pm := p.(map[string]any)
+		for _, k := range []string{"metavariable-pattern", "metavariable-regex"} {
+			if mv, ok := pm[k].(map[string]any); ok && (mv["metavariable"] == "$GCOND" || mv["metavariable"] == "$GBODY") {
+				out = append(out, canonicalYAML(t, pm))
+			}
+		}
+	}
+	return out
+}
+
+// jsonExclusions returns the pattern-not-inside clauses of a patterns list
+// that name a JSON content type.
+func jsonExclusions(patterns any) []string {
+	list, _ := patterns.([]any)
+	var out []string
+	for _, p := range list {
+		if s, ok := p.(map[string]any)["pattern-not-inside"].(string); ok && strings.Contains(strings.ToLower(s), "json") {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // sqlBlocks renders the SQL call list (the pattern-either naming JdbcTemplate)

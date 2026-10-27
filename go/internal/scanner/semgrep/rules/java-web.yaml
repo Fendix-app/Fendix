@@ -7,10 +7,11 @@
 # java-injection.yaml, repeated word for word (Semgrep cannot share a block
 # between rules); TestJavaTaintRulesShareTheirBlocks keeps the copies equal.
 #
-# A guard (a host allowlist, a containment check, a local-path check) counts
-# only when it exits (return or throw) or replaces the value when the check
-# fails, or when the use sits inside the then-branch of a passing check with
-# no else. java-ssrf-sink and java-open_redirect-sink carry the same guards as
+# A guard (a host check, a containment check, a local-path check) counts only
+# when the branch taken on a failing check ends with a direct return or
+# throw (for a redirect, also a direct assignment of a literal), not under an
+# &&; or when the use sits inside the then-branch of a passing check with no
+# else. java-ssrf-sink and java-open_redirect-sink carry the same guards as
 # negations on their parameter; TestJavaSinkRulesShareTheirTaintRulesBlocks
 # keeps those copies equal.
 #
@@ -1073,28 +1074,24 @@ rules:
       # parsed from it, or an exact URL; or a passing check around the use.
       # The occurrences of the URL after it (or inside it) are clean.
       - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
           - pattern-either:
               - pattern-inside: |
-                  if ($GCOND) { ... throw $GE; }
+                  if (<... $GV.getHost() ...>) { ... }
                   ...
               - pattern-inside: |
-                  if ($GCOND) { ... return ...; }
+                  if (<... URI.create($GV) ...>) { ... }
                   ...
               - pattern-inside: |
-                  if ($GCOND) throw $GE;
+                  if (<... new URI($GV) ...>) { ... }
                   ...
               - pattern-inside: |
-                  if ($GCOND) return ...;
-                  ...
-          - pattern-either:
-              - pattern-inside: |
-                  if (<... $GFA.contains(<... $GV ...>) ...>) { ... }
+                  if (<... new URL($GV) ...>) { ... }
                   ...
               - pattern-inside: |
-                  if (<... $GFA.equals(<... $GV ...>) ...>) { ... }
-                  ...
-              - pattern-inside: |
-                  if (<... $GV.getHost().equals(...) ...>) { ... }
+                  if (<... $GFA.equals($GV) ...>) { ... }
                   ...
               - pattern-inside: |
                   if (<... $GV.equals(...) ...>) { ... }
@@ -1108,177 +1105,60 @@ rules:
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
                 - pattern-either:
-                    - pattern: '!$GALLOW.contains(<... $GV ...>)'
-                    - pattern: '!"...".equals(<... $GV ...>)'
+                    - pattern: '!$GALLOW.contains($GV.getHost())'
+                    - pattern: '!$GALLOW.contains(URI.create($GV).getHost())'
+                    - pattern: '!$GALLOW.contains(new URI($GV).getHost())'
+                    - pattern: '!$GALLOW.contains(new URL($GV).getHost())'
+                    - pattern: '!"...".equals($GV.getHost())'
+                    - pattern: '!"...".equals(URI.create($GV).getHost())'
+                    - pattern: '!"...".equals(new URI($GV).getHost())'
+                    - pattern: '!"...".equals(new URL($GV).getHost())'
                     - pattern: '!$GV.getHost().equals("...")'
-                    - pattern: '!$GV.equals("...")'
+                    - pattern: '!URI.create($GV).getHost().equals("...")'
+                    - pattern: '!new URI($GV).getHost().equals("...")'
+                    - pattern: '!new URL($GV).getHost().equals("...")'
+                    - pattern: '!"=~/^https?:\/\/[^\/]+/".equals($GV)'
+                    - pattern: '!$GV.equals("=~/^https?:\/\/[^\/]+/")'
                     - pattern: '!$GV.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
                 - pattern-not-inside: '$GA && $GB'
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  $GT $GX = $GMK($GV);
+                  $GT $GX = URI.create($GV);
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GMK($GV);
-                  ...
-                  if ($GCOND) { ... return ...; }
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GT $GX = $GMK($GV);
+                  $GX = URI.create($GV);
                   ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GMK($GV);
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GX = $GMK($GV);
+                  $GT $GX = new URI($GV);
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GX = $GMK($GV);
-                  ...
-                  if ($GCOND) { ... return ...; }
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GX = $GMK($GV);
+                  $GX = new URI($GV);
                   ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GX = $GMK($GV);
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GT $GX = new $GTY($GV);
+                  $GT $GX = new URL($GV);
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = new $GTY($GV);
-                  ...
-                  if ($GCOND) { ... return ...; }
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
-                  $GT $GX = new $GTY($GV);
+                  $GX = new URL($GV);
                   ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GX = new $GTY($GV);
-                  ...
-                  if ($GCOND) return ...;
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV);
-                  ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV);
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV);
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV);
-                  ...
-                  if ($GCOND) return ...;
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) return ...;
-                  ...
-              - pattern-inside: |
-                  $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GX = $GMK($GV).getHost();
-                  ...
-                  if ($GCOND) return ...;
-                  ...
-              - pattern-inside: |
-                  $GT $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) return ...;
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GX = new $GTY($GV).getHost();
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
           - pattern-either:
               - pattern-inside: |
@@ -1287,54 +1167,125 @@ rules:
               - pattern-inside: |
                   if (<... $GFA.equals(...) ...>) { ... }
                   ...
-              - pattern-inside: |
-                  if (<... $GFA.matches(...) ...>) { ... }
-                  ...
           - pattern-not-inside: |
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GT $GX = $GMK($GV);
+              $GT $GX = URI.create($GV);
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GX = $GMK($GV);
+              $GX = URI.create($GV);
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GT $GX = new $GTY($GV);
+              $GT $GX = new URI($GV);
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GX = new $GTY($GV);
+              $GX = new URI($GV);
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GT $GX = $GMK($GV).getHost();
+              $GT $GX = new URL($GV);
               ...
               if ($GCOND) { ... }
           - pattern-not-inside: |
-              $GX = $GMK($GV).getHost();
-              ...
-              if ($GCOND) { ... }
-          - pattern-not-inside: |
-              $GT $GX = new $GTY($GV).getHost();
-              ...
-              if ($GCOND) { ... }
-          - pattern-not-inside: |
-              $GX = new $GTY($GV).getHost();
+              $GX = new URL($GV);
               ...
               if ($GCOND) { ... }
           - pattern: $GV
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
                 - pattern-either:
-                    - pattern: '!$GALLOW.contains(<... $GX ...>)'
-                    - pattern: '!"...".equals(<... $GX ...>)'
+                    - pattern: '!$GALLOW.contains($GX.getHost())'
+                    - pattern: '!"...".equals($GX.getHost())'
                     - pattern: '!$GX.getHost().equals("...")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GX = URI.create($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = URI.create($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GX = new URI($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = new URI($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GX = new URL($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = new URL($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.contains(...) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GFA.equals(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = URI.create($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = URI.create($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = new URI($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = new URI($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = new URL($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = new URL($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GALLOW.contains($GX)'
+                    - pattern: '!"...".equals($GX)'
                     - pattern: '!$GX.equals("...")'
                 - pattern-not-inside: '$GA && $GB'
       - patterns:
@@ -1342,11 +1293,15 @@ rules:
               if ($GCOND) { ... }
           - pattern-either:
               - pattern-inside: |
-                  if (<... $GFA.contains(<... $GV ...>) ...>) { ... }
+                  if (<... $GV.getHost() ...>) { ... }
               - pattern-inside: |
-                  if (<... $GFA.equals(<... $GV ...>) ...>) { ... }
+                  if (<... URI.create($GV) ...>) { ... }
               - pattern-inside: |
-                  if (<... $GV.getHost().equals(...) ...>) { ... }
+                  if (<... new URI($GV) ...>) { ... }
+              - pattern-inside: |
+                  if (<... new URL($GV) ...>) { ... }
+              - pattern-inside: |
+                  if (<... $GFA.equals($GV) ...>) { ... }
               - pattern-inside: |
                   if (<... $GV.equals(...) ...>) { ... }
               - pattern-inside: |
@@ -1361,17 +1316,37 @@ rules:
               metavariable: $GCOND
               patterns:
                 - pattern-either:
-                    - pattern: '$GALLOW.contains(<... $GV ...>)'
-                    - pattern: '"...".equals(<... $GV ...>)'
+                    - pattern: '$GALLOW.contains($GV.getHost())'
+                    - pattern: '$GALLOW.contains(URI.create($GV).getHost())'
+                    - pattern: '$GALLOW.contains(new URI($GV).getHost())'
+                    - pattern: '$GALLOW.contains(new URL($GV).getHost())'
+                    - pattern: '"...".equals($GV.getHost())'
+                    - pattern: '"...".equals(URI.create($GV).getHost())'
+                    - pattern: '"...".equals(new URI($GV).getHost())'
+                    - pattern: '"...".equals(new URL($GV).getHost())'
                     - pattern: '$GV.getHost().equals("...")'
-                    - pattern: '$GV.equals("...")'
+                    - pattern: 'URI.create($GV).getHost().equals("...")'
+                    - pattern: 'new URI($GV).getHost().equals("...")'
+                    - pattern: 'new URL($GV).getHost().equals("...")'
+                    - pattern: '"=~/^https?:\/\/[^\/]+/".equals($GV)'
+                    - pattern: '$GV.equals("=~/^https?:\/\/[^\/]+/")'
                     - pattern: '$GV.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
-                - pattern-not-inside: '!$GALLOW.contains(<... $GV ...>)'
-                - pattern-not-inside: '!"...".equals(<... $GV ...>)'
-                - pattern-not-inside: '!$GV.getHost().equals("...")'
-                - pattern-not-inside: '!$GV.equals("...")'
-                - pattern-not-inside: '!$GV.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
                 - pattern-not-inside: '$GA || $GB'
+                - pattern-not-inside: '!$GALLOW.contains($GV.getHost())'
+                - pattern-not-inside: '!$GALLOW.contains(URI.create($GV).getHost())'
+                - pattern-not-inside: '!$GALLOW.contains(new URI($GV).getHost())'
+                - pattern-not-inside: '!$GALLOW.contains(new URL($GV).getHost())'
+                - pattern-not-inside: '!"...".equals($GV.getHost())'
+                - pattern-not-inside: '!"...".equals(URI.create($GV).getHost())'
+                - pattern-not-inside: '!"...".equals(new URI($GV).getHost())'
+                - pattern-not-inside: '!"...".equals(new URL($GV).getHost())'
+                - pattern-not-inside: '!$GV.getHost().equals("...")'
+                - pattern-not-inside: '!URI.create($GV).getHost().equals("...")'
+                - pattern-not-inside: '!new URI($GV).getHost().equals("...")'
+                - pattern-not-inside: '!new URL($GV).getHost().equals("...")'
+                - pattern-not-inside: '!"=~/^https?:\/\/[^\/]+/".equals($GV)'
+                - pattern-not-inside: '!$GV.equals("=~/^https?:\/\/[^\/]+/")'
+                - pattern-not-inside: '!$GV.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -1484,28 +1459,24 @@ rules:
       # The same host checks as java-ssrf-taint's, on the parameter.
       - pattern-not:
           patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
             - pattern-either:
                 - pattern-inside: |
-                    if ($GCOND) { ... throw $GE; }
+                    if (<... $Q.getHost() ...>) { ... }
                     ...
                 - pattern-inside: |
-                    if ($GCOND) { ... return ...; }
+                    if (<... URI.create($Q) ...>) { ... }
                     ...
                 - pattern-inside: |
-                    if ($GCOND) throw $GE;
+                    if (<... new URI($Q) ...>) { ... }
                     ...
                 - pattern-inside: |
-                    if ($GCOND) return ...;
-                    ...
-            - pattern-either:
-                - pattern-inside: |
-                    if (<... $GFA.contains(<... $Q ...>) ...>) { ... }
+                    if (<... new URL($Q) ...>) { ... }
                     ...
                 - pattern-inside: |
-                    if (<... $GFA.equals(<... $Q ...>) ...>) { ... }
-                    ...
-                - pattern-inside: |
-                    if (<... $Q.getHost().equals(...) ...>) { ... }
+                    if (<... $GFA.equals($Q) ...>) { ... }
                     ...
                 - pattern-inside: |
                     if (<... $Q.equals(...) ...>) { ... }
@@ -1538,178 +1509,61 @@ rules:
                 - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
                 - pattern: new URL($Q).openConnection(...)
                 - pattern: new URL($Q).openStream()
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:
                   - pattern-either:
-                      - pattern: '!$GALLOW.contains(<... $Q ...>)'
-                      - pattern: '!"...".equals(<... $Q ...>)'
+                      - pattern: '!$GALLOW.contains($Q.getHost())'
+                      - pattern: '!$GALLOW.contains(URI.create($Q).getHost())'
+                      - pattern: '!$GALLOW.contains(new URI($Q).getHost())'
+                      - pattern: '!$GALLOW.contains(new URL($Q).getHost())'
+                      - pattern: '!"...".equals($Q.getHost())'
+                      - pattern: '!"...".equals(URI.create($Q).getHost())'
+                      - pattern: '!"...".equals(new URI($Q).getHost())'
+                      - pattern: '!"...".equals(new URL($Q).getHost())'
                       - pattern: '!$Q.getHost().equals("...")'
-                      - pattern: '!$Q.equals("...")'
+                      - pattern: '!URI.create($Q).getHost().equals("...")'
+                      - pattern: '!new URI($Q).getHost().equals("...")'
+                      - pattern: '!new URL($Q).getHost().equals("...")'
+                      - pattern: '!"=~/^https?:\/\/[^\/]+/".equals($Q)'
+                      - pattern: '!$Q.equals("=~/^https?:\/\/[^\/]+/")'
                       - pattern: '!$Q.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
                   - pattern-not-inside: '$GA && $GB'
       - pattern-not:
           patterns:
             - pattern-either:
                 - pattern-inside: |
-                    $GT $GX = $GMK($Q);
+                    $GT $GX = URI.create($Q);
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GX = $GMK($Q);
-                    ...
-                    if ($GCOND) { ... return ...; }
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
-                    $GT $GX = $GMK($Q);
+                    $GX = URI.create($Q);
                     ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GX = $GMK($Q);
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
-                    $GX = $GMK($Q);
+                    $GT $GX = new URI($Q);
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GX = $GMK($Q);
-                    ...
-                    if ($GCOND) { ... return ...; }
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
-                    $GX = $GMK($Q);
+                    $GX = new URI($Q);
                     ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GX = $GMK($Q);
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
-                    $GT $GX = new $GTY($Q);
+                    $GT $GX = new URL($Q);
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GX = new $GTY($Q);
-                    ...
-                    if ($GCOND) { ... return ...; }
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
-                    $GT $GX = new $GTY($Q);
+                    $GX = new URL($Q);
                     ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GX = new $GTY($Q);
-                    ...
-                    if ($GCOND) return ...;
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q);
-                    ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q);
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q);
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q);
-                    ...
-                    if ($GCOND) return ...;
-                    ...
-                - pattern-inside: |
-                    $GT $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GT $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) return ...;
-                    ...
-                - pattern-inside: |
-                    $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GX = $GMK($Q).getHost();
-                    ...
-                    if ($GCOND) return ...;
-                    ...
-                - pattern-inside: |
-                    $GT $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GT $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) return ...;
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GX = new $GTY($Q).getHost();
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
             - pattern-either:
                 - pattern-inside: |
@@ -1718,41 +1572,30 @@ rules:
                 - pattern-inside: |
                     if (<... $GFA.equals(...) ...>) { ... }
                     ...
-                - pattern-inside: |
-                    if (<... $GFA.matches(...) ...>) { ... }
-                    ...
             - pattern-not-inside: |
                 if ($GCOND) { ... }
             - pattern-not-inside: |
-                $GT $GX = $GMK($Q);
+                $GT $GX = URI.create($Q);
                 ...
                 if ($GCOND) { ... }
             - pattern-not-inside: |
-                $GX = $GMK($Q);
+                $GX = URI.create($Q);
                 ...
                 if ($GCOND) { ... }
             - pattern-not-inside: |
-                $GT $GX = new $GTY($Q);
+                $GT $GX = new URI($Q);
                 ...
                 if ($GCOND) { ... }
             - pattern-not-inside: |
-                $GX = new $GTY($Q);
+                $GX = new URI($Q);
                 ...
                 if ($GCOND) { ... }
             - pattern-not-inside: |
-                $GT $GX = $GMK($Q).getHost();
+                $GT $GX = new URL($Q);
                 ...
                 if ($GCOND) { ... }
             - pattern-not-inside: |
-                $GX = $GMK($Q).getHost();
-                ...
-                if ($GCOND) { ... }
-            - pattern-not-inside: |
-                $GT $GX = new $GTY($Q).getHost();
-                ...
-                if ($GCOND) { ... }
-            - pattern-not-inside: |
-                $GX = new $GTY($Q).getHost();
+                $GX = new URL($Q);
                 ...
                 if ($GCOND) { ... }
             - pattern-either:
@@ -1778,13 +1621,115 @@ rules:
                 - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
                 - pattern: new URL($Q).openConnection(...)
                 - pattern: new URL($Q).openStream()
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:
                   - pattern-either:
-                      - pattern: '!$GALLOW.contains(<... $GX ...>)'
-                      - pattern: '!"...".equals(<... $GX ...>)'
+                      - pattern: '!$GALLOW.contains($GX.getHost())'
+                      - pattern: '!"...".equals($GX.getHost())'
                       - pattern: '!$GX.getHost().equals("...")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    $GT $GX = URI.create($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = URI.create($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GX = new URI($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = new URI($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GX = new URL($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = new URL($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $GFA.contains(...) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $GFA.equals(...) ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = URI.create($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = URI.create($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = new URI($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = new URI($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = new URL($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = new URL($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-either:
+                - patterns:
+                    - pattern-either:
+                        - pattern: (RestTemplate $CLIENT).$CALL($Q, ...)
+                        - pattern: (RestOperations $CLIENT).$CALL($Q, ...)
+                        - patterns:
+                            - pattern: $CLIENT.$CALL($Q, ...)
+                            - metavariable-regex:
+                                metavariable: $CLIENT
+                                regex: (?i)^\w*rest(template|operations)$
+                    - metavariable-regex:
+                        metavariable: $CALL
+                        regex: ^(getForObject|getForEntity|postForObject|postForEntity|postForLocation|put|patchForObject|delete|exchange|execute|headForHeaders|optionsForAllow)$
+                - patterns:
+                    - pattern: $CLIENT.$VERB().uri($Q, ...)
+                    - metavariable-regex:
+                        metavariable: $VERB
+                        regex: ^(get|post|put|patch|delete|head|options)$
+                - pattern: $CLIENT.method($HTTPMETHOD).uri($Q, ...)
+                - pattern: HttpRequest.newBuilder(URI.create($Q))
+                - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
+                - pattern: new URL($Q).openConnection(...)
+                - pattern: new URL($Q).openStream()
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GALLOW.contains($GX)'
+                      - pattern: '!"...".equals($GX)'
                       - pattern: '!$GX.equals("...")'
                   - pattern-not-inside: '$GA && $GB'
       - pattern-not:
@@ -1793,11 +1738,15 @@ rules:
                 if ($GCOND) { ... }
             - pattern-either:
                 - pattern-inside: |
-                    if (<... $GFA.contains(<... $Q ...>) ...>) { ... }
+                    if (<... $Q.getHost() ...>) { ... }
                 - pattern-inside: |
-                    if (<... $GFA.equals(<... $Q ...>) ...>) { ... }
+                    if (<... URI.create($Q) ...>) { ... }
                 - pattern-inside: |
-                    if (<... $Q.getHost().equals(...) ...>) { ... }
+                    if (<... new URI($Q) ...>) { ... }
+                - pattern-inside: |
+                    if (<... new URL($Q) ...>) { ... }
+                - pattern-inside: |
+                    if (<... $GFA.equals($Q) ...>) { ... }
                 - pattern-inside: |
                     if (<... $Q.equals(...) ...>) { ... }
                 - pattern-inside: |
@@ -1831,17 +1780,37 @@ rules:
                 metavariable: $GCOND
                 patterns:
                   - pattern-either:
-                      - pattern: '$GALLOW.contains(<... $Q ...>)'
-                      - pattern: '"...".equals(<... $Q ...>)'
+                      - pattern: '$GALLOW.contains($Q.getHost())'
+                      - pattern: '$GALLOW.contains(URI.create($Q).getHost())'
+                      - pattern: '$GALLOW.contains(new URI($Q).getHost())'
+                      - pattern: '$GALLOW.contains(new URL($Q).getHost())'
+                      - pattern: '"...".equals($Q.getHost())'
+                      - pattern: '"...".equals(URI.create($Q).getHost())'
+                      - pattern: '"...".equals(new URI($Q).getHost())'
+                      - pattern: '"...".equals(new URL($Q).getHost())'
                       - pattern: '$Q.getHost().equals("...")'
-                      - pattern: '$Q.equals("...")'
+                      - pattern: 'URI.create($Q).getHost().equals("...")'
+                      - pattern: 'new URI($Q).getHost().equals("...")'
+                      - pattern: 'new URL($Q).getHost().equals("...")'
+                      - pattern: '"=~/^https?:\/\/[^\/]+/".equals($Q)'
+                      - pattern: '$Q.equals("=~/^https?:\/\/[^\/]+/")'
                       - pattern: '$Q.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
-                  - pattern-not-inside: '!$GALLOW.contains(<... $Q ...>)'
-                  - pattern-not-inside: '!"...".equals(<... $Q ...>)'
-                  - pattern-not-inside: '!$Q.getHost().equals("...")'
-                  - pattern-not-inside: '!$Q.equals("...")'
-                  - pattern-not-inside: '!$Q.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
                   - pattern-not-inside: '$GA || $GB'
+                  - pattern-not-inside: '!$GALLOW.contains($Q.getHost())'
+                  - pattern-not-inside: '!$GALLOW.contains(URI.create($Q).getHost())'
+                  - pattern-not-inside: '!$GALLOW.contains(new URI($Q).getHost())'
+                  - pattern-not-inside: '!$GALLOW.contains(new URL($Q).getHost())'
+                  - pattern-not-inside: '!"...".equals($Q.getHost())'
+                  - pattern-not-inside: '!"...".equals(URI.create($Q).getHost())'
+                  - pattern-not-inside: '!"...".equals(new URI($Q).getHost())'
+                  - pattern-not-inside: '!"...".equals(new URL($Q).getHost())'
+                  - pattern-not-inside: '!$Q.getHost().equals("...")'
+                  - pattern-not-inside: '!URI.create($Q).getHost().equals("...")'
+                  - pattern-not-inside: '!new URI($Q).getHost().equals("...")'
+                  - pattern-not-inside: '!new URL($Q).getHost().equals("...")'
+                  - pattern-not-inside: '!"=~/^https?:\/\/[^\/]+/".equals($Q)'
+                  - pattern-not-inside: '!$Q.equals("=~/^https?:\/\/[^\/]+/")'
+                  - pattern-not-inside: '!$Q.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
 
   - id: java-path_traversal-taint
     mode: taint
@@ -2274,82 +2243,22 @@ rules:
               - pattern-inside: |
                   $GT $GV = $GN.normalize();
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = $GN.normalize();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = $GN.normalize();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GV = $GN.normalize();
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
                   $GV = $GN.normalize();
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GV = $GN.normalize();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GV = $GN.normalize();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GV = $GN.normalize();
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
                   $GT $GV = $GN.toRealPath(...);
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = $GN.toRealPath(...);
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = $GN.toRealPath(...);
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GV = $GN.toRealPath(...);
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
                   $GV = $GN.toRealPath(...);
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GV = $GN.toRealPath(...);
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GV = $GN.toRealPath(...);
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GV = $GN.toRealPath(...);
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
           - pattern-either:
               - pattern-inside: |
@@ -2377,11 +2286,16 @@ rules:
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
                 - pattern-either:
                     - pattern: '!$GV.startsWith($GBASE)'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
                 - pattern-not-inside: '$GA && $GB'
       - patterns:
           - pattern-either:
@@ -2401,11 +2315,11 @@ rules:
                   $GV = $GN.toRealPath(...);
                   ...
                   if ($GCOND) { ... }
+          - pattern-inside: |
+              if ($GCOND) { ... }
           - pattern-either:
               - pattern-inside: |
                   if (<... $GFA.startsWith(...) ...>) { ... }
-          - pattern-inside: |
-              if ($GCOND) { ... }
           - pattern-not-inside: |
               if ($GCOND) { ... } else { ... }
           - pattern: $GV
@@ -2417,6 +2331,8 @@ rules:
               patterns:
                 - pattern-either:
                     - pattern: '$GV.startsWith($GBASE)'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
                 - pattern-not-inside: '!$GV.startsWith($GBASE)'
                 - pattern-not-inside: '$GA || $GB'
       - patterns:
@@ -2424,82 +2340,22 @@ rules:
               - pattern-inside: |
                   $GT $GV = <... $GN.getCanonicalPath() ...>;
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = <... $GN.getCanonicalPath() ...>;
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = <... $GN.getCanonicalPath() ...>;
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GV = <... $GN.getCanonicalPath() ...>;
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
                   $GV = <... $GN.getCanonicalPath() ...>;
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GV = <... $GN.getCanonicalPath() ...>;
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GV = <... $GN.getCanonicalPath() ...>;
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GV = <... $GN.getCanonicalPath() ...>;
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
                   $GT $GV = <... $GN.normalize() ...>;
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = <... $GN.normalize() ...>;
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GT $GV = <... $GN.normalize() ...>;
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GV = <... $GN.normalize() ...>;
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
                   $GV = <... $GN.normalize() ...>;
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GV = <... $GN.normalize() ...>;
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GV = <... $GN.normalize() ...>;
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GV = <... $GN.normalize() ...>;
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
           - pattern-either:
               - pattern-inside: |
@@ -2527,12 +2383,17 @@ rules:
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
                 - pattern-either:
                     - pattern: '!$GV.startsWith($GBASE + File.separator)'
                     - pattern: '!$GV.startsWith($GBASE + "/")'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
                 - pattern-not-inside: '$GA && $GB'
       - patterns:
           - pattern-either:
@@ -2552,11 +2413,11 @@ rules:
                   $GV = <... $GN.normalize() ...>;
                   ...
                   if ($GCOND) { ... }
+          - pattern-inside: |
+              if ($GCOND) { ... }
           - pattern-either:
               - pattern-inside: |
                   if (<... $GFA.startsWith(...) ...>) { ... }
-          - pattern-inside: |
-              if ($GCOND) { ... }
           - pattern-not-inside: |
               if ($GCOND) { ... } else { ... }
           - pattern: $GV
@@ -2569,6 +2430,8 @@ rules:
                 - pattern-either:
                     - pattern: '$GV.startsWith($GBASE + File.separator)'
                     - pattern: '$GV.startsWith($GBASE + "/")'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
                 - pattern-not-inside: '!$GV.startsWith($GBASE + File.separator)'
                 - pattern-not-inside: '!$GV.startsWith($GBASE + "/")'
                 - pattern-not-inside: '$GA || $GB'
@@ -2577,42 +2440,12 @@ rules:
               - pattern-inside: |
                   $GT $GX = $GV.getCanonicalPath();
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GV.getCanonicalPath();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GV.getCanonicalPath();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GT $GX = $GV.getCanonicalPath();
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
               - pattern-inside: |
                   $GX = $GV.getCanonicalPath();
                   ...
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  $GX = $GV.getCanonicalPath();
-                  ...
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  $GX = $GV.getCanonicalPath();
-                  ...
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  $GX = $GV.getCanonicalPath();
-                  ...
-                  if ($GCOND) return ...;
+                  if ($GCOND) $GBODY;
                   ...
           - pattern-either:
               - pattern-inside: |
@@ -2632,6 +2465,9 @@ rules:
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
@@ -2640,22 +2476,12 @@ rules:
                     - pattern: '!$GX.startsWith($GBASE + "/")'
                 - pattern-not-inside: '$GA && $GB'
       - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
           - pattern-either:
               - pattern-inside: |
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) return ...;
-                  ...
-          - pattern-either:
-              - pattern-inside: |
-                  if (<... $GV.startsWith("//") ...>) { ... }
+                  if (<... $GFA.startsWith(...) ...>) { ... }
                   ...
           - pattern-not-inside: |
               if ($GCOND) { ... }
@@ -2663,6 +2489,9 @@ rules:
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
@@ -2754,82 +2583,22 @@ rules:
                 - pattern-inside: |
                     $GT $GV = <... $Q ...>.normalize();
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>.normalize();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>.normalize();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>.normalize();
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
                     $GV = <... $Q ...>.normalize();
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>.normalize();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>.normalize();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>.normalize();
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
                     $GT $GV = <... $Q ...>.toRealPath(...);
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>.toRealPath(...);
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>.toRealPath(...);
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>.toRealPath(...);
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
                     $GV = <... $Q ...>.toRealPath(...);
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>.toRealPath(...);
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>.toRealPath(...);
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>.toRealPath(...);
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
             - pattern-either:
                 - pattern-inside: |
@@ -2847,11 +2616,16 @@ rules:
                 - pattern: $DIRPATH.resolve($Q)
                 - pattern: Paths.get($DIR + $Q)
                 - pattern: new File($DIR + $Q)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:
                   - pattern-either:
                       - pattern: '!$GV.startsWith($GBASE)'
+                  - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                  - pattern-not: '$GV.startsWith(<... $GV ...>)'
                   - pattern-not-inside: '$GA && $GB'
       - pattern-not:
           patterns:
@@ -2859,42 +2633,12 @@ rules:
                 - pattern-inside: |
                     $GT $GV = <... $Q ...>;
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
                     $GV = <... $Q ...>;
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>;
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>;
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GV = <... $Q ...>;
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
             - pattern-either:
                 - pattern-inside: |
@@ -2912,6 +2656,9 @@ rules:
                 - pattern: $DIRPATH.resolve($Q)
                 - pattern: Paths.get($DIR + $Q)
                 - pattern: new File($DIR + $Q)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:
@@ -2927,56 +2674,14 @@ rules:
                     ...
                     $GT2 $GX = $GV.getCanonicalPath();
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    $GT2 $GX = $GV.getCanonicalPath();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    $GT2 $GX = $GV.getCanonicalPath();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    $GT2 $GX = $GV.getCanonicalPath();
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
                 - pattern-inside: |
                     $GT $GV = <... $Q ...>;
                     ...
                     $GX = $GV.getCanonicalPath();
                     ...
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    $GX = $GV.getCanonicalPath();
-                    ...
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    $GX = $GV.getCanonicalPath();
-                    ...
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    $GT $GV = <... $Q ...>;
-                    ...
-                    $GX = $GV.getCanonicalPath();
-                    ...
-                    if ($GCOND) return ...;
+                    if ($GCOND) $GBODY;
                     ...
             - pattern-either:
                 - pattern-inside: |
@@ -2994,6 +2699,9 @@ rules:
                 - pattern: $DIRPATH.resolve($Q)
                 - pattern: Paths.get($DIR + $Q)
                 - pattern: new File($DIR + $Q)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:
@@ -3424,25 +3132,9 @@ rules:
       # with "//". It exits or replaces the target with a literal when it
       # fails, or surrounds the use.
       - patterns:
-          - pattern-either:
-              - pattern-inside: |
-                  if ($GCOND) { ... throw $GE; }
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) { ... return ...; }
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) throw $GE;
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) return ...;
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) { ... $GV = "..."; }
-                  ...
-              - pattern-inside: |
-                  if ($GCOND) $GV = "...";
-                  ...
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
           - pattern-either:
               - pattern-inside: |
                   if (<... $GV.startsWith("//") ...>) { ... }
@@ -3453,13 +3145,27 @@ rules:
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw\b[^;{}]*|return\b[^;{}]*|\w+\s*=\s*"[^"\n]*");?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GBODY
+              pattern-either:
+                - pattern: throw $GE;
+                - pattern: return ...;
+                - pattern: $GV = "...";
           - metavariable-pattern:
               metavariable: $GCOND
               patterns:
                 - pattern-either:
                     - pattern: '$GV.startsWith("//")'
-                - pattern-inside: '<... !$GV.startsWith("/") ...>'
                 - pattern-not-inside: '!$GV.startsWith("//")'
+                - pattern-not-inside: '$GA && $GB'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.startsWith("/")'
                 - pattern-not-inside: '$GA && $GB'
       - patterns:
           - pattern-inside: |
@@ -3478,7 +3184,13 @@ rules:
               patterns:
                 - pattern-either:
                     - pattern: '!$GV.startsWith("//")'
-                - pattern-inside: '<... $GV.startsWith("/") ...>'
+                - pattern-not-inside: '$GA || $GB'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GV.startsWith("/")'
+                - pattern-not-inside: '!$GV.startsWith("/")'
                 - pattern-not-inside: '$GA || $GB'
     pattern-sinks:
       - patterns:
@@ -3551,25 +3263,9 @@ rules:
       # The same local-path check as java-open_redirect-taint's.
       - pattern-not:
           patterns:
-            - pattern-either:
-                - pattern-inside: |
-                    if ($GCOND) { ... throw $GE; }
-                    ...
-                - pattern-inside: |
-                    if ($GCOND) { ... return ...; }
-                    ...
-                - pattern-inside: |
-                    if ($GCOND) throw $GE;
-                    ...
-                - pattern-inside: |
-                    if ($GCOND) return ...;
-                    ...
-                - pattern-inside: |
-                    if ($GCOND) { ... $Q = "..."; }
-                    ...
-                - pattern-inside: |
-                    if ($GCOND) $Q = "...";
-                    ...
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
             - pattern-either:
                 - pattern-inside: |
                     if (<... $Q.startsWith("//") ...>) { ... }
@@ -3585,13 +3281,27 @@ rules:
                         regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
                 - pattern: '"redirect:" + $Q'
                 - pattern: new RedirectView($Q, ...)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw\b[^;{}]*|return\b[^;{}]*|\w+\s*=\s*"[^"\n]*");?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GBODY
+                pattern-either:
+                  - pattern: throw $GE;
+                  - pattern: return ...;
+                  - pattern: $Q = "...";
             - metavariable-pattern:
                 metavariable: $GCOND
                 patterns:
                   - pattern-either:
                       - pattern: '$Q.startsWith("//")'
-                  - pattern-inside: '<... !$Q.startsWith("/") ...>'
                   - pattern-not-inside: '!$Q.startsWith("//")'
+                  - pattern-not-inside: '$GA && $GB'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$Q.startsWith("/")'
                   - pattern-not-inside: '$GA && $GB'
       - pattern-not:
           patterns:
@@ -3616,5 +3326,11 @@ rules:
                 patterns:
                   - pattern-either:
                       - pattern: '!$Q.startsWith("//")'
-                  - pattern-inside: '<... $Q.startsWith("/") ...>'
+                  - pattern-not-inside: '$GA || $GB'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '$Q.startsWith("/")'
+                  - pattern-not-inside: '!$Q.startsWith("/")'
                   - pattern-not-inside: '$GA || $GB'
