@@ -221,8 +221,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       body for it (Werkzeug drops it). Neither is a redirect (301, 302, 303,
       307 or 308) with a `Location` entry in a literal headers dict or list
       of pairs, because the browser follows it instead of rendering the body.
-      A redirect status without a `Location` header, or a `Location` header
-      without a redirect status, is still a sink.
+      The redirect status must be an int or an imported status constant
+      (`HTTPStatus.FOUND`, `http.HTTPStatus.SEE_OTHER`, or `HTTP_302_FOUND`
+      from `starlette.status`, `fastapi.status` or `rest_framework.status`);
+      a local name such as `FOUND = 200` is not one. A redirect status
+      without a `Location` header, or a `Location` header without a redirect
+      status, is still a sink.
   - **Only a framework's constructor.** An imported constructor must come
     from its framework: `HttpResponse` from Django, `make_response` from
     Flask, `HTMLResponse` from Starlette or FastAPI, and `Response` from
@@ -297,10 +301,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         - `uuid.UUID`, `decimal.Decimal` and `fractions.Fraction`;
         - `fromisoformat`/`strptime` on `date`, `datetime` and `time`;
         - a comparison (`q == "x"`) or a `not`;
-        - the `str` methods that return a bool or a number: `.isdigit()`,
+        - a `str` test that returns a bool, on any value: `.isdigit()`,
           `.isalpha()`, `.isalnum()` and the other `.is...()` tests,
-          `.startswith()`, `.endswith()`, `.count()`, `.find()`, `.rfind()`,
-          `.index()` and `.rindex()`;
+          `.startswith()` and `.endswith()`;
+        - `.count()`, `.find()`, `.rfind()`, `.index()` and `.rindex()`, but
+          only on a value known to be a `str`: a str literal, an f-string,
+          `str()`, the result of a `str` method that returns a `str`, a query
+          or form value read off the request (`request.args`, `.form`,
+          `.values`, `.GET` or `.POST`, by `.get(...)` or subscript; not files,
+          JSON or the raw body), a Flask or Django URL variable, a FastAPI
+          parameter annotated `str`, or a name every assignment of which is one
+          of these. On any other value they carry text: an XML element's or a
+          BeautifulSoup tree's `.find()` returns markup, so
+          `f"<p>{root.find('name').text}</p>"` is reported;
         - a request value Werkzeug converts with `type=`:
           `request.args.get("page", 1, type=int)`, and `float`, `bool` or a
           value parser such as `uuid.UUID`. The converted value, or the

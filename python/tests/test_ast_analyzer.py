@@ -4899,3 +4899,103 @@ class TestFlaskViewReturnedBodyFixRound1:
             + "def s(q: str = ''):\n    return HTMLResponse(f'<p>{q}</p>')\n"
         )
         assert [f["sink"] for f in found] == ["HTMLResponse(f'<p>{q}</p>')"]
+
+
+class TestFlaskViewReturnedBodyFixRound2:
+    """Task 3.3 fix round 2: ``find``/``rfind``/``index``/``rindex``/``count``
+    hold no text only on a value known to be a ``str`` (an XML element's or a
+    BeautifulSoup tree's ``find`` returns markup), and a redirect status must
+    be an int or an imported status constant."""
+
+    _xss = staticmethod(TestFlaskViewReturnedBody._xss)
+    _proven = TestFlaskViewReturnedBodyFixRound1._proven
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            (
+                "from bs4 import BeautifulSoup\n"
+                "from django.http import HttpResponse\n"
+                "def v(request):\n"
+                "    soup = BeautifulSoup(request.body, 'html.parser')\n"
+                "    return HttpResponse(f\"<div>{soup.find('div')}</div>\")\n"
+            ),
+            (
+                "import xml.etree.ElementTree as ET\n"
+                "from django.http import HttpResponse\n"
+                "def v(request):\n"
+                "    root = ET.fromstring(request.body)\n"
+                "    return HttpResponse(f\"<p>{root.find('name').text}</p>\")\n"
+            ),
+            _flask_view("doc = parse(request.data)", "return f\"<p>{doc.index('a')}</p>\""),
+            _flask_view("items = request.args.getlist('t')", "return f'<p>{items.count(q)}</p>'"),
+        ],
+        ids=["bs4-find", "etree-find", "unknown-index", "list-count"],
+    )
+    def test_index_methods_on_values_not_known_to_be_str_carry_text(self, src: str) -> None:
+        self._proven(src)
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            _flask_view("q2 = request.args['q']", "return f\"<p>{q2.find('x')}</p>\""),
+            _flask_view("return f\"<p>{q.count('a')}</p>\""),
+            _flask_view("return f\"<p>{request.form.get('n', '').rfind('/')}</p>\""),
+            _flask_view("return f\"<p>{q.strip().index(':')}</p>\""),
+            _flask_view("return f\"<p>{str(request.data).count('a')}</p>\""),
+            _flask_view("return f\"<p>{'abc'.find(q)}</p>\""),
+            _DJANGO_VIEW + "    return HttpResponse(f\"<p>{request.GET['n'].count('a')}</p>\")\n",
+            (
+                _FLASK_APP + '@app.route("/u/<name>")\n'
+                "def u(name):\n"
+                "    return f\"<p>{name.find('x')}</p>\"\n"
+            ),
+            (
+                "from fastapi import FastAPI\n"
+                "from fastapi.responses import HTMLResponse\n"
+                "app = FastAPI()\n"
+                "@app.get('/s', response_class=HTMLResponse)\n"
+                "def s(q: str = ''):\n"
+                "    return f\"<p>{q.find('x')}</p>\"\n"
+            ),
+        ],
+        ids=[
+            "args-subscript", "args-get", "form-get", "str-method-result", "str-call",
+            "str-literal", "django-GET", "flask-url-variable", "fastapi-str-param",
+        ],
+    )
+    def test_index_methods_on_known_strings_hold_no_text(self, src: str) -> None:
+        assert self._xss(src) == []
+
+    def test_bool_str_tests_hold_no_text_on_any_receiver(self) -> None:
+        src = _flask_view("doc = parse(request.data)", "return f\"<p>{doc.startswith('a')}</p>\"")
+        assert self._xss(src) == []
+
+    # -- a redirect status must be an int or an imported status constant -------
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["FOUND = 200", "return f'<p>{q}</p>', FOUND, {'Location': '/x'}"],
+            ["SEE_OTHER = status_for(q)", "return f'<p>{q}</p>', SEE_OTHER, {'Location': '/x'}"],
+        ],
+        ids=["local-FOUND", "local-SEE_OTHER"],
+    )
+    def test_a_local_name_is_not_a_redirect_status(self, lines: list[str]) -> None:
+        self._proven(_flask_view(*lines))
+
+    @pytest.mark.parametrize(
+        "prelude, status",
+        [
+            ("from http import HTTPStatus\n", "HTTPStatus.FOUND"),
+            ("import http\n", "http.HTTPStatus.SEE_OTHER"),
+            ("from starlette import status\n", "status.HTTP_302_FOUND"),
+            ("from starlette.status import HTTP_307_TEMPORARY_REDIRECT\n", "HTTP_307_TEMPORARY_REDIRECT"),
+        ],
+        ids=["HTTPStatus", "http.HTTPStatus", "starlette-status", "imported-name"],
+    )
+    def test_an_imported_redirect_status_with_location_is_not_xss(
+        self, prelude: str, status: str
+    ) -> None:
+        src = _flask_view(f"return f'<p>{{q}}</p>', {status}, {{'Location': '/x'}}", prelude=prelude)
+        assert self._xss(src) == []

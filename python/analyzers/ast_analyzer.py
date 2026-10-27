@@ -4526,13 +4526,21 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     return True
                 redirect = redirect or value.value in _REDIRECT_STATUSES
             else:
-                name = _terminal_name(value)
-                if name.endswith(("NO_CONTENT", "NOT_MODIFIED")):
+                if _terminal_name(value).endswith(("NO_CONTENT", "NOT_MODIFIED")):
                     return True
-                redirect = redirect or bool(_REDIRECT_STATUS_NAME.fullmatch(name))
+                redirect = redirect or self._is_redirect_status_constant(value)
         return redirect and any(
             _header_values(h, "location") for h in self._response_headers(node, ctor, package)
         )
+
+    def _is_redirect_status_constant(self, value: ast.AST) -> bool:
+        """True for a redirect status named through an import: an
+        ``HTTPStatus`` member (``HTTPStatus.FOUND``, ``http.HTTPStatus.SEE_OTHER``)
+        or a constant of a status module (``http.client``, ``starlette.status``,
+        ``fastapi.status``, ``rest_framework.status``: ``HTTP_302_FOUND``). A
+        local name such as ``FOUND = 200`` is not one."""
+        module, _, name = self._import_origin(value).rpartition(".")
+        return module in _STATUS_MODULES and bool(_REDIRECT_STATUS_NAME.fullmatch(name))
 
     def _response_headers(self, node: ast.Call, ctor: str, package: str) -> list[ast.AST]:
         """The headers a constructor call passes: its ``headers=`` keyword,
@@ -4756,6 +4764,70 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             bound, _seen | {expr.id}, _depth + 1
         )
 
+    def _is_known_str(
+        self, expr: ast.AST, _seen: frozenset[str] = frozenset(), _depth: int = 0
+    ) -> bool:
+        """True when ``expr`` is known to be a ``str``: a str literal, an
+        f-string, ``str()``/``repr()``, the result of a str method that
+        returns a str (`_STR_RESULT_METHODS`), a query or form value read off
+        the request (``request.args``/``.form``/``.values``/``.GET``/``.POST``,
+        by ``.get(...)`` or subscript; not files, JSON or the raw body), a
+        route parameter that is a str (`_is_str_route_param`), or a name every
+        plain assignment of which is one of these."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(expr, ast.Constant):
+            return isinstance(expr.value, str)
+        if isinstance(expr, ast.JoinedStr):
+            return True
+        if isinstance(expr, ast.Subscript):
+            return _is_request_query_mapping(expr.value)
+        if isinstance(expr, ast.Call):
+            func = expr.func
+            if isinstance(func, ast.Name):
+                return func.id in ("str", "repr") and func.id not in self._file_defined_names()
+            if isinstance(func, ast.Attribute):
+                if func.attr in _STR_RESULT_METHODS:
+                    return True
+                return (
+                    func.attr == "get"
+                    and _is_request_query_mapping(func.value)
+                    and self._request_get_value_type(expr) is None
+                )
+            return False
+        if not isinstance(expr, ast.Name):
+            return False
+        if self._is_str_route_param(expr.id):
+            return True
+        if expr.id in _seen:
+            return False
+        values = self._name_binding_values(expr.id)
+        if values is None:
+            return False
+        if not values:
+            bound = self._scope_binding(expr.id)
+            values = [bound] if bound is not None else []
+        return bool(values) and all(
+            self._is_known_str(v, _seen | {expr.id}, _depth + 1) for v in values
+        )
+
+    def _is_str_route_param(self, name: str) -> bool:
+        """True when ``name`` is a request parameter of the route handler
+        being visited that arrives as a ``str``: a Flask or Django URL
+        variable (their int, float and UUID converters are not sources), or a
+        FastAPI parameter annotated ``str`` (bare, ``Optional``,
+        ``X | None`` or ``Annotated``)."""
+        if not self._name_is_route_param_source(name):
+            return False
+        route = self._bound_route()
+        if getattr(route, "framework", "") in ("flask", "django"):
+            return True
+        func = self._func_stack[-1]
+        params = [*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs]
+        arg = next((a for a in params if a.arg == name), None)
+        types = _unwrap_annotation(arg.annotation)[0] if arg is not None else []
+        return bool(types) and all(isinstance(t, ast.Name) and t.id == "str" for t in types)
+
     def _html_body_carries_text(
         self,
         expr: ast.AST,
@@ -4845,10 +4917,15 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return any(part(a) for a in args)
             if (
                 isinstance(func, ast.Attribute)
-                and func.attr in _NON_TEXT_METHODS
                 and not self._import_origin(func.value)
+                and (
+                    func.attr in _BOOL_STR_METHODS
+                    or (func.attr in _STR_INDEX_METHODS and self._is_known_str(func.value))
+                )
             ):
-                return False  # q.isdigit(), q.startswith("a"), q.count("a")
+                # q.isdigit(), x.startswith("a"); q.count("a") and q.find(":")
+                # only on a str: an XML element's or a soup's find() is markup.
+                return False
             typed = self._request_get_value_type(expr)
             if typed is not None:
                 # request.args.get("page", 1, type=int): Werkzeug returns the
@@ -5219,6 +5296,10 @@ _BODYLESS_STATUSES: frozenset[int] = frozenset({204, 304})
 # Redirect statuses whose body the browser does not render when the response
 # carries a Location header: it follows the redirect instead.
 _REDIRECT_STATUSES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
+# Modules whose constants name HTTP statuses (`_is_redirect_status_constant`).
+_STATUS_MODULES: frozenset[str] = frozenset(
+    {"http.HTTPStatus", "http.client", "starlette.status", "fastapi.status", "rest_framework.status"}
+)
 _REDIRECT_STATUS_NAME = re.compile(
     r"HTTP_30[12378]_[A-Z_]+|MOVED_PERMANENTLY|FOUND|SEE_OTHER|TEMPORARY_REDIRECT|PERMANENT_REDIRECT"
 )
@@ -5274,15 +5355,28 @@ _TEXT_METHODS: frozenset[str] = frozenset(
 )
 # str methods that return a list, which Flask sends as JSON.
 _STR_LIST_METHODS: frozenset[str] = frozenset({"split", "rsplit", "splitlines"})
-# str methods whose result is a bool or an int, so it holds no text.
-_NON_TEXT_METHODS: frozenset[str] = frozenset(
+# str tests whose result is a bool, so it holds no text whatever the receiver.
+_BOOL_STR_METHODS: frozenset[str] = frozenset(
     {
-        "count", "endswith", "find", "index", "isalnum", "isalpha", "isascii",
-        "isdecimal", "isdigit", "isidentifier", "islower", "isnumeric",
-        "isprintable", "isspace", "istitle", "isupper", "rfind", "rindex",
-        "startswith",
+        "endswith", "isalnum", "isalpha", "isascii", "isdecimal", "isdigit",
+        "isidentifier", "islower", "isnumeric", "isprintable", "isspace",
+        "istitle", "isupper", "startswith",
     }
 )
+# str methods that return a number, but only on a str (`_is_known_str`): an
+# XML element's or a BeautifulSoup tree's find() returns markup.
+_STR_INDEX_METHODS: frozenset[str] = frozenset({"count", "find", "index", "rfind", "rindex"})
+# str methods whose result is a str.
+_STR_RESULT_METHODS: frozenset[str] = frozenset(
+    {
+        "capitalize", "casefold", "center", "decode", "expandtabs", "format",
+        "format_map", "join", "ljust", "lower", "lstrip", "removeprefix",
+        "removesuffix", "replace", "rjust", "rstrip", "safe_substitute", "strip",
+        "substitute", "swapcase", "title", "translate", "upper", "zfill",
+    }
+)
+# Request mappings whose values are query or form strings.
+_REQUEST_QUERY_MAPPINGS: frozenset[str] = frozenset({"args", "form", "values", "GET", "POST"})
 # Calls whose result holds no text from their argument: builtins (by bare
 # name) and value parsers (by import path).
 _NON_TEXT_FUNCS: frozenset[str] = frozenset(
@@ -5326,6 +5420,17 @@ _FLASK_REQUEST_MAPPINGS: frozenset[str] = frozenset(
     {"args", "form", "values", "files", "cookies", "headers", "json"}
 )
 _FLASK_MAPPING_METHODS: frozenset[str] = frozenset({"to_dict", "getlist"})
+
+
+def _is_request_query_mapping(expr: ast.AST) -> bool:
+    """True for ``request.args``/``.form``/``.values``/``.GET``/``.POST``,
+    whose values are strings."""
+    return (
+        isinstance(expr, ast.Attribute)
+        and expr.attr in _REQUEST_QUERY_MAPPINGS
+        and isinstance(expr.value, ast.Name)
+        and expr.value.id in _REQUEST_NAMES
+    )
 
 
 def _is_flask_request_mapping(expr: ast.AST) -> bool:
