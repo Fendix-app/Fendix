@@ -2580,20 +2580,20 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # and mako.template.Template, resolved through the file's imports.
         # Flask's render_template_string keeps its own rule (PY_XSS_HTML_SINK,
         # below). Proven flows are CRITICAL; an unproven source stays HIGH.
-        elif (template_src := self._ssti_template_arg(node)) is not None:
-            sink_expr = (
-                f"{self._template_construction(node)[0]}({_ast_expr_text(template_src)})"
-            )
+        elif (ssti := self._ssti_sink(node)) is not None:
+            template_name, template_src = ssti
+            sink_expr = f"{template_name}({_ast_expr_text(template_src)})"
             chain = self._collect_taint_chain(template_src, node.lineno, sink_expr)
             self._emit_finding(
                 "PY_SSTI",
-                "Template built from request input (server-side template injection)",
+                "Template built from a non-constant value (possible server-side template injection)",
                 "HIGH",
                 "HIGH",
                 "CWE-1336",
                 _SSTI_FIX,
                 node.lineno,
                 taint_chain=chain,
+                proven_title="Template built from request input (server-side template injection)",
                 proven_severity="CRITICAL",
                 sink=sink_expr,
             )
@@ -2622,11 +2622,12 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             if node.args:
                 sink_name = self._xss_sink_name(node)
                 sink_expr = f"{sink_name}({_ast_expr_text(node.args[0])})"
-                chain = self._collect_taint_chain(
-                    node.args[0],
-                    node.lineno,
-                    sink_expr,
-                )
+                with self._without_template_sources():
+                    chain = self._collect_taint_chain(
+                        node.args[0],
+                        node.lineno,
+                        sink_expr,
+                    )
             self._emit_finding(
                 "PY_XSS_HTML_SINK",
                 _XSS_HTML_SINK_TITLE,
@@ -4187,10 +4188,39 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _reports_html_sink(self, node: ast.Call) -> bool:
         """True when visit_Call's Markup/mark_safe/render_template_string
         branch reports ``node``: a known HTML-render sink whose argument is not
-        fully escaped (B5)."""
-        return self._is_xss_html_sink(node) and not (
-            node.args and self._expr_is_fully_escaped(node.args[0])
-        )
+        fully escaped (B5).
+
+        One flow, one finding (Task 3.4): when the argument renders a template
+        that PY_SSTI reports (`_renders_reported_template`), the page is that
+        rule's, and the sink is reported only when something else in the
+        argument, such as a render argument, can carry text
+        (`_html_body_carries_text`, which reads a template object as holding
+        none)."""
+        if not self._is_xss_html_sink(node) or self._expr_is_fully_escaped(node.args[0]):
+            return False
+        arg = node.args[0]
+        if self._renders_reported_template(arg):
+            return self._html_body_carries_text(arg, node.lineno)
+        return True
+
+    def _renders_reported_template(
+        self, expr: ast.AST, _seen: frozenset[str] = frozenset(), _depth: int = 0
+    ) -> bool:
+        """True when ``expr``, or a name it reads through the bindings in
+        scope, holds a template construction that PY_SSTI reports
+        (`_ssti_sink`)."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        for n in ast.walk(expr):
+            if isinstance(n, ast.Call) and self._ssti_sink(n) is not None:
+                return True
+            if isinstance(n, ast.Name) and n.id not in _seen:
+                bound = self._scope_binding(n.id)
+                if bound is not None and self._renders_reported_template(
+                    bound, _seen | {n.id}, _depth + 1
+                ):
+                    return True
+        return False
 
     # ─── HTML response constructors (Task 3.2) ──────────────────────
     #
@@ -4991,10 +5021,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return True  # a parameter or a global: whatever was passed in
             return same(expr.value)
         if isinstance(expr, ast.Call):
-            if self._template_construction(expr) is not None:
-                # A template object. Its source is the template-injection
-                # rule's (PY_SSTI, Task 3.4); the page it renders carries
-                # what its `.render(...)` is passed.
+            built = self._template_construction(expr)
+            if built is not None and built[1] is not None:
+                # A template object built from a string. Its source is the
+                # template-injection rule's (PY_SSTI, Task 3.4); the page it
+                # renders carries what its `.render(...)` is passed. One with
+                # no source argument (`Template(*args)`, Mako's
+                # `Template(filename=...)`) is read like any other call.
                 return False
             verdict = self._renderer_verdict(expr)
             if verdict == "safe":
@@ -5061,13 +5094,19 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         string (`_template_construction`) and that string may be the
         request's: not constant and not otherwise trusted
         (`_template_source_is_trusted`). None for any other call."""
+        sink = self._ssti_sink(node)
+        return None if sink is None else sink[1]
+
+    def _ssti_sink(self, node: ast.Call) -> tuple[str, ast.AST] | None:
+        """``(sink name, template source)`` for `_ssti_template_arg`, from a
+        single `_template_construction` of ``node``."""
         built = self._template_construction(node)
         if built is None or built[1] is None:
             return None
-        source = built[1]
+        name, source = built
         if self._template_source_is_trusted(source, node.lineno):
             return None
-        return source
+        return name, source
 
     def _template_construction(self, node: ast.Call) -> tuple[str, ast.AST | None] | None:
         """``(sink name, source argument)`` when ``node`` compiles a template
@@ -5193,7 +5232,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             default = expr.args[1] if len(expr.args) > 1 else None
         else:
             return False
-        if not isinstance(holder, ast.Name):
+        if not isinstance(holder, ast.Name) or self._collection_is_mutated(holder.id):
             return False
         collection = self._scope_binding(holder.id)
         if isinstance(collection, ast.Dict) and None not in collection.keys:
@@ -5206,13 +5245,43 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             default is None or self._expr_folds_to_constant(default)
         )
 
+    def _collection_is_mutated(self, name: str) -> bool:
+        """True when the file changes the collection ``name`` in place
+        anywhere: an item assignment or deletion (``name[k] = v``,
+        ``name[k] += v``, ``del name[k]``) or a mutating method call
+        (``name.update(...)``, ``.setdefault``, ``.append``, ...). A literal
+        dict of constant templates then no longer holds only constants."""
+        root = self._module_root
+        if root is None:
+            return False
+        for n in ast.walk(root):
+            if (
+                isinstance(n, ast.Subscript)
+                and isinstance(n.ctx, (ast.Store, ast.Del))
+                and isinstance(n.value, ast.Name)
+                and n.value.id == name
+            ):
+                return True
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr in _MUTATING_METHODS
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == name
+            ):
+                return True
+        return False
+
     def _is_file_read(self, expr: ast.AST) -> bool:
-        """True for a file's or a package resource's content: ``.read()``,
+        """True for a template read from the file system: ``.read()``,
         ``.read_text()`` or ``.read_bytes()`` (awaited or ``.decode()``d too)
-        on a value that is not read off the request and holds no request
-        input (an uploaded file is the attacker's text), or
-        ``pkgutil.get_data``/``importlib.resources.read_text``. Which file is
-        read is the path-traversal rule's concern."""
+        on a file-system handle (`_is_file_system_handle`), or a package
+        resource read by a constant name (``pkgutil.get_data(pkg, "t.html")``,
+        ``importlib.resources.read_text``). Which file is read is the
+        path-traversal rule's concern; a resource name the request chooses is
+        not trusted, since no rule reports it. Any other read (``urlopen``, a
+        ``requests`` response, a zip archive, ``io.StringIO``) can return the
+        request's text and is not trusted."""
         if isinstance(expr, ast.Await):
             expr = expr.value
         if not isinstance(expr, ast.Call):
@@ -5221,11 +5290,59 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if isinstance(func, ast.Attribute):
             if func.attr == "decode":
                 return self._is_file_read(func.value)
-            if func.attr in _FILE_READ_METHODS:
-                return not (
-                    self._is_request_rooted(func.value) or _references_request_input(func.value)
-                )
-        return self._import_origin(func) in _FILE_READ_CALLS
+            if func.attr in _FILE_READ_METHODS and self._is_file_system_handle(func.value):
+                return True
+        if self._callee_origin(func) in _RESOURCE_READ_CALLS:
+            return all(self._expr_folds_to_constant(a) for a in expr.args[1:]) and all(
+                self._expr_folds_to_constant(kw.value)
+                for kw in expr.keywords
+                if kw.arg not in ("encoding", "errors")
+            )
+        return False
+
+    def _is_file_system_handle(
+        self, expr: ast.AST, _seen: frozenset[str] = frozenset(), _depth: int = 0
+    ) -> bool:
+        """True when ``expr`` is a file opened from, or a path on, the file
+        system: a builtin ``open(...)``, ``io.open(...)`` or
+        ``codecs.open(...)``; a pathlib path (`_is_pathlib_ctor_call`, ``/``,
+        ``.parent``, ``.joinpath()`` and the other path-deriving methods); an
+        ``importlib.resources.files(...)`` traversable; or a name bound to one
+        of these (``with open(path) as fh``)."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(expr, ast.Name):
+            if expr.id in _seen:
+                return False
+            bound = self._scope_binding(expr.id)
+            return bound is not None and self._is_file_system_handle(
+                bound, _seen | {expr.id}, _depth + 1
+            )
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+            return self._is_file_system_handle(expr.left, _seen, _depth + 1)
+        if isinstance(expr, ast.Attribute) and expr.attr in _PATH_DERIVING_ATTRS:
+            return self._is_file_system_handle(expr.value, _seen, _depth + 1)
+        if not isinstance(expr, ast.Call):
+            return False
+        func = expr.func
+        if self._is_builtin_open(func) or self._is_pathlib_ctor_call(expr):
+            return True
+        if isinstance(func, ast.Attribute) and func.attr in _PATH_DERIVING_METHODS:
+            return self._is_file_system_handle(func.value, _seen, _depth + 1)
+        origin = self._callee_origin(func)
+        return origin in _FILE_OPEN_CALLS or origin in _RESOURCE_FILES_CALLS
+
+    def _is_builtin_open(self, func: ast.AST) -> bool:
+        """True for a bare ``open`` that is the builtin: not imported, not
+        defined in the file and not bound in scope."""
+        return (
+            isinstance(func, ast.Name)
+            and func.id == "open"
+            and func.id not in self._from_imports
+            and func.id not in self._module_aliases
+            and func.id not in self._file_defined_names()
+            and self._scope_binding(func.id) is None
+        )
 
     def _xss_sink_name(self, node: ast.Call) -> str:
         """Return the canonical sink-function name, or '' if not an XSS sink.
@@ -5691,11 +5808,34 @@ _TEMPLATE_ENVIRONMENTS: dict[str, str] = {
     "jinja2.nativetypes.NativeEnvironment": "jinja2.nativetypes.NativeEnvironment",
 }
 _DJANGO_ENGINES = "django.template.engines"
-# What reads a file's or a package resource's content: a template loaded from
-# one is the developer's, like a template loaded by name (`_is_file_read`).
+# What reads a template from the file system: a template loaded from a file is
+# the developer's, like a template loaded by name (`_is_file_read`). The read
+# methods count only on a file-system handle (`_is_file_system_handle`): a
+# file opened with `open`, `io.open` or `codecs.open`, a pathlib path, or an
+# `importlib.resources.files(...)` traversable.
 _FILE_READ_METHODS: frozenset[str] = frozenset({"read", "read_text", "read_bytes"})
-_FILE_READ_CALLS: frozenset[str] = frozenset(
-    {"pkgutil.get_data", "importlib.resources.read_text", "importlib.resources.read_binary"}
+_FILE_OPEN_CALLS: frozenset[str] = frozenset({"io.open", "codecs.open"})
+_RESOURCE_FILES_CALLS: frozenset[str] = frozenset(
+    {"importlib.resources.files", "importlib_resources.files"}
+)
+# Methods and attributes that derive one path from another.
+_PATH_DERIVING_METHODS: frozenset[str] = frozenset(
+    {"joinpath", "resolve", "absolute", "expanduser", "with_name", "with_suffix", "with_stem"}
+)
+_PATH_DERIVING_ATTRS: frozenset[str] = frozenset({"parent"})
+# Package-resource readers: trusted only for a constant resource name.
+_RESOURCE_READ_CALLS: frozenset[str] = frozenset(
+    {
+        "pkgutil.get_data",
+        "importlib.resources.read_text",
+        "importlib.resources.read_binary",
+        "importlib_resources.read_text",
+        "importlib_resources.read_binary",
+    }
+)
+# Methods that change a dict or list in place (`_collection_is_mutated`).
+_MUTATING_METHODS: frozenset[str] = frozenset(
+    {"update", "setdefault", "__setitem__", "append", "extend", "insert"}
 )
 _SSTI_FIX = (
     "Never compile a template from request input. Load templates by name from "

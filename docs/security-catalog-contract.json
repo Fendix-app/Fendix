@@ -1696,7 +1696,7 @@
     {
       "id": "python.ast/PY_SSTI",
       "finding_id": "SEC-PY_SSTI",
-      "title": "Template built from request input (server-side template injection)",
+      "title": "Template built from a non-constant value (possible server-side template injection)",
       "analyzer": "python-engine/injection",
       "category": "injection",
       "default_severity": "HIGH",

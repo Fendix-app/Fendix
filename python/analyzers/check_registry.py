@@ -181,7 +181,7 @@ CHECKS: tuple[Check, ...] = (
     ),
     _py(
         "PY_SSTI",
-        "Template built from request input (server-side template injection)",
+        "Template built from a non-constant value (possible server-side template injection)",
         "CWE-1336",
         "injection",
         "HIGH",

@@ -445,12 +445,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
     The source may also be passed by keyword (`source=`, `template_string=`,
     `text=`, `template_code=`).
-  - **Severity.** A flow proven from request input is CRITICAL. It is marked
-    reachable, carries a taint chain and may block. A source the engine cannot
-    trace to the request is reported at HIGH with MEDIUM confidence, and does
-    not block: a helper's parameter that no caller in the file passes request
-    input to, a database value, or a configuration value such as a Django
-    setting.
+  - **Severity and title.** A flow proven from request input is CRITICAL and
+    titled "Template built from request input (server-side template
+    injection)". It is marked reachable, carries a taint chain and may block.
+    A source the engine cannot trace to the request is reported at HIGH with
+    MEDIUM confidence, titled "Template built from a non-constant value
+    (possible server-side template injection)", and does not block: a
+    helper's parameter that no caller in the file passes request input to, a
+    database value, or a configuration value such as a Django setting. The
+    title is presentation, so a finding keeps its identity when its flow is
+    later proven.
   - **Not reported:**
     - a template loaded by name: `get_template(...)`, Flask's
       `render_template(...)`, a Mako `TemplateLookup`, or
@@ -462,27 +466,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       `format`, f-string or conditional of constants;
     - a template picked among constant templates: `TEMPLATES[key]` or
       `TEMPLATES.get(key, DEFAULT)` on a literal dict whose values are
-      constants, or a name that a preceding `if name not in ALLOWED:` guard
-      with an early exit keeps inside a literal collection;
-    - a template read from a file or a package resource: `.read()`,
-      `.read_text()` or `.read_bytes()`, decoded or not, on a value that is
-      not the request's own data, `pkgutil.get_data(...)` and
-      `importlib.resources.read_text(...)`. Which file is read is the
-      path-traversal rule's concern. An uploaded file
-      (`request.files["t"].read()`) is reported.
+      constants and that the file never changes in place (no
+      `TEMPLATES[k] = ...`, `.update(...)` or `.setdefault(...)`), or a name
+      that a preceding `if name not in ALLOWED:` guard with an early exit
+      keeps inside a literal collection;
+    - a template read from the file system: `.read()`, `.read_text()` or
+      `.read_bytes()`, decoded or not, on a file opened with `open(...)`,
+      `io.open(...)` or `codecs.open(...)` (`with open(path) as fh` too), on
+      a pathlib path (`Path(...)`, `/`, `.parent`, `.joinpath(...)`), or on
+      an `importlib.resources.files(...)` traversable. Which file is read is
+      the path-traversal rule's concern: a path the request chooses is still
+      reported, and proven, as `python.ast/PY_PATH_TRAVERSAL`;
+    - a package resource read by a constant name:
+      `pkgutil.get_data("app", "t.html")` or
+      `importlib.resources.read_text("app", "t.html")`. A resource name that
+      is not constant is reported, since no other rule covers it.
+
+    Any other read can return the request's text and is reported: an
+    uploaded file (`request.files["t"].read()`), `urlopen(url).read()`, a
+    `requests` response's `.raw.read()`, a zip archive's `.read(...)`, and
+    `io.StringIO(...)` or `io.BytesIO(...)` over a value.
 
     Escaping is not a sanitiser here: `html.escape` leaves `{{ }}` intact.
   - **`render_template_string` keeps its rule.** Flask's
     `render_template_string(src)` is still reported as
     `python.ast/PY_XSS_HTML_SINK`, as before, and never as `PY_SSTI`.
   - **One finding per flow.** A template built from request input and
-    rendered into an HTML response, such as
-    `HTMLResponse(Template(src).render())`, is reported once, as `PY_SSTI`.
-    The HTML-response XSS finding now follows only what `.render(...)` is
+    rendered into a page, such as `HTMLResponse(Template(src).render())`,
+    `Markup(Template(src).render())`, `mark_safe(...)` of one, or
+    `render_template_string(...)` of one, is reported once, as `PY_SSTI`.
+    The XSS finding on that page now follows only what `.render(...)` is
     passed. It is reported when a render argument can carry text, as in
     `HTMLResponse(Template(src).render(name=name))`, and proven only when
     that argument is request input. This applies to a Flask view's returned
-    string too.
+    string too. A construction with no template source argument, such as
+    `Template(*args)` or Mako's `Template(filename=...)`, is neither a sink
+    of this rule nor a template object to these XSS rules, which read it as
+    before.
   - **Imports.** `import a.b` now resolves `a.b.c` to `a.b.c`, as Python
     binds it, wherever the engine reads an import path: this rule, and the
     HTML-response sink's constructors, renderers, value types and redirect

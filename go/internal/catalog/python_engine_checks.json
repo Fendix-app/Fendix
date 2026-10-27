@@ -157,7 +157,7 @@
   },
   {
     "id": "PY_SSTI",
-    "title": "Template built from request input (server-side template injection)",
+    "title": "Template built from a non-constant value (possible server-side template injection)",
     "cwe": "CWE-1336",
     "category": "injection",
     "languages": [
