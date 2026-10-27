@@ -224,6 +224,22 @@ router.post('/reset', (req, res) => {
   res.json({ apiKey: Math.random().toString(16).slice(2), resetToken });
 });
 
+function generateApiKey() {
+  // ruleid: js-weak-random-token-taint
+  return Math.random().toString(36);
+}
+
+function makeSessionId() {
+  // ruleid: js-weak-random-token-taint
+  return Math.random().toString(36);
+}
+
+// An expiry is not a token, though the name starts with one.
+function computeTokenExpiry() {
+  // ok: js-weak-random-token-taint
+  return Date.now() + Math.random();
+}
+
 function generateResetToken() {
   // ruleid: js-weak-random-token-taint
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
@@ -282,4 +298,4 @@ export async function PUT(request: NextRequest) {
   return NextResponse.json({ email, resetToken, picks });
 }
 
-export { router, hashShortNames, scheduleRetry, hashPassword, getClaims, checkIssuer, lastLoginOf, generateResetToken, DIGEST };
+export { router, generateApiKey, makeSessionId, computeTokenExpiry, hashShortNames, scheduleRetry, hashPassword, getClaims, checkIssuer, lastLoginOf, generateResetToken, DIGEST };

@@ -29,6 +29,8 @@ const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads');
 const ALLOWED_HOSTS = new Set(['api.github.com', 'cdn.example.com']);
 const BLOCKED_HOSTS = new Set(['169.254.169.254', 'localhost']);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const RAW_ROW = '<tr><td><%- q %></td></tr>';
+const ESCAPED_ROW = '<tr><td><%= q %></td></tr>';
 
 // ---------------------------------------------------------------------------
 // Cross-site scripting
@@ -114,6 +116,30 @@ router.get('/xss/rendered', async (req, res) => {
   }
   const html = nunjucks.renderString(String(req.query.tpl), {});
   // ruleid: js-xss-taint
+  res.send(html);
+});
+
+// A fixed template that writes the value raw is not escaped output: ejs <%-,
+// Mustache and Handlebars {{{ }}}, nunjucks | safe, pug !=.
+router.get('/xss/raw-templates', (req, res) => {
+  const q = req.query.q;
+  if (q === 'ejs') {
+    const html = ejs.render('<p><%- q %></p>', { q: req.query.q });
+    // ruleid: js-xss-taint
+    return res.send(html);
+  }
+  if (q === 'nunjucks') {
+    const html = nunjucks.renderString('<p>{{ q | safe }}</p>', { q: req.query.q });
+    // ruleid: js-xss-taint
+    return res.send(html);
+  }
+  if (q === 'const') {
+    const html = ejs.render(RAW_ROW, { q: req.query.q });
+    // ruleid: js-xss-taint
+    return res.send(html);
+  }
+  const html = ejs.render(ESCAPED_ROW, { q: req.query.q });
+  // ok: js-xss-taint
   res.send(html);
 });
 
@@ -243,6 +269,55 @@ router.get('/ssrf/allowlist-log-only', async (req, res) => {
   res.json({ status: upstream.status });
 });
 
+// A check under && lets a value through when the other operand is false
+// (http://169.254.169.254 here); a return inside a callback does not leave.
+router.get('/ssrf/allowlist-and', async (req, res) => {
+  const u = new URL(String(req.query.url));
+  if (u.protocol === 'https:' && !ALLOWED_HOSTS.has(u.hostname)) return res.status(400).end();
+  // ruleid: js-ssrf-taint
+  const upstream = await fetch(u);
+  res.json({ status: upstream.status });
+});
+
+router.get('/ssrf/allowlist-callback-return', async (req, res) => {
+  const u = new URL(String(req.query.url));
+  if (!ALLOWED_HOSTS.has(u.hostname)) {
+    [1].forEach(() => {
+      return;
+    });
+  }
+  // ruleid: js-ssrf-taint
+  const upstream = await fetch(u);
+  res.json({ status: upstream.status });
+});
+
+router.get('/ssrf/allowlist-nested-return', async (req, res) => {
+  const u = new URL(String(req.query.url));
+  if (!ALLOWED_HOSTS.has(u.hostname)) {
+    if (req.query.strict) {
+      return res.status(400).end();
+    }
+  }
+  // ruleid: js-ssrf-taint
+  const upstream = await fetch(u);
+  res.json({ status: upstream.status });
+});
+
+// Rejected by any operand of || is still rejected; a throw leaves too.
+router.get('/ssrf/allowlist-or', async (req, res) => {
+  const u = new URL(String(req.query.url));
+  if (u.protocol !== 'https:' || !ALLOWED_HOSTS.has(u.hostname)) {
+    return res.status(400).end();
+  }
+  // ok: js-ssrf-taint
+  await fetch(u);
+  const url = String(req.query.other);
+  if (!ALLOWED_HOSTS.has(new URL(url).hostname)) throw new Error('host');
+  // ok: js-ssrf-taint
+  const upstream = await fetch(url);
+  res.json({ status: upstream.status });
+});
+
 // A fixed scheme and host, wherever the URL is built.
 router.get('/ssrf/fixed-host-variable', async (req, res) => {
   const url = `https://api.github.com/users/${encodeURIComponent(String(req.query.login))}`;
@@ -356,6 +431,31 @@ router.get('/files/relative', (req, res) => {
   res.send(fs.readFileSync(p, 'utf8'));
 });
 
+router.get('/files/no-exit', (req, res) => {
+  const p = path.resolve(PUBLIC_DIR, String(req.query.f));
+  if (!p.startsWith(PUBLIC_DIR + path.sep)) {
+    console.warn('outside');
+  }
+  // ruleid: js-path-traversal-taint
+  res.send(fs.readFileSync(p));
+});
+
+router.get('/files/guard-throw', (req, res) => {
+  const p = path.resolve(PUBLIC_DIR, String(req.query.f));
+  if (!p.startsWith(PUBLIC_DIR + path.sep)) throw new Error('bad');
+  // ok: js-path-traversal-taint
+  res.send(fs.readFileSync(p));
+});
+
+router.get('/files/positive-branch', (req, res) => {
+  const p = path.resolve(PUBLIC_DIR, String(req.query.f));
+  if (p.startsWith(PUBLIC_DIR + path.sep)) {
+    // ok: js-path-traversal-taint
+    res.send(fs.readFileSync(p));
+  }
+  res.end();
+});
+
 router.get('/files/relative-unchecked', (req, res) => {
   const p = path.resolve(PUBLIC_DIR, String(req.query.f));
   const rel = path.relative(PUBLIC_DIR, p);
@@ -459,6 +559,31 @@ router.get('/redirect/half-ternary', (req, res) => {
   const ok = !next.startsWith('//');
   // ruleid: js-open-redirect-taint
   res.redirect(ok ? next : '/');
+});
+
+// Both halves, under && with another condition: when strict is unset nothing
+// is checked.
+router.get('/redirect/guard-and', (req, res) => {
+  const next = String(req.query.next);
+  if (req.query.strict && (!next.startsWith('/') || next.startsWith('//'))) return res.redirect('/');
+  // ruleid: js-open-redirect-taint
+  res.redirect(next);
+});
+
+router.get('/redirect/guard-reversed', (req, res) => {
+  const next = String(req.query.next);
+  if (next.startsWith('//') || !next.startsWith('/')) {
+    return res.redirect('/');
+  }
+  // ok: js-open-redirect-taint
+  res.redirect(next);
+});
+
+router.get('/redirect/ternary-reversed', (req, res) => {
+  const next = String(req.query.next);
+  const local = !next.startsWith('//') && next.startsWith('/');
+  // ok: js-open-redirect-taint
+  res.redirect(local ? next : '/');
 });
 
 // A same-site path built in a variable first.

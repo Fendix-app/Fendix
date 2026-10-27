@@ -906,26 +906,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `req.get(...)`; a NestJS parameter bound by `@Query()`, `@Param()`,
     `@Body()`, `@Headers()` or `@Req()`; and a Next.js route handler's
     `searchParams`, `json()`, `formData()`, `headers` and context `params`.
-  - **An SQL builder's tagged template is never SQL injection.**
+  - **An SQL builder's tagged template is never SQL injection.** A tag
+    named `sql` sends its interpolations as bound parameters:
     `` sql`... ${id}` `` (postgres.js, drizzle), slonik's `sql`,
     `sql.type(...)`, `sql.unsafe`, `sql.typeAlias(...)` and `sql.fragment`,
-    `Prisma.sql`, `` prisma.$queryRaw`...` `` and sql-template-strings' `SQL`
-    send their interpolations as bound parameters, so neither the taint rule
-    nor the shape rule reports them. `String.raw` and drizzle's `sql.raw(...)`
-    do not, and are reported. A pg config object, inline or bound to a name
-    first, is the parameterized form too; its `text` is still checked.
+    `Prisma.sql`, `` prisma.$queryRaw`...` `` and sql-template-strings'
+    `SQL`. Neither the taint rule nor the shape rule reports them. A
+    project's own tag (`buildSql`, `rawSql`, `sqlConcat`) may concatenate, so
+    it is reported, as are `String.raw`, drizzle's `sql.raw(...)` and a tag
+    imported under another name. A pg config object, inline or bound to a
+    name first, is the parameterized form too; its `text` is still checked,
+    and reported when request input reaches it.
   - **A sanitiser has to hold.** An SSRF host allowlist counts only as
     `if (!ALLOWED.has(<host>)) return` or `throw`, with the host read off
     the URL object, off `new URL(url)` or destructured from it; the URL and
-    the string it parsed are clean afterwards. A denylist, or a check that
-    does not leave, cleans nothing. An open-redirect guard needs both
-    halves, starts with `/` and not with `//`. A URL whose literal start
+    the string it parsed are clean afterwards. The check may be an operand
+    of `||` but not of `&&`, and the `return` or `throw` must be a direct
+    statement of the guard's body. A denylist, or a check that does not
+    leave, cleans nothing. An open-redirect guard needs both halves, starts
+    with `/` and not with `//`; path-traversal guards follow the same
+    rules. A URL whose literal start
     fixes the scheme and host, or a same-site path, is clean wherever it is
     built, inline or in a variable first. Path traversal accepts
     `sendFile`/`download` with `root` and the `path.relative` containment
     check. XSS accepts only named HTML escapers (not `unescape`,
     `he.decode` or `_.escapeRegExp`) and the output of an engine rendering a
-    fixed template or of React's `renderToString`. A `Math.random()` token
+    fixed template that writes no value raw (ejs `<%-`, `{{{`, `| safe`,
+    pug `!=`) or of React's `renderToString`. A `Math.random()` token
     is one whose name ends in the token word (`resetToken`, `sessionId`),
     not jitter such as `resetDelayMs`.
   - **Seven shape rules** (`js-<class>-sink`) report the same sinks behind a

@@ -118,10 +118,28 @@ rules:
       # The output of an autoescaping engine rendering a fixed template (a file
       # name or a constant), and React's server rendering. A template taken
       # from the request is template injection (js-ssti-taint), not escaped.
+      # A template that writes a value raw is not escaped output: ejs <%-,
+      # Mustache and Handlebars {{{, nunjucks | safe, pug != and !{.
+      - patterns:
+          - pattern: $ENGINE.$RENDER("$TEXT", ...)
+          - metavariable-regex:
+              metavariable: $RENDER
+              regex: ^(render|renderFile|renderString)$
+          - metavariable-regex:
+              metavariable: $TEXT
+              regex: (?s)^(?!.*(<%-|\{\{\{|\|\s*safe\b|!=|!\{))
+      - patterns:
+          - pattern-inside: |
+              const $TPL = "$TEXT";
+              ...
+          - pattern: $ENGINE.$RENDER($TPL, ...)
+          - metavariable-regex:
+              metavariable: $RENDER
+              regex: ^(render|renderFile|renderString)$
+          - metavariable-regex:
+              metavariable: $TEXT
+              regex: (?s)^(?!.*(<%-|\{\{\{|\|\s*safe\b|!=|!\{))
       - pattern-either:
-          - pattern: $ENGINE.render("...", ...)
-          - pattern: $ENGINE.renderFile("...", ...)
-          - pattern: $ENGINE.renderString("...", ...)
           - pattern: renderToString(...)
           - pattern: renderToStaticMarkup(...)
           - pattern: $REACT.renderToString(...)
@@ -313,21 +331,36 @@ rules:
           - metavariable-comparison:
               comparison: str($V) == str($W)
     pattern-sanitizers:
-      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw.
-      # The host is read off a URL object, off new URL(string), or destructured
-      # from new URL(string); afterwards the URL object and the string it
-      # parsed are both clean. A denylist (no `!`) or a check whose body does
-      # not leave cleans nothing. Inside if (ALLOWED.has(<host>)) { ... } the
-      # value is clean as well.
+      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw,
+      # the check alone or an operand of `||`, never under `&&`; the return or
+      # throw a direct statement of the body. The host is read off a URL
+      # object, off new URL(string), or destructured from new URL(string);
+      # afterwards the URL object and the string it parsed are both clean. A
+      # denylist (no `!`) or a check whose body does not leave cleans nothing.
+      # Inside if (ALLOWED.has(<host>)) { ... } the value is clean as well.
       - patterns:
-          - pattern-inside: |
-              if (<... !$ALLOW.$HAS($U.$PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -336,14 +369,28 @@ rules:
               regex: ^(hostname|host|origin)$
           - pattern: $U
       - patterns:
-          - pattern-inside: |
-              if (<... !$ALLOW.$HAS(new URL($U, ...).$PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -352,16 +399,34 @@ rules:
               regex: ^(hostname|host|origin)$
           - pattern: $U
       - patterns:
-          - pattern-inside: |
-              $OBJ = new URL($U, ...);
-              ...
-              if (<... !$ALLOW.$HAS($OBJ.$PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -370,16 +435,34 @@ rules:
               regex: ^(hostname|host|origin)$
           - pattern: $U
       - patterns:
-          - pattern-inside: |
-              const {..., $PART, ...} = new URL($U, ...);
-              ...
-              if (<... !$ALLOW.$HAS($PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -779,22 +862,53 @@ rules:
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  if (<... !$P.startsWith($BASE + $PATH.sep) ...>) $BODY
+                  if (!$P.startsWith($BASE + $PATH.sep)) $BODY
                   ...
               - pattern-inside: |
-                  if (<... !$P.startsWith($BASE + "/") ...>) $BODY
+                  if ($GUARD_OR || !$P.startsWith($BASE + $PATH.sep)) $BODY
                   ...
               - pattern-inside: |
-                  if (<... !$P.startsWith(`${$BASE}${$PATH.sep}`) ...>) $BODY
+                  if (!$P.startsWith($BASE + $PATH.sep) || $GUARD_OR) $BODY
                   ...
               - pattern-inside: |
-                  if (<... !$P.startsWith(`${$BASE}/`) ...>) $BODY
+                  if (!$P.startsWith($BASE + "/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$P.startsWith($BASE + "/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith($BASE + "/") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}${$PATH.sep}`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$P.startsWith(`${$BASE}${$PATH.sep}`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}${$PATH.sep}`) || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}/`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$P.startsWith(`${$BASE}/`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}/`) || $GUARD_OR) $BODY
                   ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - pattern: $P
       - patterns:
           - pattern-either:
@@ -808,18 +922,55 @@ rules:
               - pattern-inside: |
                   $REL = path.relative($BASE, $P);
                   ...
-                  if (<... $REL.startsWith("..") || path.isAbsolute($REL) ...>) $BODY
+                  if ($REL.startsWith("..") || path.isAbsolute($REL)) $BODY
                   ...
               - pattern-inside: |
                   $REL = path.relative($BASE, $P);
                   ...
-                  if (<... path.isAbsolute($REL) || $REL.startsWith("..") ...>) $BODY
+                  if ($REL.startsWith("..") || path.isAbsolute($REL) || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || $REL.startsWith("..") || path.isAbsolute($REL)) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || ($REL.startsWith("..") || path.isAbsolute($REL))) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if (path.isAbsolute($REL) || $REL.startsWith("..")) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if (path.isAbsolute($REL) || $REL.startsWith("..") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || path.isAbsolute($REL) || $REL.startsWith("..")) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || (path.isAbsolute($REL) || $REL.startsWith(".."))) $BODY
                   ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - pattern: $P
       - pattern-either:
           - pattern: Number(...)
@@ -1026,41 +1177,93 @@ rules:
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  if (<... !$U.startsWith("/") || $U.startsWith("//") ...>) $BODY
+                  if (!$U.startsWith("/") || $U.startsWith("//")) $BODY
                   ...
               - pattern-inside: |
-                  if (<... $U.startsWith("//") || !$U.startsWith("/") ...>) $BODY
+                  if (!$U.startsWith("/") || $U.startsWith("//") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$U.startsWith("/") || $U.startsWith("//")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || (!$U.startsWith("/") || $U.startsWith("//"))) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($U.startsWith("//") || !$U.startsWith("/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($U.startsWith("//") || !$U.startsWith("/") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || $U.startsWith("//") || !$U.startsWith("/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || ($U.startsWith("//") || !$U.startsWith("/"))) $BODY
                   ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - pattern: $U
       - patterns:
           - pattern-either:
               - pattern-inside: |
-                  $OK = <... $U.startsWith("/") && !$U.startsWith("//") ...>;
+                  $OK = $U.startsWith("/") && !$U.startsWith("//");
                   ...
               - pattern-inside: |
-                  $OK = <... !$U.startsWith("//") && $U.startsWith("/") ...>;
+                  $OK = $U.startsWith("/") && !$U.startsWith("//") && $GUARD_AND;
+                  ...
+              - pattern-inside: |
+                  $OK = $GUARD_AND && $U.startsWith("/") && !$U.startsWith("//");
+                  ...
+              - pattern-inside: |
+                  $OK = !$U.startsWith("//") && $U.startsWith("/");
+                  ...
+              - pattern-inside: |
+                  $OK = !$U.startsWith("//") && $U.startsWith("/") && $GUARD_AND;
+                  ...
+              - pattern-inside: |
+                  $OK = $GUARD_AND && !$U.startsWith("//") && $U.startsWith("/");
                   ...
           - pattern: '$OK ? $U : $FALLBACK'
-      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw.
-      # The host is read off a URL object, off new URL(string), or destructured
-      # from new URL(string); afterwards the URL object and the string it
-      # parsed are both clean. A denylist (no `!`) or a check whose body does
-      # not leave cleans nothing. Inside if (ALLOWED.has(<host>)) { ... } the
-      # value is clean as well.
+      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw,
+      # the check alone or an operand of `||`, never under `&&`; the return or
+      # throw a direct statement of the body. The host is read off a URL
+      # object, off new URL(string), or destructured from new URL(string);
+      # afterwards the URL object and the string it parsed are both clean. A
+      # denylist (no `!`) or a check whose body does not leave cleans nothing.
+      # Inside if (ALLOWED.has(<host>)) { ... } the value is clean as well.
       - patterns:
-          - pattern-inside: |
-              if (<... !$ALLOW.$HAS($U.$PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -1069,14 +1272,28 @@ rules:
               regex: ^(hostname|host|origin)$
           - pattern: $U
       - patterns:
-          - pattern-inside: |
-              if (<... !$ALLOW.$HAS(new URL($U, ...).$PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -1085,16 +1302,34 @@ rules:
               regex: ^(hostname|host|origin)$
           - pattern: $U
       - patterns:
-          - pattern-inside: |
-              $OBJ = new URL($U, ...);
-              ...
-              if (<... !$ALLOW.$HAS($OBJ.$PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -1103,16 +1338,34 @@ rules:
               regex: ^(hostname|host|origin)$
           - pattern: $U
       - patterns:
-          - pattern-inside: |
-              const {..., $PART, ...} = new URL($U, ...);
-              ...
-              if (<... !$ALLOW.$HAS($PART) ...>) $BODY
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART) || $GUARD_OR) $BODY
+                  ...
           - metavariable-pattern:
               metavariable: $BODY
-              pattern-either:
-                - pattern: return ...;
-                - pattern: throw $ERR;
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
           - metavariable-regex:
               metavariable: $HAS
               regex: ^(has|includes)$
@@ -1550,16 +1803,41 @@ rules:
           patterns:
             - pattern-either:
                 - pattern: |
-                    if (<... !$P.startsWith("/") || $P.startsWith("//") ...>) $BODY
+                    if (!$P.startsWith("/") || $P.startsWith("//")) $BODY
                     ...
                 - pattern: |
-                    if (<... $P.startsWith("//") || !$P.startsWith("/") ...>) $BODY
+                    if (!$P.startsWith("/") || $P.startsWith("//") || $GUARD_OR) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || !$P.startsWith("/") || $P.startsWith("//")) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || (!$P.startsWith("/") || $P.startsWith("//"))) $BODY
+                    ...
+                - pattern: |
+                    if ($P.startsWith("//") || !$P.startsWith("/")) $BODY
+                    ...
+                - pattern: |
+                    if ($P.startsWith("//") || !$P.startsWith("/") || $GUARD_OR) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || $P.startsWith("//") || !$P.startsWith("/")) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || ($P.startsWith("//") || !$P.startsWith("/"))) $BODY
                     ...
             - metavariable-pattern:
                 metavariable: $BODY
-                pattern-either:
-                  - pattern: return ...;
-                  - pattern: throw $ERR;
+                patterns:
+                  - pattern-either:
+                      - pattern: return ...;
+                      - pattern: throw $ERR;
+                  - pattern-not-inside: function $EXIT_FN(...) { ... }
+                  - pattern-not-inside: function (...) { ... }
+                  - pattern-not-inside: (...) => $EXIT_ARROW
+                  - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                  - pattern-not-inside: for (...) $EXIT_STMT
+                  - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
       - pattern-not-inside: |
           const $P = "...";
           ...

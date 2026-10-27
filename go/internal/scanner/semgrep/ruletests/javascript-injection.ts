@@ -17,7 +17,6 @@ import postgres from 'postgres';
 import pug from 'pug';
 import { sql as slonikSql } from 'slonik';
 import SQL from 'sql-template-strings';
-import { sql as drizzleSql } from 'drizzle-orm';
 
 const pool = new Pool();
 const prisma = new PrismaClient();
@@ -28,6 +27,11 @@ const router = express.Router();
 const db: any = {};
 const apollo: any = {};
 const GET_USER = 'query GetUser($id: ID!) { user(id: $id) { name } }';
+declare function buildSql(s: TemplateStringsArray, ...v: unknown[]): string;
+declare function mysqlEscapeTemplate(s: TemplateStringsArray, ...v: unknown[]): string;
+declare function sqlConcat(s: TemplateStringsArray, ...v: unknown[]): string;
+declare function rawSql(s: TemplateStringsArray, ...v: unknown[]): string;
+declare function toSqlString(s: TemplateStringsArray, ...v: unknown[]): string;
 
 const DEFAULT_ROLE = 'member';
 const LOG_DIR = '/var/log/app';
@@ -62,37 +66,37 @@ router.get('/sqli/tagged', async (req, res) => {
   const rows = await prisma.$queryRaw`SELECT * FROM users WHERE id = ${id}`;
   // ok: js-sqli-taint, js-sqli-sink
   await prisma.$queryRaw(Prisma.sql`SELECT * FROM users WHERE id = ${id}`);
-  // ok: js-sqli-taint, js-sqli-sink
-  await pool.query(slonikSql`SELECT * FROM users WHERE id = ${id}`);
   const query = Prisma.sql`SELECT * FROM users WHERE id = ${id}`;
   // ok: js-sqli-taint, js-sqli-sink
   await prisma.$queryRaw(query);
   res.json({ users, rows });
 });
 
-// Review Focus 1, typed and fragment tags: slonik's sql.type(...), sql.unsafe,
-// sql.typeAlias(...) and sql.fragment, sql-template-strings' SQL and drizzle's
-// sql all bind their interpolations. drizzle's sql.raw(...) and String.raw do
-// not.
-router.get('/sqli/tag-variants', async (req, res) => {
+// Review Focus 1 needs the tag to be named sql. A project's own tag may just
+// concatenate, so buildSql, rawSql, sqlConcat, toSqlString and
+// mysqlEscapeTemplate stay sinks, as do String.raw and drizzle's sql.raw(...).
+// slonik's typed tags and drizzle's sql are in javascript-injection.slonik.ts
+// and javascript-injection.drizzle.ts, where they are imported as sql.
+router.get('/sqli/tag-names', async (req, res) => {
   const id = req.params.id;
   // ok: js-sqli-taint, js-sqli-sink
-  const a = await pool.query(slonikSql.type(User)`SELECT * FROM users WHERE id = ${id}`);
-  // ok: js-sqli-taint, js-sqli-sink
-  const b = await pool.query(slonikSql.unsafe`SELECT * FROM users WHERE id = ${id}`);
-  // ok: js-sqli-taint, js-sqli-sink
-  const c = await pool.query(slonikSql.typeAlias('id')`SELECT id FROM users WHERE id = ${id}`);
-  // ok: js-sqli-taint, js-sqli-sink
-  await pool.query(slonikSql.fragment`WHERE id = ${id}`);
-  // ok: js-sqli-taint, js-sqli-sink
   await pool.query(SQL`SELECT * FROM users WHERE id = ${id}`);
-  // ok: js-sqli-taint, js-sqli-sink
-  await db.execute(drizzleSql`SELECT * FROM users WHERE id = ${id}`);
-  // ruleid: js-sqli-taint, js-sqli-sink
-  await db.execute(drizzleSql.raw(`SELECT * FROM users WHERE id = ${id}`));
+  // ruleid: js-sqli-taint
+  await pool.query(buildSql`SELECT * FROM users WHERE id = ${id}`);
+  // ruleid: js-sqli-taint
+  await pool.query(mysqlEscapeTemplate`SELECT * FROM users WHERE id = ${id}`);
+  // ruleid: js-sqli-taint
+  await pool.query(sqlConcat`SELECT * FROM users WHERE id = ${id}`);
+  // ruleid: js-sqli-taint
+  await pool.query(rawSql`SELECT * FROM users WHERE id = ${id}`);
+  // ruleid: js-sqli-taint
+  await pool.query(toSqlString`SELECT * FROM users WHERE id = ${id}`);
   // ruleid: js-sqli-taint
   await pool.query(String.raw`SELECT * FROM users WHERE id = ${id}`);
-  res.json({ a, b, c });
+  // An aliased import is not recognised: only the local name is seen.
+  // ruleid: js-sqli-taint
+  await pool.query(slonikSql`SELECT * FROM users WHERE id = ${id}`);
+  res.end();
 });
 
 // A query object built first and passed by name is pg's parameterized form;
@@ -107,6 +111,11 @@ router.get('/sqli/config-variable', async (req, res) => {
   await apollo.query(options);
   // ruleid: js-sqli-taint
   await pool.query({ text: 'SELECT * FROM users WHERE id = ' + req.params.id });
+  // The text of a config object bound to a name is still the query text; the
+  // finding is on the text.
+  // ruleid: js-sqli-taint
+  const byName = { text: 'SELECT * FROM users WHERE id = ' + req.params.id };
+  await pool.query(byName);
   res.json(r.rows);
 });
 

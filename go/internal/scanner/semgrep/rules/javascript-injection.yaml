@@ -107,15 +107,17 @@ rules:
               comparison: str($V) == str($W)
     pattern-sanitizers:
       # Review Focus 1: an SQL builder's tagged template sends its
-      # interpolations as bound parameters: postgres.js sql, slonik sql,
-      # sql.type(...), sql.unsafe, sql.typeAlias(...), sql.fragment,
-      # Prisma.sql, sql-template-strings SQL, drizzle sql. The tag's member
-      # chain names sql; String.raw or a project's own string tag does not.
+      # interpolations as bound parameters. The tag is named exactly sql (any
+      # case, on any object): postgres.js and drizzle sql, slonik sql and its
+      # sql.type(...), sql.typeAlias(...), sql.unsafe and sql.fragment,
+      # Prisma.sql, sql-template-strings SQL. A project's own tag (buildSql,
+      # rawSql, sqlConcat, toSqlString) may concatenate, and String.raw does,
+      # so they stay sinks; so does an aliased import (import { sql as q }).
       - patterns:
           - pattern: $TAG`...`
           - metavariable-regex:
               metavariable: $TAG
-              regex: (?i)^[\w$.]*sql
+              regex: (?i)^(?:[\w$]+\.)*sql(?:\.(?:type|typeAlias|unsafe|fragment)(?:\(.*\))?)?$
       - pattern-either:
           - pattern: Number(...)
           - pattern: parseInt(...)
@@ -143,6 +145,26 @@ rules:
               metavariable: $METHOD
               regex: ^(query|execute|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
           - focus-metavariable: $Q
+      # The same text field when the config object is bound to a name first
+      # and then passed to the query: the finding is on the text.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $OBJ = {..., text: $Q, ...};
+                  ...
+                  <... $DB.$METHOD($OBJ, ...) ...>;
+              - pattern-inside: |
+                  $OBJ = {..., text: $Q, ...};
+                  ...
+                  $RESULT = <... $DB.$METHOD($OBJ, ...) ...>;
+              - pattern-inside: |
+                  $OBJ = {..., text: $Q, ...};
+                  ...
+                  return <... $DB.$METHOD($OBJ, ...) ...>;
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|execute|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
+          - pattern: $Q
       # .execute is a common method name: only SQL text counts there, or a
       # receiver named like a database connection.
       - patterns:
