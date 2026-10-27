@@ -925,7 +925,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     statement of the guard's body. A denylist, or a check that does not
     leave, cleans nothing. An open-redirect guard needs both halves, starts
     with `/` and not with `//`; path-traversal guards follow the same
-    rules. A URL whose literal start
+    rules, and a prefix check counts only on a path from `path.resolve`.
+    SQL accepts an identifier allowlist with the same rules (or a reset to a
+    literal, or a literal-picking ternary) and values made only of
+    constants: a list's length or placeholders mapped from it, a literal-map
+    lookup with a literal fallback, and a same-file helper whose every
+    return is one of those. A URL whose literal start
     fixes the scheme and host, or a same-site path, is clean wherever it is
     built, inline or in a variable first. Path traversal accepts
     `sendFile`/`download` with `root` and the `path.relative` containment
@@ -943,6 +948,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     SHA-1. A module constant or a literal is never reported. SSRF and path
     traversal have no shape rule: helpers that fetch a URL or read a file
     by a parameter are too common in clean code.
+  - **Test code is skipped.** No rule reports in test, mock or fixture
+    paths (`__tests__/`, `__mocks__/`, `__fixtures__/`, `mocks/`, `mock/`,
+    `fixtures/`, `test/`, `tests/`, `spec/`, `e2e/`, `cypress/`, and
+    `*.test.*`, `*.spec.*`, `*.e2e-spec.*`, `*.cy.*` files), matched relative
+    to the scan root.
   - **Proven taint findings block.** The taint rules' findings are
     reachable; see the next entry. Shape findings warn.
   - **Framework parity (JS/TS):** recall 19.4% to 88.9% (96 of 108

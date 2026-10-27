@@ -11,6 +11,23 @@ rules:
   - id: js-xss-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Request input is written into an HTML response without escaping. Escape it
@@ -238,6 +255,23 @@ rules:
   - id: js-ssrf-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Request input chooses the URL of an outbound request. Check its host against
@@ -759,6 +793,23 @@ rules:
   - id: js-path-traversal-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Request input reaches a file path that is read or sent. Resolve the path and
@@ -855,10 +906,13 @@ rules:
       - pattern: path.basename(...)
       # Containment that rejects: if (!p.startsWith(BASE + path.sep)) return|
       # throw, or the relative path from the base climbs out or is absolute
-      # (another drive on Windows). A bare startsWith(BASE) still admits
-      # /srv/base_evil/x (Review Focus 5), and a check whose body does not
-      # leave cleans nothing. Inside if (p.startsWith(BASE + path.sep)) { ... }
-      # the path is clean as well.
+      # (another drive on Windows). The prefix check proves containment only on
+      # a path bound from path.resolve(...) (path.join or normalize alone keep
+      # ../ out of it, and on raw input or a concatenation
+      # /srv/files/../../etc/passwd starts with the base). A bare
+      # startsWith(BASE) still admits /srv/base_evil/x (Review Focus 5), and a
+      # check whose body does not leave cleans nothing. Inside
+      # if (p.startsWith(BASE + path.sep)) { ... } the path is clean as well.
       - patterns:
           - pattern-either:
               - pattern-inside: |
@@ -897,6 +951,9 @@ rules:
               - pattern-inside: |
                   if (!$P.startsWith(`${$BASE}/`) || $GUARD_OR) $BODY
                   ...
+          - pattern-inside: |
+              $P = path.resolve(...);
+              ...
           - metavariable-pattern:
               metavariable: $BODY
               patterns:
@@ -916,6 +973,9 @@ rules:
                   if ($P.startsWith($BASE + $PATH.sep)) $BODY
               - pattern-inside: |
                   if ($P.startsWith($BASE + "/")) $BODY
+          - pattern-inside: |
+              $P = path.resolve(...);
+              ...
           - pattern: $P
       - patterns:
           - pattern-either:
@@ -1019,6 +1079,23 @@ rules:
 
   - id: js-xss-sink
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: WARNING
     message: >-
       A function's parameter is written into HTML markup unescaped. If a caller
@@ -1077,6 +1154,23 @@ rules:
   - id: js-open-redirect-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Request input chooses the target of a redirect. Allow only same-site paths,
@@ -1767,6 +1861,23 @@ rules:
 
   - id: js-open-redirect-sink
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: WARNING
     message: >-
       A function's parameter is the target of a redirect. If a caller passes

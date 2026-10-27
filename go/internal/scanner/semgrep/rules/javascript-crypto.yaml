@@ -11,6 +11,23 @@ rules:
   - id: js-weak-password-hash-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       A password from the request is hashed with MD5 or SHA-1. Use a password
@@ -167,6 +184,23 @@ rules:
 
   - id: js-weak-password-hash-sink
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: WARNING
     message: >-
       A value named like a password is hashed with MD5 or SHA-1. Use a password
@@ -202,6 +236,23 @@ rules:
   - id: js-jwt-no-verify-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       A token from the request is decoded without verifying its signature, and its
@@ -338,6 +389,23 @@ rules:
 
   - id: js-jwt-no-verify-sink
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: WARNING
     message: >-
       A function decodes the JWT it is given without verifying its signature. If a
@@ -391,6 +459,23 @@ rules:
   - id: js-weak-random-token-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Math.random() output becomes a security token. Math.random is predictable;

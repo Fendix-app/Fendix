@@ -431,6 +431,46 @@ router.get('/files/relative', (req, res) => {
   res.send(fs.readFileSync(p, 'utf8'));
 });
 
+// A prefix check proves containment only on a resolved path: on raw input or
+// a concatenation, /srv/files/../../etc/passwd starts with the base.
+router.get('/files/raw-startswith', (req, res) => {
+  const name = String(req.query.name);
+  if (!name.startsWith(PUBLIC_DIR + path.sep)) return res.status(400).end();
+  // ruleid: js-path-traversal-taint
+  res.send(fs.readFileSync(name));
+});
+
+router.get('/files/concat-startswith', (req, res) => {
+  const p = PUBLIC_DIR + '/' + req.query.name;
+  if (!p.startsWith(PUBLIC_DIR + '/')) return res.status(400).end();
+  // ruleid: js-path-traversal-taint
+  res.send(fs.readFileSync(p));
+});
+
+router.get('/files/template-startswith', (req, res) => {
+  const p = `${PUBLIC_DIR}/${req.query.name}`;
+  if (!p.startsWith(`${PUBLIC_DIR}/`)) return res.status(400).end();
+  // ruleid: js-path-traversal-taint
+  fs.createReadStream(p).pipe(res);
+});
+
+router.get('/files/concat-positive', (req, res) => {
+  const p = PUBLIC_DIR + '/' + req.query.name;
+  if (p.startsWith(PUBLIC_DIR + path.sep)) {
+    // ruleid: js-path-traversal-taint
+    res.send(fs.readFileSync(p));
+  }
+  res.end();
+});
+
+// Joined, then resolved: the prefix check holds.
+router.get('/files/join-resolve', (req, res) => {
+  const p = path.resolve(path.join(PUBLIC_DIR, String(req.query.name)));
+  if (!p.startsWith(PUBLIC_DIR + path.sep)) return res.status(400).end();
+  // ok: js-path-traversal-taint
+  res.send(fs.readFileSync(p));
+});
+
 router.get('/files/no-exit', (req, res) => {
   const p = path.resolve(PUBLIC_DIR, String(req.query.f));
   if (!p.startsWith(PUBLIC_DIR + path.sep)) {

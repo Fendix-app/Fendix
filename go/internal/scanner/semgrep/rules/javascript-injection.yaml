@@ -12,6 +12,23 @@ rules:
   - id: js-sqli-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Request input reaches a SQL query string. Pass it as a bound parameter
@@ -125,6 +142,149 @@ rules:
           - pattern: Math.floor(...)
           - pattern: Math.round(...)
           - pattern: Boolean(...)
+      # Values made only of constants carry no input into the query text: a
+      # list's length, a repeated literal, and a list mapped to literals or to
+      # its index (IN-list placeholders: ids.map(() => '?').join(','),
+      # '?,'.repeat(ids.length), ids.map((_, i) => '$' + (i + 1))).
+      - pattern: $LIST.length
+      - pattern: '"...".repeat(...)'
+      - pattern-either:
+          - pattern: '$LIST.map(() => "...")'
+          - pattern: '$LIST.map(($ELEM) => "...")'
+          - pattern: '$LIST.map(($ELEM, $IDX) => "...")'
+          - pattern: '$LIST.map(($ELEM, $IDX) => "..." + $IDX)'
+          - pattern: '$LIST.map(($ELEM, $IDX) => `...${$IDX}...`)'
+      - patterns:
+          - pattern-either:
+              - pattern: '$LIST.map(($ELEM, $IDX) => "..." + ($IDX + $NUM))'
+              - pattern: '$LIST.map(($ELEM, $IDX) => `...${$IDX + $NUM}...`)'
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^\d+$
+      # A lookup in a const object of literals, with a literal fallback.
+      - patterns:
+          - pattern-inside: |
+              const $MAP = $OBJ;
+              ...
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: (?s)^(?:Object\.freeze\()?\{\s*(?:(?:[\w$]+|'[^'\\]*'|"[^"\\]*")\s*:\s*(?:'[^'\\]*'|"[^"\\]*"|-?\d+(?:\.\d+)?|true|false|null)\s*,?\s*)*\}\)?(?:\s+as\s+const)?$
+          - pattern-either:
+              - pattern: '$MAP[$KEY] ?? "..."'
+              - pattern: '$MAP[$KEY] || "..."'
+      # A call to a function of this file, declared before the call, whose every
+      # return is a literal, or a literal-map lookup with a literal fallback.
+      - patterns:
+          - pattern-inside: |
+              function $HELPER(...) { ... }
+              ...
+          - pattern: $HELPER(...)
+          - pattern-not-inside:
+              patterns:
+                - pattern-inside: |
+                    function $HELPER(...) { ... return $RET; ... }
+                    ...
+                - metavariable-pattern:
+                    metavariable: $RET
+                    patterns:
+                      - pattern-not: '"..."'
+                      - pattern: $RET
+      - patterns:
+          - pattern-inside: |
+              const $MAP = $OBJ;
+              ...
+              function $HELPER(...) { ... }
+              ...
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: (?s)^(?:Object\.freeze\()?\{\s*(?:(?:[\w$]+|'[^'\\]*'|"[^"\\]*")\s*:\s*(?:'[^'\\]*'|"[^"\\]*"|-?\d+(?:\.\d+)?|true|false|null)\s*,?\s*)*\}\)?(?:\s+as\s+const)?$
+          - pattern: $HELPER(...)
+          - pattern-not-inside:
+              patterns:
+                - pattern-inside: |
+                    function $HELPER(...) { ... return $RET; ... }
+                    ...
+                - metavariable-pattern:
+                    metavariable: $RET
+                    patterns:
+                      - pattern-not: '"..."'
+                      - pattern-not: '$MAP[$KEY] ?? "..."'
+                      - pattern-not: '$MAP[$KEY] || "..."'
+                      - pattern: $RET
+      # An identifier allowlist (a Set or array of names): the value is
+      # rejected (return or throw, the check alone or an operand of `||`, never
+      # under `&&`), or reset to a literal, or a ternary picks a literal.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($V)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$SET.$HAS($V)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^([A-Za-z_$][\w$]*|\[.*\])$
+          - pattern: $V
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($V)) $V = "...";
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$SET.$HAS($V)) $V = "...";
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V) || $GUARD_OR) $V = "...";
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V)) {
+                    $V = "...";
+                  }
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$SET.$HAS($V)) {
+                    $V = "...";
+                  }
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V) || $GUARD_OR) {
+                    $V = "...";
+                  }
+                  ...
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^([A-Za-z_$][\w$]*|\[.*\])$
+          - pattern: $V
+      - patterns:
+          - pattern: '$SET.$HAS($V) ? $V : "..."'
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^([A-Za-z_$][\w$]*|\[.*\])$
     pattern-sinks:
       - patterns:
           - pattern: $DB.$METHOD($Q, ...)
@@ -202,6 +362,23 @@ rules:
 
   - id: js-sqli-sink
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: WARNING
     message: >-
       SQL query text built by concatenation or an untagged template literal from a
@@ -248,6 +425,23 @@ rules:
   - id: js-cmdi-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Request input reaches a shell command. Run the program with execFile or
@@ -468,6 +662,23 @@ rules:
 
   - id: js-cmdi-sink
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: WARNING
     message: >-
       A shell command built from a non-constant value is passed to child_process
@@ -576,6 +787,23 @@ rules:
   - id: js-ssti-taint
     mode: taint
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: ERROR
     message: >-
       Request input is used as a template, not as data for one. Render a fixed
@@ -697,6 +925,23 @@ rules:
 
   - id: js-ssti-sink
     languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
     severity: WARNING
     message: >-
       A function's parameter is compiled as a template. If a caller passes request

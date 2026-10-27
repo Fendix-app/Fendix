@@ -320,3 +320,69 @@ func TestRequestSourceDriftIsCaught(t *testing.T) {
 		})
 	}
 }
+
+// javascriptTestCodePaths is the paths.exclude list every rule of the
+// JavaScript/TypeScript pack carries: test, mock and fixture code.
+var javascriptTestCodePaths = []any{
+	"**/__tests__/**",
+	"**/__mocks__/**",
+	"**/__fixtures__/**",
+	"**/mocks/**",
+	"**/mock/**",
+	"**/fixtures/**",
+	"**/test/**",
+	"**/tests/**",
+	"**/spec/**",
+	"**/e2e/**",
+	"**/cypress/**",
+	"*.test.*",
+	"*.spec.*",
+	"*.e2e-spec.*",
+	"*.cy.*",
+}
+
+// Every JavaScript rule, taint or shape, skips test, mock and fixture code
+// with one identical list, so a rule added or edited later cannot drift from
+// it. A finding there would block a build on code that never ships.
+func TestJavaScriptRulesShareOneTestCodeExclude(t *testing.T) {
+	taint, other := javascriptRules(t)
+	for _, r := range append(taint, other...) {
+		paths, _ := r.Raw["paths"].(map[string]any)
+		got, _ := paths["exclude"].([]any)
+		if !reflect.DeepEqual(got, javascriptTestCodePaths) {
+			t.Errorf("%s: paths.exclude = %v, want %v", r.ID, got, javascriptTestCodePaths)
+		}
+	}
+}
+
+// Real Semgrep, real pack: the same vulnerable route at a normal path and at
+// test, mock and fixture paths is reported only at the normal one. Semgrep
+// matches a rule's paths against paths relative to the scan root, so a
+// repository checked out under a directory named test or __tests__ is still
+// scanned; the roots below pin that.
+func TestJavaScriptPackSkipsTestCode(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+
+	skipped := []string{
+		"__tests__/app.js", "__mocks__/app.js", "__fixtures__/app.js", "src/__fixtures__/app.js",
+		"mocks/app.js", "mock/app.js", "fixtures/app.js", "test/app.js", "tests/app.js",
+		"spec/app.js", "e2e/app.js", "cypress/e2e/app.js", "packages/api/test/app.js",
+		"src/app.test.js", "src/app.spec.ts", "src/app.e2e-spec.ts", "src/app.cy.js",
+	}
+	for _, rootName := range []string{"repo", filepath.Join("test", "repo"), filepath.Join("__tests__", "repo")} {
+		t.Run(rootName, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), rootName)
+			files := map[string]string{"src/app.js": spikeApp, "src/testing/app.js": spikeApp}
+			for _, rel := range skipped {
+				files[rel] = spikeApp
+			}
+			writeTree(t, root, files)
+			got, err := Scan(context.Background(), root)
+			if err != nil {
+				t.Fatalf("Scan: %v", err)
+			}
+			assertEndpoints(t, got, map[string]bool{"src/app.js:9": true, "src/testing/app.js:9": true})
+		})
+	}
+}
