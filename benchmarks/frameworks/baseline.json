@@ -930,7 +930,7 @@
       "blocks": false
     },
     "gin-cmdi-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-cmdi-cross_file": {
@@ -978,11 +978,11 @@
       "blocks": false
     },
     "gin-jwt_no_verify-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-jwt_no_verify-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-jwt_no_verify-safe": {
@@ -994,19 +994,19 @@
       "blocks": false
     },
     "gin-open_redirect-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-open_redirect-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-open_redirect-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-open_redirect-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-open_redirect-safe": {
@@ -1018,19 +1018,19 @@
       "blocks": false
     },
     "gin-path_traversal-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-path_traversal-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-path_traversal-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-path_traversal-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-path_traversal-safe": {
@@ -1066,19 +1066,19 @@
       "blocks": false
     },
     "gin-ssrf-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-ssrf-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-ssrf-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-ssrf-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-ssrf-safe": {
@@ -1090,11 +1090,11 @@
       "blocks": false
     },
     "gin-ssti-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-ssti-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-ssti-safe": {
@@ -1122,11 +1122,11 @@
       "blocks": false
     },
     "gin-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-weak_random_token-safe": {
@@ -1138,19 +1138,19 @@
       "blocks": false
     },
     "gin-xss-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-xss-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-xss-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "gin-xss-safe": {
@@ -1394,7 +1394,7 @@
       "blocks": false
     },
     "nethttp-cmdi-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-cmdi-cross_file": {
@@ -1442,11 +1442,11 @@
       "blocks": false
     },
     "nethttp-jwt_no_verify-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-jwt_no_verify-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-jwt_no_verify-safe": {
@@ -1458,19 +1458,19 @@
       "blocks": false
     },
     "nethttp-open_redirect-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-open_redirect-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-open_redirect-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-open_redirect-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-open_redirect-safe": {
@@ -1482,19 +1482,19 @@
       "blocks": false
     },
     "nethttp-path_traversal-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-path_traversal-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-path_traversal-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-path_traversal-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-path_traversal-safe": {
@@ -1530,19 +1530,19 @@
       "blocks": false
     },
     "nethttp-ssrf-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-ssrf-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-ssrf-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-ssrf-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-ssrf-safe": {
@@ -1554,11 +1554,11 @@
       "blocks": false
     },
     "nethttp-ssti-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-ssti-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-ssti-safe": {
@@ -1586,11 +1586,11 @@
       "blocks": false
     },
     "nethttp-weak_random_token-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-weak_random_token-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-weak_random_token-safe": {
@@ -1602,19 +1602,19 @@
       "blocks": false
     },
     "nethttp-xss-alt_api": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-xss-cross_file": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-xss-direct": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-xss-indirect": {
-      "outcome": "FN",
+      "outcome": "TP",
       "blocks": false
     },
     "nethttp-xss-safe": {

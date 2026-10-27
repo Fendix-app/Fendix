@@ -1,0 +1,1729 @@
+# Go (net/http, Gin) injection rules: SQL, OS command and template injection.
+#
+# Written in-house for Fendix. Each class has a taint rule (<lang>-<class>-taint)
+# that counts as reachability once Go clears its gate (ADR-011), and a shape
+# rule (<lang>-<class>-sink) for a function parameter reaching the same sink.
+# Tests: ../ruletests/go-injection.go (semgrep --test, see its README.md).
+#
+# Semgrep OSS taint analysis is intraprocedural, so each taint rule also
+# treats as a sink a call, in the same file, to a function whose string
+# parameter reaches the sink directly. The call is then the reported line.
+# The argument and the parameter are paired by position (first to third),
+# and only a bare call is followed: it names a package-level function, never
+# a method, and Semgrep's top-level func pattern does not match a method
+# either (pinned by a rule test).
+#
+# Taint passes through a bare call (a function of this package, a builtin, a
+# conversion), as Semgrep does by default, and through the string-building
+# calls the call sanitizer lists. Any other qualified or method call's result
+# is clean: a row, a cache entry or a stored file name looked up by request
+# input is not request input.
+rules:
+  # SQL injection (Go). Taint mode: a net/http or Gin request input reaching
+  # the query string of a database/sql, sqlx or GORM call, in the handler or
+  # through a function of the same file. Placeholders keep the input out of
+  # the query string, so they are never a sink.
+  - id: go-sqli-taint
+    mode: taint
+    languages: [go]
+    # Go test code: *_test.go and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+    severity: ERROR
+    message: >-
+      SQL query built from request input: pass the value as a query argument with a placeholder instead.
+    metadata:
+      category: injection
+      cwe: [CWE-89]
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        SQL query built from request input.
+      fendix_remediation: >-
+        Request input is formatted or concatenated into a SQL query. Pass it as a query argument with a placeholder instead: db.Query("... WHERE name = $1", name) (or ? for MySQL and SQLite).
+      fendix_reachability: taint
+    options:
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+      # m[key] is a lookup: an element found by request input is not request input.
+      taint_assume_safe_indexes: true
+    pattern-sources:
+      # net/http: the request's query string, form values, path values,
+      # headers, cookies and body. Header, Cookie and Body are typed so that an
+      # *http.Response's headers and body are not taken for request input.
+      - pattern: $R.URL.Query()
+      - pattern: $R.URL.RawQuery
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.PathValue(...)
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: $C.Request.Header
+      - pattern: $C.Request.Body
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      # A JSON request body decoded into a variable.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: 'json.NewDecoder(($R : *http.Request).Body).Decode(&$X)'
+              - pattern: json.NewDecoder($C.Request.Body).Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $DEC := json.NewDecoder(($R : *http.Request).Body)
+                      ...
+                  - pattern: $DEC.Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $BODY, $ERR := io.ReadAll(($R : *http.Request).Body)
+                      ...
+                  - pattern: json.Unmarshal($BODY, &$X)
+          - focus-metavariable: $X
+      # Gin: the context's request accessors, and the target of a bind.
+      - patterns:
+          - pattern: '($C : *gin.Context).$ACCESSOR(...)'
+          - metavariable-regex:
+              metavariable: $ACCESSOR
+              regex: ^(Query|DefaultQuery|GetQuery|QueryArray|GetQueryArray|QueryMap|GetQueryMap|Param|PostForm|DefaultPostForm|GetPostForm|PostFormArray|GetPostFormArray|PostFormMap|GetPostFormMap|GetHeader|Cookie|GetRawData|FormFile)$
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: '($C : *gin.Context).$BIND(&$X, ...)'
+              - pattern: '($C : *gin.Context).$BIND($X, ...)'
+          - metavariable-regex:
+              metavariable: $BIND
+              regex: ^(Should|Must)?Bind[A-Za-z]*$
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      # A qualified or method call's result is not request input: see the pack
+      # header. A bare call (a function of this package, a builtin, a
+      # conversion) keeps its arguments' taint, as Semgrep's default; that is
+      # what lets the helper sinks below follow a call into this file.
+      - exact: true
+        patterns:
+          - pattern: $RECEIVER.$FUNC(...)
+          # Sources.
+          - pattern-not: $R.URL.Query()
+          - pattern-not: $R.URL.Query().$GET(...)
+          - pattern-not: $R.FormValue(...)
+          - pattern-not: $R.PostFormValue(...)
+          - pattern-not: $R.PathValue(...)
+          - pattern-not: $R.Header.Get(...)
+          - pattern-not: $R.Header.Values(...)
+          - pattern-not: $R.Form.Get(...)
+          - pattern-not: $R.PostForm.Get(...)
+          - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: mux.Vars(...)
+          - pattern-not: chi.URLParam(...)
+          - pattern-not: '($C : *gin.Context).$GIN(...)'
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
+          # Calls that hand their input back.
+          - pattern-not: fmt.Sprintf(...)
+          - pattern-not: fmt.Sprint(...)
+          - pattern-not: fmt.Sprintln(...)
+          - pattern-not: strings.$STRINGS(...)
+          - pattern-not: bytes.$BYTES(...)
+          - pattern-not: filepath.$FILEPATH(...)
+          - pattern-not: path.$PATH(...)
+          - pattern-not: url.$URL(...)
+          - pattern-not: html.UnescapeString(...)
+          - pattern-not: strconv.Unquote(...)
+          - pattern-not: string(...)
+          - pattern-not: '[]byte(...)'
+          - pattern-not: '[]rune(...)'
+          - pattern-not: append(...)
+          - pattern-not: $VALUE.String()
+          - pattern-not: $VALUE.Bytes()
+          - pattern-not: $VALUE.Query()
+          - pattern-not: $VALUE.Hostname()
+          - pattern-not: $CODEC.DecodeString(...)
+          - pattern-not: $CODEC.Unescape(...)
+          - pattern-not: $CODEC.UnescapeString(...)
+          - pattern-not: $CODEC.QueryUnescape(...)
+          - pattern-not: $CODEC.PathUnescape(...)
+          - pattern-not: $CODEC.Unquote(...)
+          - pattern-not: io.ReadAll(...)
+          - pattern-not: ioutil.ReadAll(...)
+          - pattern-not: json.NewDecoder(...)
+          - pattern-not: $DECODER.Decode(...)
+          - pattern-not: json.Unmarshal(...)
+          # A call that takes a function literal (router.GET(path, func(c
+          # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+          # does not judge the calls inside a sanitized range one by one.
+          - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+          # This rule's sinks.
+          - pattern-not: $DB.Query(...)
+          - pattern-not: $DB.QueryRow(...)
+          - pattern-not: $DB.Exec(...)
+          - pattern-not: $DB.Prepare(...)
+          - pattern-not: $DB.Queryx(...)
+          - pattern-not: $DB.QueryRowx(...)
+          - pattern-not: $DB.MustExec(...)
+          - pattern-not: $DB.Raw(...)
+          - pattern-not: $DB.QueryContext(...)
+          - pattern-not: $DB.QueryRowContext(...)
+          - pattern-not: $DB.ExecContext(...)
+          - pattern-not: $DB.PrepareContext(...)
+          - pattern-not: $DB.QueryxContext(...)
+          - pattern-not: $DB.QueryRowxContext(...)
+          - pattern-not: $DB.MustExecContext(...)
+          - pattern-not: $DB.Where(...)
+          - pattern-not: $DB.Or(...)
+          - pattern-not: $DB.Not(...)
+          - pattern-not: $DB.Order(...)
+          - pattern-not: $DB.Group(...)
+          - pattern-not: $DB.Having(...)
+          - pattern-not: $DB.Joins(...)
+
+      # A value parsed as a number, a boolean or a UUID carries no syntax.
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
+      - pattern: uuid.Parse(...)
+      - pattern: uuid.MustParse(...)
+      # A number formatted back into a string is digits only.
+      - pattern: strconv.Itoa(...)
+      - pattern: strconv.FormatInt(...)
+      - pattern: strconv.FormatUint(...)
+      - pattern: strconv.FormatFloat(...)
+      - pattern: strconv.FormatBool(...)
+
+      # Quoted by the driver.
+      - pattern: pq.QuoteLiteral(...)
+      - pattern: pq.QuoteIdentifier(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $DB.$METHOD($QUERY, ...)
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(Query|QueryRow|Exec|Prepare|Queryx|QueryRowx|MustExec|Raw)$
+              - patterns:
+                  - pattern: $DB.$METHOD($CTX, $QUERY, ...)
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext)$
+              # GORM-style condition methods also take structs and maps; only a
+              # condition string built in place is raw SQL.
+              - patterns:
+                  - pattern: $DB.$METHOD($QUERY, ...)
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(Where|Or|Not|Order|Group|Having|Joins)$
+                  - metavariable-pattern:
+                      metavariable: $QUERY
+                      pattern-either:
+                        - pattern: fmt.Sprintf(...)
+                        - pattern: $LEFT + $RIGHT
+          # Gin's c.Query(...) is a request accessor, not a database call.
+          - pattern-not: '($C : *gin.Context).$ANY(...)'
+          # A prepared statement's Query, QueryRow and Exec take arguments, not SQL.
+          - pattern-not: '($STMT : *sql.Stmt).$ANY(...)'
+          - pattern-not-inside: |
+              $DB, $ERR := $CONN.Prepare(...)
+              ...
+          - pattern-not-inside: |
+              $DB, $ERR := $CONN.PrepareContext(...)
+              ...
+          - pattern-not-inside: |
+              $DB, $ERR = $CONN.Prepare(...)
+              ...
+          - pattern-not-inside: |
+              $DB, $ERR = $CONN.PrepareContext(...)
+              ...
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!.*(?i:stmt))
+          - focus-metavariable: $QUERY
+      # Request input passed as the first argument of a function of this
+      # file whose parameter reaches a SQL query string; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $DB.$METHOD(<... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $QUERY := <... $LEFT + $PARAM ...>;
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $QUERY := <... $PARAM + $RIGHT ...>;
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                pq.QuoteLiteral($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                pq.QuoteIdentifier($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.Prepare(...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.PrepareContext(...)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(Query|QueryRow|Exec|Prepare|Queryx|QueryRowx|MustExec|Raw)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!.*(?i:stmt))
+          - pattern: $HELPER($ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the second argument of a function of this
+      # file whose parameter reaches a SQL query string; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $DB.$METHOD(<... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $LEFT + $PARAM ...>;
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $PARAM + $RIGHT ...>;
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                pq.QuoteLiteral($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                pq.QuoteIdentifier($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.Prepare(...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.PrepareContext(...)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(Query|QueryRow|Exec|Prepare|Queryx|QueryRowx|MustExec|Raw)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!.*(?i:stmt))
+          - pattern: $HELPER($X1, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the third argument of a function of this
+      # file whose parameter reaches a SQL query string; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $DB.$METHOD(<... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $LEFT + $PARAM ...>;
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $PARAM + $RIGHT ...>;
+                    ...
+                    $DB.$METHOD($QUERY, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                pq.QuoteLiteral($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                pq.QuoteIdentifier($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.Prepare(...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.PrepareContext(...)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(Query|QueryRow|Exec|Prepare|Queryx|QueryRowx|MustExec|Raw)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!.*(?i:stmt))
+          - pattern: $HELPER($X1, $X2, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the first argument of a function of this
+      # file whose parameter reaches a SQL query string; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $DB.$METHOD($CTX, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $QUERY := <... $LEFT + $PARAM ...>;
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $QUERY := <... $PARAM + $RIGHT ...>;
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                pq.QuoteLiteral($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                pq.QuoteIdentifier($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.Prepare(...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.PrepareContext(...)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!.*(?i:stmt))
+          - pattern: $HELPER($ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the second argument of a function of this
+      # file whose parameter reaches a SQL query string; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $DB.$METHOD($CTX, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $LEFT + $PARAM ...>;
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $PARAM + $RIGHT ...>;
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                pq.QuoteLiteral($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                pq.QuoteIdentifier($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.Prepare(...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.PrepareContext(...)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!.*(?i:stmt))
+          - pattern: $HELPER($X1, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the third argument of a function of this
+      # file whose parameter reaches a SQL query string; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $DB.$METHOD($CTX, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $LEFT + $PARAM ...>;
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $QUERY := <... $PARAM + $RIGHT ...>;
+                    ...
+                    $DB.$METHOD($CTX, $QUERY, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                pq.QuoteLiteral($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                pq.QuoteIdentifier($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.Prepare(...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                $DB, $ERR := $CONN.PrepareContext(...)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!.*(?i:stmt))
+          - pattern: $HELPER($X1, $X2, $ARG, ...)
+          - focus-metavariable: $ARG
+  # The same sinks, for a string parameter of the enclosing function: a helper
+  # whose caller (in another file, or with input the taint rule cannot follow)
+  # passes request input. A shape match proves no flow; it never blocks alone.
+  - id: go-sqli-sink
+    languages: [go]
+    # Go test code: *_test.go and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+    severity: WARNING
+    message: >-
+      SQL query built from a function parameter: if callers pass request input, this is SQL injection. Use a placeholder.
+    metadata:
+      category: injection
+      cwe: [CWE-89]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        SQL query built from a function parameter.
+      fendix_remediation: >-
+        The query string is formatted or concatenated from a parameter. If a caller passes request input, this is SQL injection. Pass the value as a query argument with a placeholder.
+    patterns:
+      - pattern-inside: |
+          func $FN(..., $PARAM string, ...) {
+            ...
+          }
+      # The parameter itself is formatted or concatenated into a query that reads
+      # like SQL, in the call or in a variable the call runs. A wrapper that runs
+      # a query its caller passes whole builds nothing, and a parameter passed
+      # through a quoting function first is not the raw input.
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $DB.$METHOD(fmt.Sprintf($FORMAT, ..., $PARAM, ...), ...)
+                  - pattern: $DB.$METHOD(<... $LEFT + $PARAM ...>, ...)
+                  - pattern: $DB.$METHOD(<... $PARAM + $RIGHT ...>, ...)
+              - pattern: $DB.$METHOD($QUERY, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(Query|QueryRow|Exec|Prepare|Queryx|QueryRowx|MustExec|Raw)$
+          - patterns:
+              - pattern-either:
+                  - pattern: $DB.$METHOD($CTX, fmt.Sprintf($FORMAT, ..., $PARAM, ...), ...)
+                  - pattern: $DB.$METHOD($CTX, <... $LEFT + $PARAM ...>, ...)
+                  - pattern: $DB.$METHOD($CTX, <... $PARAM + $RIGHT ...>, ...)
+              - pattern: $DB.$METHOD($CTX, $QUERY, ...)
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext)$
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $VAR := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                      ...
+                  - pattern-inside: |
+                      $VAR := <... $LEFT + $PARAM ...>;
+                      ...
+                  - pattern-inside: |
+                      $VAR := <... $PARAM + $RIGHT ...>;
+                      ...
+              - pattern-inside: |
+                  $VAR := $QUERY;
+                  ...
+              - pattern-either:
+                  - patterns:
+                      - pattern: $DB.$METHOD($VAR, ...)
+                      - metavariable-regex:
+                          metavariable: $METHOD
+                          regex: ^(Query|QueryRow|Exec|Prepare|Queryx|QueryRowx|MustExec|Raw)$
+                  - patterns:
+                      - pattern: $DB.$METHOD($CTX, $VAR, ...)
+                      - metavariable-regex:
+                          metavariable: $METHOD
+                          regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext)$
+      # The parameter lands in a value position (a comparison, LIKE, IN, VALUES
+      # or a WHERE, ORDER BY or LIMIT clause). A table or column name formatted
+      # into DDL is plumbing between internal callers, and no placeholder can
+      # stand in for it.
+      - metavariable-regex:
+          metavariable: $QUERY
+          regex: (?is).*(=|<>|!=|<|>|\blike|\bin\s*\(|\bvalues\s*\(|\bwhere|\band|\bor|\border\s+by|\bgroup\s+by|\blimit|\boffset)\s*\(?\s*['"]?\s*(%%)*(%(\[\d+\])?[sv]|"\s*\+|`\s*\+)
+      - pattern-not: '($C : *gin.Context).$ANY(...)'
+      - pattern-not: '($STMT : *sql.Stmt).$ANY(...)'
+      - pattern-not-inside: |
+          $DB, $ERR := $CONN.Prepare(...)
+          ...
+      - pattern-not-inside: |
+          $DB, $ERR := $CONN.PrepareContext(...)
+          ...
+      - metavariable-regex:
+          metavariable: $DB
+          regex: ^(?!.*(?i:stmt))
+      - pattern-not: $DB.$METHOD("...", ...)
+      - pattern-not: $DB.$METHOD($CTX, "...", ...)
+      - pattern-not: $DB.$METHOD(<... pq.QuoteLiteral($PARAM) ...>, ...)
+      - pattern-not: $DB.$METHOD(<... pq.QuoteIdentifier($PARAM) ...>, ...)
+      # Exported functions only: the entry points another file (or package) calls,
+      # which the taint rule cannot follow. A call into an unexported helper of
+      # the same file is the taint rule's to judge.
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^[A-Z]
+      # A parameter cannot also be a constant in its own scope; these keep the
+      # pack's -sink contract (a module constant is never reported) explicit.
+      - pattern-not-inside: |
+          const $PARAM = "..."
+          ...
+      - pattern-not-inside: |
+          const (
+            $PARAM = "..."
+          )
+          ...
+  # Command injection (Go). Taint mode: request input reaching a shell's
+  # command line (sh -c, bash -c, ...) or the program exec.Command runs.
+  # Arguments of a fixed program are not a sink: without a shell they are
+  # never parsed as a command.
+  - id: go-cmdi-taint
+    mode: taint
+    languages: [go]
+    # Go test code: *_test.go and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+    severity: ERROR
+    message: >-
+      Shell command built from request input: run a fixed program without a shell and pass the input as an argument.
+    metadata:
+      category: injection
+      cwe: [CWE-78]
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        Shell command built from request input.
+      fendix_remediation: >-
+        Request input reaches a shell command line or the name of the program exec.Command runs. Run a fixed program and pass the input as its own argument, without a shell: exec.Command("ping", "-c", "1", host).
+      fendix_reachability: taint
+    options:
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+      # m[key] is a lookup: an element found by request input is not request input.
+      taint_assume_safe_indexes: true
+    pattern-sources:
+      # net/http: the request's query string, form values, path values,
+      # headers, cookies and body. Header, Cookie and Body are typed so that an
+      # *http.Response's headers and body are not taken for request input.
+      - pattern: $R.URL.Query()
+      - pattern: $R.URL.RawQuery
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.PathValue(...)
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: $C.Request.Header
+      - pattern: $C.Request.Body
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      # A JSON request body decoded into a variable.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: 'json.NewDecoder(($R : *http.Request).Body).Decode(&$X)'
+              - pattern: json.NewDecoder($C.Request.Body).Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $DEC := json.NewDecoder(($R : *http.Request).Body)
+                      ...
+                  - pattern: $DEC.Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $BODY, $ERR := io.ReadAll(($R : *http.Request).Body)
+                      ...
+                  - pattern: json.Unmarshal($BODY, &$X)
+          - focus-metavariable: $X
+      # Gin: the context's request accessors, and the target of a bind.
+      - patterns:
+          - pattern: '($C : *gin.Context).$ACCESSOR(...)'
+          - metavariable-regex:
+              metavariable: $ACCESSOR
+              regex: ^(Query|DefaultQuery|GetQuery|QueryArray|GetQueryArray|QueryMap|GetQueryMap|Param|PostForm|DefaultPostForm|GetPostForm|PostFormArray|GetPostFormArray|PostFormMap|GetPostFormMap|GetHeader|Cookie|GetRawData|FormFile)$
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: '($C : *gin.Context).$BIND(&$X, ...)'
+              - pattern: '($C : *gin.Context).$BIND($X, ...)'
+          - metavariable-regex:
+              metavariable: $BIND
+              regex: ^(Should|Must)?Bind[A-Za-z]*$
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      # A qualified or method call's result is not request input: see the pack
+      # header. A bare call (a function of this package, a builtin, a
+      # conversion) keeps its arguments' taint, as Semgrep's default; that is
+      # what lets the helper sinks below follow a call into this file.
+      - exact: true
+        patterns:
+          - pattern: $RECEIVER.$FUNC(...)
+          # Sources.
+          - pattern-not: $R.URL.Query()
+          - pattern-not: $R.URL.Query().$GET(...)
+          - pattern-not: $R.FormValue(...)
+          - pattern-not: $R.PostFormValue(...)
+          - pattern-not: $R.PathValue(...)
+          - pattern-not: $R.Header.Get(...)
+          - pattern-not: $R.Header.Values(...)
+          - pattern-not: $R.Form.Get(...)
+          - pattern-not: $R.PostForm.Get(...)
+          - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: mux.Vars(...)
+          - pattern-not: chi.URLParam(...)
+          - pattern-not: '($C : *gin.Context).$GIN(...)'
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
+          # Calls that hand their input back.
+          - pattern-not: fmt.Sprintf(...)
+          - pattern-not: fmt.Sprint(...)
+          - pattern-not: fmt.Sprintln(...)
+          - pattern-not: strings.$STRINGS(...)
+          - pattern-not: bytes.$BYTES(...)
+          - pattern-not: filepath.$FILEPATH(...)
+          - pattern-not: path.$PATH(...)
+          - pattern-not: url.$URL(...)
+          - pattern-not: html.UnescapeString(...)
+          - pattern-not: strconv.Unquote(...)
+          - pattern-not: string(...)
+          - pattern-not: '[]byte(...)'
+          - pattern-not: '[]rune(...)'
+          - pattern-not: append(...)
+          - pattern-not: $VALUE.String()
+          - pattern-not: $VALUE.Bytes()
+          - pattern-not: $VALUE.Query()
+          - pattern-not: $VALUE.Hostname()
+          - pattern-not: $CODEC.DecodeString(...)
+          - pattern-not: $CODEC.Unescape(...)
+          - pattern-not: $CODEC.UnescapeString(...)
+          - pattern-not: $CODEC.QueryUnescape(...)
+          - pattern-not: $CODEC.PathUnescape(...)
+          - pattern-not: $CODEC.Unquote(...)
+          - pattern-not: io.ReadAll(...)
+          - pattern-not: ioutil.ReadAll(...)
+          - pattern-not: json.NewDecoder(...)
+          - pattern-not: $DECODER.Decode(...)
+          - pattern-not: json.Unmarshal(...)
+          # A call that takes a function literal (router.GET(path, func(c
+          # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+          # does not judge the calls inside a sanitized range one by one.
+          - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+          # This rule's sinks.
+          - pattern-not: exec.Command(...)
+          - pattern-not: exec.CommandContext(...)
+          - pattern-not: syscall.Exec(...)
+          - pattern-not: os.StartProcess(...)
+
+      # A value parsed as a number, a boolean or a UUID carries no syntax.
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
+      - pattern: uuid.Parse(...)
+      - pattern: uuid.MustParse(...)
+      # A number formatted back into a string is digits only.
+      - pattern: strconv.Itoa(...)
+      - pattern: strconv.FormatInt(...)
+      - pattern: strconv.FormatUint(...)
+      - pattern: strconv.FormatFloat(...)
+      - pattern: strconv.FormatBool(...)
+
+      # Quoted for the shell.
+      - pattern: shellescape.Quote(...)
+      - pattern: shellescape.QuoteCommand(...)
+    pattern-sinks:
+      # A shell's command line (sh -c, bash -c, cmd /c, ...).
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command($SHELL, $FLAG, $CMD, ...)
+              - pattern: exec.CommandContext($CTX, $SHELL, $FLAG, $CMD, ...)
+          - metavariable-regex:
+              metavariable: $SHELL
+              regex: ^"((/usr)?/bin/)?(sh|bash|zsh|ksh|dash|ash)"$|^"(cmd|cmd\.exe|powershell|powershell\.exe|pwsh)"$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^"(-[a-z]*c|/c|/C|-Command)"$
+          - focus-metavariable: $CMD
+      # The program itself.
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command($NAME, ...)
+              - pattern: exec.CommandContext($CTX, $NAME, ...)
+              - pattern: syscall.Exec($NAME, ...)
+              - pattern: os.StartProcess($NAME, ...)
+          - focus-metavariable: $NAME
+      # Request input passed as the first argument of a function of this
+      # file whose parameter reaches a shell command or program name; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    exec.Command($SHELL, $FLAG, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    exec.CommandContext($CTX, $SHELL, $FLAG, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                shellescape.Quote($PARAM)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $SHELL
+              regex: ^"((/usr)?/bin/)?(sh|bash|zsh|ksh|dash|ash)"$|^"(cmd|cmd\.exe|powershell|powershell\.exe|pwsh)"$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^"(-[a-z]*c|/c|/C|-Command)"$
+          - pattern: $HELPER($ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the second argument of a function of this
+      # file whose parameter reaches a shell command or program name; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    exec.Command($SHELL, $FLAG, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    exec.CommandContext($CTX, $SHELL, $FLAG, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                shellescape.Quote($PARAM)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $SHELL
+              regex: ^"((/usr)?/bin/)?(sh|bash|zsh|ksh|dash|ash)"$|^"(cmd|cmd\.exe|powershell|powershell\.exe|pwsh)"$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^"(-[a-z]*c|/c|/C|-Command)"$
+          - pattern: $HELPER($X1, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the third argument of a function of this
+      # file whose parameter reaches a shell command or program name; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    exec.Command($SHELL, $FLAG, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    exec.CommandContext($CTX, $SHELL, $FLAG, <... $PARAM ...>, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                shellescape.Quote($PARAM)
+                ...
+              }
+              ...
+          - metavariable-regex:
+              metavariable: $SHELL
+              regex: ^"((/usr)?/bin/)?(sh|bash|zsh|ksh|dash|ash)"$|^"(cmd|cmd\.exe|powershell|powershell\.exe|pwsh)"$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^"(-[a-z]*c|/c|/C|-Command)"$
+          - pattern: $HELPER($X1, $X2, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the first argument of a function of this
+      # file whose parameter reaches a shell command or program name; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    exec.Command($PARAM, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    exec.CommandContext($CTX, $PARAM, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                shellescape.Quote($PARAM)
+                ...
+              }
+              ...
+          - pattern: $HELPER($ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the second argument of a function of this
+      # file whose parameter reaches a shell command or program name; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    exec.Command($PARAM, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    exec.CommandContext($CTX, $PARAM, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                shellescape.Quote($PARAM)
+                ...
+              }
+              ...
+          - pattern: $HELPER($X1, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the third argument of a function of this
+      # file whose parameter reaches a shell command or program name; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    exec.Command($PARAM, ...)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    exec.CommandContext($CTX, $PARAM, ...)
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                shellescape.Quote($PARAM)
+                ...
+              }
+              ...
+          - pattern: $HELPER($X1, $X2, $ARG, ...)
+          - focus-metavariable: $ARG
+  # A string parameter of the enclosing function in a shell's command line.
+  - id: go-cmdi-sink
+    languages: [go]
+    # Go test code: *_test.go and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+    severity: WARNING
+    message: >-
+      Shell command built from a function parameter: if callers pass request input, this is command injection.
+    metadata:
+      category: injection
+      cwe: [CWE-78]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Shell command built from a function parameter.
+      fendix_remediation: >-
+        A shell's command line (sh -c) is built from a parameter. If a caller passes request input, this is command injection. Run a fixed program without a shell and pass the value as its own argument.
+    patterns:
+      - pattern-inside: |
+          func $FN(..., $PARAM string, ...) {
+            ...
+          }
+      - pattern-either:
+          - pattern: exec.Command($SHELL, $FLAG, <... $PARAM ...>, ...)
+          - pattern: exec.CommandContext($CTX, $SHELL, $FLAG, <... $PARAM ...>, ...)
+      - metavariable-regex:
+          metavariable: $SHELL
+          regex: ^"((/usr)?/bin/)?(sh|bash|zsh|ksh|dash|ash)"$|^"(cmd|cmd\.exe|powershell|powershell\.exe|pwsh)"$
+      - metavariable-regex:
+          metavariable: $FLAG
+          regex: ^"(-[a-z]*c|/c|/C|-Command)"$
+      - pattern-not: exec.Command($SHELL, $FLAG, "...", ...)
+      - pattern-not: exec.Command($SHELL, $FLAG, <... shellescape.Quote($PARAM) ...>, ...)
+      # Exported functions only: the entry points another file (or package) calls,
+      # which the taint rule cannot follow. A call into an unexported helper of
+      # the same file is the taint rule's to judge.
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^[A-Z]
+      # A parameter cannot also be a constant in its own scope; these keep the
+      # pack's -sink contract (a module constant is never reported) explicit.
+      - pattern-not-inside: |
+          const $PARAM = "..."
+          ...
+      - pattern-not-inside: |
+          const (
+            $PARAM = "..."
+          )
+          ...
+  # Server-side template injection (Go). Taint mode: request input parsed as
+  # a text/template or html/template template. Request input passed to
+  # Execute as data is not a sink.
+  - id: go-ssti-taint
+    mode: taint
+    languages: [go]
+    # Go test code: *_test.go and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+    severity: ERROR
+    message: >-
+      Go template parsed from request input: parse a fixed template and pass the input as data.
+    metadata:
+      category: injection
+      cwe: [CWE-1336, CWE-94]
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        Go template parsed from request input.
+      fendix_remediation: >-
+        Request input is parsed as a text/template or html/template template, so the caller controls its actions and the methods it calls. Parse a fixed template and pass the input as data to Execute.
+      fendix_reachability: taint
+    options:
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+      # m[key] is a lookup: an element found by request input is not request input.
+      taint_assume_safe_indexes: true
+    pattern-sources:
+      # net/http: the request's query string, form values, path values,
+      # headers, cookies and body. Header, Cookie and Body are typed so that an
+      # *http.Response's headers and body are not taken for request input.
+      - pattern: $R.URL.Query()
+      - pattern: $R.URL.RawQuery
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.PathValue(...)
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: $C.Request.Header
+      - pattern: $C.Request.Body
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      # A JSON request body decoded into a variable.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: 'json.NewDecoder(($R : *http.Request).Body).Decode(&$X)'
+              - pattern: json.NewDecoder($C.Request.Body).Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $DEC := json.NewDecoder(($R : *http.Request).Body)
+                      ...
+                  - pattern: $DEC.Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $BODY, $ERR := io.ReadAll(($R : *http.Request).Body)
+                      ...
+                  - pattern: json.Unmarshal($BODY, &$X)
+          - focus-metavariable: $X
+      # Gin: the context's request accessors, and the target of a bind.
+      - patterns:
+          - pattern: '($C : *gin.Context).$ACCESSOR(...)'
+          - metavariable-regex:
+              metavariable: $ACCESSOR
+              regex: ^(Query|DefaultQuery|GetQuery|QueryArray|GetQueryArray|QueryMap|GetQueryMap|Param|PostForm|DefaultPostForm|GetPostForm|PostFormArray|GetPostFormArray|PostFormMap|GetPostFormMap|GetHeader|Cookie|GetRawData|FormFile)$
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: '($C : *gin.Context).$BIND(&$X, ...)'
+              - pattern: '($C : *gin.Context).$BIND($X, ...)'
+          - metavariable-regex:
+              metavariable: $BIND
+              regex: ^(Should|Must)?Bind[A-Za-z]*$
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      # A qualified or method call's result is not request input: see the pack
+      # header. A bare call (a function of this package, a builtin, a
+      # conversion) keeps its arguments' taint, as Semgrep's default; that is
+      # what lets the helper sinks below follow a call into this file.
+      - exact: true
+        patterns:
+          - pattern: $RECEIVER.$FUNC(...)
+          # Sources.
+          - pattern-not: $R.URL.Query()
+          - pattern-not: $R.URL.Query().$GET(...)
+          - pattern-not: $R.FormValue(...)
+          - pattern-not: $R.PostFormValue(...)
+          - pattern-not: $R.PathValue(...)
+          - pattern-not: $R.Header.Get(...)
+          - pattern-not: $R.Header.Values(...)
+          - pattern-not: $R.Form.Get(...)
+          - pattern-not: $R.PostForm.Get(...)
+          - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: mux.Vars(...)
+          - pattern-not: chi.URLParam(...)
+          - pattern-not: '($C : *gin.Context).$GIN(...)'
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
+          # Calls that hand their input back.
+          - pattern-not: fmt.Sprintf(...)
+          - pattern-not: fmt.Sprint(...)
+          - pattern-not: fmt.Sprintln(...)
+          - pattern-not: strings.$STRINGS(...)
+          - pattern-not: bytes.$BYTES(...)
+          - pattern-not: filepath.$FILEPATH(...)
+          - pattern-not: path.$PATH(...)
+          - pattern-not: url.$URL(...)
+          - pattern-not: html.UnescapeString(...)
+          - pattern-not: strconv.Unquote(...)
+          - pattern-not: string(...)
+          - pattern-not: '[]byte(...)'
+          - pattern-not: '[]rune(...)'
+          - pattern-not: append(...)
+          - pattern-not: $VALUE.String()
+          - pattern-not: $VALUE.Bytes()
+          - pattern-not: $VALUE.Query()
+          - pattern-not: $VALUE.Hostname()
+          - pattern-not: $CODEC.DecodeString(...)
+          - pattern-not: $CODEC.Unescape(...)
+          - pattern-not: $CODEC.UnescapeString(...)
+          - pattern-not: $CODEC.QueryUnescape(...)
+          - pattern-not: $CODEC.PathUnescape(...)
+          - pattern-not: $CODEC.Unquote(...)
+          - pattern-not: io.ReadAll(...)
+          - pattern-not: ioutil.ReadAll(...)
+          - pattern-not: json.NewDecoder(...)
+          - pattern-not: $DECODER.Decode(...)
+          - pattern-not: json.Unmarshal(...)
+          # A call that takes a function literal (router.GET(path, func(c
+          # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+          # does not judge the calls inside a sanitized range one by one.
+          - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+          # This rule's sinks.
+          - pattern-not: $TPL.Parse(...)
+
+      # A value parsed as a number, a boolean or a UUID carries no syntax.
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
+      - pattern: uuid.Parse(...)
+      - pattern: uuid.MustParse(...)
+      # A number formatted back into a string is digits only.
+      - pattern: strconv.Itoa(...)
+      - pattern: strconv.FormatInt(...)
+      - pattern: strconv.FormatUint(...)
+      - pattern: strconv.FormatFloat(...)
+      - pattern: strconv.FormatBool(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: template.New(...).Parse($TEMPLATE)
+              - pattern: template.New(...).$CONFIG(...).Parse($TEMPLATE)
+              - pattern: template.New(...).$CONFIG(...).$MORE(...).Parse($TEMPLATE)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $TPL := template.New(...)
+                          ...
+                      - pattern-inside: |
+                          $TPL := template.New(...).$CONFIG(...)
+                          ...
+                  - pattern: $TPL.Parse($TEMPLATE)
+          - focus-metavariable: $TEMPLATE
+      # Request input passed as the first argument of a function of this
+      # file whose parameter reaches Template.Parse; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    template.New(...).Parse($PARAM)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    template.New(...).$CONFIG(...).Parse($PARAM)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $TPL := template.New(...)
+                    ...
+                    $TPL.Parse($PARAM)
+                    ...
+                  }
+                  ...
+          - pattern: $HELPER($ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the second argument of a function of this
+      # file whose parameter reaches Template.Parse; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    template.New(...).Parse($PARAM)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    template.New(...).$CONFIG(...).Parse($PARAM)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $TPL := template.New(...)
+                    ...
+                    $TPL.Parse($PARAM)
+                    ...
+                  }
+                  ...
+          - pattern: $HELPER($X1, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the third argument of a function of this
+      # file whose parameter reaches Template.Parse; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    template.New(...).Parse($PARAM)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    template.New(...).$CONFIG(...).Parse($PARAM)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $TPL := template.New(...)
+                    ...
+                    $TPL.Parse($PARAM)
+                    ...
+                  }
+                  ...
+          - pattern: $HELPER($X1, $X2, $ARG, ...)
+          - focus-metavariable: $ARG
+  # A string parameter of the enclosing function parsed as a template.
+  - id: go-ssti-sink
+    languages: [go]
+    # Go test code: *_test.go and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+    severity: WARNING
+    message: >-
+      Go template parsed from a function parameter: if callers pass request input, this is template injection.
+    metadata:
+      category: injection
+      cwe: [CWE-1336, CWE-94]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Go template parsed from a function parameter.
+      fendix_remediation: >-
+        A template is parsed from a parameter. If a caller passes request input, this is template injection. Parse a fixed template and pass the value as data.
+    patterns:
+      - pattern-inside: |
+          func $FN(..., $PARAM string, ...) {
+            ...
+          }
+      - pattern-either:
+          - pattern: template.New(...).Parse($PARAM)
+          - pattern: template.New(...).$CONFIG(...).Parse($PARAM)
+          - patterns:
+              - pattern-inside: |
+                  $TPL := template.New(...)
+                  ...
+              - pattern: $TPL.Parse($PARAM)
+      - pattern-not: template.New(...).Parse("...")
+      # Exported functions only: the entry points another file (or package) calls,
+      # which the taint rule cannot follow. A call into an unexported helper of
+      # the same file is the taint rule's to judge.
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^[A-Z]
+      # A parameter cannot also be a constant in its own scope; these keep the
+      # pack's -sink contract (a module constant is never reported) explicit.
+      - pattern-not-inside: |
+          const $PARAM = "..."
+          ...
+      - pattern-not-inside: |
+          const (
+            $PARAM = "..."
+          )
+          ...

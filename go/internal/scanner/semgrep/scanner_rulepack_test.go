@@ -29,9 +29,11 @@ import (
 // flask-route-no-auth-decorator on every Flask route (ADR-012). v3.7.0
 // added python-random-token-assignment, the JavaScript/TypeScript pack
 // (Task 4.3): 17 rules in javascript-injection.yaml, javascript-web.yaml and
-// javascript-crypto.yaml, and the Java/Spring pack (Task 4.4): ten taint rules
-// and five shape rules in java-injection.yaml, java-web.yaml and java-crypto.yaml.
-const rulepackTotalCount = 55
+// javascript-crypto.yaml, the Java/Spring pack (Task 4.4): ten taint rules
+// and five shape rules in java-injection.yaml, java-web.yaml and java-crypto.yaml,
+// and the Go pack (Task 4.5): 19 rules in go-injection.yaml, go-web.yaml and
+// go-crypto.yaml.
+const rulepackTotalCount = 74
 
 // rulepackFiles is the canonical list of embedded YAML rule files. The
 // extraction tests (TestEnsureRules_ExtractsAllBundledFiles) assert this
@@ -47,6 +49,9 @@ var rulepackFiles = []string{
 	"java-injection.yaml",
 	"java-web.yaml",
 	"java-crypto.yaml",
+	"go-injection.yaml",
+	"go-web.yaml",
+	"go-crypto.yaml",
 }
 
 // validFendixSeverityKeys is the set of values accepted in the

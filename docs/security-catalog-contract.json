@@ -1244,6 +1244,352 @@
       "availability": "stable"
     },
     {
+      "id": "go-jwt-no-verify-sink",
+      "title": "JWT parameter decoded without verifying its signature.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A token parameter is decoded with ParseUnverified and its claims are read. If a caller passes a token from the request, its claims are whatever the caller wrote. Verify it with jwt.Parse and jwt.WithValidMethods.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-jwt-no-verify-taint",
+      "title": "JWT from the request trusted without verifying its signature.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "ParseUnverified decodes a token without checking its signature, so its claims are whatever the caller wrote. Verify it with jwt.Parse or jwt.ParseWithClaims, a key function and jwt.WithValidMethods; read only the header (for example kid) from an unverified token.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-weak-password-hash-sink",
+      "title": "Password parameter hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter named like a password is hashed with MD5 or SHA-1, fast and unsalted hashes. Hash passwords with bcrypt, argon2id or scrypt.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-weak-password-hash-taint",
+      "title": "Password from request input hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "MD5 and SHA-1 are fast, unsalted hashes: a leaked table of them is cracked in hours. Hash passwords with bcrypt (golang.org/x/crypto/bcrypt), argon2id or scrypt.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-weak-random-token",
+      "title": "Security token generated with math/rand.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-338"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "math/rand is a predictable generator: its outputs can be recovered from a few samples or its seed. Generate tokens, session ids and reset codes with crypto/rand, for example rand.Text() or rand.Read into a byte slice.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-cmdi-sink",
+      "title": "Shell command built from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A shell's command line (sh -c) is built from a parameter. If a caller passes request input, this is command injection. Run a fixed program without a shell and pass the value as its own argument.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-cmdi-taint",
+      "title": "Shell command built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input reaches a shell command line or the name of the program exec.Command runs. Run a fixed program and pass the input as its own argument, without a shell: exec.Command(\"ping\", \"-c\", \"1\", host).",
+      "availability": "stable"
+    },
+    {
+      "id": "go-sqli-sink",
+      "title": "SQL query built from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "The query string is formatted or concatenated from a parameter. If a caller passes request input, this is SQL injection. Pass the value as a query argument with a placeholder.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-sqli-taint",
+      "title": "SQL query built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input is formatted or concatenated into a SQL query. Pass it as a query argument with a placeholder instead: db.Query(\"... WHERE name = $1\", name) (or ? for MySQL and SQLite).",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssti-sink",
+      "title": "Go template parsed from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A template is parsed from a parameter. If a caller passes request input, this is template injection. Parse a fixed template and pass the value as data.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssti-taint",
+      "title": "Go template parsed from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input is parsed as a text/template or html/template template, so the caller controls its actions and the methods it calls. Parse a fixed template and pass the input as data to Execute.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-open-redirect-sink",
+      "title": "Redirect to a URL taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is used as a redirect target. If a caller passes request input, this is an open redirect. Redirect only to a local path.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-open-redirect-taint",
+      "title": "Redirect to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "The response redirects to a target the caller chose, which phishing links use to borrow the site's name. Redirect only to a local path: require a leading / and reject // and /\\, or map the input to a fixed set of destinations.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-path-traversal-sink",
+      "title": "File path joined from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is joined onto a directory and opened. If a caller passes request input, ../ sequences escape the directory. Keep only the base name, or check the resolved path stays under the directory.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-path-traversal-taint",
+      "title": "File path built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input reaches a file path, so ../ sequences can read or write outside the intended directory. Keep only the base name (filepath.Base), or resolve the joined path and check it stays under the base directory: strings.HasPrefix(target, base+string(os.PathSeparator)).",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssrf-sink",
+      "title": "Outbound HTTP request to a URL taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is used as the URL of an outbound request. If a caller passes request input, this is server-side request forgery. Allow only a fixed set of hosts before the request.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssrf-taint",
+      "title": "Outbound HTTP request to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "The server fetches a URL the caller chose, so it can be pointed at internal services or cloud metadata endpoints. Parse the URL and allow only a fixed set of hosts before the request: u, err := url.Parse(target); if err != nil || !allowedHosts[u.Hostname()] { return }.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-xss-sink",
+      "title": "HTML response built from a function parameter without escaping.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is written into an HTML response unescaped. If a caller passes request input, this is cross-site scripting. Render it with html/template, or escape it with html.EscapeString.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-xss-taint",
+      "title": "Request input written into an HTML response without escaping.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input reaches an HTML response unescaped: a writer whose Content-Type is text/html, Gin's c.Data with an HTML type, or a template.HTML conversion that switches html/template's escaping off. Render it with html/template, or escape it with html.EscapeString.",
+      "availability": "stable"
+    },
+    {
       "id": "django-orm-raw-sql",
       "title": "Django ORM raw SQL with a non-literal argument — SQL injection risk.",
       "analyzer": "semgrep",

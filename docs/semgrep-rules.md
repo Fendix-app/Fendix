@@ -1,10 +1,10 @@
 # Semgrep Rule Guide
 
-Fendix's white-box engine bundles 55 Semgrep rules across ten files:
+Fendix's white-box engine bundles 74 Semgrep rules across thirteen files:
 23 Python rules in four (auth, injection, secrets, crypto), 17
 JavaScript/TypeScript rules in three (javascript-injection, javascript-web,
-javascript-crypto) and 15 Java rules in three (java-injection, java-web,
-java-crypto). It extracts them to a per-process temp directory at
+javascript-crypto), 15 Java rules in three (java-injection, java-web,
+java-crypto) and 19 Go rules in three (go-injection, go-web, go-crypto). It extracts them to a per-process temp directory at
 scan time. This guide explains the metadata Fendix
 expects, how rules are mapped into the Finding model, and the conventions
 to follow when writing project-specific rules.

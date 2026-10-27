@@ -51,6 +51,12 @@ db.query("SELECT * FROM users WHERE id = $1", [req.query.id]);
 A line that no annotation names must not be reported by any rule of the
 pack.
 
+Semgrep also requires every rule a test file annotates to report at least one
+line of that file: a file whose only annotations are `ok:` lines for a rule
+that reports nothing there fails the run ("rule id mismatch"). A file that
+must stay silent, such as `go-crypto.cryptorand.go`, carries no annotation:
+any line a rule reports in it fails the test.
+
 ## Go test files
 
 This directory is inside the Go module, so the `go` tool would compile a

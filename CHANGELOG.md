@@ -1129,6 +1129,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     locations, all true positives (SQL injection lessons, open redirects,
     path traversal and zip slip, predictable tokens and secrets). The scan
     takes about one second longer.
+- **Go: Semgrep taint rules for net/http and Gin.** Three new packs,
+  `go-injection.yaml`, `go-web.yaml` and `go-crypto.yaml`, add 19 rules: a
+  taint rule (`go-<class>-taint`) and a shape rule (`go-<class>-sink`) for SQL
+  injection, command injection, template injection, XSS, SSRF, path
+  traversal, open redirect, weak password hashing and JWTs decoded with
+  `ParseUnverified`, and a pattern rule, `go-weak-random-token`, for tokens
+  drawn from `math/rand`. The findings warn: Go is not yet enabled in
+  `semgrep.ReachabilityLanguages`.
+  - **Sources.** net/http's query, form and path values, request headers,
+    cookies and body (decoded JSON included), gorilla/mux and chi path
+    variables, and Gin's request accessors and bind targets.
+  - **One call into the same file.** Semgrep OSS follows taint within one
+    function. A call that passes request input to a function of the same
+    file whose string parameter reaches the sink is reported at the call.
+  - **Lookups are not request input.** A qualified or method call's result
+    (a row, a cache entry, a stored file name looked up by request input) is
+    clean, except the calls that hand their input back (`fmt.Sprintf`, the
+    `strings`, `filepath`, `path` and `url` functions, decoders). A map
+    lookup keyed by request input is clean too.
+  - **Guards.** Placeholders and prepared statements for SQL; a host
+    allowlist that exits (on the parsed URL or the string it came from) for
+    SSRF; a local-path check (starts with `/`, not with `//`) that exits or
+    replaces the target for redirects; `filepath.Base`, `filepath.Rel` or a
+    separator-terminated prefix check that exits for paths; escaping or
+    `html/template` for XSS; a literal scheme-and-host or local-path prefix
+    for SSRF and redirects. A denylist, a `//` check alone, a prefix check
+    without a separator, or an `if` that only logs guards nothing.
+  - **Shape rules** report an exported function whose string parameter is
+    formatted into a SQL value, a shell command line, an HTML response, an
+    outbound URL, a joined file path or a redirect target, for callers in
+    other files.
+  - **Go test code is skipped:** `*_test.go`, and `testdata`, `testhelpers`,
+    `testutil`, `testutils`, `testing`, `test` and `tests` directories.
+  - **Parity.** net/http and Gin recall rises from 36% to 100% each, with no
+    new false positive (the four left are textscan's, on the SQL and command
+    lookalikes).
 
 ### Changed
 

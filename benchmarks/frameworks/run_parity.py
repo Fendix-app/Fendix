@@ -187,6 +187,27 @@ RULE_CLASS = {
     "js-jwt-no-verify-sink": "jwt_no_verify",
     "js-weak-random-token-taint": "weak_random_token",
     "java-weak_random_token-taint": "weak_random_token",
+    # Go pack (go/internal/scanner/semgrep/rules/go-*.yaml): a taint rule and a
+    # shape rule per class, plus the math/rand token rule.
+    "go-sqli-taint": "sqli",
+    "go-sqli-sink": "sqli",
+    "go-cmdi-taint": "cmdi",
+    "go-cmdi-sink": "cmdi",
+    "go-xss-taint": "xss",
+    "go-xss-sink": "xss",
+    "go-ssrf-taint": "ssrf",
+    "go-ssrf-sink": "ssrf",
+    "go-path-traversal-taint": "path_traversal",
+    "go-path-traversal-sink": "path_traversal",
+    "go-open-redirect-taint": "open_redirect",
+    "go-open-redirect-sink": "open_redirect",
+    "go-ssti-taint": "ssti",
+    "go-ssti-sink": "ssti",
+    "go-weak-password-hash-taint": "weak_password_hash",
+    "go-weak-password-hash-sink": "weak_password_hash",
+    "go-jwt-no-verify-taint": "jwt_no_verify",
+    "go-jwt-no-verify-sink": "jwt_no_verify",
+    "go-weak-random-token": "weak_random_token",
 }
 
 
