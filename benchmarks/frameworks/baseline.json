@@ -7,7 +7,7 @@
     },
     "django-cmdi-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-cmdi-direct": {
       "outcome": "TP",
@@ -71,7 +71,7 @@
     },
     "django-open_redirect-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-open_redirect-direct": {
       "outcome": "TP",
@@ -95,7 +95,7 @@
     },
     "django-path_traversal-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-path_traversal-direct": {
       "outcome": "TP",
@@ -119,7 +119,7 @@
     },
     "django-sqli-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-sqli-direct": {
       "outcome": "TP",
@@ -143,7 +143,7 @@
     },
     "django-ssrf-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-ssrf-direct": {
       "outcome": "TP",
@@ -215,7 +215,7 @@
     },
     "django-xss-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-xss-direct": {
       "outcome": "TP",
@@ -471,7 +471,7 @@
     },
     "fastapi-cmdi-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-cmdi-direct": {
       "outcome": "TP",
@@ -535,7 +535,7 @@
     },
     "fastapi-open_redirect-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-open_redirect-direct": {
       "outcome": "TP",
@@ -559,7 +559,7 @@
     },
     "fastapi-path_traversal-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-path_traversal-direct": {
       "outcome": "TP",
@@ -583,7 +583,7 @@
     },
     "fastapi-sqli-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-sqli-direct": {
       "outcome": "TP",
@@ -607,7 +607,7 @@
     },
     "fastapi-ssrf-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-ssrf-direct": {
       "outcome": "TP",
@@ -679,7 +679,7 @@
     },
     "fastapi-xss-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-xss-direct": {
       "outcome": "TP",
@@ -703,7 +703,7 @@
     },
     "flask-cmdi-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-cmdi-direct": {
       "outcome": "TP",
@@ -767,7 +767,7 @@
     },
     "flask-open_redirect-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-open_redirect-direct": {
       "outcome": "TP",
@@ -791,7 +791,7 @@
     },
     "flask-path_traversal-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-path_traversal-direct": {
       "outcome": "TP",
@@ -815,7 +815,7 @@
     },
     "flask-sqli-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-sqli-direct": {
       "outcome": "TP",
@@ -839,7 +839,7 @@
     },
     "flask-ssrf-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-ssrf-direct": {
       "outcome": "TP",
@@ -911,7 +911,7 @@
     },
     "flask-xss-cross_file": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-xss-direct": {
       "outcome": "TP",

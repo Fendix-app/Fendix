@@ -141,7 +141,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Same-file helpers.** A handler that passes its parameter to a helper in
     the same file proves the helper's sink, through the one-hop check. The
     chain starts at the handler's `def` line, then the call. Caller-side
-    sanitisers still apply. A helper in another file is not followed.
+    sanitisers still apply. A helper in another module is followed too, one
+    hop (see "A Python sink in a helper is now proven when a view in another
+    module passes it request input" below).
   - **Identity.** A finding this change proves can change identity once. A
     baseline entry or a `.fendix-ignore` `fingerprint:` rule for it stops
     matching, and it is reported as new once.
@@ -700,6 +702,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `python-random-token-assignment`. The rule pack has 23 rules, and the
     security catalog lists 106 checks.
 
+- **A Python sink in a helper is now proven when a view in another module
+  passes it request input.** The one-hop helper check followed a helper's
+  parameter only to the calls in the helper's own file. A view that imports
+  its helper, as in `from app.services.user_queries import find_users` and
+  then `find_users(username)`, left the helper's SQL injection, command
+  injection, SSRF, path traversal, open redirect or XSS finding reported but
+  unproven, so it only warned. The check now also follows the parameter to
+  the calls that name the helper through an import, anywhere in the scanned
+  tree.
+  - **A proven finding.** It is marked reachable and carries a taint chain.
+    The chain's first link is in the caller's file: the call, or the request
+    expression when it is passed inline. The helper's own links follow, up
+    to the sink. Like any proven finding, it takes the rule's proven title
+    and severity where it has one, the engine escalates it one level as
+    reachable, and it may now block.
+  - **The caller is judged as a same-file caller is.**
+    - The request value is traced through the caller's own assignments. For
+      each name, the last assignment before the call decides.
+    - A route handler's parameters are sources under the same rules as
+      everywhere else, so a FastAPI `int` or `Depends(...)` parameter is not
+      one.
+    - The caller-side sanitisers of the same-file hop apply in the caller's
+      file: a membership guard, a `urlparse(...).netloc` allowlist, path
+      containment, escaping, an allowlist lookup, `url_for(...)` or
+      `reverse(...)`, or a URL with a fixed scheme and host. Any of them
+      leaves the helper's finding unproven.
+  - **Which calls count.** `f(x)`, `m.f(x)` and `a.b.f(x)`, where an import
+    binds `f`, `m` or `a`: `from a.b import f` (with or without `as`),
+    `import a.b as m`, `import a.b`, or a relative import, resolved against
+    the caller's package. The name must not be rebound in the calling
+    function or module.
+    - Only a module-level function is matched. A method, a nested function
+      and a class attribute (`m.Store.find(x)`) are not.
+    - A keyword-only parameter is matched by its keyword alone. Positional
+      arguments are not matched once a `*args` comes at or before the
+      parameter's position.
+  - **Module names.** A module's name is its path under the scan root:
+    `app/services/q.py` is `app.services.q`. When the scan root sits above
+    the package (`src/app/services/q.py`), an import of `app.services.q`
+    still names it, but only when exactly one scanned module ends with
+    `app.services.q`. A suffix shorter than two components is never tried.
+  - **One hop.** The caller's own parameters are not traced into its
+    callers. So `view -> a.helper -> b.sink` proves `a.helper`'s findings,
+    not `b.sink`'s. A caller in the helper's own file that proves the flow
+    still comes first.
+  - **Not followed:**
+    - a star import;
+    - a helper re-exported by a package's `__init__.py` and imported from
+      the package;
+    - a scan rooted inside the package, as when scanning `app/` for code that
+      imports `app.services.q`;
+    - a call inside a lambda, comprehension or class body, unless the
+      request value is passed inline;
+    - a value read from a datastore, which is a source for the LLM prompt
+      sink alone.
+  - **Identity.** A finding this change proves can change identity once. A
+    baseline entry or a `.fendix-ignore` `fingerprint:` rule for it stops
+    matching, and it is reported as new once.
+    - The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+      `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+      `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+      proven, so such a finding is identified by its sink instead of its
+      evidence line.
+    - SSRF, open-redirect, path-traversal and XSS findings keep their
+      identity. A helper that is not itself a route handler binds no route,
+      so its finding stays in the helper's file and function.
+    - Rules that pin their identity keep doing so:
+      `python.ast/PY_JWT_WEAK` and `python.ast/PY_WEAK_CRYPTO_PASSWORD` give
+      their evidence line as their sink.
+    - A newly proven helper such as `open(os.path.join(BASE, name))` also
+      reports the inner `os.path.join(...)`, which is reported only when the
+      flow is proven.
+  - **Cost.** Before analysing, the Python analyzer reads every file once
+    more. It parses only the files that name `request` or `req` or hold a
+    route handler, and analyses those from the same parse. On a 217k-line
+    tree (Django, django-allauth and Django REST framework), the AST pass
+    took 3.9 s instead of 3.1 s, with the same findings.
+  - **Framework parity:** in Django, Flask and FastAPI, the `cross_file`
+    cases for SQL injection, command injection, SSRF, path traversal, open
+    redirect and XSS now block. They warned before. No safe case is flagged
+    or blocks. The Python frameworks block on 102 of 108 vulnerable cases,
+    up from 84.
+
 ### Changed
 
 - **`python-random-for-token-generation` reports more token generators.**
@@ -1077,9 +1162,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `_render(escape(request.args["n"]))` no longer proves.
   - **Not followed:** a call inside a lambda, comprehension or class body,
     which still proves only with the request expression passed inline; a
-    method call (`self._ping(host)`); a caller in another file; and the
-    caller's own parameters, which are not traced into its callers (one hop
-    only). A helper whose callers all pass constants is not proven.
+    method call (`self._ping(host)`); and the caller's own parameters, which
+    are not traced into its callers (one hop only). A helper whose callers
+    all pass constants is not proven. A caller in another module is now
+    followed as well (see "A Python sink in a helper is now proven when a
+    view in another module passes it request input").
   - **A bare-name call no longer proves a method's parameter.** `handle(h, p)`
     calls the function `handle`, never a method of that name, but it was
     matched against a method's parameters too, `self` included. With `p` from

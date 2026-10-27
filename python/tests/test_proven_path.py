@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from analyzers.ast_analyzer import ASTAnalyzer, route_param_sources
+from analyzers.ast_analyzer import (
+    ASTAnalyzer,
+    route_param_source_names,
+    route_param_sources,
+)
 from analyzers.route_extractor import extract_routes
 
 
@@ -1232,3 +1236,305 @@ def test_django_route_with_no_module_binds_nothing():
     f = _one({"urls.py": urls, "other.py": _REEXPORT_VIEW.format(name="show")})
     _assert_unproven(f)
     assert "route" not in f
+
+
+# ---------------------------------------------------------------------------
+# Task 3.8: the helper hop follows one call across files
+# ---------------------------------------------------------------------------
+#
+# A view that passes request input to a helper imported from another module
+# proves the helper's sink, one hop, as a same-file helper does. The chain
+# starts at the call in the view's file. The caller-side sanitisers of the
+# same-file hop apply in the caller's file (R-pf50 a), the caller's sources
+# are the whole route-parameter rule set (R-pf50 b), and only a module-level
+# function is matched (R-pf50 c).
+
+
+def _flask_cross_file(view_body: str, helper: str, prelude: str = "") -> dict[str, str]:
+    """The layout of corpus case `flask-sqli-cross_file`: a blueprint, the
+    view in `app/sqli_cross_file.py`, the helper in `app/services/`."""
+    return {
+        "app/__init__.py": "",
+        "app/blueprint.py": 'from flask import Blueprint\nbp = Blueprint("cases", __name__)\n',
+        "app/services/__init__.py": "",
+        "app/services/helpers.py": helper,
+        "app/sqli_cross_file.py": (
+            "from flask import abort, jsonify, request\n"
+            "from app.blueprint import bp\n"
+            "from app.services import helpers\n"
+            f"{prelude}"
+            '@bp.route("/x", endpoint="x")\n'
+            "def view():\n"
+            f"{view_body}"
+        ),
+    }
+
+
+def _in_helper(files: dict[str, str], rule: str) -> dict:
+    """The one `rule` finding in `app/services/helpers.py`. The view may
+    report its own sink too (a proven `os.path.join` in it is one)."""
+    found = [
+        f
+        for f in _rule(_scan(files), rule)
+        if f["line"].startswith("app/services/helpers.py:")
+    ]
+    assert len(found) == 1, found
+    return found[0]
+
+
+def test_cross_file_sqli_is_reachable():
+    files = {
+        "app/__init__.py": "",
+        "app/blueprint.py": 'from flask import Blueprint\nbp = Blueprint("cases", __name__)\n',
+        "app/services/__init__.py": "",
+        "app/services/user_queries.py": (
+            "import sqlite3\n"
+            "from contextlib import closing\n"
+            'DB_PATH = "app.db"\n'
+            "def find_users(username: str) -> list:\n"
+            "    with closing(sqlite3.connect(DB_PATH)) as conn:\n"
+            "        cursor = conn.cursor()\n"
+            "        cursor.execute(f\"SELECT id FROM users WHERE username = '{username}'\")\n"
+            "        return cursor.fetchall()\n"
+        ),
+        "app/sqli_cross_file.py": (
+            "from flask import jsonify, request\n"
+            "from app.blueprint import bp\n"
+            "from app.services.user_queries import find_users\n"
+            '@bp.route("/sqli/cross-file", endpoint="sqli_cross_file")\n'
+            "def search_users():\n"
+            '    username = request.args.get("username", "")\n'
+            "    rows = find_users(username)\n"
+            "    return jsonify(results=[list(row) for row in rows])\n"
+        ),
+    }
+    f = _one(files)
+    assert f["line"] == "app/services/user_queries.py:7"
+    assert f.get("reachable") is True, f
+    assert f["taint_chain"][0]["file"] == "app/sqli_cross_file.py"
+    assert f["taint_chain"][0] == {
+        "file": "app/sqli_cross_file.py",
+        "line": 7,
+        "expr": "find_users(username)",
+    }
+    assert f["taint_chain"][-1]["file"] == "app/services/user_queries.py"
+    # Identity: the helper is not a route handler, so nothing binds, and the
+    # finding stays in the helper's file and function.
+    assert "route" not in f
+    assert f["symbol"] == "find_users"
+
+
+_SSRF_HELPER = "import requests\ndef fetch(url):\n    return requests.get(url, timeout=5).text\n"
+_PATH_HELPER = "def read(path):\n    with open(path) as fh:\n        return fh.read()\n"
+_XSS_HELPER = (
+    "from markupsafe import Markup\n"
+    "def render(name):\n"
+    '    return Markup(f"<b>{name}</b>")\n'
+)
+
+# Each guarded caller is reported in the helper and never proven across the
+# hop; its control, the same view without the guard, is proven (R-pf50 a).
+_CROSS_FILE_GUARDS = {
+    "membership": (
+        "PY_SSRF",
+        _SSRF_HELPER,
+        'ALLOWED = {"https://a.example/x"}\n',
+        (
+            '    url = request.args["u"]\n'
+            "    if url not in ALLOWED:\n"
+            "        abort(400)\n"
+        ),
+        "    return helpers.fetch(url)\n",
+    ),
+    "netloc": (
+        "PY_SSRF",
+        _SSRF_HELPER,
+        'from urllib.parse import urlparse\nHOSTS = {"api.example.com"}\n',
+        (
+            '    url = request.args["u"]\n'
+            "    if urlparse(url).netloc not in HOSTS:\n"
+            "        abort(400)\n"
+        ),
+        "    return helpers.fetch(url)\n",
+    ),
+    "containment": (
+        "PY_PATH_TRAVERSAL",
+        _PATH_HELPER,
+        'import os\nBASE = "/srv/reports"\n',
+        (
+            '    full = os.path.realpath(os.path.join(BASE, request.args["f"]))\n'
+            "    if not full.startswith(BASE + os.sep):\n"
+            "        abort(400)\n"
+        ),
+        "    return helpers.read(full)\n",
+    ),
+    "escape": (
+        "PY_XSS_HTML_SINK",
+        _XSS_HELPER,
+        "from markupsafe import escape\n",
+        '    name = escape(request.args["n"])\n',
+        "    return helpers.render(name)\n",
+    ),
+}
+
+
+@pytest.mark.parametrize("guard", sorted(_CROSS_FILE_GUARDS))
+def test_caller_side_sanitiser_blocks_the_cross_file_proof(guard):
+    rule, helper, prelude, guarded, call = _CROSS_FILE_GUARDS[guard]
+    _assert_unproven(_in_helper(_flask_cross_file(guarded + call, helper, prelude), rule))
+
+
+@pytest.mark.parametrize("guard", sorted(_CROSS_FILE_GUARDS))
+def test_the_same_view_without_its_guard_proves_across_files(guard):
+    rule, helper, prelude, _guarded, call = _CROSS_FILE_GUARDS[guard]
+    unguarded = {
+        "membership": '    url = request.args["u"]\n',
+        "netloc": '    url = request.args["u"]\n',
+        "containment": '    full = os.path.realpath(os.path.join(BASE, request.args["f"]))\n',
+        "escape": '    name = request.args["n"]\n',
+    }[guard]
+    f = _in_helper(_flask_cross_file(unguarded + call, helper, prelude), rule)
+    assert f.get("reachable") is True, f
+    assert f["taint_chain"][0]["file"] == "app/sqli_cross_file.py"
+
+
+def _fastapi_cross_file(params: str, prelude: str = "") -> dict[str, str]:
+    return {
+        "app/__init__.py": "",
+        "app/services/__init__.py": "",
+        "app/services/q.py": (
+            "import sqlite3\n"
+            "def find(item_id):\n"
+            '    cur = sqlite3.connect("db").cursor()\n'
+            "    cur.execute(f\"SELECT * FROM items WHERE id = '{item_id}'\")\n"
+        ),
+        "app/main.py": (
+            "from typing import Annotated\n"
+            "from fastapi import APIRouter, Depends\n"
+            "from app.services.q import find\n"
+            "router = APIRouter()\n"
+            "def current() -> str:\n"
+            '    return "me"\n'
+            f"{prelude}"
+            '@router.get("/items")\n'
+            f"def read_item({params}):\n"
+            "    return find(item_id)\n"
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        "item_id: int = 0",
+        "item_id: str = Depends(current)",
+        "item_id: Annotated[str, Depends(current)]",
+    ],
+)
+def test_fastapi_param_the_rule_set_excludes_does_not_prove_across_files(params):
+    # R-pf50 b: the caller's sources are `route_param_sources`.
+    _assert_unproven(_one(_fastapi_cross_file(params)))
+
+
+def test_param_typed_by_a_dependency_alias_does_not_prove_across_files():
+    # Only the module-aware rules of `route_param_sources` know the alias;
+    # the signature alone (`route_param_source_names`) takes it for a source.
+    alias = "Current = Annotated[str, Depends(current)]\n"
+    files = _fastapi_cross_file("item_id: Current", prelude=alias)
+    func = next(
+        n
+        for n in ast.walk(ast.parse(files["app/main.py"]))
+        if isinstance(n, ast.FunctionDef) and n.name == "read_item"
+    )
+    assert "item_id" in route_param_source_names(func)
+    _assert_unproven(_one(files))
+
+
+def test_flask_param_its_url_does_not_name_does_not_prove_across_files():
+    # A plain default the URL pattern does not name is the developer's value.
+    helper = (
+        "import subprocess\n"
+        "def ping(host):\n"
+        '    return subprocess.run(f"ping -c 1 {host}", shell=True).stdout\n'
+    )
+    files = _flask_cross_file("    return helpers.ping(host)\n", helper)
+    files["app/sqli_cross_file.py"] = files["app/sqli_cross_file.py"].replace(
+        "def view():", 'def view(host="localhost"):'
+    )
+    _assert_unproven(_in_helper(files, "PY_SUBPROCESS_SHELL"))
+    named = dict(files)
+    named["app/sqli_cross_file.py"] = files["app/sqli_cross_file.py"].replace(
+        '@bp.route("/x"', '@bp.route("/x/<host>"'
+    )
+    assert _in_helper(named, "PY_SUBPROCESS_SHELL").get("reachable") is True
+
+
+def test_fastapi_str_param_proves_across_files():
+    f = _one(_fastapi_cross_file('item_id: str = ""'))
+    assert f.get("reachable") is True, f
+    assert f["taint_chain"][0] == {"file": "app/main.py", "line": 9, "expr": "find(item_id)"}
+
+
+def test_keyword_only_helper_parameter_proves_by_keyword_across_files():
+    helper = (
+        "import subprocess\n"
+        "def ping(count, *, host):\n"
+        '    return subprocess.run(f"ping -c {count} {host}", shell=True).stdout\n'
+    )
+    body = '    host = request.args["h"]\n    return helpers.ping(1, host=host)\n'
+    f = _one(_flask_cross_file(body, helper), "PY_SUBPROCESS_SHELL")
+    assert f.get("reachable") is True, f
+    # The positional slot after `count` is never the keyword-only `host`.
+    body = '    return helpers.ping(1, request.args["h"])\n'
+    _assert_unproven(_one(_flask_cross_file(body, helper), "PY_SUBPROCESS_SHELL"))
+
+
+def test_a_method_is_not_proven_by_an_imported_function_call():
+    # R-pf50 c: `helpers.ping(...)` names the module-level `ping`; the method
+    # `Pinger.ping` of the same module is never matched by it, nor is a
+    # method whose caller is `self.ping(...)`.
+    helper = (
+        "import subprocess\n"
+        "class Pinger:\n"
+        "    def ping(self, host):\n"
+        '        return subprocess.run(f"ping -c 1 {host}", shell=True).stdout\n'
+        "    def run(self, host):\n"
+        "        return self.ping(host)\n"
+    )
+    # Two arguments, so the method's `host` (index 1, after `self`) lines up
+    # with a tainted positional argument: only the module-level rule keeps it
+    # from matching.
+    body = '    return helpers.ping("x", request.args["h"])\n'
+    _assert_unproven(_one(_flask_cross_file(body, helper), "PY_SUBPROCESS_SHELL"))
+
+
+def test_module_attribute_call_proves_a_module_level_function():
+    helper = (
+        "import subprocess\n"
+        "def ping(host):\n"
+        '    return subprocess.run(f"ping -c 1 {host}", shell=True).stdout\n'
+    )
+    body = '    return helpers.ping(request.args["h"])\n'
+    f = _one(_flask_cross_file(body, helper), "PY_SUBPROCESS_SHELL")
+    assert f.get("reachable") is True, f
+    assert f["taint_chain"][0] == {
+        "file": "app/sqli_cross_file.py",
+        "line": 6,
+        "expr": "request.args['h']",
+    }
+
+
+def test_a_same_file_caller_still_comes_first():
+    # A helper with both a same-file and a cross-file tainted caller keeps the
+    # same-file chain (Task 3.0), unchanged.
+    helper = (
+        "import subprocess\n"
+        "from flask import request\n"
+        "def ping(host):\n"
+        '    return subprocess.run(f"ping -c 1 {host}", shell=True).stdout\n'
+        "def local_view():\n"
+        '    return ping(request.args["local"])\n'
+    )
+    body = '    return helpers.ping(request.args["h"])\n'
+    f = _one(_flask_cross_file(body, helper), "PY_SUBPROCESS_SHELL")
+    assert f["taint_chain"][0]["file"] == "app/services/helpers.py"

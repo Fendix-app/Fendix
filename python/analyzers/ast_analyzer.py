@@ -17,7 +17,7 @@ import re
 import sys
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator, Literal, Mapping
 
@@ -138,6 +138,12 @@ class ASTAnalyzer:
         # different file (Django). Best-effort and metadata-only; a failure
         # here leaves binding off and never blocks the security pass.
         self._routes_by_func = self._build_route_index(root)
+        # Task 3.8: a second pre-pass indexes the calls between the project's
+        # modules, so a helper's parameter can be followed one hop to a caller
+        # in another file. It parses each file once and hands the parse to
+        # `_analyze_python`. Best-effort like the route index: on failure the
+        # helper hop stays within each file.
+        self._call_index = self._build_call_index(root, self._routes_by_func)
 
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
@@ -166,6 +172,9 @@ class ASTAnalyzer:
                 elif fpath.suffix in {".js", ".ts", ".jsx", ".tsx"}:
                     self.file_stats["javascript"] += 1
                     self._analyze_js_heuristic(fpath, rel, emit_fn)
+        # The index holds the callers' parsed trees; nothing reads it after
+        # the walk.
+        self._call_index = None
 
     def _build_route_index(self, root: Path):
         """Walk the tree once and merge every file's routes into one
@@ -218,6 +227,21 @@ class ASTAnalyzer:
             )
         return index
 
+    def _build_call_index(self, root: Path, route_table):
+        """The project's `ProjectCallIndex` (analyzers/call_index.py), or None
+        when it cannot be built. Imported here, not at module level: the
+        index module imports this one."""
+        try:
+            from analyzers.call_index import ProjectCallIndex
+
+            return ProjectCallIndex.build(root, route_table)
+        except (RecursionError, Exception) as exc:  # noqa: BLE001 — the hop is optional
+            print(
+                f"[fendix-engine] ast_analyzer: project call index failed: {exc}",
+                file=sys.stderr,
+            )
+            return None
+
     # ------------------------------------------------------------------
     # Python AST analysis
     # ------------------------------------------------------------------
@@ -225,14 +249,20 @@ class ASTAnalyzer:
     def _analyze_python(
         self, filepath: Path, rel: str, emit_fn: Callable[[dict], None]
     ) -> None:
-        """Parse and analyze a Python file's AST."""
-        try:
-            if filepath.stat().st_size > _MAX_FILE_BYTES:
+        """Parse and analyze a Python file's AST. A file the project call
+        index already parsed is analysed from that parse (Task 3.8)."""
+        call_index = getattr(self, "_call_index", None)
+        parsed = call_index.take_parsed(rel) if call_index is not None else None
+        if parsed is not None:
+            source, tree = parsed
+        else:
+            try:
+                if filepath.stat().st_size > _MAX_FILE_BYTES:
+                    return
+                source = filepath.read_text(encoding="utf-8", errors="replace")
+                tree = ast.parse(source, filename=str(filepath))
+            except (OSError, SyntaxError):
                 return
-            source = filepath.read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(source, filename=str(filepath))
-        except (OSError, SyntaxError):
-            return
 
         # F-H5b: isolate the per-file AST walk. A crafted file (deeply nested
         # expression, a recursive node shape ast.parse accepted, or any other
@@ -247,6 +277,7 @@ class ASTAnalyzer:
             rel,
             emit_fn,
             route_table=getattr(self, "_routes_by_func", None),
+            call_index=call_index,
         )
         visitor._module_root = tree  # enable 1-hop interprocedural call-site index
         try:
@@ -342,6 +373,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         rel_path: str,
         emit_fn: Callable[[dict], None],
         route_table=None,
+        call_index=None,
     ) -> None:
         self._lines = source_lines
         self._rel = rel_path
@@ -388,6 +420,14 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             dict[ast.AST, list[tuple[tuple[int, int], str, ast.AST]]] | None
         ) = None
         self._interproc_depth: int = 0
+        # Task 3.8: the project's call index (call_index.ProjectCallIndex), for
+        # a helper's callers in other files, and this file's dotted module,
+        # the name those callers import it by. None: the hop stays in the
+        # file.
+        self._call_index = call_index
+        self._module_dotted = (
+            call_index.module_of(rel_path) if call_index is not None else ""
+        )
         self._module_root = None  # set in _analyze_python before the walk
         # Maps a bare local name → (module, symbol), populated by
         # visit_ImportFrom. Lets `from os import system; system(cmd)` and
@@ -1029,7 +1069,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
         A caller whose argument a sanitiser of the direct path accepts proves
         nothing (`_caller_arg_is_sanitised`): the hop must not prove what the
-        same code written inline would not."""
+        same code written inline would not.
+
+        When no caller in this file proves the parameter, the callers in other
+        files are asked (`_cross_file_caller_link`, Task 3.8)."""
         for call, scope, arg in self._caller_args(param_name):
             self._interproc_depth += 1
             try:
@@ -1038,7 +1081,41 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 self._interproc_depth -= 1
             if prefix is not None:
                 return prefix
-        return None
+        return self._cross_file_caller_link(param_name)
+
+    def _cross_file_caller_link(self, param_name: str) -> list[dict] | None:
+        """Task 3.8: the one-hop chain prefix a caller in ANOTHER file proves
+        for parameter `param_name` of the innermost enclosing function, or
+        None. The project call index (`self._call_index`) holds the calls that
+        name this function through an import, and judges each in the caller's
+        own file as `_caller_arg_chain` judges a same-file caller: request
+        input or a request-carrying route parameter of the caller
+        (`route_param_sources`), traced through the caller's assignments
+        before the call, with the caller-side sanitiser union applied there
+        (R-pf32, R-pf50 a). The prefix is that caller's one link, in the
+        caller's file: the call, or the request expression passed inline.
+
+        Only a module-level function is imported by name, so a method or a
+        nested def has no callers here (R-pf50 c). A keyword-only parameter
+        is matched by keyword alone (index -1). Single hop: never consulted
+        while a hop is under way, and the callers' own parameters are not
+        followed."""
+        if self._call_index is None or self._interproc_depth >= 1 or not self._func_stack:
+            return None
+        func = self._func_stack[-1]
+        if not self._is_module_level_def(func):
+            return None
+        positional = [a.arg for a in func.args.posonlyargs + func.args.args]
+        if param_name in positional:
+            index = positional.index(param_name)
+        elif any(a.arg == param_name for a in func.args.kwonlyargs):
+            index = -1
+        else:
+            return None
+        links = self._call_index.tainted_args(
+            self._module_dotted, func.name, index, param_name
+        )
+        return [asdict(links[0])] if links else None
 
     def _caller_arg_chain(
         self, call: ast.Call, scope: ast.AST, arg: ast.AST, extra_source, depth: int
