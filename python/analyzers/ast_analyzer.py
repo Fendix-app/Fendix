@@ -439,6 +439,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         proven_title: str | None = None,
         proven_severity: str | None = None,
         sink: str | None = None,
+        bind_route_in_other_file: bool = True,
     ) -> None:
         finding: dict = {
             "id": f"SEC-{pat_id}",
@@ -560,10 +561,23 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             # Proven Path v1: bind the route that reaches this sink, when the
             # enclosing function is a registered handler. route → handler →
             # source→sink chain is the v1 proof.
+            #
+            # A bound route's file is the finding's file in its fingerprint
+            # (models.Fingerprint, codeFile), and a Django route is declared in
+            # the urlconf, not in the view. A rule whose findings were never
+            # proven before passes bind_route_in_other_file=False, so proving
+            # one does not re-file it under the urlconf.
             route = self._bound_route()
-            if route is not None:
+            if route is not None and (
+                bind_route_in_other_file or self._route_is_in_this_file(route)
+            ):
                 finding["route"] = route.as_dict()
         self._emit(finding)
+
+    def _route_is_in_this_file(self, route) -> bool:
+        """True when `route` is declared in the file being visited: a
+        decorator route on its handler, not a urlconf entry elsewhere."""
+        return route.file.replace(os.sep, "/") == self._rel.replace(os.sep, "/")
 
     def _bound_route(self):
         """Return the Route whose handler is the innermost enclosing
@@ -2527,7 +2541,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # disqualified by NIST/OWASP for password storage. We require a
         # password-y identifier in the arg subtree to keep noise low — md5 of
         # a file checksum is fine.
+        #
+        # Task 3.9: the hashed value is traced to request input, so a password
+        # read from the request is proven (reachable) and may block. The sink
+        # is the evidence line on both paths: see the JWT branch below for why
+        # a code finding needs that, and this `secrets` finding is keyed on
+        # its rule and file alone (models.Fingerprint, secretIdentity).
         elif self._is_weak_password_hash(node):
+            chain = self._collect_taint_chain(
+                self._weak_password_hash_data(node), node.lineno, _ast_expr_text(node)
+            )
             self._emit_finding(
                 "PY_WEAK_CRYPTO_PASSWORD",
                 "Weak hash (MD5/SHA1) used for password — credential exposure risk",
@@ -2541,6 +2564,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 ),
                 node.lineno,
                 category="secrets",
+                taint_chain=chain,
+                sink=self._line_text(node.lineno),
             )
 
         # A redirect constructor with request-derived input (`_redirect_ctor`):
@@ -2847,7 +2872,24 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
         # JWT crypto-misuse (Sanad C2): jwt.decode(..., verify=False) or
         # algorithms driven by a non-literal/None (algorithm-confusion surface).
+        #
+        # Task 3.9: the decoded token (the first argument, or `jwt=`) is traced
+        # to request input, so a bearer token read from the request is proven
+        # (reachable) and may block.
+        #
+        # Identity must not move with the proof. This is a code finding, and
+        # models.Fingerprint names its operation by the sink, else the chain's
+        # last link, else the evidence line. Before Task 3.9 it had neither, so
+        # the evidence line was its identity: the sink is that line, on both
+        # paths. A route declared in another file is not bound either (see
+        # _emit_finding).
         elif self._is_jwt_misuse(node):
+            token = _source_argument(node, "jwt")
+            chain = (
+                None
+                if token is None
+                else self._collect_taint_chain(token, node.lineno, _ast_expr_text(node))
+            )
             self._emit_finding(
                 "PY_JWT_WEAK",
                 "Weak JWT verification — decode with verify=False or unpinned algorithm",
@@ -2861,6 +2903,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 ),
                 node.lineno,
                 category="auth_bypass",
+                taint_chain=chain,
+                sink=self._line_text(node.lineno),
+                bind_route_in_other_file=False,
             )
 
         # Secret-in-log (Sanad A4): a secret-looking value (os.getenv("*_KEY"/
@@ -3705,12 +3750,17 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
     def _is_weak_password_hash(self, node: ast.Call) -> bool:
         """Return True if hashlib.md5/sha1 is hashing a password-like value."""
+        return self._weak_password_hash_data(node) is not None
+
+    def _weak_password_hash_data(self, node: ast.Call) -> ast.AST | None:
+        """The hashed data of a hashlib.md5/sha1 call (`hashlib.new("md5" or
+        "sha1", data)` too) when it looks like a password, else None."""
         if not isinstance(node.func, ast.Attribute):
-            return False
+            return None
         if not (
             isinstance(node.func.value, ast.Name) and node.func.value.id == "hashlib"
         ):
-            return False
+            return None
         algo: str | None = None
         if node.func.attr in {"md5", "sha1"}:
             algo = node.func.attr
@@ -3721,16 +3771,16 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 if first.value.lower() in {"md5", "sha1"}:
                     algo = first.value.lower()
         if algo is None:
-            return False
+            return None
         # Find the data argument: arg[0] for md5/sha1, arg[1] for new(algo, data).
         data_arg = None
         if node.func.attr in {"md5", "sha1"} and node.args:
             data_arg = node.args[0]
         elif node.func.attr == "new" and len(node.args) >= 2:
             data_arg = node.args[1]
-        if data_arg is None:
-            return False
-        return _arg_subtree_looks_like_password(data_arg)
+        if data_arg is None or not _arg_subtree_looks_like_password(data_arg):
+            return None
+        return data_arg
 
     def _is_open_redirect(self, node: ast.Call) -> bool:
         """Return True if a redirect constructor (`_redirect_ctor`) gets a

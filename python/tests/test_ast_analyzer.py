@@ -6621,3 +6621,306 @@ class TestFileResponsePathSink:
             "FileResponse(name)",
         )
         assert f["line"] == "mod.py:3"
+
+
+_WEAK_HASH = "SEC-PY_WEAK_CRYPTO_PASSWORD"
+_JWT_WEAK = "SEC-PY_JWT_WEAK"
+
+
+class TestWeakHashAndJwtTaintProof:
+    """Task 3.9: PY_WEAK_CRYPTO_PASSWORD and PY_JWT_WEAK carry a taint chain
+    when request input reaches the hashed value or the decoded token. A proven
+    finding is reachable, an independent signal, so it may block; an unproven
+    one is reported exactly as before.
+
+    Identity does not move with the proof. Both rules name their sink as the
+    evidence line on both paths: PY_JWT_WEAK is a code finding, whose
+    fingerprint hashed the evidence line while it had no sink, and
+    PY_WEAK_CRYPTO_PASSWORD is a `secrets` finding, keyed on its rule and
+    file alone. PY_JWT_WEAK binds no route declared in another file (a Django
+    urlconf), because a bound route's file replaces the finding's own in its
+    fingerprint."""
+
+    @staticmethod
+    def _found(src: str | dict[str, str], rule: str) -> list[dict]:
+        if isinstance(src, str):
+            return [f for f in _collect_src(src) if f["id"] == rule]
+        with tempfile.TemporaryDirectory() as d:
+            for name, content in src.items():
+                p = Path(d) / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+            return [f for f in _collect(d) if f["id"] == rule]
+
+    def _one(self, src: str | dict[str, str], rule: str) -> dict:
+        found = self._found(src, rule)
+        assert len(found) == 1, found
+        return found[0]
+
+    def _proven(self, src: str | dict[str, str], rule: str) -> dict:
+        f = self._one(src, rule)
+        assert f.get("reachable") is True, f
+        return f
+
+    def _unproven(self, src: str | dict[str, str], rule: str) -> dict:
+        f = self._one(src, rule)
+        assert f.get("reachable") is not True, f
+        assert "taint_chain" not in f, f
+        return f
+
+    # -- the brief's cases ----------------------------------------------------
+
+    def test_md5_of_request_password_is_reachable(self) -> None:
+        f = self._proven(
+            "import hashlib\n"
+            "from flask import request\n"
+            "def register():\n"
+            '    password = request.form["password"]\n'
+            "    return hashlib.md5(password.encode()).hexdigest()\n",
+            _WEAK_HASH,
+        )
+        assert f["taint_chain"] == [
+            _link(4, "request.form['password']"),
+            _link(5, "hashlib.md5(password.encode())"),
+        ]
+        assert f["line"] == "mod.py:5"
+
+    def test_jwt_decode_of_authorization_header_is_reachable(self) -> None:
+        f = self._proven(
+            "import jwt\n"
+            "from flask import request\n"
+            "def current_user():\n"
+            '    token = request.headers["Authorization"]\n'
+            '    return jwt.decode(token, options={"verify_signature": False})\n',
+            _JWT_WEAK,
+        )
+        assert f["taint_chain"] == [
+            _link(4, "request.headers['Authorization']"),
+            _link(5, "jwt.decode(token, options={'verify_signature': False})"),
+        ]
+
+    def test_md5_of_constant_stays_unreachable(self) -> None:
+        self._unproven(
+            "import hashlib\n"
+            'DEFAULT_PASSWORD = "changeme"\n'
+            "def seed():\n"
+            "    return hashlib.md5(DEFAULT_PASSWORD.encode()).hexdigest()\n",
+            _WEAK_HASH,
+        )
+
+    def test_jwt_decode_of_constant_stays_unreachable(self) -> None:
+        self._unproven(
+            "import jwt\n"
+            'SAMPLE_TOKEN = "header.payload.signature"\n'
+            "def sample_claims():\n"
+            '    return jwt.decode(SAMPLE_TOKEN, options={"verify_signature": False})\n',
+            _JWT_WEAK,
+        )
+
+    # -- identity -------------------------------------------------------------
+
+    _HASH_HEAD = "import hashlib\nfrom flask import request\ndef register():\n"
+    _HASH_SINK = "    return hashlib.md5(password.encode()).hexdigest()\n"
+    _JWT_HEAD = "import jwt\nfrom flask import request\ndef current_user():\n"
+    _JWT_SINK = '    return jwt.decode(token, options={"verify_signature": False})\n'
+
+    @staticmethod
+    def _without_proof(f: dict) -> dict:
+        return {k: v for k, v in f.items() if k not in ("reachable", "taint_chain", "route")}
+
+    def test_weak_hash_fingerprint_fields_unchanged(self) -> None:
+        # The same sink, with and without a request source. models.Fingerprint
+        # keys a `secrets` finding on category, rule and the endpoint's file
+        # (secretIdentity), and a code finding on file, symbol and sink; none
+        # of them, nor the title, severity or confidence, may follow the proof.
+        proven = self._proven(
+            self._HASH_HEAD + '    password = request.form["password"]\n' + self._HASH_SINK,
+            _WEAK_HASH,
+        )
+        unproven = self._unproven(
+            self._HASH_HEAD + "    password = load_password()\n" + self._HASH_SINK,
+            _WEAK_HASH,
+        )
+        assert self._without_proof(proven) == self._without_proof(unproven)
+        assert proven["category"] == "secrets"
+        assert proven["rule_id"] == "python.ast/PY_WEAK_CRYPTO_PASSWORD"
+        assert proven["endpoint"] == unproven["endpoint"] == "mod.py:5"
+        assert proven["symbol"] == unproven["symbol"] == "register"
+        assert proven["sink"] == unproven["sink"] == proven["evidence"]
+        assert proven["title"] == "Weak hash (MD5/SHA1) used for password — credential exposure risk"
+        assert proven["severity"] == "HIGH"
+        assert proven["confidence"] == "MEDIUM"
+
+    def test_jwt_fingerprint_fields_unchanged(self) -> None:
+        # PY_JWT_WEAK is a code finding: its fingerprint hashes the sink, and
+        # the evidence line when there is none, which is what every finding
+        # this rule reported before Task 3.9 had. The sink is that line.
+        proven = self._proven(
+            self._JWT_HEAD + '    token = request.headers["Authorization"]\n' + self._JWT_SINK,
+            _JWT_WEAK,
+        )
+        unproven = self._unproven(
+            self._JWT_HEAD + "    token = read_cached_token()\n" + self._JWT_SINK,
+            _JWT_WEAK,
+        )
+        assert self._without_proof(proven) == self._without_proof(unproven)
+        assert proven["category"] == "auth_bypass"
+        assert proven["symbol"] == unproven["symbol"] == "current_user"
+        assert proven["sink"] == unproven["sink"] == proven["evidence"]
+        assert proven["sink"] == 'return jwt.decode(token, options={"verify_signature": False})'
+        assert proven["title"] == (
+            "Weak JWT verification — decode with verify=False or unpinned algorithm"
+        )
+        assert proven["severity"] == "HIGH"
+        assert proven["confidence"] == "MEDIUM"
+
+    def test_proven_jwt_in_a_django_view_binds_no_urlconf_route(self) -> None:
+        # A route declared in the urlconf would make the urlconf the
+        # finding's file in its fingerprint, re-filing it on proof.
+        f = self._proven(
+            {
+                "app/urls.py": "from django.urls import path\n"
+                "from app import views\n"
+                'urlpatterns = [path("me/", views.current_user)]\n',
+                "app/views.py": "import jwt\n"
+                "def current_user(request):\n"
+                '    token = request.headers.get("Authorization", "")\n'
+                '    return jwt.decode(token, options={"verify_signature": False})\n',
+            },
+            _JWT_WEAK,
+        )
+        assert "route" not in f, f
+        assert f["endpoint"] == "app/views.py:4"
+        assert {link["file"] for link in f["taint_chain"]} == {"app/views.py"}
+
+    def test_proven_jwt_in_a_flask_route_binds_its_route(self) -> None:
+        # A decorator route is declared in the handler's own file: binding it
+        # leaves the finding's file as it was.
+        f = self._proven(
+            "import jwt\n"
+            "from flask import Flask, request\n"
+            "app = Flask(__name__)\n"
+            '@app.route("/me")\n'
+            "def current_user():\n"
+            '    token = request.headers["Authorization"]\n'
+            '    return jwt.decode(token, options={"verify_signature": False})\n',
+            _JWT_WEAK,
+        )
+        assert f["route"]["file"] == "mod.py", f
+
+    # -- route parameters, helpers and caller-side sanitisers ------------------
+
+    def test_md5_of_fastapi_form_parameter_is_reachable(self) -> None:
+        f = self._proven(
+            "import hashlib\n"
+            "from typing import Annotated\n"
+            "from fastapi import APIRouter, Form\n"
+            "router = APIRouter()\n"
+            '@router.post("/register")\n'
+            "def register(password: Annotated[str, Form()]):\n"
+            "    return hashlib.md5(password.encode()).hexdigest()\n",
+            _WEAK_HASH,
+        )
+        assert f["taint_chain"][0] == _link(6, "password")
+
+    def test_jwt_decode_of_fastapi_header_parameter_is_reachable(self) -> None:
+        f = self._proven(
+            "import jwt\n"
+            "from typing import Annotated\n"
+            "from fastapi import APIRouter, Header\n"
+            "router = APIRouter()\n"
+            '@router.get("/me")\n'
+            'def current_user(authorization: Annotated[str, Header()] = ""):\n'
+            '    token = authorization.removeprefix("Bearer ")\n'
+            '    return jwt.decode(token, options={"verify_signature": False})\n',
+            _JWT_WEAK,
+        )
+        assert f["taint_chain"][0] == _link(6, "authorization")
+
+    _HASH_HELPER = (
+        "import hashlib\n"
+        "from flask import request\n"
+        'ALLOWED = {"a", "b"}\n'
+        "def _hash_password(password):\n"
+        "    return hashlib.md5(password.encode()).hexdigest()\n"
+        "def register():\n"
+        '    pw = request.form["password"]\n'
+    )
+
+    def test_md5_of_request_value_through_a_same_file_helper_is_proven(self) -> None:
+        f = self._proven(self._HASH_HELPER + "    return _hash_password(pw)\n", _WEAK_HASH)
+        assert f["line"] == "mod.py:5"
+        assert f["taint_chain"][0] == _link(7, "request.form['password']")
+        assert f["taint_chain"][-1] == _link(5, "hashlib.md5(password.encode())")
+
+    def test_md5_through_a_helper_behind_a_caller_sanitiser_is_not_proven(self) -> None:
+        f = self._unproven(
+            self._HASH_HELPER
+            + "    if pw not in ALLOWED:\n"
+            + '        return "no", 400\n'
+            + "    return _hash_password(pw)\n",
+            _WEAK_HASH,
+        )
+        assert f["line"] == "mod.py:5"
+
+    def test_md5_through_a_keyword_only_helper_parameter_is_proven(self) -> None:
+        f = self._proven(
+            "import hashlib\n"
+            "from flask import request\n"
+            "def _hash_password(*, password):\n"
+            "    return hashlib.md5(password.encode()).hexdigest()\n"
+            "def register():\n"
+            '    return _hash_password(password=request.form["password"])\n',
+            _WEAK_HASH,
+        )
+        assert f["taint_chain"][0] == _link(6, "request.form['password']")
+
+    def test_jwt_decode_through_a_same_file_helper_is_proven(self) -> None:
+        f = self._proven(
+            "import jwt\n"
+            "from flask import request\n"
+            "def _decode_token(token):\n"
+            '    return jwt.decode(token, options={"verify_signature": False})\n'
+            "def current_user():\n"
+            '    token = request.headers.get("Authorization", "")\n'
+            "    return _decode_token(token)\n",
+            _JWT_WEAK,
+        )
+        assert f["line"] == "mod.py:4"
+        assert f["taint_chain"][0] == _link(6, "request.headers.get('Authorization', '')")
+
+    # -- argument positions ---------------------------------------------------
+
+    def test_hashlib_new_traces_its_data_argument(self) -> None:
+        f = self._proven(
+            "import hashlib\n"
+            "from flask import request\n"
+            "def register():\n"
+            '    password = request.form["password"]\n'
+            '    return hashlib.new("sha1", password.encode()).hexdigest()\n',
+            _WEAK_HASH,
+        )
+        assert f["taint_chain"][-1] == _link(5, "hashlib.new('sha1', password.encode())")
+
+    def test_jwt_decode_traces_the_jwt_keyword(self) -> None:
+        f = self._proven(
+            "import jwt\n"
+            "from flask import request\n"
+            "def current_user():\n"
+            '    token = request.headers["Authorization"]\n'
+            '    return jwt.decode(jwt=token, options={"verify_signature": False})\n',
+            _JWT_WEAK,
+        )
+        assert f["taint_chain"][0] == _link(4, "request.headers['Authorization']")
+
+    def test_jwt_decode_does_not_trace_the_key(self) -> None:
+        # A request value used as the key is not the token being trusted.
+        self._unproven(
+            "import jwt\n"
+            "from flask import request\n"
+            'SAMPLE_TOKEN = "header.payload.signature"\n'
+            "def check():\n"
+            '    key = request.args["k"]\n'
+            '    return jwt.decode(SAMPLE_TOKEN, key, options={"verify_signature": False})\n',
+            _JWT_WEAK,
+        )

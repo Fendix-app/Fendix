@@ -727,6 +727,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     They warn, and the safe cases stay clean. The Python frameworks detect
     all 108 vulnerable cases, up from 102. They still block on 72.
 
+- **Python weak password hashing and unverified JWT decoding are now
+  proven when the value comes from the request, and may block.**
+  `python.ast/PY_WEAK_CRYPTO_PASSWORD` reports MD5 or SHA-1 of a
+  password-named value. `python.ast/PY_JWT_WEAK` reports `jwt.decode` with
+  signature verification off. Neither rule tried to prove a flow, so even
+  `hashlib.md5(request.form["password"].encode())` only warned. Both now
+  trace a value back to request input: the hashed data, and the decoded token
+  (the first argument, or `jwt=`).
+  - **Sources and hops.** These are the same as for the other proven Python
+    rules:
+    - a `request.*` read;
+    - a route handler's request-carrying parameter, such as a FastAPI
+      `Form()` or `Header()` parameter;
+    - a same-file helper that the value is passed to, keyword-only
+      parameters included.
+
+    A sanitiser in the caller that the helper hop honours, such as a
+    membership guard, leaves the helper's finding unproven.
+  - **A proven finding.** It is marked reachable and carries a taint chain.
+    A reachable taint path is an independent signal, so the confidence gate
+    lets the finding block at a `--fail-on HIGH` threshold. Neither rule has
+    a proven title or severity, so the title does not change. The severity
+    stays HIGH: the engine raises a reachable finding one level, and MEDIUM
+    confidence caps it at HIGH again.
+  - **An unproven finding** is reported as before and still warns. The
+    Semgrep rules `python-md5-used-for-password`,
+    `python-sha1-used-for-password` and `python-jwt-decode-no-verification`
+    do not change.
+  - **Identity.** Fingerprints do not change, whether a finding is proven or
+    not.
+    - Both rules now give the evidence line as their sink, on both paths.
+      The JSON report's new `sink` field equals the `evidence` field.
+    - `python.ast/PY_JWT_WEAK` is a code finding. Its fingerprint hashes the
+      sink, and hashed the evidence line while the rule named no sink, so
+      the operation it identifies is unchanged.
+    - `python.ast/PY_WEAK_CRYPTO_PASSWORD` is a `secrets` finding, identified
+      by its rule and file alone. A bound route, a sink or a chain never
+      moves it, so it binds a Django route like the other rules do.
+    - A proven `python.ast/PY_JWT_WEAK` finding in a Django view does not
+      bind the urlconf's route. A bound route's file would replace the view's
+      file in the fingerprint. A Flask or FastAPI route is declared in the
+      handler's own file, so it is bound.
+  - **Framework parity.** In Django, Flask and FastAPI, the `direct` and
+    `indirect` weak-password-hash and JWT-no-verify cases now block. They
+    warned before. No safe case is flagged. The Python frameworks block on
+    84 of 108 vulnerable cases, up from 72.
+
 - **A Flask route without authentication now gets one missing-auth finding
   instead of two.** The Semgrep rules `flask-missing-login-required` and
   `flask-route-no-auth-decorator` both reported every unprotected Flask route.

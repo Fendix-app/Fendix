@@ -80,6 +80,11 @@ Each cell shows `detected/vulnerable`, then the number that block (`b`), then `+
 
 The four new classes only `WARN`, with one exception: Flask's `render_template_string` template injection blocks once. Across all frameworks, 22 of their 72 vulnerable cases are detected.
 
+- Closed after v3.6.3 for Python weak password hashing and JWT decoding. `python.ast/PY_WEAK_CRYPTO_PASSWORD` and `python.ast/PY_JWT_WEAK` now carry a taint chain when request input reaches the hashed value or the decoded token, and a proven finding may block.
+  - The Django, Flask and FastAPI `direct` and `indirect` cases of both classes block. No safe case is flagged.
+  - The Python frameworks block on 84 of 108 vulnerable cases, up from 72. The weak-random-token cases, also detected after v3.6.3, still warn.
+  - See `CHANGELOG.md`, `[Unreleased]`.
+
 ## Harder variants
 
 Recall and blocking rate by variant, per language family:

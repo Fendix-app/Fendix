@@ -51,11 +51,11 @@
     },
     "django-jwt_no_verify-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-jwt_no_verify-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-jwt_no_verify-safe": {
       "outcome": "TN",
@@ -179,11 +179,11 @@
     },
     "django-weak_password_hash-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-weak_password_hash-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "django-weak_password_hash-safe": {
       "outcome": "TN",
@@ -515,11 +515,11 @@
     },
     "fastapi-jwt_no_verify-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-jwt_no_verify-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-jwt_no_verify-safe": {
       "outcome": "TN",
@@ -643,11 +643,11 @@
     },
     "fastapi-weak_password_hash-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-weak_password_hash-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "fastapi-weak_password_hash-safe": {
       "outcome": "TN",
@@ -747,11 +747,11 @@
     },
     "flask-jwt_no_verify-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-jwt_no_verify-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-jwt_no_verify-safe": {
       "outcome": "TN",
@@ -875,11 +875,11 @@
     },
     "flask-weak_password_hash-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-weak_password_hash-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "flask-weak_password_hash-safe": {
       "outcome": "TN",
