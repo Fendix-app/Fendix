@@ -1054,7 +1054,7 @@ func TestBundledRuleSpecsComeFromThePack(t *testing.T) {
 // 4.4 (java) and 4.5 (go) each add a language only after its pack meets the
 // precision gate recorded in ADR-011, and update this test in the same change.
 func TestReachabilityLanguagesAreTheClearedOnes(t *testing.T) {
-	want := map[string]bool{"javascript": true, "typescript": true, "java": true}
+	want := map[string]bool{"javascript": true, "typescript": true, "java": true, "go": true}
 	if !reflect.DeepEqual(ReachabilityLanguages, want) {
 		t.Errorf("ReachabilityLanguages = %v, want %v; a language is enabled only with ADR-011's evidence",
 			ReachabilityLanguages, want)

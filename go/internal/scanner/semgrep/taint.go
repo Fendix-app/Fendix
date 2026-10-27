@@ -32,12 +32,17 @@ import (
 //
 // Java met it with Task 4.4's packs (java-injection, java-web, java-crypto):
 // precision 35/37 = 0.946 on the Spring corpus, with no new finding on
-// spring-petclinic, the clean noise target. Every other language's Semgrep
-// findings are models.TierSemgrepShim findings.
+// spring-petclinic, the clean noise target.
+//
+// Go (net/http and Gin, rules/go-*.yaml) met it: corpus v2 precision
+// 72/(72+4) = 0.947, and no new finding on the clean noise target
+// golang-gin-realworld. Every other language's Semgrep findings are
+// models.TierSemgrepShim findings.
 var ReachabilityLanguages = map[string]bool{
 	"javascript": true,
 	"typescript": true,
 	"java":       true,
+	"go":         true,
 }
 
 // A rule asks for its matches to count as reachability with this metadata.

@@ -232,6 +232,7 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
 |---|---|---|---|
 | `javascript`, `typescript` | Task 4.3 (`javascript-injection`, `javascript-web`, `javascript-crypto`) | 96 / (96 + 3) = 0.970 over the 174 Express, NestJS and Next.js cases. The 3 FPs are the `sqli-safe_lookalike` cases the Python engine's `SEC-JS_SQL_TEMPLATE` already flagged; the pack's own findings are 84 TP and no FP. | No new finding on `node-express-realworld` (2.4 kLOC). Of the pack's 19 matches on `juice-shop` and `nodegoat`, 17 are true positives. |
 | `java` | Task 4.4 (Spring packs `java-injection`, `java-web`, `java-crypto`) | 35 / (35 + 2) = 0.946 on the Spring corpus; both false positives are textscan's | no new finding on `spring-petclinic` |
+| `go` | Task 4.5 (Go packs `go-injection`, `go-web`, `go-crypto`) | 72 / (72 + 4) = 0.947 on the net/http and Gin cases; the four false positives are textscan's | no new finding on `golang-gin-realworld` |
 
 `javascript` and `typescript` are enabled together: every rule of the
 JavaScript and TypeScript pack declares both, and a rule counts only when all

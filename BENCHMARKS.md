@@ -260,7 +260,7 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 | Language | How | Tier |
 |---|---|---|
 | Python | taint engine (source→sink, sanitizer-aware; within a function, plus one call into a helper in the same file or another module) | proven taint |
-| Go (net/http, Gin) | Semgrep taint rules (request source to sink within a function, plus one call into a function of the same file), shape rules for exported helpers, regex SAST (line-local) and dep-CVE; the taint findings warn until Go clears its precision gate | taint (Semgrep) / regex / SCA |
+| Go (net/http, Gin) | Semgrep taint rules (request source to sink within a function, plus one call into a function of the same file), shape rules for exported helpers, regex SAST (line-local) and dep-CVE; a proven taint finding may block | proven taint (Semgrep) / regex / SCA |
 | JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function, proven and able to block) and shape rules for a helper's parameter (warn only) | regex / semgrep taint |
 | Java (Spring) | Semgrep taint rules from Spring MVC and servlet request input to SQL, command, template, XSS, SSRF, path and redirect sinks, within a method plus one call into a method of the same class; weak password hashing, unverified JWT claims and weak random tokens; shape rules for a sink in another class | Semgrep taint |
 | **Java (v0.27–v0.28)** | **regex SAST (line-local): command injection, SQLi-by-concat, weak crypto, insecure deserialization, XXE, insecure cookie, weak randomness, LDAP injection, SSRF** | **regex** |

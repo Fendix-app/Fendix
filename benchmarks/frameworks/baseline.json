@@ -931,7 +931,7 @@
     },
     "gin-cmdi-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-cmdi-cross_file": {
       "outcome": "TP",
@@ -939,11 +939,11 @@
     },
     "gin-cmdi-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-cmdi-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-cmdi-safe": {
       "outcome": "TN",
@@ -979,11 +979,11 @@
     },
     "gin-jwt_no_verify-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-jwt_no_verify-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-jwt_no_verify-safe": {
       "outcome": "TN",
@@ -995,7 +995,7 @@
     },
     "gin-open_redirect-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-open_redirect-cross_file": {
       "outcome": "TP",
@@ -1003,11 +1003,11 @@
     },
     "gin-open_redirect-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-open_redirect-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-open_redirect-safe": {
       "outcome": "TN",
@@ -1019,7 +1019,7 @@
     },
     "gin-path_traversal-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-path_traversal-cross_file": {
       "outcome": "TP",
@@ -1027,11 +1027,11 @@
     },
     "gin-path_traversal-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-path_traversal-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-path_traversal-safe": {
       "outcome": "TN",
@@ -1043,7 +1043,7 @@
     },
     "gin-sqli-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-sqli-cross_file": {
       "outcome": "TP",
@@ -1051,11 +1051,11 @@
     },
     "gin-sqli-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-sqli-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-sqli-safe": {
       "outcome": "TN",
@@ -1067,7 +1067,7 @@
     },
     "gin-ssrf-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-ssrf-cross_file": {
       "outcome": "TP",
@@ -1075,11 +1075,11 @@
     },
     "gin-ssrf-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-ssrf-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-ssrf-safe": {
       "outcome": "TN",
@@ -1091,11 +1091,11 @@
     },
     "gin-ssti-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-ssti-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-ssti-safe": {
       "outcome": "TN",
@@ -1107,11 +1107,11 @@
     },
     "gin-weak_password_hash-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-weak_password_hash-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-weak_password_hash-safe": {
       "outcome": "TN",
@@ -1139,7 +1139,7 @@
     },
     "gin-xss-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-xss-cross_file": {
       "outcome": "TP",
@@ -1147,11 +1147,11 @@
     },
     "gin-xss-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-xss-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "gin-xss-safe": {
       "outcome": "TN",
@@ -1395,7 +1395,7 @@
     },
     "nethttp-cmdi-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-cmdi-cross_file": {
       "outcome": "TP",
@@ -1403,11 +1403,11 @@
     },
     "nethttp-cmdi-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-cmdi-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-cmdi-safe": {
       "outcome": "TN",
@@ -1443,11 +1443,11 @@
     },
     "nethttp-jwt_no_verify-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-jwt_no_verify-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-jwt_no_verify-safe": {
       "outcome": "TN",
@@ -1459,7 +1459,7 @@
     },
     "nethttp-open_redirect-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-open_redirect-cross_file": {
       "outcome": "TP",
@@ -1467,11 +1467,11 @@
     },
     "nethttp-open_redirect-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-open_redirect-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-open_redirect-safe": {
       "outcome": "TN",
@@ -1483,7 +1483,7 @@
     },
     "nethttp-path_traversal-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-path_traversal-cross_file": {
       "outcome": "TP",
@@ -1491,11 +1491,11 @@
     },
     "nethttp-path_traversal-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-path_traversal-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-path_traversal-safe": {
       "outcome": "TN",
@@ -1507,7 +1507,7 @@
     },
     "nethttp-sqli-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-sqli-cross_file": {
       "outcome": "TP",
@@ -1515,11 +1515,11 @@
     },
     "nethttp-sqli-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-sqli-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-sqli-safe": {
       "outcome": "TN",
@@ -1531,7 +1531,7 @@
     },
     "nethttp-ssrf-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-ssrf-cross_file": {
       "outcome": "TP",
@@ -1539,11 +1539,11 @@
     },
     "nethttp-ssrf-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-ssrf-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-ssrf-safe": {
       "outcome": "TN",
@@ -1555,11 +1555,11 @@
     },
     "nethttp-ssti-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-ssti-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-ssti-safe": {
       "outcome": "TN",
@@ -1571,11 +1571,11 @@
     },
     "nethttp-weak_password_hash-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-weak_password_hash-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-weak_password_hash-safe": {
       "outcome": "TN",
@@ -1603,7 +1603,7 @@
     },
     "nethttp-xss-alt_api": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-xss-cross_file": {
       "outcome": "TP",
@@ -1611,11 +1611,11 @@
     },
     "nethttp-xss-direct": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-xss-indirect": {
       "outcome": "TP",
-      "blocks": false
+      "blocks": true
     },
     "nethttp-xss-safe": {
       "outcome": "TN",

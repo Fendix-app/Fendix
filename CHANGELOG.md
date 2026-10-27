@@ -1135,8 +1135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   injection, command injection, template injection, XSS, SSRF, path
   traversal, open redirect, weak password hashing and JWTs decoded with
   `ParseUnverified`, and a pattern rule, `go-weak-random-token`, for tokens
-  drawn from `math/rand`. The findings warn: Go is not yet enabled in
-  `semgrep.ReachabilityLanguages`.
+  drawn from `math/rand`. A taint rule's match may block once Go is enabled
+  in `semgrep.ReachabilityLanguages` (see Changed); the other rules warn.
   - **Sources.** net/http's query, form and path values, request headers,
     cookies and body (decoded JSON included), gorilla/mux and chi path
     variables, and Gin's request accessors and bind targets.
@@ -1185,6 +1185,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     finding.
   - The taint findings keep their identity: enabling the gate does not move a
     fingerprint.
+
+- **Proven Go flows may now block.** Go is enabled in
+  `semgrep.ReachabilityLanguages`, so a match of a Go taint rule
+  (`go-<class>-taint`) is a reachable `semgrep_taint` finding: escalated one
+  level, and blocking at or above `--fail-on`. The pack met ADR-011's gate:
+  precision 72/(72+4) = 0.947 on the framework-parity development set (the
+  four false positives are textscan's), and no new finding on the clean noise
+  target `golang-gin-realworld`. Shape rules (`go-<class>-sink`) and
+  `go-weak-random-token` still warn.
+  - **Parity.** net/http and Gin block recall rises from 11% to 78% each
+    (28 of 36): the secrets cases as before, and every direct, `alt_api`
+    and same-file helper case of the nine taint classes. The other
+    `cross_file` cases and the two math/rand token cases warn. No safe case
+    blocks.
+  - **Two analyzers on one line.** Where textscan's `GO_SQL_INJECTION` or
+    `GO_EXEC_COMMAND_INJECTION` reports the same line, the proven Semgrep
+    finding, escalated before the collapse, is the one kept.
 
 - **`python-random-for-token-generation` reports more token generators.**
   - **More calls.** `random.choices`, `random.randrange` and
