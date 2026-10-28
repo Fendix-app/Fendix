@@ -8,10 +8,8 @@ The recommended GitHub integration is the Fendix Action
 ([Fendix Security Scan on GitHub Marketplace](https://github.com/marketplace/actions/fendix-security-scan)),
 pinned to the full commit of the v3.7.0 release,
 `Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0`, with
-`version: v3.7.0`. `@v1` still resolves to the v3.6.2 Action code until it is
-moved, so it does not have v3.7.0's fail-closed required analyzers; a workflow
-that stays on `@v1` until then should set `version: v3.6.5`, the newest release
-tested with it. See
+`version: v3.7.0`. `@v1` resolves to that commit since 2026-10-27 and moves
+with later compatible releases; with it, set `version: v3.7.0` as well. See
 [INTEGRATION_GUIDE §3.1](INTEGRATION_GUIDE.md#31-recommended--the-composite-github-action).
 Never reference `@main`.
 
