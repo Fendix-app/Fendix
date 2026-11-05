@@ -2026,6 +2026,77 @@ class TestJavaScriptHeuristic:
         findings = _collect(str(FIXTURES_DIR))
         assert "SEC-JS_SQL_TEMPLATE" in _ids(findings)
 
+    @staticmethod
+    def _sql_template_ids(source: str, name: str = "app.ts") -> set[str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, name).write_text(source)
+            return _ids(_collect(tmpdir))
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "const r = await sql`SELECT * FROM u WHERE id = ${id}`;",
+            "const r = await prisma.$queryRaw`SELECT * FROM u WHERE id = ${id}`;",
+            "const r = await Prisma.sql`SELECT * FROM u WHERE id = ${id}`;",
+            "const r = db.sql`UPDATE u SET n = ${n} WHERE id = ${id}`;",
+            "const r = await tx.$executeRaw`DELETE FROM u WHERE id = ${id}`;",
+        ],
+        ids=["postgres-js", "prisma-queryRaw", "Prisma.sql", "member-tag", "executeRaw"],
+    )
+    def test_tagged_template_sql_is_parameterized_not_flagged(self, line: str) -> None:
+        """A tagged template hands the pieces and values to the tag, which
+        binds them as parameters (postgres.js, slonik, Prisma)."""
+        assert "SEC-JS_SQL_TEMPLATE" not in self._sql_template_ids(line + "\n")
+
+    def test_template_over_a_module_constant_not_flagged(self) -> None:
+        src = (
+            "const DEFAULT_ROLE = 'member';\n"
+            "async function f(pool) {\n"
+            "  return pool.query(`SELECT id FROM users WHERE role = '${DEFAULT_ROLE}'`);\n"
+            "}\n"
+        )
+        assert "SEC-JS_SQL_TEMPLATE" not in self._sql_template_ids(src)
+
+    def test_template_over_an_exported_typed_constant_not_flagged(self) -> None:
+        src = (
+            'export const TABLE: string = "users";\n'
+            "const q = pool.query(`SELECT id FROM ${TABLE} WHERE active = true`);\n"
+        )
+        assert "SEC-JS_SQL_TEMPLATE" not in self._sql_template_ids(src)
+
+    def test_template_over_a_variable_still_flagged(self) -> None:
+        src = "const r = await pool.query(`SELECT * FROM u WHERE n = '${name}'`);\n"
+        assert "SEC-JS_SQL_TEMPLATE" in self._sql_template_ids(src)
+
+    def test_template_mixing_a_constant_and_a_variable_still_flagged(self) -> None:
+        src = (
+            "const ROLE = 'member';\n"
+            "const r = pool.query(`SELECT * FROM u WHERE role = '${ROLE}' AND n = '${name}'`);\n"
+        )
+        assert "SEC-JS_SQL_TEMPLATE" in self._sql_template_ids(src)
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            "let ROLE = 'member';",
+            "var ROLE = 'member';",
+            "  const ROLE = 'member';",  # inside a function: not a module-level constant
+            "const ROLE = req.query.role;",
+        ],
+        ids=["let", "var", "indented", "not-a-literal"],
+    )
+    def test_only_a_module_level_const_string_counts_as_constant(self, decl: str) -> None:
+        src = decl + "\nconst r = pool.query(`SELECT * FROM u WHERE role = '${ROLE}'`);\n"
+        assert "SEC-JS_SQL_TEMPLATE" in self._sql_template_ids(src)
+
+    def test_untagged_template_after_a_call_still_flagged(self) -> None:
+        for line in (
+            "return `SELECT * FROM u WHERE id = ${id}`;",
+            "const q = `DELETE FROM u WHERE id = ${id}`;",
+            "db.query(`INSERT INTO u VALUES (${a})`);",
+        ):
+            assert "SEC-JS_SQL_TEMPLATE" in self._sql_template_ids(line + "\n"), line
+
     def test_safe_textcontent_not_flagged(self) -> None:
         """textContent assignment should not trigger innerHTML finding."""
         with tempfile.TemporaryDirectory() as tmpdir:

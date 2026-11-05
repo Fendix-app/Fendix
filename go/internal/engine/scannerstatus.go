@@ -181,6 +181,27 @@ func classifyErr(err error) reporters.ScannerReason {
 // are kept, as a partial dependency lookup keeps its own.
 func recordSemgrepRun(status *scannerStatusList, findings *[]evidence.Evidence, run semgrep.Run) {
 	*findings = append(*findings, run.Findings...)
+	// A rule Semgrep could not load means the pack did not run in full: the
+	// run is failed, so a broken pack is neither read as a clean scan nor
+	// allowed to stand in for the checks that cover for Semgrep (see
+	// dropFallbackJSPatterns). Semgrep exits non-zero with a parseable
+	// document in that case, and ScanRun accepts it.
+	if len(run.RuleErrors) > 0 {
+		noun := "rule errors"
+		if len(run.RuleErrors) == 1 {
+			noun = "rule error"
+		}
+		parts := make([]string, 0, len(run.RuleErrors))
+		for _, e := range run.RuleErrors {
+			parts = append(parts, e.Type+": "+e.Message)
+		}
+		detail := fmt.Sprintf("%d %s, rules not loaded: %s", len(parts), noun, strings.Join(parts, "; "))
+		if len(run.Timeouts) > 0 {
+			detail += fmt.Sprintf("; %d rule timeout(s) as well", len(run.Timeouts))
+		}
+		status.failDetail(AnalyzerSemgrep, reporters.ReasonExecutionError, detail)
+		return
+	}
 	if len(run.Timeouts) == 0 {
 		status.ok(AnalyzerSemgrep)
 		return
@@ -310,4 +331,49 @@ func codeScannerLabels(status scannerStatusList) []string {
 		out = append(out, "deps")
 	}
 	return out
+}
+
+// jsFallbackPrefix starts the rule ids of the Python engine's JavaScript
+// pattern checks (SEC-JS_EVAL, SEC-JS_INNER_HTML, SEC-JS_DOCUMENT_WRITE,
+// SEC-JS_SQL_TEMPLATE).
+const jsFallbackPrefix = "SEC-JS_"
+
+// semgrepRunSucceeded reports whether the run-level semgrep entry is ok. There
+// is one status for the whole Semgrep run and none per pack; the JavaScript
+// pack is always part of it.
+func (l scannerStatusList) semgrepRunSucceeded() bool {
+	for _, s := range l {
+		if s.Name == AnalyzerSemgrep {
+			return s.State == reporters.ScannerOK
+		}
+	}
+	return false
+}
+
+// dropFallbackJSPatterns removes the Python engine's JavaScript pattern
+// findings (rule ids SEC-JS_*) when the Semgrep run succeeded. They are the
+// fallback for a scan with no Semgrep (--fast, or no binary), where nothing
+// else reads JavaScript beyond textscan; once Semgrep's JavaScript pack has run
+// they only repeat it, less precisely (D4). A Semgrep run that is skipped or
+// failed, including one that could not load a rule, keeps them.
+//
+// evid is the Python engine's output only. A Semgrep finding's ID also starts
+// with SEC-JS_ (js-cmdi-taint reports as SEC-JS_CMDI_TAINT), but its RuleID is
+// the bundled rule's own, and Semgrep findings are never passed here.
+func dropFallbackJSPatterns(evid []evidence.Evidence, status scannerStatusList) []evidence.Evidence {
+	if !status.semgrepRunSucceeded() {
+		return evid
+	}
+	kept := evid[:0:0]
+	for _, e := range evid {
+		id := e.RuleID
+		if id == "" {
+			id = e.ID
+		}
+		if strings.HasPrefix(id, jsFallbackPrefix) {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept
 }

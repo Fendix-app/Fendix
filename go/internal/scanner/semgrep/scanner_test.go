@@ -1166,3 +1166,53 @@ func TestScanRunKeepsResultsBesideMalformedErrors(t *testing.T) {
 		}
 	}
 }
+
+// A rule Semgrep cannot load is not a finding-free run. Semgrep prints the
+// error in `errors`, exits 7 and reports no result at all (checked with
+// 1.141.0: `--config rules/` over a directory holding one rule with no
+// pattern aborts the whole run), and ScanRun accepts any parseable document.
+// Without RuleErrors a broken pack looked like a clean scan.
+func TestParseRunSurfacesRuleErrors(t *testing.T) {
+	doc := `{"results": [], "errors": [
+	  {"code": 4, "level": "error", "type": "InvalidRuleSchemaError",
+	   "long_msg": "Expected one of ` + "`pattern`" + ` to be present.", "short_msg": "Invalid rule schema"},
+	  {"code": 7, "level": "error", "type": "SemgrepError", "message": "invalid configuration file found (1 configs were invalid)"},
+	  {"type": ["PatternParseError", ["javascript"]], "rule_id": "r", "path": "a.js"},
+	  {"type": "Timeout", "rule_id": "a", "path": "x.py"},
+	  {"type": "Syntax error", "path": "y.py"},
+	  {"type": ["PartialParsing", [{"path": "z.py"}]], "path": "z.py"},
+	  {"type": "SemgrepError", "message": "some other failure"},
+	  {"type": "InvalidRuleSchemaError", "short_msg": 7}
+	]}`
+	run := parseRun([]byte(doc), "/code")
+	var got []string
+	for _, e := range run.RuleErrors {
+		got = append(got, e.Type)
+	}
+	want := []string{"InvalidRuleSchemaError", "SemgrepError", "PatternParseError", "InvalidRuleSchemaError"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rule error types = %v; want %v (a Timeout, a file parse error and an unrelated SemgrepError are not rule errors)", got, want)
+	}
+	if !strings.Contains(run.RuleErrors[0].Message, "Invalid rule schema") {
+		t.Errorf("message = %q; want it to carry the short message", run.RuleErrors[0].Message)
+	}
+	if !strings.Contains(run.RuleErrors[1].Message, "invalid configuration file") {
+		t.Errorf("message = %q; want it to carry the message", run.RuleErrors[1].Message)
+	}
+	if len(run.Timeouts) != 1 {
+		t.Errorf("timeouts = %+v; want the one Timeout still counted", run.Timeouts)
+	}
+}
+
+func TestScanRunReturnsRuleErrorsFromAnAbortedRun(t *testing.T) {
+	root := t.TempDir()
+	doc := `{"results": [], "errors": [{"code": 7, "level": "error", "type": "SemgrepError", "message": "invalid configuration file found (1 configs were invalid)"}]}`
+	installFakeSemgrep(t, doc, "", 7)
+	run, err := ScanRun(context.Background(), root, nil)
+	if err != nil {
+		t.Fatalf("ScanRun: %v", err)
+	}
+	if len(run.RuleErrors) != 1 {
+		t.Errorf("rule errors = %+v; want the one SemgrepError", run.RuleErrors)
+	}
+}

@@ -158,9 +158,24 @@ type RuleTimeout struct {
 	Path   string // relative to the scan root, forward slashes
 }
 
+// RuleError is one error Semgrep reported about the rules themselves: a rule
+// it could not load (invalid schema, a pattern that does not parse, an unknown
+// language, a configuration file it rejected). A run with one did not run the
+// whole pack, however clean its results look.
+type RuleError struct {
+	Type    string // Semgrep's error type, for example InvalidRuleSchemaError
+	Message string
+}
+
 // Run is what one semgrep run produced.
 type Run struct {
 	Findings []evidence.Evidence
+	// RuleErrors lists the rules Semgrep could not load. ScanRun returns no
+	// error for them: Semgrep exits non-zero (7) with a parseable document
+	// and, for a rule it rejects, no result at all, and ScanRun accepts any
+	// parseable document. The orchestrator records such a run failed, so a
+	// broken pack is never mistaken for a pack that found nothing.
+	RuleErrors []RuleError
 	// Timeouts lists the rules Semgrep stopped on a file. ScanRun returns
 	// no error for them, since Findings holds everything else the run
 	// found; the orchestrator records such a run failed with reason
@@ -373,23 +388,81 @@ type semgrepOutput struct {
 //
 // and still exits 0. Type is kept raw: other error types are ATD variants,
 // encoded as an array whose first element is the tag.
+//
+// The message fields are kept raw as well, so a message of an unexpected type
+// costs the message and never the entry (a Timeout is still counted).
 type semgrepError struct {
-	Type   json.RawMessage `json:"type"`
-	RuleID string          `json:"rule_id"`
-	Path   string          `json:"path"`
+	Type     json.RawMessage `json:"type"`
+	RuleID   string          `json:"rule_id"`
+	Path     string          `json:"path"`
+	Message  json.RawMessage `json:"message"`
+	ShortMsg json.RawMessage `json:"short_msg"`
+	LongMsg  json.RawMessage `json:"long_msg"`
+}
+
+// ruleErrorTypes are the error types that say Semgrep could not load a rule.
+// The others in `errors` are about a scanned file (ParseError, LexicalError,
+// PartialParsing, "Syntax error") or about a run limit (Timeout, OutOfMemory)
+// and do not mean the pack did not run.
+var ruleErrorTypes = map[string]bool{
+	"InvalidRuleSchemaError": true,
+	"RuleParseError":         true,
+	"PatternParseError":      true,
+	"UnknownLanguageError":   true,
+	"InvalidYaml":            true,
+	"IncompatibleRule":       true,
+}
+
+// typeTag is the error's type: a plain string, or the first element of an ATD
+// variant array. "" when it is neither.
+func (e semgrepError) typeTag() string {
+	var tag string
+	if json.Unmarshal(e.Type, &tag) == nil {
+		return tag
+	}
+	var variant []json.RawMessage
+	if json.Unmarshal(e.Type, &variant) == nil && len(variant) > 0 && json.Unmarshal(variant[0], &tag) == nil {
+		return tag
+	}
+	return ""
+}
+
+func rawString(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+// ruleError reports whether the error says a rule could not be loaded, with
+// the message to show for it. Semgrep reports a configuration file it rejected
+// as a SemgrepError "invalid configuration file found", after the specific
+// InvalidRuleSchemaError.
+func (e semgrepError) ruleError() (RuleError, bool) {
+	tag := e.typeTag()
+	message := rawString(e.Message)
+	switch {
+	case ruleErrorTypes[tag]:
+	case tag == "SemgrepError" && strings.Contains(strings.ToLower(message), "invalid configuration"):
+	default:
+		return RuleError{}, false
+	}
+	for _, m := range []string{rawString(e.ShortMsg), message, rawString(e.LongMsg)} {
+		if m != "" {
+			message = m
+			break
+		}
+	}
+	if len(message) > evidenceMaxLen {
+		message = message[:evidenceMaxLen] + "..."
+	}
+	return RuleError{Type: tag, Message: message}, true
 }
 
 // isTimeout reports whether the error is a rule timing out on a file.
 func (e semgrepError) isTimeout() bool {
-	var tag string
-	if json.Unmarshal(e.Type, &tag) == nil {
-		return tag == "Timeout"
-	}
-	var variant []json.RawMessage
-	if json.Unmarshal(e.Type, &variant) == nil && len(variant) > 0 && json.Unmarshal(variant[0], &tag) == nil {
-		return tag == "Timeout"
-	}
-	return false
+	return e.typeTag() == "Timeout"
 }
 
 // parseAndMap decodes Semgrep's stdout JSON and converts each result
@@ -426,7 +499,32 @@ func parseRun(stdout []byte, codeRoot string) Run {
 		run.Findings = append(run.Findings, f)
 	}
 	run.Timeouts = ruleTimeouts(out.Errors, absRoot)
+	run.RuleErrors = ruleErrors(out.Errors)
 	return run
+}
+
+// ruleErrors decodes the entries of a document's `errors` that say a rule could
+// not be loaded, and logs each one. An `errors` that is not a list, and an
+// entry that does not decode, are skipped.
+func ruleErrors(raw json.RawMessage) []RuleError {
+	var entries []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	var out []RuleError
+	for _, entry := range entries {
+		var e semgrepError
+		if json.Unmarshal(entry, &e) != nil {
+			continue
+		}
+		re, ok := e.ruleError()
+		if !ok {
+			continue
+		}
+		slog.Warn("semgrep: a rule could not be loaded; its matches are missing", "type", re.Type, "message", re.Message)
+		out = append(out, re)
+	}
+	return out
 }
 
 // ruleTimeouts decodes the Timeout entries of a document's `errors`, and

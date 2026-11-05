@@ -1387,6 +1387,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Python engine's JavaScript SQL check no longer fires on tagged
+  templates or constant-only templates, and steps aside when Semgrep ran.**
+  `SEC-JS_SQL_TEMPLATE` flagged every template literal with a SQL keyword and
+  a `${...}`, including `sql`...${id}``, `prisma.$queryRaw`...${id}`` and
+  `Prisma.sql`...``, which bind the values as parameters, and a template that
+  interpolates only a module-level `const ROLE = 'member'`. Neither is
+  reported now; `pool.query(`... '${name}'`)` still is.
+  - **The engine's `SEC-JS_*` pattern checks (`SEC-JS_EVAL`,
+    `SEC-JS_INNER_HTML`, `SEC-JS_DOCUMENT_WRITE`, `SEC-JS_SQL_TEMPLATE`) are
+    now the fallback for a scan without Semgrep** (`--fast`, or no binary).
+    When the run-level `semgrep` scanner status is `ok`, they are dropped
+    and the Semgrep JavaScript pack answers, so one sink is reported once.
+  - **A Semgrep run that could not load a rule is now recorded `failed`**
+    (reason `execution_error`, detail naming the rule errors). Semgrep exits 7
+    with a parseable document and no results for a rule it rejects, which was
+    read as a clean run. It keeps the fallback checks on, and
+    `--fail-on-scanner-error` sees it.
 - **The regex scanner now detects `child_process` exec in every import form.**
   `JS_CHILD_PROCESS_SHELL` only matched the literal `child_process.exec(`, so
   `const { exec } = require("child_process"); exec(cmd)`,

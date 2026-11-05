@@ -673,6 +673,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			started := time.Now()
 			wbFindings, result := o.runWhiteboxScan(ctx)
 			o.recordAnalyzerTime(AnalyzerPythonEngine, started)
+			// The engine's JavaScript pattern checks only fall back for a scan
+			// that has no Semgrep; a Semgrep run that succeeded already covered
+			// JavaScript (D4).
+			wbFindings = dropFallbackJSPatterns(wbFindings, scanStatus)
 			evid = append(evid, wbFindings...)
 			recordPythonEngine(&scanStatus, result)
 		}

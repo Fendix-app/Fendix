@@ -99,12 +99,61 @@ _JS_PATTERNS: list[tuple[str, str, re.Pattern[str], str, str, str]] = [
     (
         "JS_SQL_TEMPLATE",
         "SQL query built via template literal — injection risk",
-        re.compile(r"`[^`]*(?:SELECT|INSERT|UPDATE|DELETE)[^`]*\$\{"),
+        # The opening backtick must not directly follow an identifier, `.`,
+        # `)` or `]`: `sql`...${id}``, `prisma.$queryRaw`...${id}`` and
+        # `Prisma.sql`...`` are TAGGED templates. The tag receives the strings
+        # and the values apart and binds the values as parameters (postgres.js,
+        # slonik, Prisma), so they are not string-built SQL.
+        re.compile(r"(?<![\w$.)\]])`[^`]*(?:SELECT|INSERT|UPDATE|DELETE)[^`]*\$\{"),
         "HIGH",
         "HIGH",
         "CWE-89",
     ),
 ]
+
+
+# `${expr}` placeholders of one template literal.
+_JS_TEMPLATE_EXPR = re.compile(r"\$\{([^}]*)\}")
+_JS_IDENTIFIER = re.compile(r"[A-Za-z_$][\w$]*\Z")
+
+
+def _js_module_string_constants(source: str) -> set[str]:
+    """Names declared at module level as ``const NAME = '<string literal>'``.
+
+    Only a declaration that starts in column 0 counts (``export`` allowed, a
+    ``: string`` annotation allowed): an indented ``const`` sits inside a
+    function or block and may shadow, and ``let``/``var`` can be reassigned.
+    """
+    return {
+        m.group(1)
+        for m in re.finditer(
+            r"^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::\s*string\s*)?="
+            r"\s*(?:'[^'\\\n]*'|\"[^\"\\\n]*\"|`[^`$\\\n]*`)\s*;?\s*(?://.*)?$",
+            source,
+            re.MULTILINE,
+        )
+    }
+
+
+def _js_template_only_constants(line: str, source: str) -> bool:
+    """True when every ``${...}`` of the SQL template on ``line`` is a bare
+    identifier that ``source`` declares as a module-level constant string.
+
+    Such a template cannot carry user input. A call, a member access, an
+    expression, an undeclared name or a ``let``/``var`` keeps the finding.
+    """
+    consts = _js_module_string_constants(source)
+    checked = False
+    for match in re.finditer(r"(?<![\w$.)\]])`([^`]*)(?:`|$)", line):
+        body = match.group(1)
+        if not re.search(r"SELECT|INSERT|UPDATE|DELETE", body):
+            continue
+        for expr in _JS_TEMPLATE_EXPR.findall(body):
+            name = expr.strip()
+            if not _JS_IDENTIFIER.match(name) or name not in consts:
+                return False
+            checked = True
+    return checked
 
 
 class ASTAnalyzer:
@@ -315,6 +364,10 @@ class ASTAnalyzer:
                 continue
             for pat_id, title, pattern, severity, confidence, cwe in _JS_PATTERNS:
                 if pattern.search(line):
+                    if pat_id == "JS_SQL_TEMPLATE" and _js_template_only_constants(
+                        line, source
+                    ):
+                        continue
                     emit_fn(
                         {
                             "id": f"SEC-{pat_id}",

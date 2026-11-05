@@ -226,3 +226,38 @@ func TestSemgrepRunWithRuleTimeoutsFailsAndKeepsFindings(t *testing.T) {
 		})
 	}
 }
+
+// A Semgrep run that could not load a rule pack is recorded failed (reason
+// execution_error), whatever else the run produced: it did not run the pack, so
+// the checks that stand in for it (D4) must stay on, and --fail-on-scanner-error
+// must see it.
+func TestSemgrepRunWithRuleErrorsFailsAndKeepsFindings(t *testing.T) {
+	found := []evidence.Evidence{{ID: "SEC-PYTHON_EVAL_INJECTION", RuleID: "python-eval-injection"}}
+	var status scannerStatusList
+	var evid []evidence.Evidence
+	recordSemgrepRun(&status, &evid, semgrep.Run{
+		Findings: found,
+		RuleErrors: []semgrep.RuleError{
+			{Type: "InvalidRuleSchemaError", Message: "Invalid rule schema: no pattern"},
+			{Type: "SemgrepError", Message: "invalid configuration file found"},
+		},
+	})
+	if len(status) != 1 {
+		t.Fatalf("entries = %+v; want one", status)
+	}
+	got := status[0]
+	if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonExecutionError {
+		t.Errorf("entry = %+v; want semgrep, failed, execution_error", got)
+	}
+	for _, want := range []string{"2 rule errors", "InvalidRuleSchemaError", "invalid configuration file found"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("detail %q lacks %q", got.Detail, want)
+		}
+	}
+	if !status.hasFailure() {
+		t.Error("a rule error must count as a scanner failure")
+	}
+	if !reflect.DeepEqual(evid, found) {
+		t.Errorf("findings = %+v; want the run's findings kept", evid)
+	}
+}
