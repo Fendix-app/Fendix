@@ -527,6 +527,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # with def/class, collected on first need.
         self._call_targets: dict[ast.Call, tuple[str, ast.Assign]] = {}
         self._defined_names: frozenset[str] | None = None
+        self._autoescape_switched_off: bool | None = None
         # Task 3.1: each def → the parameters that carry request data because
         # it is a route handler bound to this file (`_route_param_sources`),
         # and the module's `_ModuleFacts`, collected once, on first need.
@@ -5165,7 +5166,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if (
             isinstance(func, ast.Attribute)
             and func.attr == "render"
-            and self._is_django_template(func.value)
+            and (
+                self._is_django_template(func.value)
+                or self._is_autoescaping_jinja_template(func.value)
+            )
         ):
             return "safe"
         if isinstance(func, ast.Name):
@@ -5215,6 +5219,138 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 and self._is_django_template(func.value, _depth + 1)
             )
         return False
+
+    def _is_autoescaping_jinja_template(self, expr: ast.AST, _depth: int = 0) -> bool:
+        """True when ``expr`` is, directly or through a binding, a template a
+        Jinja2 environment that autoescapes loaded (``get_template``,
+        ``select_template``, ``get_or_select_template``, ``from_string``), so
+        its ``render`` escapes what it is passed. Honoured:
+
+        - ``Environment(autoescape=True)`` and
+          ``Environment(autoescape=select_autoescape(...))`` (also on a
+          sandboxed or native environment), the setting read off the call that
+          built the environment, directly or through the names it is bound to;
+          ``select_autoescape`` only for a template name its extensions cover
+          (default ``html``, ``htm``, ``xml``; a non-constant name is given the
+          benefit of the doubt, as Flask's ``render_template`` is) and for
+          ``from_string`` unless ``default_for_string=False``;
+        - Flask's own ``<app>.jinja_env`` in a file that imports Flask.
+
+        Not honoured: no ``autoescape`` argument (Jinja2's default is off),
+        ``autoescape=False`` or any value this cannot read, and an
+        environment the file switches off later (``env.autoescape = False``)."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(expr, ast.Name):
+            bound = self._scope_binding(expr.id)
+            return bound is not None and self._is_autoescaping_jinja_template(bound, _depth + 1)
+        if not (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr in _JINJA_TEMPLATE_LOADERS
+        ):
+            return False
+        if self._autoescape_is_switched_off():
+            return False
+        setting = self._environment_autoescape(expr.func.value)
+        if setting is None:
+            return False
+        if isinstance(setting, ast.Constant):
+            return setting.value is True
+        if not isinstance(setting, ast.Call):
+            return False
+        if self._import_origin(setting.func) not in _SELECT_AUTOESCAPE:
+            return False
+        return self._select_autoescape_covers(setting, expr)
+
+    def _environment_autoescape(
+        self, env: ast.AST, _depth: int = 0
+    ) -> ast.AST | None:
+        """The ``autoescape`` setting of the Jinja2 environment ``env`` is,
+        directly or through the names it is bound to: the ``autoescape``
+        keyword of the call that built it (None when it has none), or a
+        ``True`` constant for Flask's ``jinja_env``. None for anything else."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return None
+        if isinstance(env, ast.Name):
+            bound = self._scope_binding(env.id)
+            return None if bound is None else self._environment_autoescape(bound, _depth + 1)
+        if isinstance(env, ast.Attribute) and env.attr == "jinja_env":
+            flask_file = "flask" in self._imported_modules.values() or any(
+                module.split(".")[0] == "flask" for module, _ in self._from_imports.values()
+            )
+            return ast.Constant(value=True) if flask_file else None
+        if isinstance(env, ast.Call) and self._callee_origin(env.func) in _TEMPLATE_ENVIRONMENTS:
+            setting = next((kw.value for kw in env.keywords if kw.arg == "autoescape"), None)
+            if isinstance(setting, ast.Name):
+                setting = self._scope_binding(setting.id)
+            return setting
+        return None
+
+    def _select_autoescape_covers(self, setting: ast.Call, load: ast.Call) -> bool:
+        """True when ``select_autoescape(...)`` (`setting`) autoescapes the
+        template ``load`` (a ``get_template``/``from_string`` call) loads."""
+
+        def keyword(name: str, position: int) -> ast.AST | None:
+            found = next((kw.value for kw in setting.keywords if kw.arg == name), None)
+            if found is None and len(setting.args) > position:
+                found = setting.args[position]
+            return found
+
+        def literal_strings(node: ast.AST | None) -> tuple[str, ...] | None:
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return (node.value,)
+            if isinstance(node, (ast.List, ast.Tuple, ast.Set)) and all(
+                isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts
+            ):
+                return tuple(e.value for e in node.elts)  # type: ignore[attr-defined]
+            return None
+
+        def is_false(node: ast.AST | None) -> bool:
+            return isinstance(node, ast.Constant) and node.value is False
+
+        assert isinstance(load.func, ast.Attribute)
+        if load.func.attr == "from_string":
+            return not is_false(keyword("default_for_string", 2))
+        name = load.args[0] if load.args else next(
+            (kw.value for kw in load.keywords if kw.arg == "name"), None
+        )
+        if not (isinstance(name, ast.Constant) and isinstance(name.value, str)):
+            return True  # which template is not known: the benefit of the doubt
+        given = keyword("enabled_extensions", 0)
+        enabled = _SELECT_AUTOESCAPE_ENABLED if given is None else literal_strings(given)
+        disabled = literal_strings(keyword("disabled_extensions", 1)) or ()
+        if enabled is None:
+            return True  # a computed list of extensions: the benefit of the doubt
+        template = name.value.lower()
+        if any(template.endswith("." + e.lower()) for e in disabled):
+            return False
+        if any(template.endswith("." + e.lower()) for e in enabled):
+            return True
+        default = keyword("default", 3)
+        return isinstance(default, ast.Constant) and default.value is True
+
+    def _autoescape_is_switched_off(self) -> bool:
+        """True when the file assigns ``<anything>.autoescape`` something other
+        than ``True`` (``env.autoescape = False``, ``app.jinja_env.autoescape =
+        flag``). It does not follow which environment, so one such assignment
+        turns the autoescape honouring off for the whole file."""
+        if self._autoescape_switched_off is None:
+            root = self._module_root
+            self._autoescape_switched_off = root is not None and any(
+                isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                and any(
+                    isinstance(t, ast.Attribute) and t.attr == "autoescape"
+                    for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+                )
+                and not (
+                    isinstance(n, (ast.Assign, ast.AnnAssign))
+                    and isinstance(n.value, ast.Constant)
+                    and n.value.value is True
+                )
+                for n in ast.walk(root)
+            )
+        return self._autoescape_switched_off
 
     def _is_non_text_call(self, call: ast.Call) -> bool:
         """True for a call whose result holds no text from its argument: the
@@ -6306,6 +6442,16 @@ _TEMPLATE_ENVIRONMENTS: dict[str, str] = {
     "jinja2.nativetypes.NativeEnvironment": "jinja2.nativetypes.NativeEnvironment",
 }
 _DJANGO_ENGINES = "django.template.engines"
+# What a Jinja2 environment calls to load a template, whose `render` then
+# escapes when the environment autoescapes (`_is_autoescaping_jinja_template`).
+_JINJA_TEMPLATE_LOADERS: frozenset[str] = frozenset(
+    {"get_template", "select_template", "get_or_select_template", "from_string"}
+)
+_SELECT_AUTOESCAPE: frozenset[str] = frozenset(
+    {"jinja2.select_autoescape", "jinja2.utils.select_autoescape"}
+)
+# The extensions `select_autoescape()` enables when it is given none.
+_SELECT_AUTOESCAPE_ENABLED: tuple[str, ...] = ("html", "htm", "xml")
 # What reads a template from the file system: a template loaded from a file is
 # the developer's, like a template loaded by name (`_is_file_read`). The read
 # methods count only on a file-system handle (`_is_file_system_handle`): a

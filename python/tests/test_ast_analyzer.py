@@ -7028,3 +7028,96 @@ class TestPython39Compatibility:
     def test_a_file_is_still_analysed_without_the_match_node_classes(self, no_match_nodes) -> None:
         found = [f for f in _collect_src(self._SRC) if f["id"] == "SEC-PY_XSS_HTML_SINK"]
         assert len(found) == 1, found
+
+
+class TestJinjaAutoescapeEnvironment:
+    """A Jinja2 `Environment` that autoescapes renders request text as inert
+    text, so its `.render(...)` result is not an XSS sink body. One built with
+    no autoescape (the default) or `autoescape=False` still is."""
+
+    _HEAD = (
+        "from flask import Flask, request\n"
+        "from jinja2 import Environment, select_autoescape\n"
+        "app = Flask(__name__)\n"
+    )
+    _VIEW = '@app.route("/")\ndef v():\n    return {ret}\n'
+
+    def _xss(self, env_line: str, ret: str) -> list[dict]:
+        src = self._HEAD + env_line + "\n" + self._VIEW.format(ret=ret)
+        return [f for f in _collect_src(src) if f["id"] == "SEC-PY_XSS_HTML_SINK"]
+
+    _RENDER = 'env.get_template("{name}").render(name=request.args["n"])'
+
+    @pytest.mark.parametrize(
+        "env_line",
+        [
+            'env = Environment(autoescape=select_autoescape(["html"]))',
+            "env = Environment(autoescape=select_autoescape())",
+            "env = Environment(autoescape=True)",
+            "env = jinja2.Environment(autoescape=True)",
+            'env = Environment(autoescape=select_autoescape(enabled_extensions=("html", "xml")))',
+        ],
+        ids=["select-list", "select-default", "true", "module-attr", "select-keyword"],
+    )
+    def test_an_autoescaping_environment_is_not_xss(self, env_line: str) -> None:
+        if "jinja2." in env_line:
+            env_line = "import jinja2\n" + env_line
+        assert self._xss(env_line, self._RENDER.format(name="a.html")) == []
+
+    def test_an_autoescaping_environment_bound_in_the_view_is_not_xss(self) -> None:
+        src = (
+            self._HEAD
+            + '@app.route("/")\n'
+            "def v():\n"
+            "    env = Environment(autoescape=True)\n"
+            "    tpl = env.get_template('a.html')\n"
+            '    return tpl.render(name=request.args["n"])\n'
+        )
+        assert [f for f in _collect_src(src) if f["id"] == "SEC-PY_XSS_HTML_SINK"] == []
+
+    def test_from_string_on_an_autoescaping_environment_is_not_xss(self) -> None:
+        found = self._xss(
+            "env = Environment(autoescape=True)",
+            'env.from_string("<p>{{ name }}</p>").render(name=request.args["n"])',
+        )
+        assert found == []
+
+    def test_flask_jinja_env_is_autoescaping(self) -> None:
+        found = self._xss(
+            "",
+            'app.jinja_env.get_template("a.html").render(name=request.args["n"])',
+        )
+        assert found == []
+
+    def test_current_app_jinja_env_is_autoescaping(self) -> None:
+        src = (
+            "from flask import current_app, request\n"
+            "def v():\n"
+            '    return current_app.jinja_env.get_template("a.html").render(n=request.args["n"])\n'
+        )
+        assert [f for f in _collect_src(src) if f["id"] == "SEC-PY_XSS_HTML_SINK"] == []
+
+    @pytest.mark.parametrize(
+        "env_line, name",
+        [
+            ("env = Environment()", "a.html"),
+            ("env = Environment(autoescape=False)", "a.html"),
+            ("env = Environment(autoescape=select_autoescape(default=False))", "a.txt"),
+            ('env = Environment(autoescape=select_autoescape(["html"]))', "a.txt"),
+            ("env = Environment(autoescape=some_flag)", "a.html"),
+            ("env = Environment(autoescape=True)\nenv.autoescape = False", "a.html"),
+        ],
+        ids=[
+            "default",
+            "false",
+            "select-non-matching-extension",
+            "select-listed-extensions-only",
+            "unknown-flag",
+            "switched-off-later",
+        ],
+    )
+    def test_a_non_autoescaping_environment_is_still_xss(self, env_line: str, name: str) -> None:
+        found = self._xss(env_line, self._RENDER.format(name=name))
+        assert len(found) == 1, found
+        assert found[0].get("reachable") is True
+        assert found[0]["severity"] == "HIGH"

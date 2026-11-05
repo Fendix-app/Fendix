@@ -1400,6 +1400,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Jinja2 template rendered by an autoescaping environment is no longer
+  reported as reflected XSS.** `Environment(autoescape=True)`,
+  `Environment(autoescape=select_autoescape(...))` and Flask's
+  `app.jinja_env` (or `current_app.jinja_env`) escape what `.render(...)` is
+  passed, but `env.get_template("a.html").render(name=request.args["n"])` was
+  still reported `PY_XSS_HTML_SINK` HIGH with a proven path. `select_autoescape`
+  counts for a template whose extension it covers (`html`, `htm`, `xml` unless
+  the call lists others), and for `from_string` unless `default_for_string=False`.
+  `Environment()` with no `autoescape`, `autoescape=False`, an argument the
+  analyzer cannot read, and a file that later sets `<env>.autoescape` to
+  anything but `True` are still reported.
+
 - **The Go taint rules keep their `ok` cases clean on Semgrep 1.182.1, the
   version Fendix ships.** The Go pack was written on Semgrep 1.141.0. Semgrep
   1.182.1 keeps the taint of a variable assigned from a call that an exact
