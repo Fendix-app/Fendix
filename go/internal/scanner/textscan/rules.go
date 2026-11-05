@@ -18,6 +18,15 @@ func AllRules() []Rule {
 	return rules
 }
 
+// callArgs matches the argument text of a call up to the first `)` that is not
+// a nested call's own: any run of non-parenthesis characters and one-level
+// `(...)` groups. `[^)]*` stopped at the first inner `)` (`r.Context()`), and
+// `[^()]*` refused to cross an inner `(` at all; this crosses exactly one
+// level. RE2 matches it in linear time, so a long line of parentheses cannot
+// make a rule backtrack (TestGoRules_NestedPatternStaysLinear). Deeper nesting
+// (`f(g(h(x)))`) is out of reach for a regex and stays a documented FN.
+const callArgs = `(?:[^()]|\([^()]*\))*`
+
 // GoRules — Sprint 04 shipped subset (2 of the brief's 5 rules).
 // XXE and INSECURE_RAND need cross-function AST context to avoid
 // stdlib false positives; carried to Sprint 04.5.
@@ -36,7 +45,7 @@ func GoRules() []Rule {
 			// The "query built one line earlier and passed as a bare
 			// identifier" case is the dominant real-world shape but
 			// needs taint analysis — carried to Sprint 04.5.
-			Pattern: regexp.MustCompile(`(?:db|conn|tx)\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\([^)]*(?:\+|%[sv]|fmt\.Sprintf)`),
+			Pattern: regexp.MustCompile(`(?:db|conn|tx)\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\(` + callArgs + `(?:\+|%[sv]|fmt\.Sprintf)`),
 			Applies: HasGoExtension,
 			Fix:     "Use parameterised queries: db.Query(\"SELECT … WHERE x = ?\", value). Never concatenate or fmt.Sprintf user-controlled values into SQL.",
 		},
@@ -51,7 +60,7 @@ func GoRules() []Rule {
 			//   1. exec.Command("sh","-c", …) / bash / cmd / powershell — shell semantics.
 			//   2. exec.Command(…) with `+` concat anywhere in the argv list.
 			//   3. exec.Command(…) with fmt.Sprintf building an argv element.
-			Pattern: regexp.MustCompile(`exec\.(?:Command|CommandContext)\([^)]*(?:"(?:sh|bash|cmd|powershell)"\s*,\s*"-c"|\+|fmt\.Sprintf)`),
+			Pattern: regexp.MustCompile(`exec\.(?:Command|CommandContext)\(` + callArgs + `(?:"(?:sh|bash|cmd|powershell)"\s*,\s*"-c"|\+|fmt\.Sprintf)`),
 			Applies: HasGoExtension,
 			Fix:     "Pass argv as a list rather than going through `sh -c`. If shell semantics are required, sanitise inputs with shellescape or use os/exec with explicit env+argv.",
 		},
@@ -199,7 +208,7 @@ func JavaRules() []Rule {
 			// argument is built with `+` concat or String.format. FP class:
 			// concat of two constants. FN class: argv built on a prior line
 			// (needs taint, not line-local regex).
-			Pattern: regexp.MustCompile(`(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\([^)]*(?:\+|String\.format)`),
+			Pattern: regexp.MustCompile(`(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\(` + callArgs + `(?:\+|String\.format)`),
 			Applies: HasJavaExtension,
 			Fix:     "Pass the command + args as a String[] / List<String> of literals; never build a shell string from user input. If a shell is unavoidable, validate against an allowlist.",
 		},
@@ -215,11 +224,13 @@ func JavaRules() []Rule {
 			// names, so an Executor's execute(Runnable) cannot collide; bare
 			// `execute` is deliberately NOT matched (it would fire on a non-SQL
 			// Executor.execute(...) whose argument merely contains a SQL-looking
-			// word). `[^()]*` (not `[^)]*`) so the match cannot cross an inner
-			// call's `(` — e.g. ex.execute(makeTask("update " + x)) stays clean.
+			// word). The name alternation is what keeps
+			// ex.execute(makeTask("update " + x)) clean, not the argument
+			// pattern: callArgs crosses one level of inner call (a
+			// `conn.prepareStatement(table("u") + "SELECT ...")` still matches).
 			// FN class: Statement.execute("raw sql" + x) and SQL assembled on a
 			// prior line (needs taint, not line-local regex).
-			Pattern: regexp.MustCompile(`(?:executeQuery|executeUpdate|prepareStatement)\s*\([^()]*"[^"]*(?i:select|insert|update|delete|from|where)[^"]*"\s*\+`),
+			Pattern: regexp.MustCompile(`(?:executeQuery|executeUpdate|prepareStatement)\s*\(` + callArgs + `"[^"]*(?i:select|insert|update|delete|from|where)[^"]*"\s*\+`),
 			Applies: HasJavaExtension,
 			Fix:     "Use a PreparedStatement with bound `?` parameters: conn.prepareStatement(\"… WHERE x = ?\"). Never concatenate user input into SQL.",
 		},
@@ -326,9 +337,9 @@ func JavaRules() []Rule {
 			// An outbound-request sink (new URL / openConnection / HttpClient /
 			// RestTemplate) wrapping a servlet request source ON THE SAME LINE.
 			// The request-source qualifier is required — an unqualified `new URL(`
-			// is far too noisy. `[^()]*` guards inner-call crossing. FN class:
+			// is far too noisy. callArgs crosses one level of inner call. FN class:
 			// the URL built on a prior line (needs the deferred taint engine).
-			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?URL|\.openConnection|HttpRequest\.newBuilder|new\s+(?:[\w.]+\.)?HttpGet|restTemplate\.(?:getForObject|exchange))\s*\([^()]*` + javaReqSource),
+			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?URL|\.openConnection|HttpRequest\.newBuilder|new\s+(?:[\w.]+\.)?HttpGet|restTemplate\.(?:getForObject|exchange))\s*\(` + callArgs + javaReqSource),
 			Applies: HasJavaExtension,
 			Fix:     "Validate the URL against an allowlist of permitted hosts/schemes before the request; never pass a raw request parameter to an HTTP client.",
 		},
@@ -344,11 +355,11 @@ func JavaRules() []Rule {
 			// receiver must contain "resp" (response/resp/httpResponse/
 			// this.response) — without it, any object with a getWriter()
 			// (a log, a report, a Socket) would false-positive (v0.29 review).
-			// The request-source qualifier is also required. `[^()]*` guards
-			// inner-call crossing. FN class: a writer aliased to a non-"resp"
+			// The request-source qualifier is also required. callArgs crosses
+			// one level of inner call. FN class: a writer aliased to a non-"resp"
 			// local (`PrintWriter out = response.getWriter(); out.print(req)`),
 			// or value assembled on a prior line — needs the deferred taint engine.
-			Pattern: regexp.MustCompile(`[\w]*[Rr]esp[\w]*\.(?:getWriter|getOutputStream)\(\)\.(?:print|println|write|append)\s*\([^()]*` + javaReqSource),
+			Pattern: regexp.MustCompile(`[\w]*[Rr]esp[\w]*\.(?:getWriter|getOutputStream)\(\)\.(?:print|println|write|append)\s*\(` + callArgs + javaReqSource),
 			Applies: HasJavaExtension,
 			Fix:     "HTML-encode untrusted output (OWASP Encoder: Encode.forHtml(...)) or use a context-aware templating engine; never write a raw request parameter to the response.",
 		},
@@ -361,9 +372,9 @@ func JavaRules() []Rule {
 			CWE:        "CWE-22",
 			// A file-API sink (new File / Paths.get / FileInputStream / etc.)
 			// taking a request source ON THE SAME LINE. Request-source qualifier
-			// required (a constant path is fine). `[^()]*` guards inner-call
-			// crossing. FN class: path assembled on a prior line.
-			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?File(?:InputStream|Reader|OutputStream|Writer)?|Paths\.get)\s*\([^()]*` + javaReqSource),
+			// required (a constant path is fine). callArgs crosses one level of
+			// inner call. FN class: path assembled on a prior line.
+			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?File(?:InputStream|Reader|OutputStream|Writer)?|Paths\.get)\s*\(` + callArgs + javaReqSource),
 			Applies: HasJavaExtension,
 			Fix:     "Resolve the path against a fixed base directory and verify it stays within it (canonical path + prefix check), or map the request value to an allowlisted file; never pass it straight to a file API.",
 		},

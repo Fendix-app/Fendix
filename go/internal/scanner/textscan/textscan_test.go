@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/models"
@@ -515,5 +516,75 @@ public class Ok29 {
 }`)
 	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
 		t.Errorf("expected no findings on safe Java, got %d: %+v", len(got), got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Calls whose arguments hold one level of nested parentheses: a context
+// accessor (`r.Context()`, `c.Request.Context()`) before the argument that
+// makes the call unsafe. `[^)]*` stopped at the accessor's own `)`.
+// ---------------------------------------------------------------------------
+
+func TestGoRules_ExecCommandContextWithNestedCall(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(c *gin.Context, host string) {
+	exec.CommandContext(c.Request.Context(), "sh", "-c", "ping -c 1 "+host).Output()
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_EXEC_COMMAND_INJECTION"]) != 1 {
+		t.Errorf("GO_EXEC_COMMAND_INJECTION = %d; want 1", len(by["GO_EXEC_COMMAND_INJECTION"]))
+	}
+}
+
+func TestGoRules_QueryRowContextWithNestedCall(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(db *sql.DB, r *http.Request, n string) {
+	db.QueryRowContext(r.Context(), fmt.Sprintf("SELECT id FROM u WHERE name = '%s'", n))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_SQL_INJECTION"]) != 1 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 1", len(by["GO_SQL_INJECTION"]))
+	}
+}
+
+func TestJavaRules_NestedParenthesesInArguments(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "N.java", `public class N {
+  void a(String in) throws Exception {
+    Runtime.getRuntime().exec(wrap(in) + " --flag");
+    st.executeQuery(db.table("u") + "SELECT * FROM u WHERE id = " + in);
+  }
+  void b(HttpServletRequest request) throws Exception {
+    new java.net.URL(base(), request.getParameter("u"));
+    new java.io.File(dir(), request.getParameter("p"));
+    response.getWriter().println(esc(1) + request.getParameter("q"));
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_EXEC_COMMAND_INJECTION"]) != 1 {
+		t.Errorf("JAVA_EXEC_COMMAND_INJECTION = %d; want 1", len(by["JAVA_EXEC_COMMAND_INJECTION"]))
+	}
+	for _, id := range []string{"JAVA_SQL_INJECTION", "JAVA_SSRF", "JAVA_PATH_TRAVERSAL", "JAVA_XSS_REFLECTED"} {
+		if len(by[id]) != 1 {
+			t.Errorf("%s = %d; want 1", id, len(by[id]))
+		}
+	}
+}
+
+// TestGoRules_NestedPatternStaysLinear documents that the nested-parenthesis
+// alternation cannot backtrack catastrophically: RE2 matches in linear time.
+func TestGoRules_NestedPatternStaysLinear(t *testing.T) {
+	line := "exec.Command(" + strings.Repeat("(a)", 130) + ` "x"`
+	if len(line) < 400 {
+		t.Fatalf("line is %d chars; want at least 400", len(line))
+	}
+	for _, r := range append(GoRules(), JavaRules()...) {
+		start := time.Now()
+		r.Pattern.MatchString(line)
+		if d := time.Since(start); d > 10*time.Millisecond {
+			t.Errorf("%s took %v on a 400-character line of nested parentheses; want < 10ms", r.ID, d)
+		}
 	}
 }

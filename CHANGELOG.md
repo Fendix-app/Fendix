@@ -1387,6 +1387,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The regex scanner now matches calls whose arguments contain a nested
+  call.** `GO_SQL_INJECTION`, `GO_EXEC_COMMAND_INJECTION`,
+  `JAVA_EXEC_COMMAND_INJECTION`, `JAVA_SQL_INJECTION`, `JAVA_SSRF`,
+  `JAVA_XSS_REFLECTED` and `JAVA_PATH_TRAVERSAL` stopped at the first inner
+  `)`, so `exec.CommandContext(r.Context(), "sh", "-c", "ping "+host)` and
+  `db.QueryRowContext(r.Context(), fmt.Sprintf(...))` were missed. They now
+  cross one level of parentheses. Matching stays linear-time (RE2).
 - **A Semgrep taint rule and its sink twin on one line are reported once.**
   With the taint gate closed, `js-cmdi-taint` and `js-cmdi-sink` (and the
   other `<base>-taint` / `<base>-sink` pairs of the JavaScript, Java and Go
