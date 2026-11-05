@@ -39,11 +39,14 @@ const SORT_MAP = { name: 'name', created: 'created_at' };
 const ALLOWED_SORT = new Set(['name', 'created_at']);
 const COLUMNS = loadColumns();
 
-// Helpers whose every return is a literal or a lookup in a literal map.
+// A helper that is one literal-map lookup with a literal fallback.
 function sortColumn(s: string) {
   return SORT_MAP[s] ?? 'id';
 }
 
+// A helper whose every return is a literal is not recognised: proving it took a
+// file-wide search of every function's returns, which timed the rule out on
+// large route files. The taint rule reports it.
 function sortColumnSwitch(s: string) {
   switch (s) {
     case 'name':
@@ -162,8 +165,7 @@ router.post('/sqli/constant-identifiers', async (req, res) => {
   // ruleid: js-sqli-sink
   await pool.query('SELECT * FROM t ORDER BY ' + col);
   const col2 = sortColumnSwitch(req.query.sort);
-  // ok: js-sqli-taint
-  // ruleid: js-sqli-sink
+  // ruleid: js-sqli-taint, js-sqli-sink
   await pool.query('SELECT * FROM t ORDER BY ' + col2);
   const col3 = SORT_MAP[req.query.sort] ?? 'id';
   // ok: js-sqli-taint
@@ -181,6 +183,18 @@ router.post('/sqli/constant-identifiers', async (req, res) => {
   // ok: js-sqli-taint
   // ruleid: js-sqli-sink
   await pool.query('SELECT * FROM t WHERE id IN (' + numbered + ')', ids);
+  const filled = Array(ids.length).fill('?').join(',');
+  // ok: js-sqli-taint
+  // ruleid: js-sqli-sink
+  await pool.query('SELECT * FROM t WHERE id IN (' + filled + ')', ids);
+  const built = Array.from({ length: ids.length }, () => '?').join(',');
+  // ok: js-sqli-taint
+  // ruleid: js-sqli-sink
+  await pool.query(`SELECT * FROM t WHERE id IN (${built})`, ids);
+  const parts = String(req.query.tags).split(',');
+  // ok: js-sqli-taint
+  // ruleid: js-sqli-sink
+  await pool.query('SELECT * FROM t LIMIT ' + parts.length);
   res.end();
 });
 
@@ -202,6 +216,12 @@ router.post('/sqli/identifier-controls', async (req, res) => {
   const echoed = ids.map((id: string) => id).join(',');
   // ruleid: js-sqli-taint, js-sqli-sink
   await pool.query('SELECT * FROM t WHERE id IN (' + echoed + ')');
+  // The length of request data is whatever the caller sent:
+  // {"length": "1 OR 1=1"}, or ?ids[length]=... through qs.
+  // ruleid: js-sqli-taint, js-sqli-sink
+  await pool.query('SELECT * FROM t LIMIT ' + req.body.length);
+  // ruleid: js-sqli-taint, js-sqli-sink
+  await pool.query('SELECT * FROM t LIMIT ' + req.query.ids.length);
   res.end();
 });
 
@@ -247,6 +267,11 @@ router.get('/sqli/allowlist-controls', async (req, res) => {
   const dir2 = ['asc', 'desc'].includes(req.query.dir2) ? req.query.dir2 : req.query.other;
   // ruleid: js-sqli-taint, js-sqli-sink
   await pool.query(`SELECT * FROM t ORDER BY name ${dir2}`);
+  // An array literal that holds request data is not an allowlist.
+  const sort3 = req.query.sort3;
+  if (![req.query.extra, 'name'].includes(sort3)) return res.status(400).end();
+  // ruleid: js-sqli-taint, js-sqli-sink
+  await pool.query('SELECT * FROM t ORDER BY ' + sort3);
   res.end();
 });
 

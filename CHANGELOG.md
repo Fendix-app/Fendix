@@ -928,9 +928,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rules, and a prefix check counts only on a path from `path.resolve`.
     SQL accepts an identifier allowlist with the same rules (or a reset to a
     literal, or a literal-picking ternary) and values made only of
-    constants: a list's length or placeholders mapped from it, a literal-map
-    lookup with a literal fallback, and a same-file helper whose every
-    return is one of those. A URL whose literal start
+    constants: placeholders mapped from a list or built with
+    `Array(n).fill('?')`, the length of a real array (not of request data),
+    a literal-map lookup with a literal fallback, and a same-file helper
+    that is exactly that lookup. The allowlist is a constant name or an
+    array literal of string literals. These checks stay linear: the rule
+    finishes a 2,000-line route file in seconds. A URL whose literal start
     fixes the scheme and host, or a same-site path, is clean wherever it is
     built, inline or in a variable first. Path traversal accepts
     `sendFile`/`download` with `root` and the `path.relative` containment

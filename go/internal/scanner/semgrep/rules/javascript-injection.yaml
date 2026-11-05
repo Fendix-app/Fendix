@@ -143,11 +143,32 @@ rules:
           - pattern: Math.round(...)
           - pattern: Boolean(...)
       # Values made only of constants carry no input into the query text: a
-      # list's length, a repeated literal, and a list mapped to literals or to
-      # its index (IN-list placeholders: ids.map(() => '?').join(','),
-      # '?,'.repeat(ids.length), ids.map((_, i) => '$' + (i + 1))).
-      - pattern: $LIST.length
+      # repeated literal, a list mapped to literals or to its index, and the
+      # placeholder builders (IN-list placeholders: ids.map(() => '?').join(','),
+      # '?,'.repeat(ids.length), ids.map((_, i) => '$' + (i + 1)),
+      # Array(ids.length).fill('?'), Array.from({ length: n }, () => '?')).
       - pattern: '"...".repeat(...)'
+      - pattern-either:
+          - pattern: 'Array($N).fill("...")'
+          - pattern: 'new Array($N).fill("...")'
+          - pattern: 'Array.from({length: $N}).fill("...")'
+          - pattern: 'Array.from({length: $N}, (...) => "...")'
+      # The length of a real array: of map / filter / split output, of an
+      # array literal, or of a name bound from one. The length of request data
+      # is not one: {"length": "1 OR 1=1"} in JSON, or ?ids[length]=... through
+      # qs, makes it a string the caller chose.
+      - patterns:
+          - pattern-either:
+              - pattern: $X.$ARRAY(...).length
+              - patterns:
+                  - pattern-inside: |
+                      $LIST = $X.$ARRAY(...);
+                      ...
+                  - pattern: $LIST.length
+          - metavariable-regex:
+              metavariable: $ARRAY
+              regex: ^(map|filter|split)$
+      - pattern: '[...].length'
       - pattern-either:
           - pattern: '$LIST.map(() => "...")'
           - pattern: '$LIST.map(($ELEM) => "...")'
@@ -172,47 +193,33 @@ rules:
           - pattern-either:
               - pattern: '$MAP[$KEY] ?? "..."'
               - pattern: '$MAP[$KEY] || "..."'
-      # A call to a function of this file, declared before the call, whose every
-      # return is a literal, or a literal-map lookup with a literal fallback.
-      - patterns:
-          - pattern-inside: |
-              function $HELPER(...) { ... }
-              ...
-          - pattern: $HELPER(...)
-          - pattern-not-inside:
-              patterns:
-                - pattern-inside: |
-                    function $HELPER(...) { ... return $RET; ... }
-                    ...
-                - metavariable-pattern:
-                    metavariable: $RET
-                    patterns:
-                      - pattern-not: '"..."'
-                      - pattern: $RET
+      # A call to a helper of this file, declared before the call, that is one
+      # literal-map lookup with a literal fallback:
+      #   function sortColumn(s) { return SORT_MAP[s] ?? 'id'; }
+      # Only that one-statement shape: a file-wide search of every function's
+      # returns made the rule superlinear on large route files (a 2k-line file
+      # timed out at 30 s), so a helper with any other body is not cleaned.
       - patterns:
           - pattern-inside: |
               const $MAP = $OBJ;
               ...
-              function $HELPER(...) { ... }
-              ...
           - metavariable-regex:
               metavariable: $OBJ
               regex: (?s)^(?:Object\.freeze\()?\{\s*(?:(?:[\w$]+|'[^'\\]*'|"[^"\\]*")\s*:\s*(?:'[^'\\]*'|"[^"\\]*"|-?\d+(?:\.\d+)?|true|false|null)\s*,?\s*)*\}\)?(?:\s+as\s+const)?$
+          - pattern-either:
+              - pattern-inside: |
+                  function $HELPER($ARG) {
+                    return $MAP[$ARG] ?? "...";
+                  }
+                  ...
+              - pattern-inside: |
+                  function $HELPER($ARG) {
+                    return $MAP[$ARG] || "...";
+                  }
+                  ...
           - pattern: $HELPER(...)
-          - pattern-not-inside:
-              patterns:
-                - pattern-inside: |
-                    function $HELPER(...) { ... return $RET; ... }
-                    ...
-                - metavariable-pattern:
-                    metavariable: $RET
-                    patterns:
-                      - pattern-not: '"..."'
-                      - pattern-not: '$MAP[$KEY] ?? "..."'
-                      - pattern-not: '$MAP[$KEY] || "..."'
-                      - pattern: $RET
-      # An identifier allowlist (a Set or array of names): the value is
-      # rejected (return or throw, the check alone or an operand of `||`, never
+      # An identifier allowlist (a constant name, or an array literal of string
+      # literals): the value is rejected (return or throw, the check alone or an operand of `||`, never
       # under `&&`), or reset to a literal, or a ternary picks a literal.
       - patterns:
           - pattern-either:
@@ -242,7 +249,7 @@ rules:
               regex: ^(has|includes)$
           - metavariable-regex:
               metavariable: $SET
-              regex: ^([A-Za-z_$][\w$]*|\[.*\])$
+              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
           - pattern: $V
       - patterns:
           - pattern-either:
@@ -275,7 +282,7 @@ rules:
               regex: ^(has|includes)$
           - metavariable-regex:
               metavariable: $SET
-              regex: ^([A-Za-z_$][\w$]*|\[.*\])$
+              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
           - pattern: $V
       - patterns:
           - pattern: '$SET.$HAS($V) ? $V : "..."'
@@ -284,7 +291,7 @@ rules:
               regex: ^(has|includes)$
           - metavariable-regex:
               metavariable: $SET
-              regex: ^([A-Za-z_$][\w$]*|\[.*\])$
+              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
     pattern-sinks:
       - patterns:
           - pattern: $DB.$METHOD($Q, ...)

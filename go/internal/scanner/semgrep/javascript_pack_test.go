@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 )
@@ -384,5 +385,72 @@ func TestJavaScriptPackSkipsTestCode(t *testing.T) {
 			}
 			assertEndpoints(t, got, map[string]bool{"src/app.js:9": true, "src/testing/app.js:9": true})
 		})
+	}
+}
+
+// largeExpressRoutes writes an Express route file of about 2,000 lines: one
+// route that builds SQL from req.query.name (line 8), then 120 handlers, each
+// with a helper function, a guard, a parameterized query and a mapped
+// response. That is the shape of a real route file, and the size at which the
+// round-3 helper sanitisers of js-sqli-taint went superlinear and timed out.
+func largeExpressRoutes() string {
+	var b strings.Builder
+	b.WriteString("const express = require('express');\nconst { Pool } = require('pg');\n\n")
+	b.WriteString("const db = new Pool();\nconst router = express.Router();\n\n")
+	b.WriteString("router.get('/search', async (req, res) => {\n")
+	b.WriteString("  const r = await db.query(\"SELECT * FROM t WHERE name = '\" + req.query.name + \"'\");\n")
+	b.WriteString("  res.json(r.rows);\n});\n\n")
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&b, "function format%d(row) {\n  return { id: row.id, name: row.name, rank: %d };\n}\n\n", i, i)
+		fmt.Fprintf(&b, "router.get('/items%d/:id', async (req, res) => {\n", i)
+		b.WriteString("  const id = req.params.id;\n")
+		b.WriteString("  const limit = Number(req.query.limit) || 10;\n")
+		b.WriteString("  if (!id) {\n    return res.status(400).json({ error: 'missing id' });\n  }\n")
+		b.WriteString("  const rows = await db.query('SELECT * FROM items WHERE id = $1 LIMIT $2', [id, limit]);\n")
+		b.WriteString("  if (rows.rows.length === 0) {\n    return res.status(404).end();\n  }\n")
+		fmt.Fprintf(&b, "  res.json(rows.rows.map((r) => format%d(r)));\n});\n\n", i)
+	}
+	b.WriteString("module.exports = router;\n")
+	return b.String()
+}
+
+// The JavaScript packs stay linear on a large route file: with the shipped
+// arguments (--timeout 30 per rule and file), the real SQL injection in a
+// 2,000-line, 241-function file is reported, no rule times out, and the whole
+// bundled pack finishes in under 20 s. Before round 4, js-sqli-taint alone
+// needed more than 200 s here, hit the 30 s bound, and lost the finding. The
+// pack takes about 3 s on a development laptop, so 20 s leaves room for a
+// slower CI runner while staying below the 30 s per-rule bound a
+// superlinear rule would hit.
+func TestJavaScriptPackStaysLinearOnALargeRouteFile(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+
+	src := largeExpressRoutes()
+	if lines := strings.Count(src, "\n"); lines < 2000 {
+		t.Fatalf("generated %d lines, want about 2,000", lines)
+	}
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"routes/items.js": src})
+
+	started := time.Now()
+	run, err := ScanRun(context.Background(), dir, nil)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("ScanRun: %v", err)
+	}
+	if len(run.Timeouts) != 0 {
+		t.Errorf("rules timed out: %+v", run.Timeouts)
+	}
+	found := false
+	for _, f := range run.Findings {
+		found = found || (f.RuleID == jsTaintRuleID && f.Endpoint == "routes/items.js:8")
+	}
+	if !found {
+		t.Errorf("no %s finding at routes/items.js:8 among %d findings", jsTaintRuleID, len(run.Findings))
+	}
+	const bound = 20 * time.Second
+	if elapsed > bound {
+		t.Errorf("the bundled pack took %s on a 2,000-line route file; want under %s", elapsed.Round(time.Millisecond), bound)
 	}
 }
