@@ -45,6 +45,7 @@ Thumbs.db
 # binary it builds, bin/fendix-parity, is covered by bin/ above.
 .venv-parity/
 .parity/
+.parity-nosemgrep/
 
 # Benchmark run artifacts (per-run timestamped dirs)
 bench-results/
