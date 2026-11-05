@@ -218,9 +218,12 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
 - **The crypto rules' sources** are the weak value itself: a value named
   like a password, a JWT decoded without verification, a
   `java.util.Random`. The flow to where it is trusted is the finding.
-- **Java is enabled in the taint gate** (`ReachabilityLanguages`, ADR-011):
-  a Java taint match is reachable, escalated one severity level, and can
-  block at or above `--fail-on`. A shape rule's finding only warns.
+- **Java is not enabled in the taint gate** (`ReachabilityLanguages` is
+  empty, ADR-011, ruling R-pf81): a Java taint match is a `semgrep_shim`
+  finding, reported as a warning and never blocking. A blind evaluation on 70
+  production repositories measured the Java taint tier at precision 0.111
+  (1 true positive in 10 findings), against the 0.80 required. A shape rule's
+  finding warns too.
 - Semgrep cannot share a block between rules, so the request sources are
   repeated in every taint rule of `java-injection.yaml` and
   `java-web.yaml`; `TestJavaTaintRulesShareTheirBlocks` keeps the copies
@@ -323,15 +326,16 @@ read a file by a parameter are too common in clean code.
 The taint rules' matches count as reachability only for a language enabled
 in `semgrep.ReachabilityLanguages`
 ([ADR-011](./adr/ADR-011-semgrep-taint-reachability.md)). JavaScript and
-TypeScript are: the pack's precision on the framework-parity development set
-is 0.97, and it adds no finding to the clean `node-express-realworld`
-application. A taint finding is therefore reachable, in the
-`semgrep_taint` tier, and blocks at or above `--fail-on` on its reachable
-path. A shape finding stays a `semgrep_shim` finding that warns. The
-`fendix_severity` of `js-sqli-taint`, `js-cmdi-taint` and `js-ssti-taint`
-is `HIGH` and the others' `MEDIUM`. A reachable finding is escalated one
-level, and a taint rule's `MEDIUM` confidence caps severity at `HIGH`, so
-every proven finding of the pack reports `HIGH`.
+TypeScript are not enabled. The pack's precision on the framework-parity
+development set is 0.97, and it adds no finding to the clean
+`node-express-realworld` application, but a blind evaluation on 70 fresh
+production repositories measured its taint tier at precision 0.077 (1 true
+positive in 13 findings), against the 0.80 required (ruling R-pf81). A taint
+finding is therefore a `semgrep_shim` finding, like a shape finding: reported
+as a warning, never blocking. The `fendix_severity` of `js-sqli-taint`,
+`js-cmdi-taint` and `js-ssti-taint` is `HIGH` and the others' `MEDIUM`. If the
+language is enabled later, a reachable finding is escalated one level, and a
+taint rule's `MEDIUM` confidence caps severity at `HIGH`.
 
 ## The Go packs
 
@@ -357,10 +361,12 @@ gorilla/mux, chi and Gin. They hold nine taint rules
 - **Test code.** No Go rule reports in `*_test.go` files or in `testdata`,
   `testhelpers`, `testutil`, `testutils`, `testing`, `test` and `tests`
   directories, matched below the scan root.
-- **Go is enabled in the taint gate** (`ReachabilityLanguages`, ADR-011): a
-  Go taint match is reachable, escalated one severity level, and can block at
-  or above `--fail-on`. A shape rule's finding and `go-weak-random-token` only
-  warn.
+- **Go is not enabled in the taint gate** (`ReachabilityLanguages` is empty,
+  ADR-011, ruling R-pf81): a Go taint match is a `semgrep_shim` finding,
+  reported as a warning and never blocking. A blind evaluation on 70
+  production repositories measured the Go taint tier at precision 0.091
+  (1 true positive in 11 findings), against the 0.80 required. A shape rule's
+  finding and `go-weak-random-token` warn too.
 - Semgrep cannot share a block between rules, so the request sources and
   sanitisers are repeated in every taint rule; `TestGoTaintRulesShareTheirBlocks`
   keeps the copies equal.

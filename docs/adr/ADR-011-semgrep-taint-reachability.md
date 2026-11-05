@@ -8,9 +8,15 @@ controller's ruling R-pf56 amends the brief's condition on the trace: a
 taint-mode match is the proof, and the trace only adds detail. Task 4.1 adds
 the mechanism with every language disabled. Tasks 4.3 (JavaScript and
 TypeScript), 4.4 (Java) and 4.5 (Go) add the taint rules and enable a
-language once it meets the gate below. They enabled `javascript` and
-`typescript`, `java` and `go`; the evidence is under
-[Enabled languages](#enabled-languages).
+language once it meets the gate below. On the corpus evidence alone they
+enabled `javascript` and `typescript`, `java` and `go`.
+
+Amended by ruling R-pf81: a blind real-world evaluation measured taint-tier
+precision of 0.077 (JavaScript and TypeScript), 0.111 (Java) and 0.091 (Go),
+all below the 0.80 rule fixed in advance, so no language is enabled and the
+three packs report warnings. The evidence is under
+[Enabled languages](#enabled-languages) and
+[Real-world precision](#real-world-precision).
 
 ## Context
 
@@ -71,6 +77,13 @@ taint pack reaches precision >= 0.90 on the corpus v2 development set
 (`benchmarks/frameworks/`) and stays within the plan's noise budget (its
 Task 0.5). The release gate checks holdout precision. Task 4.1 shipped the
 map empty; each language is added in the change that carries its evidence.
+
+**R-pf81: the real-world gate.** The development set is the packs' own
+corpus, so it cannot show how they behave on code nobody wrote them against.
+A language is enabled only if, in addition, a blind evaluation on fresh public
+production repositories finds precision of at least 0.80 on at least 10
+triaged taint-tier findings. JavaScript and TypeScript, Java and Go met the
+development gate and failed this one, and shipped warn-only (the map is empty).
 
 **R-pf56: the match is the proof, the trace is detail.** Semgrep reports a
 match of a `mode: taint` rule only when one of the rule's declared sources
@@ -203,9 +216,11 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
   follow-up.
 
 **Mitigations:**
-- `TestReachabilityLanguagesAreTheClearedOnes` (first
-  `TestReachabilityLanguagesShipEmpty`) pins the enabled set, so the change
-  that enables a language must also update that test.
+- `TestNoLanguageClearsTheRealWorldGate` (first
+  `TestReachabilityLanguagesShipEmpty`, later `TestReachabilityLanguagesAreTheClearedOnes`)
+  pins the enabled set, which is empty, so the change that enables a language
+  must also update that test. The JavaScript, Java and Go pack tests assert
+  the shipped gate is closed and, with a map injected, that it opens.
 - `TestLoggedOutTaintResultIsReachableWithoutATrace` runs on Semgrep's real
   logged-out output, and `TestTraceNeverMovesIdentity` checks that both
   recorded runs, gate open and closed, have one fingerprint.
@@ -229,17 +244,49 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
 
 ## Enabled languages
 
-| Language | Enabled by | Development-set precision | Noise on the clean target |
-|---|---|---|---|
-| `javascript`, `typescript` | Task 4.3 (`javascript-injection`, `javascript-web`, `javascript-crypto`) | 96 / (96 + 3) = 0.970 over the 174 Express, NestJS and Next.js cases. The 3 FPs are the `sqli-safe_lookalike` cases the Python engine's `SEC-JS_SQL_TEMPLATE` already flagged; none is a pack finding. | No new finding on `node-express-realworld` (2.4 kLOC). Of the pack's 19 matches on `juice-shop` and `nodegoat`, 17 are true positives. |
-| `java` | Task 4.4 (Spring packs `java-injection`, `java-web`, `java-crypto`) | 35 / (35 + 2) = 0.946 on the Spring corpus; both false positives are textscan's | no new finding on `spring-petclinic` |
-| `go` | Task 4.5 (Go packs `go-injection`, `go-web`, `go-crypto`) | 72 / (72 + 4) = 0.947 on the net/http and Gin cases; the four false positives are textscan's | no new finding on `golang-gin-realworld` |
+No language is enabled: `ReachabilityLanguages` is empty (R-pf81). Every pack
+below met the development gate and failed the real-world one.
+
+| Language | Pack | Development-set precision | Noise on the clean target | Real-world precision | Decision |
+|---|---|---|---|---|---|
+| `javascript`, `typescript` | Task 4.3 (`javascript-injection`, `javascript-web`, `javascript-crypto`) | 96 / (96 + 3) = 0.970 over the 174 Express, NestJS and Next.js cases. The 3 FPs are the `sqli-safe_lookalike` cases the Python engine's `SEC-JS_SQL_TEMPLATE` already flagged; none is a pack finding. | No new finding on `node-express-realworld` (2.4 kLOC). Of the pack's 19 matches on `juice-shop` and `nodegoat`, 17 are true positives. | 1 / 13 = 0.077 (12 repos) | Warn-only |
+| `java` | Task 4.4 (Spring packs `java-injection`, `java-web`, `java-crypto`) | 35 / (35 + 2) = 0.946 on the Spring corpus; both false positives are textscan's | no new finding on `spring-petclinic` | 1 / 9 = 0.111 (20 repos; 10 findings, one unclear) | Warn-only |
+| `go` | Task 4.5 (Go packs `go-injection`, `go-web`, `go-crypto`) | 72 / (72 + 4) = 0.947 on the net/http and Gin cases; the four false positives are textscan's | no new finding on `golang-gin-realworld` | 1 / 11 = 0.091 (38 repos) | Warn-only |
 
 Precision is true positives over true and false positives on the
 language's cases of `benchmarks/frameworks/`, counted on the integrated build
 (`make parity-baseline`), so it also counts findings of other analyzers.
 
-`javascript` and `typescript` are enabled together: every rule of the
+`javascript` and `typescript` would be enabled together: every rule of the
 JavaScript and TypeScript pack declares both, and a rule counts only when all
 its languages are enabled. Holdout precision is checked by the controller after
 the packs are integrated, and may disable a language.
+
+### Real-world precision
+
+The evaluation scanned 70 fresh public production repositories (12 JavaScript
+and TypeScript, 20 Java and 38 Go; none over about 300 kLOC) at commit
+`6901cf7`, and triaged every taint-tier finding by reading the handler and
+the helpers it calls (34 in all, no sampling). The decision rule was fixed in
+advance: a language ships blocking only with precision of at least 0.80 on at
+least 10 findings. All three had at least 10 findings and precision far below
+0.80. The outcome does not change if the one unclear Java finding is counted
+as true (0.20), or if every borderline label is flipped.
+
+The three true positives are low impact: one authenticated path traversal
+and two unvalidated open redirects. The false
+positives share a few causes:
+
+- `js-weak-random-token-taint` reports any `Math.random()` whose value flows
+  to a return or a call, whatever it is used for (5 of 13 JavaScript findings).
+- An open redirect whose URL comes from configuration, with only a selector
+  from the request (4 Java findings), and a redirect validator the rule
+  cannot see through (JavaScript and Go).
+- A sink matched by method name rather than type (`go-sqli-taint`, 3 Go
+  findings), and a project's own sanitiser (Java XSS and path traversal).
+
+The method, the per-language table, the false-positive causes and the list of
+scanned repositories are in
+[`benchmarks/frameworks/REALWORLD.md`](../../benchmarks/frameworks/REALWORLD.md).
+The corpus gate is unchanged. A language is enabled again only when its
+pack, fixed for these causes, clears both gates on a new evaluation.

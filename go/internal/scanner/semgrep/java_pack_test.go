@@ -177,9 +177,10 @@ func TestJavaTaintMatchFromRealSemgrepIsReachableOnlyWithJavaEnabled(t *testing.
 		enableReachability(t, "java")
 		requireTaint(t, scanFor(t))
 	})
-	// As the binary ships: Java has met the gate (ADR-011).
+	// As the binary ships: Java did not clear the real-world gate (precision
+	// 0.111, 1 of 10; ruling R-pf81, ADR-011), so the finding is a warning.
 	t.Run("as shipped", func(t *testing.T) {
-		requireTaint(t, scanFor(t))
+		requireShim(t, scanFor(t))
 	})
 }
 

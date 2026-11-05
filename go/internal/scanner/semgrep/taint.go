@@ -20,30 +20,21 @@ import (
 // fendix_reachability: taint is Reachable, in tier models.TierSemgrepTaint,
 // only when EVERY language the rule declares is in this set. A language is
 // added only after its taint pack reaches precision >= 0.90 on the corpus v2
-// development set within the noise budget; the release gate checks holdout
-// precision. Keys are Semgrep's canonical language names ("javascript",
-// "typescript", "java", "go").
+// development set within the noise budget AND precision >= 0.80 on at least 10
+// triaged findings of the blind real-world evaluation (ruling R-pf81). Keys
+// are Semgrep's canonical language names ("javascript", "typescript", "java",
+// "go").
 //
-// JavaScript and TypeScript met it with Task 4.3's pack
-// (rules/javascript-*.yaml): precision 0.97 on the corpus v2 JS/TS cases
-// (96 true and 3 false positives, none of the three from the pack) and no new
-// finding on the clean node-express-realworld application. Every rule of that
-// pack declares both, so neither is enabled without the other.
-//
-// Java met it with Task 4.4's packs (java-injection, java-web, java-crypto):
-// precision 35/37 = 0.946 on the Spring corpus, with no new finding on
-// spring-petclinic, the clean noise target.
-//
-// Go (net/http and Gin, rules/go-*.yaml) met it: corpus v2 precision
-// 72/(72+4) = 0.947, and no new finding on the clean noise target
-// golang-gin-realworld. Every other language's Semgrep findings are
-// models.TierSemgrepShim findings.
-var ReachabilityLanguages = map[string]bool{
-	"javascript": true,
-	"typescript": true,
-	"java":       true,
-	"go":         true,
-}
+// The map is empty: no language clears the real-world gate, so every Semgrep
+// finding is a models.TierSemgrepShim finding and is reported as a warning,
+// not a blocker. The JavaScript/TypeScript, Java and Go packs each met the
+// corpus gate (JS/TS 0.97, Java 0.946, Go 0.947), but the blind evaluation of
+// 70 fresh public production repos triaged every taint-tier finding and found
+// precision of 0.077 for JS/TS (1 of 13), 0.111 for Java (1 of 10) and 0.091
+// for Go (1 of 11). The evidence is benchmarks/frameworks/REALWORLD.md. The
+// mechanism stays so a language can be enabled again when a pack reaches the
+// gate on real-world code; the pack tests inject a non-empty map to prove it.
+var ReachabilityLanguages = map[string]bool{}
 
 // A rule asks for its matches to count as reachability with this metadata.
 const (

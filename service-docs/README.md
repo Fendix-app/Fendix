@@ -476,7 +476,7 @@ orchestrator logs an install hint and continues.
 > deleted in TASK-118. A rule added there never runs. See `CONTRIBUTING.md` →
 > "Adding a Semgrep rule".
 
-**74 rules** across thirteen files: the 23 Python rules in the four files below, and the JavaScript/TypeScript, Java and Go taint packs (17, 15 and 19 rules; see `docs/semgrep-rules.md`).
+**74 rules** across thirteen files: the 23 Python rules in the four files below, and the JavaScript/TypeScript, Java and Go taint packs (17, 15 and 19 rules; see `docs/semgrep-rules.md`). Those taint findings are reported as warnings, not blocking: real-world precision was 0.077 (JS/TS), 0.111 (Java) and 0.091 (Go), below the 0.80 gate (ADR-011).
 
 ### auth.yaml (4 rules)
 

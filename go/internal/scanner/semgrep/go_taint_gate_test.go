@@ -130,6 +130,27 @@ func TestGoTaintRuleFromRealSemgrepOpensTheGate(t *testing.T) {
 	requireShim(t, find())
 }
 
+// The shipped gate, with no test override: Go did not clear the real-world
+// gate (precision 0.091, 1 of 11; ruling R-pf81, ADR-011), so a Go taint
+// finding is a shim finding, reported as a warning.
+func TestShippedGateIsClosedForTheGoTaintRule(t *testing.T) {
+	if len(ReachabilityLanguages) != 0 {
+		t.Fatalf("ReachabilityLanguages = %v, want empty", ReachabilityLanguages)
+	}
+	meta := bundledRuleMetadata(t, goTaintRuleID)
+	result := semgrepResult{
+		CheckID: "tmp." + rulesDirPrefix + "2173727481." + goTaintRuleID,
+		Path:    "handler.go",
+		Start:   semgrepLineCol{Line: 11, Col: 15},
+		Extra:   semgrepExtra{Message: "m", Severity: "ERROR", Lines: semgrepRedactedLines, Metadata: meta},
+	}
+	ev, ok := mapResult(&result, t.TempDir())
+	if !ok {
+		t.Fatal("mapResult dropped the result")
+	}
+	requireShim(t, ev)
+}
+
 // The Go pack skips Go test code: *_test.go files, mocks and the
 // conventional helper directories (testdata, testhelpers, testutil,
 // testutils, testing, test, tests, unittest, mock, mocks, fakes).

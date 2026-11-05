@@ -260,9 +260,9 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 | Language | How | Tier |
 |---|---|---|
 | Python | taint engine (source→sink, sanitizer-aware; within a function, plus one call into a helper in the same file or another module) | proven taint |
-| Go (net/http, Gin) | Semgrep taint rules (request source to sink within a function, plus one call into a function of the same file), shape rules for exported helpers, regex SAST (line-local) and dep-CVE; a proven taint finding may block | proven taint (Semgrep) / regex / SCA |
-| JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function, proven and able to block) and shape rules for a helper's parameter (warn only) | regex / semgrep taint |
-| Java (Spring) | Semgrep taint rules from Spring MVC and servlet request input to SQL, command, template, XSS, SSRF, path and redirect sinks, within a method plus one call into a method of the same class; weak password hashing, unverified JWT claims and weak random tokens; shape rules for a sink in another class | Semgrep taint |
+| Go (net/http, Gin) | Semgrep taint rules (request source to sink within a function, plus one call into a function of the same file), shape rules for exported helpers, regex SAST (line-local) and dep-CVE; a taint finding is reported as a warning and does not block (real-world precision 0.091) | Semgrep taint (warn) / regex / SCA |
+| JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function; reported as a warning, not blocking, real-world precision 0.077) and shape rules for a helper's parameter (warn only) | regex / semgrep taint (warn) |
+| Java (Spring) | Semgrep taint rules from Spring MVC and servlet request input to SQL, command, template, XSS, SSRF, path and redirect sinks, within a method plus one call into a method of the same class; weak password hashing, unverified JWT claims and weak random tokens; shape rules for a sink in another class; findings are warnings, not blocking (real-world precision 0.111) | Semgrep taint (warn) |
 | **Java (v0.27–v0.28)** | **regex SAST (line-local): command injection, SQLi-by-concat, weak crypto, insecure deserialization, XXE, insecure cookie, weak randomness, LDAP injection, SSRF** | **regex** |
 | any language | hardcoded-secrets scanner (15 pattern families) | regex |
 
@@ -271,8 +271,11 @@ line-local**, the same tier as the Go and JS/TS textscan rules, NOT taint
 analysis. The Semgrep packs added since (JavaScript/TypeScript, Spring, and
 Go net/http and Gin) are taint rules: they follow request input within one
 function, and for Java and Go also one call into a method or function of the
-same class or file, not across files. A match of one counts as a proven flow
-and can block. We publish **no JS/TS, Java or Go recall/precision number**:
+same class or file, not across files. A match is reported as a warning and
+does not block: a blind evaluation on 70 fresh public production repositories
+triaged every taint-tier finding and measured precision of 0.077 (JS/TS, 1 of
+13), 0.111 (Java, 1 of 10) and 0.091 (Go, 1 of 11), against the 0.80 required
+to block, so `semgrep.ReachabilityLanguages` is empty (ADR-011; evidence in [benchmarks/frameworks/REALWORLD.md](benchmarks/frameworks/REALWORLD.md)). We publish **no JS/TS, Java or Go recall/precision number**:
 the framework parity corpus the rules were tuned on is a development set, and
 public numbers come only from its held-out twin. Deep, interprocedural taint
 analysis (what OWASP Benchmark needs) is a future phase.

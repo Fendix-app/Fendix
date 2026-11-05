@@ -1050,11 +1050,14 @@ func TestBundledRuleSpecsComeFromThePack(t *testing.T) {
 	}
 }
 
-// The gate opens one language at a time. Tasks 4.3 (javascript, typescript),
-// 4.4 (java) and 4.5 (go) each add a language only after its pack meets the
-// precision gate recorded in ADR-011, and update this test in the same change.
-func TestReachabilityLanguagesAreTheClearedOnes(t *testing.T) {
-	want := map[string]bool{"javascript": true, "typescript": true, "java": true, "go": true}
+// The gate opens one language at a time, and only with ADR-011's evidence. The
+// blind real-world evaluation of 70 production repos measured taint-tier
+// precision of 0.077 (JS/TS), 0.111 (Java) and 0.091 (Go), all below the 0.80
+// rule fixed in advance, so no language is enabled (ruling R-pf81) and every
+// Semgrep finding is reported as a warning. A language is added only with new
+// real-world evidence, and this test is updated in the same change.
+func TestNoLanguageClearsTheRealWorldGate(t *testing.T) {
+	want := map[string]bool{}
 	if !reflect.DeepEqual(ReachabilityLanguages, want) {
 		t.Errorf("ReachabilityLanguages = %v, want %v; a language is enabled only with ADR-011's evidence",
 			ReachabilityLanguages, want)

@@ -131,6 +131,9 @@ func TestScanReportsAJavaScriptTaintFindingAsReachable(t *testing.T) {
 		return evidence.Evidence{}
 	}
 
+	// As the binary ships: no language clears the real-world gate (R-pf81).
+	requireShim(t, find())
+
 	enableReachability(t)
 	requireShim(t, find())
 
@@ -166,11 +169,12 @@ func javascriptRules(t *testing.T) (taint, other []packRule) {
 	return taint, other
 }
 
-// The shipped gate, with no test override: JavaScript and TypeScript are
-// enabled (Task 4.3), so a match of every taint rule of the pack is a reachable
-// semgrep_taint finding, and a match of any other JavaScript rule stays a
-// semgrep_shim finding, even when its metadata claims reachability.
-func TestShippedGateOpensForTheJavaScriptTaintRulesOnly(t *testing.T) {
+// The shipped gate, with no test override: no language is enabled (ruling
+// R-pf81, ADR-011), so a match of any JavaScript rule, taint or not, and even
+// one whose metadata claims reachability, is a semgrep_shim finding, reported
+// as a warning. The blind real-world evaluation found JS/TS precision 0.077
+// (1 of 13), below the 0.80 gate.
+func TestShippedGateIsClosedForTheJavaScriptTaintRules(t *testing.T) {
 	taint, other := javascriptRules(t)
 	if len(taint) == 0 || len(other) == 0 {
 		t.Fatalf("got %d taint and %d other JavaScript rules; want both kinds", len(taint), len(other))
@@ -199,7 +203,7 @@ func TestShippedGateOpensForTheJavaScriptTaintRulesOnly(t *testing.T) {
 		return ev
 	}
 	for _, r := range taint {
-		t.Run(r.ID, func(t *testing.T) { requireTaint(t, mapped(r, false)) })
+		t.Run(r.ID, func(t *testing.T) { requireShim(t, mapped(r, false)) })
 	}
 	for _, r := range other {
 		t.Run(r.ID, func(t *testing.T) { requireShim(t, mapped(r, true)) })
