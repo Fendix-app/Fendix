@@ -934,3 +934,42 @@ func TestJavaRules_StrongDigestOfPasswordIsNotWeakHash(t *testing.T) {
 		t.Errorf("a SHA-256 digest fired JAVA_WEAK_HASH_PASSWORD (the rule is MD5/SHA-1 only): %+v", by["JAVA_WEAK_HASH_PASSWORD"])
 	}
 }
+
+// A lone `(` inside a string literal is not a call: the argument pattern must
+// still reach the `+` or the request source after it (matched before callArgs
+// crossed one level of nested calls).
+func TestRules_LoneParenInStringLiteralStillMatches(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(db *sql.DB, user, ids string) {
+	db.Query("INSERT INTO t VALUES ('" + user + "')")
+	db.Query("SELECT * FROM t WHERE id IN (" + ids + ")")
+}`)
+	writeFile(t, dir, "B.java", `public class B {
+  void a(String x) throws Exception {
+    Runtime.getRuntime().exec("echo (" + x);
+    st.executeQuery("SELECT * FROM t WHERE id IN (" + x + ")");
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, append(GoRules(), JavaRules()...)))
+	if n := len(by["GO_SQL_INJECTION"]); n != 2 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 2", n)
+	}
+	if n := len(by["JAVA_EXEC_COMMAND_INJECTION"]); n != 1 {
+		t.Errorf("JAVA_EXEC_COMMAND_INJECTION = %d; want 1", n)
+	}
+	if n := len(by["JAVA_SQL_INJECTION"]); n != 1 {
+		t.Errorf("JAVA_SQL_INJECTION = %d; want 1", n)
+	}
+}
+
+func TestRules_CountStarAndContextStillMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(db *sql.DB, r *http.Request, n string) {
+	db.QueryRowContext(r.Context(), "SELECT count(*) FROM t WHERE n = '" + n + "'")
+}`)
+	if n := len(findingsByID(mustScan(t, dir, GoRules()))["GO_SQL_INJECTION"]); n != 1 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 1", n)
+	}
+}

@@ -19,13 +19,16 @@ func AllRules() []Rule {
 }
 
 // callArgs matches the argument text of a call up to the first `)` that is not
-// a nested call's own: any run of non-parenthesis characters and one-level
-// `(...)` groups. `[^)]*` stopped at the first inner `)` (`r.Context()`), and
-// `[^()]*` refused to cross an inner `(` at all; this crosses exactly one
-// level. RE2 matches it in linear time, so a long line of parentheses cannot
-// make a rule backtrack (TestGoRules_NestedPatternStaysLinear). Deeper nesting
-// (`f(g(h(x)))`) is out of reach for a regex and stays a documented FN.
-const callArgs = `(?:[^()]|\([^()]*\))*`
+// part of a one-level nested call: any run of non-`)` characters, and `(...)`
+// groups that hold no parenthesis of their own. A lone `(` is an ordinary
+// character, so a string literal such as "... IN (" or "echo (" does not stop
+// the match (a `[^()]` alternative refused it, and lost matches `[^)]*` had),
+// while `r.Context()` and `count(*)` no longer end it early. Every old match is
+// kept and the nested-call ones are added. RE2 matches it in linear time, so a
+// long line of parentheses cannot make a rule backtrack
+// (TestGoRules_NestedPatternStaysLinear). Deeper nesting (`f(g(h(x)))`) stays a
+// documented FN.
+const callArgs = `(?:[^)]|\([^()]*\))*`
 
 // GoRules — Sprint 04 shipped subset (2 of the brief's 5 rules).
 // XXE and INSECURE_RAND need cross-function AST context to avoid
