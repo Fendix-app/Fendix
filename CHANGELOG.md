@@ -1453,8 +1453,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same file: Go `const X = "..."` (alone or in
   a `const ( ... )` block) or Java `static final String X = "...";`. A `var`, a
   non-final field, a call, a field access or any mix with a variable, in any
-  argument of the call, still fires (`exec.Command("sh", "-c", user, "x="+TABLE)`). This removes the false positives on `db.Query(fmt.Sprintf("... FROM
-  %s", usersTable))` and `sh -c "df -h " + dataVolume`.
+  argument of the call, still fires (`exec.Command("sh", "-c", user,
+  "x="+TABLE)`). This removes the false positives on
+  `db.Query(fmt.Sprintf("... FROM %s", usersTable))` and
+  `sh -c "df -h " + dataVolume`.
 - **The regex scanner now matches calls whose arguments contain a nested
   call.** `GO_SQL_INJECTION`, `GO_EXEC_COMMAND_INJECTION`,
   `JAVA_EXEC_COMMAND_INJECTION`, `JAVA_SQL_INJECTION`, `JAVA_SSRF`,
