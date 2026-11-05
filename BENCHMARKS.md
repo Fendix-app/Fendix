@@ -24,9 +24,9 @@ cd python && PYTHONPATH=. python3 benchmark/run_benchmark.py
 
 | Metric | Value |
 |---|---:|
-| Precision | **1.000** |
-| Recall | **1.000** |
-| F1 | **1.000** |
+| Precision (Python taint corpus) | **1.000** |
+| Recall (Python taint corpus) | **1.000** |
+| F1 (Python taint corpus) | **1.000** |
 | Cases | 51 labeled (22 vulnerable / 29 safe), 10 categories |
 | Known gaps | 0 (HANDLED == HONEST) |
 
@@ -47,9 +47,9 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
 
 | Metric | Value |
 |---|---:|
-| Precision | **1.000** |
-| Recall | **1.000** |
-| F1 | **1.000** |
+| Precision (synthetic corpus) | **1.000** |
+| Recall (synthetic corpus) | **1.000** |
+| F1 (synthetic corpus) | **1.000** |
 | True positives | 38 / 38 expected |
 | False positives | 0 |
 | False negatives | 0 |
@@ -64,8 +64,8 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
   scheme literal is no longer treated as a fixed host), so this case is now
   detected and F1 is **1.000 — legitimately reproduced and CI-gated**, not the
   stale v0.11.0 claim. Re-run the command above to verify.
-- **CI-gated:** on push/PR (`.github/workflows/heavy-eval.yml`), floor F1 ≥ 0.99
-  (trips on the first real regression, e.g. re-introducing the SSRF FN → 0.987).
+- **CI-gated:** on push/PR (`.github/workflows/heavy-eval.yml`), floor F1 ≥ 0.99 on the
+  synthetic corpus (trips on the first real regression, e.g. re-introducing the SSRF FN → 0.987).
 - **Caveat:** canonical-pattern corpus we author; it measures whether the full
   `fendix scan` binary flags these shapes, not real-world detection rate.
 - **Run it with `semgrep` installed.** Without semgrep on `$PATH` the scan emits
@@ -78,7 +78,7 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
 > and let each finding claim the nearest unclaimed case. Two engines flagging the
 > same sink therefore produced a spare emission that claimed the *next* case,
 > shifting every later emission one case along. That manufactured a false
-> positive on `cmdi.py:36` (overall F1 0.987, under the CI floor) and, in the
+> positive on `cmdi.py:36` (overall F1 0.987 on the synthetic corpus, under the CI floor) and, in the
 > other direction, credited `secrets` with 13/13 while the multi-line JWT on
 > line 24 was **never detected** — a duplicate eleven lines away was filling its
 > slot.
@@ -242,7 +242,7 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
   June (pre-Phase-B) triage; most FP entries now describe findings the engine no
   longer emits. A suppressed FP produces **no finding**, so it drops OUT of the
   `tp+fp` denominator — which is precisely why the ratio looks low. The
-  defensible statement is not "33 % precision" but "**1 confirmed TP retained, 0
+  defensible statement for the TWISCOPE Python corpus is not "33 % precision" but "**1 confirmed TP retained, 0
   FN, 8/11 known FP classes eliminated, SAST taint noise cut ~90 → 5, 2 residual
   FPs quantified.**"
 - **Out-of-scope unknowns.** 67 of the 69 `unknown` findings are SCA dep-CVEs,

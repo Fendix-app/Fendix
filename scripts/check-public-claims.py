@@ -283,7 +283,7 @@ def is_accuracy_surface(path: Path) -> bool:
     value = path.as_posix()
     if value.startswith(ACCURACY_SCOPE_EXEMPT_PREFIXES):
         return False
-    if value == "README.md":
+    if value in {"README.md", "BENCHMARKS.md"}:
         return True
     return value.startswith("docs/") and path.suffix.lower() in {".md", ".markdown"}
 
@@ -487,6 +487,15 @@ def self_test() -> None:
         Path("examples/github-actions/fendix-scan.yml"),
         Path("scripts/release/mirror-pages-bootstrap/index.html"),
     }
+    for path, expected in (
+        ("README.md", True),
+        ("BENCHMARKS.md", True),
+        ("docs/accuracy.md", True),
+        ("docs/superpowers/plans/x.md", False),
+        ("CHANGELOG.md", False),
+    ):
+        if is_accuracy_surface(Path(path)) != expected:
+            raise AssertionError(f"accuracy-surface regression for {path}")
     for sample in public_samples:
         if not is_public_surface(sample):
             raise AssertionError(f"public-surface regression for {sample}")
