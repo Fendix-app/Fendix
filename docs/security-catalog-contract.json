@@ -778,6 +778,25 @@
       "availability": "stable"
     },
     {
+      "id": "JAVA_WEAK_HASH_PASSWORD",
+      "finding_id": "SEC-JAVA_WEAK_HASH_PASSWORD",
+      "title": "Weak hash used for password storage",
+      "analyzer": "textscan",
+      "category": "crypto",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Use bcrypt, scrypt, argon2, or PBKDF2 for password hashing. Raw MD5/SHA-1 is unsuitable: fast hashes with no work factor and no per-record salt.",
+      "availability": "stable"
+    },
+    {
       "id": "JAVA_INSECURE_DESERIALIZATION",
       "finding_id": "SEC-JAVA_INSECURE_DESERIALIZATION",
       "title": "Insecure deserialization: Java ObjectInputStream",

@@ -875,3 +875,62 @@ func TestJavaRules_JdbcTemplateConstantTableIsNotSQLInjection(t *testing.T) {
 		t.Errorf("want one JAVA_SQL_INJECTION, on line 7 (the variable one): %+v", by["JAVA_SQL_INJECTION"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Java password hashing is a different finding from MD5 hygiene. An MD5 ETag
+// is JAVA_WEAK_CRYPTO's hygiene note, not a weak password hash.
+// ---------------------------------------------------------------------------
+
+func TestJavaRules_WeakHashPasswordFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Hash.java", `public class Hash {
+  String a(String password) throws Exception {
+    MessageDigest md = MessageDigest.getInstance("MD5");
+    return hex(md.digest(password.getBytes()));
+  }
+  String b(String userPassword) throws Exception {
+    return hex(MessageDigest.getInstance("SHA-1").digest(userPassword.getBytes(UTF_8)));
+  }
+  void c(java.security.MessageDigest md, char[] pwd) {
+    md.update(pwd);
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_WEAK_HASH_PASSWORD"]) != 3 {
+		t.Errorf("JAVA_WEAK_HASH_PASSWORD = %d; want 3: %+v", len(by["JAVA_WEAK_HASH_PASSWORD"]), by["JAVA_WEAK_HASH_PASSWORD"])
+	}
+	if f := by["JAVA_WEAK_HASH_PASSWORD"]; len(f) > 0 {
+		if f[0].Category != "crypto" || f[0].References[0] != "CWE-916" {
+			t.Errorf("category/CWE = %q/%v; want crypto/CWE-916", f[0].Category, f[0].References)
+		}
+	}
+}
+
+func TestJavaRules_Md5EtagIsHygieneNotPasswordHash(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Etag.java", `public class Etag {
+  String etag(byte[] data) throws Exception {
+    return "\"" + hex(MessageDigest.getInstance("MD5").digest(data)) + "\"";
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_WEAK_HASH_PASSWORD"]) != 0 {
+		t.Errorf("an MD5 ETag fired JAVA_WEAK_HASH_PASSWORD: %+v", by["JAVA_WEAK_HASH_PASSWORD"])
+	}
+	if len(by["JAVA_WEAK_CRYPTO"]) != 1 {
+		t.Errorf("JAVA_WEAK_CRYPTO = %d; want 1 (unchanged)", len(by["JAVA_WEAK_CRYPTO"]))
+	}
+}
+
+func TestJavaRules_StrongDigestOfPasswordIsNotWeakHash(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Strong.java", `public class Strong {
+  byte[] a(String password) throws Exception {
+    return MessageDigest.getInstance("SHA-256").digest(password.getBytes());
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_WEAK_HASH_PASSWORD"]) != 0 {
+		t.Errorf("a SHA-256 digest fired JAVA_WEAK_HASH_PASSWORD (the rule is MD5/SHA-1 only): %+v", by["JAVA_WEAK_HASH_PASSWORD"])
+	}
+}

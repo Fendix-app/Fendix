@@ -275,6 +275,32 @@ func JavaRules() []Rule {
 			Fix:     "Use SHA-256+ for digests and AES-GCM (never ECB/DES/RC4) for encryption. For passwords use bcrypt/scrypt/argon2/PBKDF2.",
 		},
 		{
+			ID:         "JAVA_WEAK_HASH_PASSWORD",
+			Title:      "Weak hash used for password storage",
+			Severity:   models.SeverityHigh,
+			Confidence: models.ConfidenceMedium,
+			Category:   "crypto",
+			CWE:        "CWE-916",
+			// The Java twin of GO_WEAK_HASH_PASSWORD, kept apart from
+			// JAVA_WEAK_CRYPTO: that rule says "an MD5/SHA-1 digest exists"
+			// (Medium, general hygiene: an MD5 ETag is a hit), this one says
+			// "a password is fed to it" (High, CWE-916). A textscan Rule has
+			// one Severity and one Pattern, so they cannot be one rule.
+			//
+			// Fires on the digest()/update() line when its argument is a
+			// password-named value (password, userPassword, pwd, passphrase,
+			// getPassword()); FileGuard limits it to a file that asks for MD5
+			// or SHA-1 at all, because the digest line of
+			// `MessageDigest md = ...getInstance("MD5"); md.digest(password...)`
+			// does not name the algorithm. FP class: a file that uses MD5
+			// elsewhere and SHA-256 on the password line. FN class: the
+			// password reaches digest() through a differently named variable.
+			Pattern:   regexp.MustCompile(`\.(?:digest|update)\s*\(\s*(?:[\w]+\.)*(?:\w*[Pp]assword|\w*[Pp]wd|\w*[Pp]assphrase)`),
+			FileGuard: regexp.MustCompile(`MessageDigest\.getInstance\s*\(\s*"(?i:MD5|SHA-?1)"`),
+			Applies:   HasJavaExtension,
+			Fix:       "Use bcrypt, scrypt, argon2, or PBKDF2 for password hashing. Raw MD5/SHA-1 is unsuitable: fast hashes with no work factor and no per-record salt.",
+		},
+		{
 			ID:         "JAVA_INSECURE_DESERIALIZATION",
 			Title:      "Insecure deserialization: Java ObjectInputStream",
 			Severity:   models.SeverityHigh,

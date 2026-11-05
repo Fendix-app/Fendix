@@ -156,7 +156,7 @@ RULE_CLASS = {
     # Weak password hashing
     "PY_WEAK_CRYPTO_PASSWORD": "weak_password_hash",
     "GO_WEAK_HASH_PASSWORD": "weak_password_hash",
-    "JAVA_WEAK_CRYPTO": "weak_password_hash",
+    "JAVA_WEAK_HASH_PASSWORD": "weak_password_hash",
     "python-md5-used-for-password": "weak_password_hash",
     "python-sha1-used-for-password": "weak_password_hash",
     "java-weak_password_hash-taint": "weak_password_hash",
