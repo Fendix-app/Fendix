@@ -176,12 +176,12 @@ func classifyErr(err error) reporters.ScannerReason {
 }
 
 // recordSemgrepRun records a semgrep run that completed and keeps its
-// findings. When Semgrep stopped a rule on a file at its per-rule timeout,
-// the run delivered only part of its findings: like a pass cut short by
-// Fendix's own budget, it is recorded failed with reason timeout (R-pf59), so
-// --fail-on-scanner-error and the coverage gates see it. The detail names
-// each rule and file whose matches are missing. The findings it did produce
-// are kept, as a partial dependency lookup keeps its own.
+// findings. A run that stopped a rule on a file at its per-rule timeout is
+// still ok, as it is by Semgrep's own contract and in v3.7.0 (R-pf90): the rule
+// lost its matches in that file only. The detail names each such rule and
+// file, so the gap is not invisible; the other per-file problems Semgrep
+// reported are counted in it too. A run that did not load a rule, or that was
+// killed (ErrFatal, which never reaches here), is failed.
 func recordSemgrepRun(status *scannerStatusList, findings *[]evidence.Evidence, run semgrep.Run) {
 	*findings = append(*findings, run.Findings...)
 	// A rule Semgrep could not load means the pack did not run in full: the
@@ -205,34 +205,45 @@ func recordSemgrepRun(status *scannerStatusList, findings *[]evidence.Evidence, 
 		status.failDetail(AnalyzerSemgrep, reporters.ReasonExecutionError, detail)
 		return
 	}
-	if len(run.Timeouts) == 0 {
-		// Per-file problems Semgrep reports as non-fatal (a file that did
-		// not fully parse, a per-file memory limit) leave the run ok, counted
-		// in the detail so they are not invisible.
-		if detail := run.Report.Summary(); detail != "" {
-			status.okDetail(AnalyzerSemgrep, detail)
-		} else {
-			status.ok(AnalyzerSemgrep)
+	var parts []string
+	if len(run.Timeouts) > 0 {
+		pairs := make([]string, 0, len(run.Timeouts))
+		for _, t := range run.Timeouts {
+			rule, file := t.RuleID, t.Path
+			if rule == "" {
+				rule = "unknown rule"
+			}
+			if file == "" {
+				file = "unknown file"
+			}
+			pairs = append(pairs, rule+" on "+file)
 		}
+		noun := "rule timeouts"
+		if len(pairs) == 1 {
+			noun = "rule timeout"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s, matches missing: %s", len(pairs), noun, strings.Join(pairs, ", ")))
+	}
+	// Per-file problems Semgrep reports as non-fatal (a file that did not
+	// fully parse, a per-file memory limit) leave the run ok, counted in the
+	// detail so they are not invisible. A Timeout is already named above.
+	other := run.Report
+	if len(run.Timeouts) > 0 && other.Incomplete["Timeout"] > 0 {
+		other.Incomplete = make(map[string]int, len(run.Report.Incomplete))
+		for typ, n := range run.Report.Incomplete {
+			if typ != "Timeout" {
+				other.Incomplete[typ] = n
+			}
+		}
+	}
+	if summary := other.Summary(); summary != "" {
+		parts = append(parts, summary)
+	}
+	if len(parts) == 0 {
+		status.ok(AnalyzerSemgrep)
 		return
 	}
-	pairs := make([]string, 0, len(run.Timeouts))
-	for _, t := range run.Timeouts {
-		rule, file := t.RuleID, t.Path
-		if rule == "" {
-			rule = "unknown rule"
-		}
-		if file == "" {
-			file = "unknown file"
-		}
-		pairs = append(pairs, rule+" on "+file)
-	}
-	noun := "rule timeouts"
-	if len(pairs) == 1 {
-		noun = "rule timeout"
-	}
-	status.failDetail(AnalyzerSemgrep, reporters.ReasonTimeout,
-		fmt.Sprintf("%d %s, matches missing: %s", len(pairs), noun, strings.Join(pairs, ", ")))
+	status.okDetail(AnalyzerSemgrep, strings.Join(parts, "; "))
 }
 
 // recordDepScanResult records the outcome of a pip-style dep scan (one

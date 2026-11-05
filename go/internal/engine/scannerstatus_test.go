@@ -170,12 +170,13 @@ func TestClassifyErr_MinimalMapping(t *testing.T) {
 	}
 }
 
-// A Semgrep run in which a rule hit its per-rule timeout delivered only part
-// of its findings (R-pf59): the analyzer is recorded failed with reason
-// timeout, as a pass cut short by Fendix's own budget is, so
-// --fail-on-scanner-error and the coverage gates see it, and the findings it
-// did produce are kept, as a partial dependency lookup keeps its own.
-func TestSemgrepRunWithRuleTimeoutsFailsAndKeepsFindings(t *testing.T) {
+// A Semgrep run in which a rule hit its per-rule timeout is recorded ok, as
+// v3.7.0 records it: Semgrep itself calls the run successful, and a timeout on
+// one rule and file loses only that rule's matches there (R-pf90). The detail
+// names each timed-out rule and file, so the loss is not invisible, and the
+// findings the run did produce are kept. A run that was killed, or that did
+// not load a rule, is the failed case (the tests below).
+func TestSemgrepRunWithRuleTimeoutsIsOkWithDetailAndKeepsFindings(t *testing.T) {
 	found := []evidence.Evidence{{ID: "SEC-PYTHON_EVAL_INJECTION", RuleID: "python-eval-injection"}}
 
 	var clean scannerStatusList
@@ -191,33 +192,50 @@ func TestSemgrepRunWithRuleTimeoutsFailsAndKeepsFindings(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		timeouts []semgrep.RuleTimeout
+		report   semgrep.Report
 		want     []string
+		notWant  []string
 	}{
 		{"two", []semgrep.RuleTimeout{
 			{RuleID: "js-sqli-taint", Path: "src/big.js"},
 			{RuleID: "python-eval-injection", Path: "app/gen.py"},
-		}, []string{"2 rule timeouts,", "js-sqli-taint on src/big.js", "python-eval-injection on app/gen.py"}},
+		}, semgrep.Report{Incomplete: map[string]int{"Timeout": 2}},
+			[]string{"2 rule timeouts,", "js-sqli-taint on src/big.js", "python-eval-injection on app/gen.py", "matches missing"},
+			[]string{"non-fatal per-file"}},
 		{"one", []semgrep.RuleTimeout{{RuleID: "js-sqli-taint", Path: "src/big.js"}},
-			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js"}},
-		{"unnamed", []semgrep.RuleTimeout{{}}, []string{"1 rule timeout,", "unknown rule on unknown file"}},
+			semgrep.Report{Incomplete: map[string]int{"Timeout": 1}},
+			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js", "matches missing"}, nil},
+		{"unnamed", []semgrep.RuleTimeout{{}}, semgrep.Report{},
+			[]string{"1 rule timeout,", "unknown rule on unknown file"}, nil},
+		// The other per-file problems of the run are still counted, once: a
+		// Timeout is already named above.
+		{"with other per-file problems", []semgrep.RuleTimeout{{RuleID: "js-sqli-taint", Path: "src/big.js"}},
+			semgrep.Report{Incomplete: map[string]int{"Timeout": 1, "PartialParsing": 2}},
+			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js", "PartialParsing 2"},
+			[]string{"Timeout 1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var status scannerStatusList
 			var evid []evidence.Evidence
-			recordSemgrepRun(&status, &evid, semgrep.Run{Findings: found, Timeouts: tc.timeouts})
+			recordSemgrepRun(&status, &evid, semgrep.Run{Findings: found, Timeouts: tc.timeouts, Report: tc.report})
 			if len(status) != 1 {
 				t.Fatalf("entries = %+v; want one", status)
 			}
 			got := status[0]
-			if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonTimeout {
-				t.Errorf("entry = %+v; want semgrep, failed, timeout", got)
+			if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerOK || got.Reason != "" {
+				t.Errorf("entry = %+v; want semgrep, ok, no reason", got)
 			}
-			if !status.hasFailure() {
-				t.Error("a rule timeout must count as a scanner failure for --fail-on-scanner-error")
+			if status.hasFailure() {
+				t.Error("a rule timeout alone must not count as a scanner failure")
 			}
-			for _, want := range append(tc.want, "matches missing") {
+			for _, want := range tc.want {
 				if !strings.Contains(got.Detail, want) {
 					t.Errorf("detail %q lacks %q", got.Detail, want)
+				}
+			}
+			for _, unwanted := range tc.notWant {
+				if strings.Contains(got.Detail, unwanted) {
+					t.Errorf("detail %q has %q", got.Detail, unwanted)
 				}
 			}
 			if !reflect.DeepEqual(evid, found) {

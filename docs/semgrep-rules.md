@@ -46,11 +46,10 @@ on a large file, and no bound at all would let one pathological file use up
 the whole deadline. When a rule hits the bound, Semgrep skips that rule on
 that file, keeps going, and lists the pair in its output's `errors` as a
 `Timeout`. Fendix logs each one with the rule and the file, keeps the
-findings the run did produce, and records the `semgrep` entry in
-`scanner_status` as `failed` with reason `timeout` and a detail naming the
-rules and files: the run delivered only part of its findings, like a pass
-cut short by Fendix's own deadline. `--fail-on-scanner-error` and the
-coverage gates see it. Semgrep's `--timeout-threshold` (3 by default) also
+findings the run did produce, and leaves the `semgrep` entry in
+`scanner_status` `ok`, as Semgrep itself calls the run successful, with a
+detail naming the rules and files whose matches are missing. Only the
+whole run's 300 s deadline is `failed` with reason `timeout`. Semgrep's `--timeout-threshold` (3 by default) also
 applies: after three rules time out on one file, it skips the remaining
 rules on that file.
 

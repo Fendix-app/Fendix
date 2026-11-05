@@ -195,8 +195,8 @@ type Run struct {
 	RuleErrors []RuleError
 	// Timeouts lists the rules Semgrep stopped on a file. ScanRun returns
 	// no error for them, since Findings holds everything else the run
-	// found; the orchestrator records such a run failed with reason
-	// timeout, its findings partial.
+	// found; the orchestrator records such a run ok, with the rules and files
+	// in the detail, as Semgrep itself calls it successful.
 	Timeouts []RuleTimeout
 	// Report counts the other non-fatal, per-file problems Semgrep reported.
 	Report Report
@@ -209,7 +209,7 @@ type Report struct {
 	// timeout, a per-file memory limit), by Semgrep error type. The run is
 	// still ok by Semgrep's own contract; findings in those files may be
 	// missing. A rule Timeout is counted here and, separately, in
-	// Run.Timeouts, which the orchestrator records as a failed run.
+	// Run.Timeouts, which the orchestrator names in the detail of the ok run.
 	Incomplete map[string]int
 }
 

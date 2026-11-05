@@ -1384,17 +1384,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rules on that file.
   - **Timeouts are no longer silent.** Semgrep lists each timed-out rule
     and file in its output's `errors`, which Fendix used to ignore. Each one
-    is now logged with the rule and the file. The run delivered only part of
-    its findings, so the `semgrep` entry in `scanner_status` is `failed` with
-    reason `timeout`, and its `detail` names the timed-out rules and files.
-    The findings the run did produce are kept, as for a partial dependency
-    lookup. `--fail-on-scanner-error` exits 2 on it, and
-    `coverage.configured_complete` is false.
-    This is stricter than v3.7.0, which left a run `ok` when Semgrep
-    reported only per-file or per-rule timeouts and counted them in `detail`.
-    A rule that lost its matches on a file is no longer called a complete
-    run. The other per-file problems v3.7.0 counts (a file that does not
-    fully parse, a per-file memory limit) still leave it `ok`.
+    is now logged with the rule and the file. The run is still `ok`, as in
+    v3.7.0 and by Semgrep's own contract, since the rule lost its matches in
+    that file only, and the `semgrep` entry's `detail` now names the
+    timed-out rules and files (v3.7.0 gave only the count). The findings the
+    run did produce are kept. A run that is killed or does not load a rule is
+    still `failed`.
   - **A malformed `errors` entry is skipped.** Each entry is decoded on its
     own, and an `errors` field that is not a list is ignored, so the results
     beside them are always kept.

@@ -65,7 +65,7 @@ The rules behind the false positives: `js-weak-random-token-taint` (5), `js-open
 ## Scan time and Semgrep timeouts
 
 - 70 scans, no crash, none reached the 600 s limit. Median scan time 23.5 s; the slowest took 120 s.
-- Semgrep's per-file rule timeout (30 s) fired in 11 of the 70 repositories (6 Go and 5 Java), which marks the scan's Semgrep status as failed. The timeouts were on minified or generated files: minified or vendored JavaScript bundles inside Go and Java repositories, generated Go (protobuf, client and ORM code) and three large Java utility files hit by a warn-only `-sink` rule. No timeout hit a handler file for a taint rule on application code. A rule that times out can only lose findings, so the timeouts cannot raise the measured precision, but those 11 scans are not guaranteed complete.
+- Semgrep's per-file rule timeout (30 s) fired in 11 of the 70 repositories (6 Go and 5 Java), which the engine then recorded as a failed Semgrep status; it now records such a scan `ok` with the timed-out rules and files in the detail. The timeouts were on minified or generated files: minified or vendored JavaScript bundles inside Go and Java repositories, generated Go (protobuf, client and ORM code) and three large Java utility files hit by a warn-only `-sink` rule. No timeout hit a handler file for a taint rule on application code. A rule that times out can only lose findings, so the timeouts cannot raise the measured precision, but those 11 scans are not guaranteed complete.
 
 ## Scanned repositories
 
