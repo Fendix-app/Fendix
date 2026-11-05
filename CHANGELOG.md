@@ -1811,6 +1811,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unknown` with the rule id and a "re-run `fendix scan`" instruction, rather
   than as an unsupported shape, and is never reported `resolved`. A finding in
   an `.mjs`, `.cjs`, `.mts` or `.cts` file is recognised as a file finding.
+- **`fendix verify` no longer calls a finding resolved when its scanner cannot
+  read the file.** A `secrets` finding in an `.mjs`, `.cjs`, `.mts` or `.cts`
+  file (textscan reads them, the secrets scanner does not) was reported
+  `resolved` because the re-test could never re-emit it. It is now `unknown`,
+  with the extension named. A Semgrep-tier finding is kept before any other
+  scanner re-tests it.
 
 ## [3.6.4] - 2026-10-24
 

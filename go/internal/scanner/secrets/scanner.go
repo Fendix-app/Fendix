@@ -560,6 +560,17 @@ func underSkipDir(root, abs string) bool {
 	return false
 }
 
+// ReadsFile reports whether Scan reads a file of this base name: its extension
+// is in scanExtensions, or it is an .env-style file. A caller that re-tests a
+// finding with Scan uses it to tell "no longer flagged" from "never looked at".
+func ReadsFile(name string) bool {
+	if isEnvFile(name) {
+		return true
+	}
+	_, ok := scanExtensions[strings.ToLower(filepath.Ext(name))]
+	return ok
+}
+
 func scanFile(path, root string, d fs.DirEntry) ([]evidence.Evidence, error) {
 	name := d.Name()
 	envFile := isEnvFile(name)

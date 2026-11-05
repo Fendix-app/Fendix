@@ -1228,3 +1228,14 @@ func TestJDBCURLPasswordWithDollarIsFullyRedacted(t *testing.T) {
 		}
 	}
 }
+
+func TestReadsFile(t *testing.T) {
+	for name, want := range map[string]bool{
+		"a.py": true, "a.JS": true, "a.json": true, ".env": true, ".env.production": true,
+		"a.mjs": false, "a.cjs": false, "a.mts": false, "a.cts": false, "a.md": false,
+	} {
+		if got := ReadsFile(name); got != want {
+			t.Errorf("ReadsFile(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

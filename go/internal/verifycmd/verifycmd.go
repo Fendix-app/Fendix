@@ -656,7 +656,34 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 		return
 	}
 
+	// A Semgrep rule's finding (the JS/TS, Java and Go packs, taint and sink
+	// rules alike) is kept, with its own reason, rather than falling through
+	// to the generic deferral below. It comes first: another scanner (the
+	// secrets re-test below) never re-tests a Semgrep-tier finding.
+	if isSemgrepRuleFinding(f) {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"%s is a Semgrep rule (%s); verify cannot re-run Semgrep against a single file, so this "+
+				"finding is kept as unconfirmed rather than resolved. Re-run `fendix scan --code <path>` "+
+				"and diff against the baseline for a verdict.",
+			semgrepRuleLabel(f), semgrepTierLabel(f))
+		return
+	}
+
 	if f.Category == "secrets" {
+		// textscan reads more extensions (.mjs, .cjs, ...) than the secrets
+		// scanner, so a finding in such a file can never be re-emitted here.
+		// Its absence would say nothing about the file, so do not call it
+		// resolved.
+		if !secrets.ReadsFile(filepath.Base(absFile)) {
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf(
+				"the secrets scanner does not read %q files (%s), so verify cannot re-test this "+
+					"finding and will not call it resolved. Re-run `fendix scan --code <path>` and "+
+					"diff against the baseline for a verdict.",
+				strings.ToLower(filepath.Ext(absFile)), relPath)
+			return
+		}
 		// Re-run the native secrets scanner against the file's dir.
 		// (The scanner itself walks; pointing it at the immediate
 		// parent gives a fast, focused re-test.)
@@ -683,19 +710,6 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 		}
 		out.Status = StatusResolved
 		out.Reason = fmt.Sprintf("secrets scanner no longer flags %s for %q", relPath, truncate(f.Title, 60))
-		return
-	}
-
-	// A Semgrep rule's finding (the JS/TS, Java and Go packs, taint and sink
-	// rules alike) is kept, with its own reason, rather than falling through
-	// to the generic deferral below.
-	if isSemgrepRuleFinding(f) {
-		out.Status = StatusUnknown
-		out.Reason = fmt.Sprintf(
-			"%s is a Semgrep rule (%s); verify cannot re-run Semgrep against a single file, so this "+
-				"finding is kept as unconfirmed rather than resolved. Re-run `fendix scan --code <path>` "+
-				"and diff against the baseline for a verdict.",
-			semgrepRuleLabel(f), semgrepTierLabel(f))
 		return
 	}
 
