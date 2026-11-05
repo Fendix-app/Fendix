@@ -1426,7 +1426,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every Semgrep finding. Fendix now reads `semgrep --version` once per binary
   and leaves out an option the version predates: `--project-root` (1.111.0),
   `--dataflow-traces` (0.107.0), `--timeout` (0.17.0), `--exclude` (0.12.0),
-  logging a warning. An unreadable version is run with every option. Documented
+  logging a warning and naming the dropped options in the Semgrep
+  `scanner_status` detail (`semgrep 1.45.0: dropped --project-root (needs
+  1.111.0)`; the status stays `ok`). An unreadable version is run with every
+  option. Documented
   in `docs/checks/semgrep.md`; the docs also name `--project-root` in the
   command, and `ADR-011` gives the 300 s run timeout.
 

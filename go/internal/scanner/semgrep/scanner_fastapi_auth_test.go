@@ -20,15 +20,12 @@ import (
 // It also pins that the FastAPI auth idioms — Depends(), Security(), and
 // PEP-593 Annotated[...] — are recognised and not falsely flagged.
 //
-// Skipped when semgrep is not on PATH, mirroring
-// TestRulepack_ValidatesViaSemgrepCLI: the YAML-only catalog tests can't
-// see matching behaviour, so this is best-effort and runs where semgrep is
+// Skipped when semgrep is not on PATH, and failed instead when
+// FENDIX_REQUIRE_SEMGREP is set (requireSemgrep, as in CI): the YAML-only
+// catalog tests can't see matching behaviour, so this runs where semgrep is
 // installed (local dev + semgrep-enabled CI).
 func TestFastAPIAuthRule_FrameworkScoping(t *testing.T) {
-	bin, err := exec.LookPath("semgrep")
-	if err != nil {
-		t.Skip("semgrep not on PATH; skipping rule-behaviour test")
-	}
+	bin := requireSemgrep(t)
 	resetRulesCacheForTesting()
 	dir, err := ensureRules()
 	if err != nil {

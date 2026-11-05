@@ -210,6 +210,11 @@ type Report struct {
 	// missing. A rule Timeout is counted here and, separately, in
 	// Run.Timeouts, which the orchestrator names in the detail of the ok run.
 	Incomplete map[string]int
+	// Dropped names the options the run went without because the host
+	// Semgrep predates the release that added them, "semgrep 1.45.0: dropped
+	// --project-root (needs 1.111.0)", or "" when none were. The run is still
+	// ok; its matches are the same, less what the option adds.
+	Dropped string
 }
 
 // Summary is the scanner-status detail for a clean run with per-file
@@ -318,7 +323,9 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 		// record semgrep failed/timeout on an offline scan.
 		"--disable-version-check",
 	}
-	args = append(args, optionalArgs(version, codePath)...)
+	optional, dropped := optionalArgs(version, codePath)
+	args = append(args, optional...)
+	note := droppedNote(version, dropped)
 	for _, rel := range includes {
 		args = append(args, "--include", rel)
 	}
@@ -347,6 +354,7 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 		status = exitStatusOf(exitErr)
 	}
 	out, report, cerr := classifyRun(status, stdout, stderr.String())
+	report.Dropped = note
 	if out == nil {
 		return Run{Report: report}, cerr
 	}

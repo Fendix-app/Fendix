@@ -239,6 +239,11 @@ func recordSemgrepRun(status *scannerStatusList, findings *[]evidence.Evidence, 
 	if summary := other.Summary(); summary != "" {
 		parts = append(parts, summary)
 	}
+	// Options dropped for an older host Semgrep leave the run ok; the detail
+	// is how a reader of the report sees the run was not a full-strength one.
+	if run.Report.Dropped != "" {
+		parts = append(parts, run.Report.Dropped)
+	}
 	if len(parts) == 0 {
 		status.ok(AnalyzerSemgrep)
 		return

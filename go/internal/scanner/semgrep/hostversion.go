@@ -2,6 +2,7 @@ package semgrep
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -79,7 +80,10 @@ var (
 
 // semgrepVersionOf is the release of the semgrep at bin, read by running
 // `bin --version` once per binary path for the life of the process. A binary
-// that does not answer, or answers with anything but a version, is unknown.
+// that answers with anything but a version is unknown, and that is remembered.
+// A read that failed (the context ended, the binary did not run) is unknown
+// for this call only and is not remembered: it says nothing about the binary,
+// and the next scan reads it again.
 func semgrepVersionOf(ctx context.Context, bin string) semgrepVersion {
 	versionMu.Lock()
 	defer versionMu.Unlock()
@@ -89,10 +93,10 @@ func semgrepVersionOf(ctx context.Context, bin string) semgrepVersion {
 	vctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	out, err := commandContext(vctx, bin, "--version").Output()
-	v := semgrepVersion{}
-	if err == nil {
-		v = parseSemgrepVersion(string(out))
+	if err != nil {
+		return semgrepVersion{}
 	}
+	v := parseSemgrepVersion(string(out))
 	versionCache[bin] = v
 	return v
 }
@@ -106,13 +110,12 @@ func resetVersionCacheForTesting() {
 // optionalArgs is the options a run passes beyond the ones every supported
 // Semgrep has: --dataflow-traces, --timeout, --project-root and the build
 // output --excludes, each left out when v is older than the release that
-// added it.
-func optionalArgs(v semgrepVersion, codePath string) []string {
-	var args []string
-	var dropped []string
+// added it. It also returns the options left out, each with the release that
+// added it ("--project-root (needs 1.111.0)").
+func optionalArgs(v semgrepVersion, codePath string) (args, dropped []string) {
 	add := func(major, minor, patch int, name string, values ...string) {
 		if !v.atLeast(major, minor, patch) {
-			dropped = append(dropped, name)
+			dropped = append(dropped, fmt.Sprintf("%s (needs %d.%d.%d)", name, major, minor, patch))
 			return
 		}
 		args = append(args, values...)
@@ -137,7 +140,17 @@ func optionalArgs(v semgrepVersion, codePath string) []string {
 		slog.Warn("semgrep: this Semgrep is older than the release that added some options, so the run goes without them",
 			"semgrep", versionString(v), "dropped", dropped)
 	}
-	return args
+	return args, dropped
+}
+
+// droppedNote is the scanner-status detail for a run that went without
+// options, "semgrep 1.45.0: dropped --project-root (needs 1.111.0)", or ""
+// when none were dropped.
+func droppedNote(v semgrepVersion, dropped []string) string {
+	if len(dropped) == 0 {
+		return ""
+	}
+	return "semgrep " + versionString(v) + ": dropped " + strings.Join(dropped, ", ")
 }
 
 func versionString(v semgrepVersion) string {

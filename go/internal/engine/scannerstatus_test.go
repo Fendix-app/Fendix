@@ -245,6 +245,28 @@ func TestSemgrepRunWithRuleTimeoutsIsOkWithDetailAndKeepsFindings(t *testing.T) 
 	}
 }
 
+// Options dropped for an older host Semgrep are named in the detail of the
+// run, which stays ok.
+func TestSemgrepRunThatDroppedOptionsStaysOkAndNamesThem(t *testing.T) {
+	const note = "semgrep 1.45.0: dropped --project-root (needs 1.111.0)"
+	var status scannerStatusList
+	var evid []evidence.Evidence
+	recordSemgrepRun(&status, &evid, semgrep.Run{Report: semgrep.Report{Dropped: note}})
+	if len(status) != 1 {
+		t.Fatalf("entries = %+v; want one", status)
+	}
+	got := status[0]
+	if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerOK || got.Reason != "" {
+		t.Errorf("entry = %+v; want semgrep, ok, no reason", got)
+	}
+	if got.Detail != note {
+		t.Errorf("detail = %q; want %q", got.Detail, note)
+	}
+	if status.hasFailure() {
+		t.Error("dropped options alone must not count as a scanner failure")
+	}
+}
+
 // A Semgrep run that could not load a rule pack is recorded failed (reason
 // execution_error), whatever else the run produced: it did not run the pack, so
 // the checks that stand in for it (D4) must stay on, and --fail-on-scanner-error
