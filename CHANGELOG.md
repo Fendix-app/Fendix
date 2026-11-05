@@ -1387,6 +1387,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The regex scanner now detects `child_process` exec in every import form.**
+  `JS_CHILD_PROCESS_SHELL` only matched the literal `child_process.exec(`, so
+  `const { exec } = require("child_process"); exec(cmd)`,
+  `import { execSync } from "node:child_process"` and
+  `promisify(require("child_process").exec)` were missed. The rule now matches
+  `exec(`, `execSync(` and `require("child_process").exec` in a file that
+  imports `child_process`, and still ignores a RegExp `.exec(` call. A bare
+  `exec(` in a file that never imports `child_process` is not reported.
 - **The regex scanner now detects SQL concatenation through JdbcTemplate and
   JPA.** `JAVA_SQL_INJECTION` also fires on `jdbcTemplate.queryForList("SELECT
   ... '" + name + "'")` and `entityManager.createNativeQuery("SELECT ... " +

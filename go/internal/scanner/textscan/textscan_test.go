@@ -788,6 +788,77 @@ func TestJavaRules_ExecutorExecuteWithUpdateStringStaysClean(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// child_process exec in every import form. The rule applies only to a file
+// that imports child_process, so `.exec(` on a RegExp stays clean.
+// ---------------------------------------------------------------------------
+
+func jsCmdiFindings(t *testing.T, name, src string) int {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, dir, name, src)
+	return len(findingsByID(mustScan(t, dir, JSRules()))["JS_CHILD_PROCESS_SHELL"])
+}
+
+func TestJSRules_ChildProcessDestructuredRequire(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const { exec } = require("child_process");
+exec(cmd);
+`); n != 1 {
+		t.Errorf("destructured require: JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+}
+
+func TestJSRules_ChildProcessNodeImportExecSync(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.ts", `import { execSync } from "node:child_process";
+execSync(cmd);
+`); n != 1 {
+		t.Errorf("node: import + execSync: JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+}
+
+func TestJSRules_ChildProcessPromisified(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const { promisify } = require("util");
+const exec = promisify(require("child_process").exec);
+`); n != 1 {
+		t.Errorf("promisify(require(...).exec): JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+	if n := jsCmdiFindings(t, "b.js", `const { exec } = require("child_process");
+const { promisify } = require("util");
+async function f(host) { return promisify(exec)(host); }
+async function g(host) { return exec(host); }
+`); n != 1 {
+		t.Errorf("promisified wrapper, direct call: JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+}
+
+func TestJSRules_ChildProcessQualifiedStillFires(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const child_process = require("child_process");
+child_process.exec(cmd);
+child_process.execSync(cmd);
+`); n != 2 {
+		t.Errorf("child_process.exec/execSync: JS_CHILD_PROCESS_SHELL = %d; want 2", n)
+	}
+}
+
+func TestJSRules_ExecWithoutChildProcessImportStaysClean(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const re = /a(b)/g;
+const m = re.exec(text);
+function exec(x) { return x; }
+exec(thing);
+`); n != 0 {
+		t.Errorf("exec( in a file with no child_process import: JS_CHILD_PROCESS_SHELL = %d; want 0", n)
+	}
+}
+
+func TestJSRules_RegExpExecInChildProcessFileStaysClean(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const { execFile } = require("child_process");
+const m = /a(b)/.exec(text);
+const n = pattern.exec(line);
+`); n != 0 {
+		t.Errorf("RegExp.exec in a file that imports child_process: JS_CHILD_PROCESS_SHELL = %d; want 0", n)
+	}
+}
+
 func TestJavaRules_JdbcTemplateConstantTableIsNotSQLInjection(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "Repo.java", `public class Repo {

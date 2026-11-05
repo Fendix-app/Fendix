@@ -139,9 +139,21 @@ func JSRules() []Rule {
 			Confidence: models.ConfidenceMedium,
 			Category:   "injection",
 			CWE:        "CWE-78",
-			Pattern:    regexp.MustCompile(`\bchild_process\.exec\s*\(`),
-			Applies:    HasJSExtension,
-			Fix:        "Prefer child_process.execFile or spawn with argv as an array. exec passes its first argument to a shell.",
+			// exec / execSync in any import form: `child_process.exec(`, a
+			// destructured `const { exec } = require("child_process")`, an ES
+			// `import { execSync } from "node:child_process"`, and
+			// `promisify(require("child_process").exec)`. A bare `exec(` is
+			// too common a name to flag alone, so FileGuard limits the rule
+			// to files that import child_process, and NegPattern drops a
+			// `.exec(` method call (RegExp.exec) unless the line spells out
+			// child_process.exec. FN class: `cp.exec(` through an alias of the
+			// module; a shell command run through a differently named wrapper.
+			Pattern:      regexp.MustCompile(`\b(?:child_process\.)?exec(?:Sync)?\s*\(|require\(\s*['"](?:node:)?child_process['"]\s*\)\.exec(?:Sync)?\b`),
+			NegPattern:   regexp.MustCompile(`\.exec\s*\(`),
+			NegException: regexp.MustCompile(`child_process\.exec`),
+			FileGuard:    regexp.MustCompile(`(?:require\(\s*['"](?:node:)?child_process['"]\s*\)|from\s+['"](?:node:)?child_process['"])`),
+			Applies:      HasJSExtension,
+			Fix:          "Prefer child_process.execFile or spawn with argv as an array. exec passes its first argument to a shell.",
 		},
 		{
 			ID:         "JS_DOCUMENT_WRITE",

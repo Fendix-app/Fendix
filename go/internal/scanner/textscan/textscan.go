@@ -66,7 +66,14 @@ type Rule struct {
 	CWE        string
 	Pattern    *regexp.Regexp
 	NegPattern *regexp.Regexp // optional: line must NOT also match
-	Fix        string
+	// NegException lifts NegPattern: a line that matches it is kept even when
+	// it also matches NegPattern. RE2 has no look-behind, so "`.exec(` that is
+	// not `child_process.exec(`" is written as the two patterns.
+	NegException *regexp.Regexp
+	// FileGuard, when set, restricts the rule to files whose content matches
+	// it (JS_CHILD_PROCESS_SHELL: only a file that imports child_process).
+	FileGuard *regexp.Regexp
+	Fix       string
 	// RedactMatch replaces every Pattern match inside the emitted evidence
 	// snippet with the shared secrets marker. Set it on any rule whose
 	// Pattern matches CREDENTIAL MATERIAL itself — without it the raw source
@@ -465,6 +472,21 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20) // 1 MiB max line
 
+	// FileGuard rules are off for the whole file unless its content matches.
+	// The file is read only when such a rule is in play.
+	var content []byte
+	for _, r := range rules {
+		if r.FileGuard == nil {
+			continue
+		}
+		if content == nil {
+			content, _ = os.ReadFile(path)
+		}
+		if !r.FileGuard.Match(content) {
+			suppressRule[r.ID] = true
+		}
+	}
+
 	// File-level string constants, read lazily and once: only a line that
 	// already matched a ConstArgSafe rule needs them.
 	var fileConsts map[string]struct{}
@@ -491,7 +513,8 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 			if !r.Pattern.MatchString(line) {
 				continue
 			}
-			if r.NegPattern != nil && r.NegPattern.MatchString(line) {
+			if r.NegPattern != nil && r.NegPattern.MatchString(line) &&
+				(r.NegException == nil || !r.NegException.MatchString(line)) {
 				continue
 			}
 			if r.ConstArgSafe && operandsAreConstants(line, constsOf()) {
