@@ -254,7 +254,9 @@ Things you **must** do in the same commit:
    without metavariables. A taint rule (`mode: taint`) is named
    `<lang>-<class>-taint` and also sets `fendix_reachability: taint`; a
    shape rule named `<lang>-<class>-sink` excludes literal arguments and
-   module constants. `TestEveryRuleCarriesFendixMetadata` in
+   module constants (in Go, `const $X = "..."` and the one-binding block
+   `const ( $X = "..." )`; Semgrep 1.141.0 cannot parse `const ( ... $X =
+   "..." ... )`). `TestEveryRuleCarriesFendixMetadata` in
    `scanner_rulepack_test.go` fails the build otherwise;
    [`docs/semgrep-rules.md`](docs/semgrep-rules.md) has the details. A rule
    with `confidence: LOW` may not exceed `fendix_severity: MEDIUM` — the

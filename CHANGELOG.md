@@ -807,13 +807,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     or blocks. The Python frameworks block on 102 of 108 vulnerable cases,
     up from 84.
 
-- **Internal: a Semgrep taint tier, behind a per-language gate that ships
-  closed.** A match of a Semgrep taint rule (`mode: taint`) that sets
+- **A Semgrep taint tier, behind a per-language gate.** A match of a Semgrep taint rule (`mode: taint`) that sets
   `metadata.fendix_reachability: taint` becomes a finding with
   `source_tier: "semgrep_taint"` and `reachable: true`, but only when every
   language in the rule's `languages` is enabled in
-  `semgrep.ReachabilityLanguages`. No language is enabled and no bundled rule
-  sets the key, so detection does not change.
+  `semgrep.ReachabilityLanguages`. The gate shipped closed with this tier.
+  JavaScript, TypeScript, Java and Go are enabled by the packs below (see
+  "Proven JavaScript, TypeScript, Java and Go flows can now block" under
+  Changed); no other language is.
   - **The match is the proof.** Semgrep reports a taint-mode match only when
     a declared source reached the sink within one function. No dataflow trace
     is needed. The engine now runs Semgrep with `--dataflow-traces`, and when
@@ -824,8 +825,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **When a language is enabled.** Only when its taint pack reaches
     precision of at least 0.90 on the framework-parity development set,
     within the noise budget. The release gate checks holdout precision.
-    ADR-011 records the decision. JavaScript, TypeScript, Java and Go packs
-    follow in later changes.
+    ADR-011 records the decision and the evidence for each enabled language.
   - **What a taint finding counts for.** Its reachability adds +10 to the
     confidence score, counts as an independent corroborating signal, and
     escalates the severity one level. A correlated one gets both the
@@ -847,14 +847,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Schema.** `source_tier` gains the value `semgrep_taint` in
     `docs/schema.json` and `docs/reporting-contract.json`. The change is
     additive: `schema_version` stays 2.
-  - **Parity and cost.** The framework parity gate shows no case change.
-    Asking for traces added about 3% to Semgrep's run time on the parity
-    corpus, within run-to-run noise.
+  - **Parity and cost.** With the gate closed, the framework parity gate
+    showed no case change. Asking for traces added about 3% to Semgrep's run
+    time on the parity corpus, within run-to-run noise.
 
-- **Internal: every bundled Semgrep rule now carries the same metadata, and
-  rule packs get `semgrep --test` tests.** This sets the contract the
-  JavaScript/TypeScript, Java and Go packs are written to. Detection does not
-  change.
+- **Every bundled Semgrep rule now carries the same metadata, and rule packs
+  get `semgrep --test` tests.** This is the contract the JavaScript/TypeScript,
+  Java and Go packs are written to. On its own it changed no detection.
   - **The contract.** `TestEveryRuleCarriesFendixMetadata` requires
     `category` (one of `injection`, `xss`, `crypto`, `auth`, `secrets`),
     `cwe` (`CWE-<number>`), `confidence`, `fendix_severity`, `fendix_title`
@@ -863,8 +862,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     named `<lang>-<class>-taint`, declares `confidence: MEDIUM` and sets
     `fendix_reachability: taint`. A shape rule named `<lang>-<class>-sink`
     excludes a fully literal argument and a module constant
-    (`const`, `static final`, a Go `const ( ... )` block), so the same sink
-    with a constant does not become a false positive.
+    (`const`, `static final`, and in Go `const $X = "..."` and the
+    one-binding block `const ( $X = "..." )`; Semgrep 1.141.0 cannot parse
+    the wider `const ( ... $X = "..." ... )`), so the same sink with a
+    constant does not become a false positive.
   - **Twelve existing rules gain `fendix_title` and
     `fendix_remediation`:** `python-jwt-decode-no-verification`,
     `python-md5-used-for-password`, `python-sha1-used-for-password`,
@@ -885,8 +886,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rule file of its stem and still reports success, so
     `TestRuleTestsPairWithRulePacks` fails on such a file. It also requires
     a `ruleid:` and an `ok:` line for every rule of a pack in a language
-    other than Python. There are no test files yet; each new pack brings its
-    own.
+    other than Python. The JavaScript/TypeScript, Java and Go packs bring
+    their own test files.
   - **Parity run time.** `make parity` records the wall time of every scan
     in `.parity/results.json` and prints the run's total and its slowest
     scan, to watch against the Semgrep deadline below.
@@ -957,13 +958,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `*.test.*`, `*.spec.*`, `*.e2e-spec.*`, `*.cy.*` files), matched relative
     to the scan root.
   - **Proven taint findings block.** The taint rules' findings are
-    reachable; see the next entry. Shape findings warn.
+    reachable; see "Proven JavaScript, TypeScript, Java and Go flows can now
+    block" under Changed. Shape findings warn.
   - **Framework parity (JS/TS):** recall 19.4% to 88.9% (96 of 108
     vulnerable cases), with no new false positive: the false-positive rate
     on safe cases stays 4.5%, the three `sqli-safe_lookalike` cases the
     Python engine's `SEC-JS_SQL_TEMPLATE` already flagged. Block recall goes
-    from 19.4% to 63.9% with the next entry, which lets the taint findings
-    block. Still missed: SSRF and path traversal through a helper in the
+    from 19.4% to 63.9% with the gate entry under Changed, which lets the
+    taint findings block. Still missed: SSRF and path traversal through a helper in the
     same or another file (12 cases).
   - **Real-world noise:** no new finding on the clean
     `node-express-realworld` (2.4 kLOC). On the vulnerable-by-design apps,
@@ -975,40 +977,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Catalog.** `docs/security-catalog-contract.json` gains the 17
     `js-*` checks under the `semgrep` analyzer.
 
-- **Proven JavaScript and TypeScript flows can block.**
-  `semgrep.ReachabilityLanguages` now enables `javascript` and `typescript`,
-  so a match of a JS/TS taint rule is a `semgrep_taint` finding:
-  `reachable: true`, one severity level higher, and at or above `--fail-on`
-  it blocks on its reachable path. A shape (`-sink`) finding still warns.
-  - **Why now.** ADR-011's gate: the pack's precision on the
-    framework-parity development set is 0.97 (96 true positives and 3 false
-    positives over the 174 Express, NestJS and Next.js cases; the 3 are the
-    Python engine's `SEC-JS_SQL_TEMPLATE` on `sqli-safe_lookalike`, the
-    pack's own findings have none), and the pack adds no finding to the
-    clean `node-express-realworld` application. The evidence is recorded in
-    ADR-011.
-  - **Severity.** `js-sqli-taint`, `js-cmdi-taint` and `js-ssti-taint`
-    declare HIGH and the other taint rules MEDIUM. Proven, they are
-    escalated one level, and MEDIUM confidence caps every one at HIGH.
-  - **Framework parity (JS/TS):** block recall 19.4% to 63.9% (69 of 108
-    vulnerable cases). 16 cases per framework newly block: the `direct`
-    case of the nine classes besides SQL injection and secrets, the
-    `alt_api` case of SQL injection, command injection, XSS, SSRF, path
-    traversal and open redirect, and the token generator of
-    `weak_random_token-indirect`. Other sinks inside a helper (`indirect`,
-    `cross_file`) still warn. Recall stays 88.9% and the false-positive
-    rate 4.5%. No safe case newly blocks; the three `sqli-safe_lookalike`
-    cases that the Python engine's `SEC-JS_SQL_TEMPLATE` already blocked
-    still do.
-  - **Real-world noise:** unchanged on `node-express-realworld` (no
-    finding of the pack). On `juice-shop` the SQL shape findings now
-    collapse into the proven ones on the same lines.
 - **Java and Spring code now has Semgrep taint rules.** Three new rule packs
   written in-house, `java-injection.yaml`, `java-web.yaml` and
   `java-crypto.yaml`, add ten taint rules and five shape rules. A taint
   rule's match can block, because Java is enabled in the taint gate (see
-  "A proven Java flow can now block" under Changed); a shape rule's finding
-  only warns.
+  "Proven JavaScript, TypeScript, Java and Go flows can now block" under
+  Changed); a shape rule's finding only warns.
   - **What they find.**
     - SQL injection: JdbcTemplate, NamedParameterJdbcTemplate, JDBC
       `Statement` and `Connection`, JPA `EntityManager` and Hibernate
@@ -1120,8 +1094,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     template injection are category `injection`, weak hashing and random
     tokens `crypto` and JWT `auth`, as textscan files them, so a textscan
     finding on the same line collapses with the Semgrep one.
-  - **Identity.** The findings are new, with new rule ids. The rule pack has
-    38 rules and the security catalog lists 121 checks.
+  - **Identity.** The findings are new, with new rule ids.
+  - **Catalog.** `docs/security-catalog-contract.json` gains the 15 `java-*`
+    checks under the `semgrep` analyzer.
   - **Parity.** On the Spring corpus, recall goes from 12 to 35 of 36
     vulnerable cases (the one left is a hardcoded secret). False positives
     stay at 2 of 22 safe cases, both textscan's.
@@ -1135,8 +1110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   injection, command injection, template injection, XSS, SSRF, path
   traversal, open redirect, weak password hashing and JWTs decoded with
   `ParseUnverified`, and a pattern rule, `go-weak-random-token`, for tokens
-  drawn from `math/rand`. A taint rule's match may block once Go is enabled
-  in `semgrep.ReachabilityLanguages` (see Changed); the other rules warn.
+  drawn from `math/rand`. A taint rule's match can block, because Go is
+  enabled in the taint gate (see "Proven JavaScript, TypeScript, Java and Go
+  flows can now block" under Changed); a shape rule's finding and
+  `go-weak-random-token` only warn.
   - **Sources.** net/http's query, form and path values, request headers,
     cookies and body (decoded JSON included), gorilla/mux and chi path
     variables, and Gin's request accessors and bind targets.
@@ -1200,43 +1177,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Parity.** net/http and Gin recall rises from 36% to 100% each, with no
     new false positive (the four left are textscan's, on the SQL and command
     lookalikes).
+  - **Catalog.** `docs/security-catalog-contract.json` gains the 19 `go-*`
+    checks under the `semgrep` analyzer.
 
 ### Changed
 
-- **A proven Java flow can now block.** Java is enabled in the Semgrep taint
-  gate (`semgrep.ReachabilityLanguages`, ADR-011), so a match of a Java taint
-  rule is a reachable `semgrep_taint` finding: the engine escalates it one
-  level and, at or above `--fail-on`, it blocks on its reachable path. The
-  shape rules (`java-*-sink`) still only warn.
-  - **Evidence.** Precision on the Spring corpus is 35 / (35 + 2) = 0.946,
-    above the 0.90 gate; both false positives are textscan's and only warn.
-    `spring-petclinic`, the clean Java noise target, gets no new finding.
-  - **Parity.** Spring block recall goes from 3 to 29 of 36 vulnerable cases.
-    No safe case blocks. The cases that still warn are the six whose sink is
-    in another file, and one hardcoded secret that is not found.
-  - **Real code.** On WebGoat, 25 Java taint locations block, all true
-    positives. That is two more than at warn: two weak random secrets that
-    textscan also reports on the same line are now kept as the proven
-    finding.
-  - The taint findings keep their identity: enabling the gate does not move a
-    fingerprint.
+- **Proven JavaScript, TypeScript, Java and Go flows can now block.**
+  `semgrep.ReachabilityLanguages` enables `javascript`, `typescript`, `java`
+  and `go` (ADR-011), so a match of one of these packs' taint rules
+  (`js-<class>-taint`, `java-<class>-taint`, `go-<class>-taint`) is a
+  `semgrep_taint` finding: `reachable: true`, escalated one severity level,
+  and, at or above `--fail-on`, it blocks on its reachable path. A shape
+  rule's finding (`-sink`) and `go-weak-random-token` still only warn. No
+  other language is enabled.
+  - **Evidence.** Each pack met ADR-011's gate: precision of at least 0.90 on
+    the framework-parity development set, and no new finding on a clean
+    application. Precision is true positives over true and false positives
+    on the language's cases.
+    - JavaScript and TypeScript: 96 / (96 + 3) = 0.970 over the 174 Express, NestJS and
+      Next.js cases. The 3 false positives are the Python engine's
+      `SEC-JS_SQL_TEMPLATE` on `sqli-safe_lookalike`, not the pack's.
+      `node-express-realworld`: no new finding.
+    - Java: 35 / (35 + 2) = 0.946 on the Spring cases; both false positives are
+      textscan's. `spring-petclinic`: no new finding.
+    - Go: 72 / (72 + 4) = 0.947 over the net/http and Gin cases; the four false
+      positives are textscan's. `golang-gin-realworld`: no new finding.
+  - **Severity.** A proven finding is escalated one level, and a taint
+    rule's MEDIUM confidence caps it at HIGH, so every proven finding of
+    these packs reports HIGH.
+  - **Framework parity (block recall, of the vulnerable cases).**
+    - JavaScript and TypeScript: block recall rises from 19.4% to 63.9% (69 of 108 vulnerable cases). 16 cases per framework newly
+      block: the `direct` case of the nine classes besides SQL injection and
+      secrets, the `alt_api` case of SQL injection, command injection, XSS,
+      SSRF, path traversal and open redirect, and the token generator of
+      `weak_random_token-indirect`. Other sinks inside a helper (`indirect`,
+      `cross_file`) still warn.
+    - Java: block recall rises from 8.3% to 80.6% (29 of 36 vulnerable cases). The cases that still warn are the six whose sink
+      is in another file, and one hardcoded secret that is not found.
+    - Go: block recall rises from 11.1% to 77.8% (56 of 72 vulnerable cases). Per framework, the secrets cases as before, and every
+      direct, `alt_api` and same-file helper case of the nine taint classes.
+      The other `cross_file` cases and the two `math/rand` token cases warn.
+    - No safe case newly blocks. The three JavaScript/TypeScript
+      `sqli-safe_lookalike` cases that the Python engine's
+      `SEC-JS_SQL_TEMPLATE` already blocked still do; that check is not part
+      of this gate.
+  - **Two analyzers on one line.** Where textscan and a taint rule report the
+    same category and line (Go's `GO_SQL_INJECTION` and
+    `GO_EXEC_COMMAND_INJECTION`, Java's weak random secrets), the proven
+    Semgrep finding, escalated before the collapse, is the one kept.
+  - **Identity.** Enabling the gate moves no fingerprint.
 
-- **Proven Go flows may now block.** Go is enabled in
-  `semgrep.ReachabilityLanguages`, so a match of a Go taint rule
-  (`go-<class>-taint`) is a reachable `semgrep_taint` finding: escalated one
-  level, and blocking at or above `--fail-on`. The pack met ADR-011's gate:
-  precision 72/(72+4) = 0.947 on the framework-parity development set (the
-  four false positives are textscan's), and no new finding on the clean noise
-  target `golang-gin-realworld`. Shape rules (`go-<class>-sink`) and
-  `go-weak-random-token` still warn.
-  - **Parity.** net/http and Gin block recall rises from 11% to 78% each
-    (28 of 36): the secrets cases as before, and every direct, `alt_api`
-    and same-file helper case of the nine taint classes. The other
-    `cross_file` cases and the two math/rand token cases warn. No safe case
-    blocks.
-  - **Two analyzers on one line.** Where textscan's `GO_SQL_INJECTION` or
-    `GO_EXEC_COMMAND_INJECTION` reports the same line, the proven Semgrep
-    finding, escalated before the collapse, is the one kept.
+- **The images pin Semgrep 1.141.0.** `python/requirements.txt` asked for
+  `semgrep>=1.45.0`, so both Dockerfiles installed whatever Semgrep was
+  newest at build time, while the rules, their tests and the lock are written
+  against 1.141.0. It is now `semgrep==1.141.0`, as is the Semgrep install in
+  the enterprise benchmark workflow. The lock already held 1.141.0.
 
 - **`python-random-for-token-generation` reports more token generators.**
   - **More calls.** `random.choices`, `random.randrange` and
@@ -1378,6 +1373,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     before this change, and no scan took longer than 1.3 seconds.
 
 ### Fixed
+
+- **Semgrep now scans a target inside a git work tree as its own project.**
+  Semgrep matches a rule's `paths.exclude` patterns, and its default ignore
+  list, relative to its project root, which inside a git work tree is the git
+  root and not the scanned directory. Scanning `<repo>/fixtures/repo`,
+  `<repo>/mock/repo` or `<repo>/spec/repo` therefore had the JavaScript, Java
+  and Go packs' test-code exclusions (`fixtures/`, `mock/`, `spec/`, `tests/`)
+  applied to every file of the target, so nothing was scanned: no error, and
+  an empty `paths.scanned`. Fendix now passes `--project-root <scan target>`,
+  so the exclusions are relative to the directory it was asked to scan.
 
 - **`flask-route-no-auth-decorator` now reports an auth decorator placed
   above `@app.route(...)`.** Such a decorator does not protect the route:

@@ -139,7 +139,10 @@ fails otherwise. It also holds two naming rules:
   with a `pattern-not` (`"..."`), and a module constant with a
   `pattern-not-inside` for the language's constant binding: `const $X = ...`
   in JavaScript and TypeScript, `static final String $X = ...` in Java, and
-  both `const $X = ...` and a `const ( ... )` block in Go.
+  both `const $X = "..."` and a one-binding block, `const (` / `$X = "..."` /
+  `)` followed by `...`, in Go. Semgrep 1.141.0 does not parse the wider
+  block form `const ( ... $X = "..." ... )`: a rule using it fails to load
+  with "Invalid pattern for Go". Write the one-binding form.
 
 ### The Java packs
 
@@ -318,7 +321,39 @@ is `HIGH` and the others' `MEDIUM`. A reachable finding is escalated one
 level, and a taint rule's `MEDIUM` confidence caps severity at `HIGH`, so
 every proven finding of the pack reports `HIGH`.
 
-## Go taint rules: calls, helpers and known false positives
+## The Go packs
+
+`go-injection.yaml`, `go-web.yaml` and `go-crypto.yaml` cover net/http,
+gorilla/mux, chi and Gin. They hold nine taint rules
+(`go-sqli-taint`, `go-cmdi-taint`, `go-ssti-taint`, `go-xss-taint`,
+`go-ssrf-taint`, `go-path-traversal-taint`, `go-open-redirect-taint`,
+`go-weak-password-hash-taint`, `go-jwt-no-verify-taint`), nine shape rules
+(`go-<class>-sink`, the same nine classes) and a pattern rule,
+`go-weak-random-token`, for a token drawn from `math/rand`. Each has tests in
+[`ruletests/`](../go/internal/scanner/semgrep/ruletests/).
+
+- **Request sources.** net/http's query, form and path values, request
+  headers, cookies and body (decoded JSON included), gorilla/mux and chi path
+  variables, and Gin's request accessors and bind targets.
+- **One call into the same file.** Semgrep OSS follows taint within one
+  function. A call that passes request input to a function of the same file
+  whose string parameter reaches the sink is reported at the call.
+- **Shape rules** report an exported function whose string parameter is
+  formatted into a SQL value, a shell command line, an HTML response, an
+  outbound URL, a joined file path or a redirect target, for callers in other
+  files. They prove no flow, so they never count as reachable.
+- **Test code.** No Go rule reports in `*_test.go` files or in `testdata`,
+  `testhelpers`, `testutil`, `testutils`, `testing`, `test` and `tests`
+  directories, matched below the scan root.
+- **Go is enabled in the taint gate** (`ReachabilityLanguages`, ADR-011): a
+  Go taint match is reachable, escalated one severity level, and can block at
+  or above `--fail-on`. A shape rule's finding and `go-weak-random-token` only
+  warn.
+- Semgrep cannot share a block between rules, so the request sources and
+  sanitisers are repeated in every taint rule; `TestGoTaintRulesShareTheirBlocks`
+  keeps the copies equal.
+
+### Calls, helpers and known false positives
 
 The Go taint rules (`go-<class>-taint`) follow request input within one
 function, as Semgrep OSS does, and treat a call by what can be seen of it in

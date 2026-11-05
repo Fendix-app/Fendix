@@ -11,7 +11,10 @@ Security-relevant code patterns using custom Semgrep rules. Semgrep performs pat
 
 ## Built-in Rules
 
-**23 rules across four files**, embedded into the Go binary from
+**74 rules across thirteen files**: the 23 Python rules in the four files
+below, and the JavaScript/TypeScript (17), Java (15) and Go (19) taint packs in
+nine more, which [`docs/semgrep-rules.md`](../semgrep-rules.md) documents. They
+are embedded into the Go binary from
 `go/internal/scanner/semgrep/rules/` via `//go:embed rules/*.yaml`. The count is
 pinned by `rulepackTotalCount` in `scanner_rulepack_test.go` — that test is the
 authority if this page and the pack ever disagree.

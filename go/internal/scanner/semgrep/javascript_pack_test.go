@@ -388,8 +388,9 @@ func TestJavaScriptPackSkipsTestCode(t *testing.T) {
 	}
 }
 
-// largeExpressRoutes writes an Express route file of about 2,000 lines: one
-// route that builds SQL from req.query.name (line 8), then 120 handlers, each
+// largeExpressRoutes writes an Express route file of about 2,500 lines: one
+// route that builds SQL from req.query.name (line 8), then 120 ORDER BY routes
+// that sort through a SORT_MAP lookup helper, then 120 handlers, each
 // with a helper function, a guard, a parameterized query and a mapped
 // response. That is the shape of a real route file, and the size at which the
 // round-3 helper sanitisers of js-sqli-taint went superlinear and timed out.
@@ -400,6 +401,17 @@ func largeExpressRoutes() string {
 	b.WriteString("router.get('/search', async (req, res) => {\n")
 	b.WriteString("  const r = await db.query(\"SELECT * FROM t WHERE name = '\" + req.query.name + \"'\");\n")
 	b.WriteString("  res.json(r.rows);\n});\n\n")
+	// The shape js-sqli-taint's constant-helper sanitiser accepts: a module
+	// constant map of literals and 120 helpers that look a value up in it with
+	// a literal fallback, each used in an ORDER BY route. That sanitiser is
+	// what went superlinear and timed out in round 3.
+	b.WriteString("const SORT_MAP = { name: 'name', date: 'created_at', rank: 'rank', owner: 'owner_id' };\n\n")
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&b, "function col%d(s) { return SORT_MAP[s] ?? 'id' }\n\n", i)
+		fmt.Fprintf(&b, "router.get('/sorted%d', async (req, res) => {\n", i)
+		fmt.Fprintf(&b, "  const rows = await db.query('SELECT * FROM items ORDER BY ' + col%d(req.query.sort));\n", i)
+		b.WriteString("  res.json(rows.rows);\n});\n\n")
+	}
 	for i := 0; i < 120; i++ {
 		fmt.Fprintf(&b, "function format%d(row) {\n  return { id: row.id, name: row.name, rank: %d };\n}\n\n", i, i)
 		fmt.Fprintf(&b, "router.get('/items%d/:id', async (req, res) => {\n", i)
@@ -416,7 +428,7 @@ func largeExpressRoutes() string {
 
 // The JavaScript packs stay linear on a large route file: with the shipped
 // arguments (--timeout 30 per rule and file), the real SQL injection in a
-// 2,000-line, 241-function file is reported, no rule times out, and the whole
+// 2,500-line, 361-function file is reported, no rule times out, and the whole
 // bundled pack finishes in under 20 s. Before round 4, js-sqli-taint alone
 // needed more than 200 s here, hit the 30 s bound, and lost the finding. The
 // pack takes about 3 s on a development laptop, so 20 s leaves room for a
@@ -428,7 +440,7 @@ func TestJavaScriptPackStaysLinearOnALargeRouteFile(t *testing.T) {
 
 	src := largeExpressRoutes()
 	if lines := strings.Count(src, "\n"); lines < 2000 {
-		t.Fatalf("generated %d lines, want about 2,000", lines)
+		t.Fatalf("generated %d lines, want about 2,500", lines)
 	}
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{"routes/items.js": src})
@@ -450,7 +462,12 @@ func TestJavaScriptPackStaysLinearOnALargeRouteFile(t *testing.T) {
 		t.Errorf("no %s finding at routes/items.js:8 among %d findings", jsTaintRuleID, len(run.Findings))
 	}
 	const bound = 20 * time.Second
+	byRule := map[string]int{}
+	for _, f := range run.Findings {
+		byRule[f.RuleID]++
+	}
+	t.Logf("express: %d lines, %d findings %v, %s", strings.Count(src, "\n"), len(run.Findings), byRule, elapsed.Round(time.Millisecond))
 	if elapsed > bound {
-		t.Errorf("the bundled pack took %s on a 2,000-line route file; want under %s", elapsed.Round(time.Millisecond), bound)
+		t.Errorf("the bundled pack took %s on a 2,500-line route file; want under %s", elapsed.Round(time.Millisecond), bound)
 	}
 }

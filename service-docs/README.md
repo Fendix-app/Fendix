@@ -476,7 +476,7 @@ orchestrator logs an install hint and continues.
 > deleted in TASK-118. A rule added there never runs. See `CONTRIBUTING.md` →
 > "Adding a Semgrep rule".
 
-**23 rules** across four files.
+**74 rules** across thirteen files: the 23 Python rules in the four files below, and the JavaScript/TypeScript, Java and Go taint packs (17, 15 and 19 rules; see `docs/semgrep-rules.md`).
 
 ### auth.yaml (4 rules)
 

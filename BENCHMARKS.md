@@ -266,13 +266,16 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 | **Java (v0.27–v0.28)** | **regex SAST (line-local): command injection, SQLi-by-concat, weak crypto, insecure deserialization, XXE, insecure cookie, weak randomness, LDAP injection, SSRF** | **regex** |
 | any language | hardcoded-secrets scanner (15 pattern families) | regex |
 
-Java (v0.27–v0.28) is **regex pattern-matching, line-local** — the same tier as the
-Go rules and the JS/TS textscan rules, NOT taint analysis. The Spring rules added since are Semgrep taint
-rules: within one method, plus one call into a method of the same class, not
-across files. A match of one counts as a proven flow and can block. We publish **no Java recall/precision number**: the framework
-parity corpus the rules were tuned on is a development set, and public numbers
-come only from its held-out twin. Deep, interprocedural Java taint analysis
-(what OWASP Benchmark needs) is a future phase.
+The Java (v0.27–v0.28) textscan rules are **regex pattern-matching,
+line-local**, the same tier as the Go and JS/TS textscan rules, NOT taint
+analysis. The Semgrep packs added since (JavaScript/TypeScript, Spring, and
+Go net/http and Gin) are taint rules: they follow request input within one
+function, and for Java and Go also one call into a method or function of the
+same class or file, not across files. A match of one counts as a proven flow
+and can block. We publish **no JS/TS, Java or Go recall/precision number**:
+the framework parity corpus the rules were tuned on is a development set, and
+public numbers come only from its held-out twin. Deep, interprocedural taint
+analysis (what OWASP Benchmark needs) is a future phase.
 
 ---
 
