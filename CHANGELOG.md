@@ -1802,6 +1802,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported. Now only a constant string repeated is inert. These findings are
   new.
 
+### Fixed
+
+- **`fendix verify` keeps findings from the JavaScript/TypeScript, Java and Go
+  Semgrep rules.** A finding of a `-taint` or `-sink` rule in those packs (tier
+  `semgrep_shim` today, `semgrep_taint` once a language gate opens) is reported
+  `unknown` with the rule id and a "re-run `fendix scan`" instruction, rather
+  than as an unsupported shape, and is never reported `resolved`. A finding in
+  an `.mjs`, `.cjs`, `.mts` or `.cts` file is recognised as a file finding.
+
 ## [3.6.4] - 2026-10-24
 
 A security rebuild of v3.6.3. The scanner source is unchanged; what changes
