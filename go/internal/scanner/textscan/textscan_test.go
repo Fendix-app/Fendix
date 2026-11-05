@@ -973,3 +973,12 @@ func a(db *sql.DB, r *http.Request, n string) {
 		t.Errorf("GO_SQL_INJECTION = %d; want 1", n)
 	}
 }
+
+func TestJSRules_ChildProcessRequireThenExecFires(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `require("child_process").exec(cmd);
+require('node:child_process').execSync(cmd);
+const cp = require("child_process"); cp.exec(cmd);
+`); n != 2 {
+		t.Errorf("require(...).exec(cmd): JS_CHILD_PROCESS_SHELL = %d; want 2 (cp.exec through an alias is the documented FN)", n)
+	}
+}

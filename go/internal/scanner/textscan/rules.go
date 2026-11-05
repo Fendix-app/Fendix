@@ -153,7 +153,7 @@ func JSRules() []Rule {
 			// module; a shell command run through a differently named wrapper.
 			Pattern:      regexp.MustCompile(`\b(?:child_process\.)?exec(?:Sync)?\s*\(|require\(\s*['"](?:node:)?child_process['"]\s*\)\.exec(?:Sync)?\b`),
 			NegPattern:   regexp.MustCompile(`\.exec\s*\(`),
-			NegException: regexp.MustCompile(`child_process\.exec`),
+			NegException: regexp.MustCompile(`child_process['"]?\)?\.exec`),
 			FileGuard:    regexp.MustCompile(`(?:require\(\s*['"](?:node:)?child_process['"]\s*\)|from\s+['"](?:node:)?child_process['"])`),
 			Applies:      HasJSExtension,
 			Fix:          "Prefer child_process.execFile or spawn with argv as an array. exec passes its first argument to a shell.",
