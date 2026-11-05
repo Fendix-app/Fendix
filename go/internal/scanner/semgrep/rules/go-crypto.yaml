@@ -17,7 +17,7 @@ rules:
   - id: go-weak-password-hash-taint
     mode: taint
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -30,6 +30,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: ERROR
     message: >-
       Password from request input hashed with MD5 or SHA-1: use bcrypt, argon2id or scrypt.
@@ -61,6 +67,7 @@ rules:
       - pattern: '($R : *http.Request).PostForm'
       - pattern: '($R : *http.Request).Header'
       - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).FormFile(...)'
       - pattern: '($R : *http.Request).Body'
       - pattern: $C.Request.Header
       - pattern: $C.Request.Body
@@ -99,13 +106,15 @@ rules:
               regex: ^(Should|Must)?Bind[A-Za-z]*$
           - focus-metavariable: $X
     pattern-sanitizers:
-      # A qualified or method call's result is not request input: see the pack
-      # header. A bare call (a function of this package, a builtin, a
-      # conversion) keeps its arguments' taint, as Semgrep's default; that is
-      # what lets the helper sinks below follow a call into this file.
+      # A call's result is not request input (see the pack header), unless the
+      # call is a source, one of this rule's sinks, a call that hands its input
+      # back, or a function of this file that returns an expression of its
+      # string parameter or passes it to this rule's sink (the helper sinks
+      # below). len, cap and make are clean like any other call, and so is a
+      # function of another file of the package: its body cannot be seen.
       - exact: true
         patterns:
-          - pattern: $RECEIVER.$FUNC(...)
+          - pattern: $FUNC(...)
           # Sources.
           - pattern-not: $R.URL.Query()
           - pattern-not: $R.URL.Query().$GET(...)
@@ -117,6 +126,7 @@ rules:
           - pattern-not: $R.Form.Get(...)
           - pattern-not: $R.PostForm.Get(...)
           - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: '($R : *http.Request).FormFile(...)'
           - pattern-not: mux.Vars(...)
           - pattern-not: chi.URLParam(...)
           - pattern-not: '($C : *gin.Context).$GIN(...)'
@@ -143,6 +153,10 @@ rules:
           - pattern-not: $VALUE.Bytes()
           - pattern-not: $VALUE.Query()
           - pattern-not: $VALUE.Hostname()
+          - pattern-not: $RE.ReplaceAllString(...)
+          - pattern-not: $RE.ReplaceAllLiteralString(...)
+          - pattern-not: $RE.ReplaceAllStringFunc(...)
+          - pattern-not: $REPLACER.Replace(...)
           - pattern-not: $CODEC.DecodeString(...)
           - pattern-not: $CODEC.Unescape(...)
           - pattern-not: $CODEC.UnescapeString(...)
@@ -165,6 +179,93 @@ rules:
           - pattern-not: sha1.New()
           - pattern-not: $HASH.Write(...)
           - pattern-not: io.WriteString(...)
+          # A function of this file that hands back an expression of its string
+          # parameter (a transform of the input). Only string functions are
+          # looked at: a wider signature makes Semgrep try every parameter of every
+          # function, which costs seconds per large file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                return <... $RETURNED ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                return <... $RETURNED ...>, $SECOND
+              }
+              ...
+          # The same, through one variable: out := re.ReplaceAllString(s, "");
+          # return out.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>, $SECOND
+              }
+              ...
+          # A function of this file whose parameter reaches this rule's sink. A
+          # sink method or function named by a list (Query, Exec, ...) is written
+          # out once per name: as a metavariable in this file-spanning pattern
+          # it makes Semgrep try every call of every function, a minute on a
+          # large generated file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                md5.Sum(<... $PARAM ...>)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                sha1.Sum(<... $PARAM ...>)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $HASH := md5.New()
+                ...
+                $HASH.Write(<... $PARAM ...>)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $HASH := sha1.New()
+                ...
+                $HASH.Write(<... $PARAM ...>)
+                ...
+              }
+              ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -338,7 +439,7 @@ rules:
   # A string parameter named like a password hashed with MD5 or SHA-1.
   - id: go-weak-password-hash-sink
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -351,6 +452,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: WARNING
     message: >-
       Password parameter hashed with MD5 or SHA-1: use bcrypt, argon2id or scrypt.
@@ -409,7 +516,7 @@ rules:
   - id: go-jwt-no-verify-taint
     mode: taint
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -422,6 +529,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: ERROR
     message: >-
       JWT from the request trusted without verifying its signature: verify it with jwt.Parse and jwt.WithValidMethods.
@@ -453,6 +566,7 @@ rules:
       - pattern: '($R : *http.Request).PostForm'
       - pattern: '($R : *http.Request).Header'
       - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).FormFile(...)'
       - pattern: '($R : *http.Request).Body'
       - pattern: $C.Request.Header
       - pattern: $C.Request.Body
@@ -491,13 +605,15 @@ rules:
               regex: ^(Should|Must)?Bind[A-Za-z]*$
           - focus-metavariable: $X
     pattern-sanitizers:
-      # A qualified or method call's result is not request input: see the pack
-      # header. A bare call (a function of this package, a builtin, a
-      # conversion) keeps its arguments' taint, as Semgrep's default; that is
-      # what lets the helper sinks below follow a call into this file.
+      # A call's result is not request input (see the pack header), unless the
+      # call is a source, one of this rule's sinks, a call that hands its input
+      # back, or a function of this file that returns an expression of its
+      # string parameter or passes it to this rule's sink (the helper sinks
+      # below). len, cap and make are clean like any other call, and so is a
+      # function of another file of the package: its body cannot be seen.
       - exact: true
         patterns:
-          - pattern: $RECEIVER.$FUNC(...)
+          - pattern: $FUNC(...)
           # Sources.
           - pattern-not: $R.URL.Query()
           - pattern-not: $R.URL.Query().$GET(...)
@@ -509,6 +625,7 @@ rules:
           - pattern-not: $R.Form.Get(...)
           - pattern-not: $R.PostForm.Get(...)
           - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: '($R : *http.Request).FormFile(...)'
           - pattern-not: mux.Vars(...)
           - pattern-not: chi.URLParam(...)
           - pattern-not: '($C : *gin.Context).$GIN(...)'
@@ -535,6 +652,10 @@ rules:
           - pattern-not: $VALUE.Bytes()
           - pattern-not: $VALUE.Query()
           - pattern-not: $VALUE.Hostname()
+          - pattern-not: $RE.ReplaceAllString(...)
+          - pattern-not: $RE.ReplaceAllLiteralString(...)
+          - pattern-not: $RE.ReplaceAllStringFunc(...)
+          - pattern-not: $REPLACER.Replace(...)
           - pattern-not: $CODEC.DecodeString(...)
           - pattern-not: $CODEC.Unescape(...)
           - pattern-not: $CODEC.UnescapeString(...)
@@ -553,6 +674,90 @@ rules:
           # This rule's sinks.
           - pattern-not: $PARSER.ParseUnverified(...)
           - pattern-not: jwt.NewParser(...)
+          # A function of this file that hands back an expression of its string
+          # parameter (a transform of the input). Only string functions are
+          # looked at: a wider signature makes Semgrep try every parameter of every
+          # function, which costs seconds per large file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                return <... $RETURNED ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                return <... $RETURNED ...>, $SECOND
+              }
+              ...
+          # The same, through one variable: out := re.ReplaceAllString(s, "");
+          # return out.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>, $SECOND
+              }
+              ...
+          # A function of this file whose parameter reaches this rule's sink. A
+          # sink method or function named by a list (Query, Exec, ...) is written
+          # out once per name: as a metavariable in this file-spanning pattern
+          # it makes Semgrep try every call of every function, a minute on a
+          # large generated file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $TOKEN, $PARTS, $ERR := $PARSER.ParseUnverified($PARAM, ...)
+                ...
+                <... $TOKEN.Claims ...>;
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $CLAIMS := $INIT
+                ...
+                $PARSER.ParseUnverified($PARAM, $CLAIMS)
+                ...
+                <... $CLAIMS ...>;
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $CLAIMS := $INIT
+                ...
+                $PARSER.ParseUnverified($PARAM, &$CLAIMS)
+                ...
+                <... $CLAIMS ...>;
+                ...
+              }
+              ...
     pattern-sinks:
       - patterns:
           # The claims are read: the token's Claims field, or the claims value
@@ -782,7 +987,7 @@ rules:
   # and its claims read.
   - id: go-jwt-no-verify-sink
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -795,6 +1000,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: WARNING
     message: >-
       JWT parameter decoded without verifying its signature and its claims read: verify it with jwt.Parse.
@@ -861,7 +1072,7 @@ rules:
   # never claims reachability.
   - id: go-weak-random-token
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -874,6 +1085,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: ERROR
     message: >-
       Security token generated with math/rand: use crypto/rand.
@@ -887,9 +1104,10 @@ rules:
       fendix_remediation: >-
         math/rand is a predictable generator: its outputs can be recovered from a few samples or its seed. Generate tokens, session ids and reset codes with crypto/rand, for example rand.Text() or rand.Read into a byte slice.
     patterns:
-      # The file uses math/rand. crypto/rand also exports rand.Read, and Semgrep
-      # resolves an import alias, so a file that imports crypto/rand at all is left
-      # out: there, rand.Read may be the CSPRNG.
+      # The file uses math/rand (under any name: Semgrep resolves the alias, so
+      # mrand.Intn matches rand.Intn). crypto/rand shares only Read and the
+      # two-argument Int with it; those are left out in a file that also imports
+      # crypto/rand, and the two-argument Int everywhere.
       - pattern-either:
           - pattern-inside: |
               import "math/rand"
@@ -897,9 +1115,9 @@ rules:
           - pattern-inside: |
               import "math/rand/v2"
               ...
-      - pattern-not-inside: |
-          import "crypto/rand"
-          ...
+      - pattern-not: $NAME := <... rand.Int($READER, $MAX) ...>
+      - pattern-not: $NAME = <... rand.Int($READER, $MAX) ...>
+      - pattern-not: return <... rand.Int($READER, $MAX) ...>
       - pattern-either:
           # Assigned to a variable or field named like a secret.
           - patterns:
@@ -911,7 +1129,7 @@ rules:
                   - pattern: $OBJ.$NAME = <... rand.$FN(...) ...>
               - metavariable-regex:
                   metavariable: $NAME
-                  regex: ^(?:(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*_(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*[a-z0-9](?:Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY))(?:ID|Id|Key|Code|Hash|Value|String|Str|Bytes)?s?$
+                  regex: ^(?:(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*_(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*[A-Za-z0-9](?:Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY))(?:ID|Id|Key|Code|Hash|Value|String|Str|Bytes)?s?$
               - metavariable-regex:
                   metavariable: $FN
                   regex: ^(Int|Intn|IntN|Int31|Int31n|Int32|Int32N|Int63|Int63n|Int64|Int64N|Uint|UintN|Uint32|Uint32N|Uint64|Uint64N|Float32|Float64|N|Perm)$
@@ -924,7 +1142,7 @@ rules:
                   }
               - metavariable-regex:
                   metavariable: $FUNC
-                  regex: ^(?:(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*_(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*[a-z0-9](?:Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY))(?:ID|Id|Key|Code|Hash|Value|String|Str|Bytes)?s?$
+                  regex: ^(?:(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*_(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*[A-Za-z0-9](?:Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY))(?:ID|Id|Key|Code|Hash|Value|String|Str|Bytes)?s?$
               - pattern-either:
                   - patterns:
                       - pattern-either:
@@ -933,4 +1151,8 @@ rules:
                       - metavariable-regex:
                           metavariable: $FN
                           regex: ^(Int|Intn|IntN|Int31|Int31n|Int32|Int32N|Int63|Int63n|Int64|Int64N|Uint|UintN|Uint32|Uint32N|Uint64|Uint64N|Float32|Float64|N|Perm)$
-                  - pattern: rand.Read($BUF)
+                  - patterns:
+                      - pattern: rand.Read($BUF)
+                      - pattern-not-inside: |
+                          import "crypto/rand"
+                          ...

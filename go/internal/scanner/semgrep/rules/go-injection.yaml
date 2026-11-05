@@ -26,7 +26,7 @@ rules:
   - id: go-sqli-taint
     mode: taint
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -39,6 +39,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: ERROR
     message: >-
       SQL query built from request input: pass the value as a query argument with a placeholder instead.
@@ -70,6 +76,7 @@ rules:
       - pattern: '($R : *http.Request).PostForm'
       - pattern: '($R : *http.Request).Header'
       - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).FormFile(...)'
       - pattern: '($R : *http.Request).Body'
       - pattern: $C.Request.Header
       - pattern: $C.Request.Body
@@ -108,13 +115,15 @@ rules:
               regex: ^(Should|Must)?Bind[A-Za-z]*$
           - focus-metavariable: $X
     pattern-sanitizers:
-      # A qualified or method call's result is not request input: see the pack
-      # header. A bare call (a function of this package, a builtin, a
-      # conversion) keeps its arguments' taint, as Semgrep's default; that is
-      # what lets the helper sinks below follow a call into this file.
+      # A call's result is not request input (see the pack header), unless the
+      # call is a source, one of this rule's sinks, a call that hands its input
+      # back, or a function of this file that returns an expression of its
+      # string parameter or passes it to this rule's sink (the helper sinks
+      # below). len, cap and make are clean like any other call, and so is a
+      # function of another file of the package: its body cannot be seen.
       - exact: true
         patterns:
-          - pattern: $RECEIVER.$FUNC(...)
+          - pattern: $FUNC(...)
           # Sources.
           - pattern-not: $R.URL.Query()
           - pattern-not: $R.URL.Query().$GET(...)
@@ -126,6 +135,7 @@ rules:
           - pattern-not: $R.Form.Get(...)
           - pattern-not: $R.PostForm.Get(...)
           - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: '($R : *http.Request).FormFile(...)'
           - pattern-not: mux.Vars(...)
           - pattern-not: chi.URLParam(...)
           - pattern-not: '($C : *gin.Context).$GIN(...)'
@@ -152,6 +162,10 @@ rules:
           - pattern-not: $VALUE.Bytes()
           - pattern-not: $VALUE.Query()
           - pattern-not: $VALUE.Hostname()
+          - pattern-not: $RE.ReplaceAllString(...)
+          - pattern-not: $RE.ReplaceAllLiteralString(...)
+          - pattern-not: $RE.ReplaceAllStringFunc(...)
+          - pattern-not: $REPLACER.Replace(...)
           - pattern-not: $CODEC.DecodeString(...)
           - pattern-not: $CODEC.Unescape(...)
           - pattern-not: $CODEC.UnescapeString(...)
@@ -190,6 +204,683 @@ rules:
           - pattern-not: $DB.Group(...)
           - pattern-not: $DB.Having(...)
           - pattern-not: $DB.Joins(...)
+          # A function of this file that hands back an expression of its string
+          # parameter (a transform of the input). Only string functions are
+          # looked at: a wider signature makes Semgrep try every parameter of every
+          # function, which costs seconds per large file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                return <... $RETURNED ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                return <... $RETURNED ...>, $SECOND
+              }
+              ...
+          # The same, through one variable: out := re.ReplaceAllString(s, "");
+          # return out.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>, $SECOND
+              }
+              ...
+          # A function of this file whose parameter reaches this rule's sink. A
+          # sink method or function named by a list (Query, Exec, ...) is written
+          # out once per name: as a metavariable in this file-spanning pattern
+          # it makes Semgrep try every call of every function, a minute on a
+          # large generated file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.Query(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.QueryRow(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.Exec(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.Prepare(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.Queryx(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.QueryRowx(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.MustExec(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.Raw(<... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.Query($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.QueryRow($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.Exec($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.Prepare($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.Queryx($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.QueryRowx($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.MustExec($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.Raw($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.Query($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.QueryRow($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.Exec($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.Prepare($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.Queryx($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.QueryRowx($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.MustExec($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.Raw($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.Query($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.QueryRow($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.Exec($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.Prepare($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.Queryx($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.QueryRowx($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.MustExec($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.Raw($QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.QueryContext($CTX, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.QueryRowContext($CTX, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.ExecContext($CTX, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.PrepareContext($CTX, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.QueryxContext($CTX, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.QueryRowxContext($CTX, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $DB.MustExecContext($CTX, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.QueryContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.QueryRowContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.ExecContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.PrepareContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.QueryxContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.QueryRowxContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := fmt.Sprintf($FORMAT, ..., $PARAM, ...);
+                ...
+                $DB.MustExecContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.QueryContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.QueryRowContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.ExecContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.PrepareContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.QueryxContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.QueryRowxContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $LEFT + $PARAM ...>;
+                ...
+                $DB.MustExecContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.QueryContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.QueryRowContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.ExecContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.PrepareContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.QueryxContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.QueryRowxContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $QUERY := <... $PARAM + $RIGHT ...>;
+                ...
+                $DB.MustExecContext($CTX, $QUERY, ...)
+                ...
+              }
+              ...
 
       # A value parsed as a number, a boolean or a UUID carries no syntax.
       - pattern: strconv.Atoi(...)
@@ -199,7 +890,13 @@ rules:
       - pattern: strconv.ParseBool(...)
       - pattern: uuid.Parse(...)
       - pattern: uuid.MustParse(...)
-      # A number formatted back into a string is digits only.
+      # A number formatted back into a string is digits only, and so is a Sprintf
+      # whose every verb is numeric ("$%d" placeholders).
+      - patterns:
+          - pattern: fmt.Sprintf($NUMERICFORMAT, ...)
+          - metavariable-regex:
+              metavariable: $NUMERICFORMAT
+              regex: ^"([^%"\\]|%%|%[-+# 0]*[0-9]*(\.[0-9]*)?[dboxXeEfFgG])*"$
       - pattern: strconv.Itoa(...)
       - pattern: strconv.FormatInt(...)
       - pattern: strconv.FormatUint(...)
@@ -209,6 +906,684 @@ rules:
       # Quoted by the driver.
       - pattern: pq.QuoteLiteral(...)
       - pattern: pq.QuoteIdentifier(...)
+      # An identifier allowlist (ORDER BY columns, sort directions). After an if
+      # that finds the value not on a list and returns or replaces it with a
+      # literal, the value is one of the list's entries.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$ALLOWED[$V] ...> {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !slices.Contains($LIST, $V) ...> {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Has($V) ...> {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if <... !$SET.Contains($V) ...> {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+          - pattern-not-inside: |
+              if <... $CONJUNCT && <... !$ALLOWED[$V] ...> ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... <... !$ALLOWED[$V] ...> && $OTHERCONJUNCT ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !(<... !$ALLOWED[$V] ...> || $OTHERDISJUNCT) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !($DISJUNCT || <... !$ALLOWED[$V] ...>) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... $WRAPPER(..., <... !$ALLOWED[$V] ...>, ...) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... $CONJUNCT && <... !slices.Contains($LIST, $V) ...> ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... <... !slices.Contains($LIST, $V) ...> && $OTHERCONJUNCT ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !(<... !slices.Contains($LIST, $V) ...> || $OTHERDISJUNCT) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !($DISJUNCT || <... !slices.Contains($LIST, $V) ...>) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... $WRAPPER(..., <... !slices.Contains($LIST, $V) ...>, ...) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... $CONJUNCT && <... !$SET.Has($V) ...> ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... <... !$SET.Has($V) ...> && $OTHERCONJUNCT ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !(<... !$SET.Has($V) ...> || $OTHERDISJUNCT) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !($DISJUNCT || <... !$SET.Has($V) ...>) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... $WRAPPER(..., <... !$SET.Has($V) ...>, ...) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... $CONJUNCT && <... !$SET.Contains($V) ...> ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... <... !$SET.Contains($V) ...> && $OTHERCONJUNCT ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !(<... !$SET.Contains($V) ...> || $OTHERDISJUNCT) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... !($DISJUNCT || <... !$SET.Contains($V) ...>) ...> {
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              if <... $WRAPPER(..., <... !$SET.Contains($V) ...>, ...) ...> {
+                ...
+              }
+              ...
+          - pattern: $V
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if <... $ALLOWED[$V] ...> {
+                    ...
+                  }
+              - pattern-inside: |
+                  if <... slices.Contains($LIST, $V) ...> {
+                    ...
+                  }
+              - pattern-inside: |
+                  if <... $SET.Has($V) ...> {
+                    ...
+                  }
+          - pattern-not-inside: |
+              if <... $DISJUNCT || <... $ALLOWED[$V] ...> ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... <... $ALLOWED[$V] ...> || $OTHERDISJUNCT ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !(<... $ALLOWED[$V] ...> && $OTHERCONJUNCT) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !($CONJUNCT && <... $ALLOWED[$V] ...>) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... $WRAPPER(..., <... $ALLOWED[$V] ...>, ...) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !($ALLOWED[$V]) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... $ALLOWED[$V] ...> {
+                ...
+              } else {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... $DISJUNCT || <... slices.Contains($LIST, $V) ...> ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... <... slices.Contains($LIST, $V) ...> || $OTHERDISJUNCT ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !(<... slices.Contains($LIST, $V) ...> && $OTHERCONJUNCT) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !($CONJUNCT && <... slices.Contains($LIST, $V) ...>) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... $WRAPPER(..., <... slices.Contains($LIST, $V) ...>, ...) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !(slices.Contains($LIST, $V)) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... slices.Contains($LIST, $V) ...> {
+                ...
+              } else {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... $DISJUNCT || <... $SET.Has($V) ...> ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... <... $SET.Has($V) ...> || $OTHERDISJUNCT ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !(<... $SET.Has($V) ...> && $OTHERCONJUNCT) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !($CONJUNCT && <... $SET.Has($V) ...>) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... $WRAPPER(..., <... $SET.Has($V) ...>, ...) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... !($SET.Has($V)) ...> {
+                ...
+              }
+          - pattern-not-inside: |
+              if <... $SET.Has($V) ...> {
+                ...
+              } else {
+                ...
+              }
+          - pattern: $V
+      # The value compared with each allowed literal, and replaced or refused
+      # when it matches none.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if $V != "..." {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    $S3
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    $S1
+                    $S2
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  if $V != "..." && $V != "..." && $V != "..." && $V != "..." {
+                    if $BRANCH {
+                      $V = "..."
+                    } else {
+                      $V = "..."
+                    }
+                  }
+                  ...
+          - pattern: $V
+      # A switch whose default replaces the value with a literal, or returns.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  switch $V {
+                  case $A, ...:
+                    ...
+                  default:
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  switch $V {
+                  case $A, ...:
+                    ...
+                  default:
+                    $S1
+                    $V = "..."
+                  }
+                  ...
+              - pattern-inside: |
+                  switch $V {
+                  case $A, ...:
+                    ...
+                  default:
+                    return ...
+                  }
+                  ...
+              - pattern-inside: |
+                  switch $V {
+                  case $A, ...:
+                    ...
+                  default:
+                    $S1
+                    return ...
+                  }
+                  ...
+          - pattern: $V
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -222,20 +1597,52 @@ rules:
                   - metavariable-regex:
                       metavariable: $METHOD
                       regex: ^(QueryContext|QueryRowContext|ExecContext|PrepareContext|QueryxContext|QueryRowxContext|MustExecContext)$
-              # GORM-style condition methods also take structs and maps; only a
-              # condition string built in place is raw SQL.
+              # GORM-style condition methods also take structs and maps. A string
+              # built in place, taken straight from the request, or held in a
+              # variable assigned one of those is raw SQL.
               - patterns:
                   - pattern: $DB.$METHOD($QUERY, ...)
                   - metavariable-regex:
                       metavariable: $METHOD
                       regex: ^(Where|Or|Not|Order|Group|Having|Joins)$
-                  - metavariable-pattern:
-                      metavariable: $QUERY
-                      pattern-either:
-                        - pattern: fmt.Sprintf(...)
-                        - pattern: $LEFT + $RIGHT
+                  - pattern-either:
+                      - pattern: $DB.$METHOD(fmt.Sprintf(...), ...)
+                      - pattern: $DB.$METHOD($LEFT + $RIGHT, ...)
+                      - pattern: $DB.$METHOD($R.FormValue(...), ...)
+                      - pattern: $DB.$METHOD($R.PostFormValue(...), ...)
+                      - pattern: $DB.$METHOD($R.URL.Query().Get(...), ...)
+                      - pattern: $DB.$METHOD($R.PathValue(...), ...)
+                      - patterns:
+                          - pattern: $DB.$METHOD($C.$ACCESSOR(...), ...)
+                          - metavariable-regex:
+                              metavariable: $ACCESSOR
+                              regex: ^(Query|DefaultQuery|Param|PostForm|DefaultPostForm|GetHeader)$
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  $QUERY := fmt.Sprintf(...)
+                                  ...
+                              - pattern-inside: |
+                                  $QUERY := $LEFT + $RIGHT
+                                  ...
+                              - pattern-inside: |
+                                  $QUERY := $R.FormValue(...)
+                                  ...
+                              - pattern-inside: |
+                                  $QUERY := $R.URL.Query().Get(...)
+                                  ...
+                              - patterns:
+                                  - pattern-inside: |
+                                      $QUERY := $C.$ACCESSOR(...)
+                                      ...
+                                  - metavariable-regex:
+                                      metavariable: $ACCESSOR
+                                      regex: ^(Query|DefaultQuery|Param|PostForm|DefaultPostForm|GetHeader)$
+                          - pattern: $DB.$METHOD($QUERY, ...)
           # Gin's c.Query(...) is a request accessor, not a database call.
           - pattern-not: '($C : *gin.Context).$ANY(...)'
+          # cmp.Or picks its first non-empty argument: it is not GORM's Or.
+          - pattern-not: cmp.$ANY(...)
           # A prepared statement's Query, QueryRow and Exec take arguments, not SQL.
           - pattern-not: '($STMT : *sql.Stmt).$ANY(...)'
           - pattern-not-inside: |
@@ -799,7 +2206,7 @@ rules:
   # passes request input. A shape match proves no flow; it never blocks alone.
   - id: go-sqli-sink
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -812,6 +2219,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: WARNING
     message: >-
       SQL query built from a function parameter: if callers pass request input, this is SQL injection. Use a placeholder.
@@ -922,7 +2335,7 @@ rules:
   - id: go-cmdi-taint
     mode: taint
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -935,6 +2348,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: ERROR
     message: >-
       Shell command built from request input: run a fixed program without a shell and pass the input as an argument.
@@ -966,6 +2385,7 @@ rules:
       - pattern: '($R : *http.Request).PostForm'
       - pattern: '($R : *http.Request).Header'
       - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).FormFile(...)'
       - pattern: '($R : *http.Request).Body'
       - pattern: $C.Request.Header
       - pattern: $C.Request.Body
@@ -1004,13 +2424,15 @@ rules:
               regex: ^(Should|Must)?Bind[A-Za-z]*$
           - focus-metavariable: $X
     pattern-sanitizers:
-      # A qualified or method call's result is not request input: see the pack
-      # header. A bare call (a function of this package, a builtin, a
-      # conversion) keeps its arguments' taint, as Semgrep's default; that is
-      # what lets the helper sinks below follow a call into this file.
+      # A call's result is not request input (see the pack header), unless the
+      # call is a source, one of this rule's sinks, a call that hands its input
+      # back, or a function of this file that returns an expression of its
+      # string parameter or passes it to this rule's sink (the helper sinks
+      # below). len, cap and make are clean like any other call, and so is a
+      # function of another file of the package: its body cannot be seen.
       - exact: true
         patterns:
-          - pattern: $RECEIVER.$FUNC(...)
+          - pattern: $FUNC(...)
           # Sources.
           - pattern-not: $R.URL.Query()
           - pattern-not: $R.URL.Query().$GET(...)
@@ -1022,6 +2444,7 @@ rules:
           - pattern-not: $R.Form.Get(...)
           - pattern-not: $R.PostForm.Get(...)
           - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: '($R : *http.Request).FormFile(...)'
           - pattern-not: mux.Vars(...)
           - pattern-not: chi.URLParam(...)
           - pattern-not: '($C : *gin.Context).$GIN(...)'
@@ -1048,6 +2471,10 @@ rules:
           - pattern-not: $VALUE.Bytes()
           - pattern-not: $VALUE.Query()
           - pattern-not: $VALUE.Hostname()
+          - pattern-not: $RE.ReplaceAllString(...)
+          - pattern-not: $RE.ReplaceAllLiteralString(...)
+          - pattern-not: $RE.ReplaceAllStringFunc(...)
+          - pattern-not: $REPLACER.Replace(...)
           - pattern-not: $CODEC.DecodeString(...)
           - pattern-not: $CODEC.Unescape(...)
           - pattern-not: $CODEC.UnescapeString(...)
@@ -1068,6 +2495,89 @@ rules:
           - pattern-not: exec.CommandContext(...)
           - pattern-not: syscall.Exec(...)
           - pattern-not: os.StartProcess(...)
+          # A function of this file that hands back an expression of its string
+          # parameter (a transform of the input). Only string functions are
+          # looked at: a wider signature makes Semgrep try every parameter of every
+          # function, which costs seconds per large file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                return <... $RETURNED ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                return <... $RETURNED ...>, $SECOND
+              }
+              ...
+          # The same, through one variable: out := re.ReplaceAllString(s, "");
+          # return out.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>, $SECOND
+              }
+              ...
+          # A function of this file whose parameter reaches this rule's sink. A
+          # sink method or function named by a list (Query, Exec, ...) is written
+          # out once per name: as a metavariable in this file-spanning pattern
+          # it makes Semgrep try every call of every function, a minute on a
+          # large generated file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                exec.Command($SHELL, $FLAG, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                exec.CommandContext($CTX, $SHELL, $FLAG, <... $PARAM ...>, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                exec.Command($PARAM, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                exec.CommandContext($CTX, $PARAM, ...)
+                ...
+              }
+              ...
 
       # A value parsed as a number, a boolean or a UUID carries no syntax.
       - pattern: strconv.Atoi(...)
@@ -1077,7 +2587,13 @@ rules:
       - pattern: strconv.ParseBool(...)
       - pattern: uuid.Parse(...)
       - pattern: uuid.MustParse(...)
-      # A number formatted back into a string is digits only.
+      # A number formatted back into a string is digits only, and so is a Sprintf
+      # whose every verb is numeric ("$%d" placeholders).
+      - patterns:
+          - pattern: fmt.Sprintf($NUMERICFORMAT, ...)
+          - metavariable-regex:
+              metavariable: $NUMERICFORMAT
+              regex: ^"([^%"\\]|%%|%[-+# 0]*[0-9]*(\.[0-9]*)?[dboxXeEfFgG])*"$
       - pattern: strconv.Itoa(...)
       - pattern: strconv.FormatInt(...)
       - pattern: strconv.FormatUint(...)
@@ -1327,7 +2843,7 @@ rules:
   # A string parameter of the enclosing function in a shell's command line.
   - id: go-cmdi-sink
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -1340,6 +2856,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: WARNING
     message: >-
       Shell command built from a function parameter: if callers pass request input, this is command injection.
@@ -1390,7 +2912,7 @@ rules:
   - id: go-ssti-taint
     mode: taint
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -1403,6 +2925,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: ERROR
     message: >-
       Go template parsed from request input: parse a fixed template and pass the input as data.
@@ -1434,6 +2962,7 @@ rules:
       - pattern: '($R : *http.Request).PostForm'
       - pattern: '($R : *http.Request).Header'
       - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).FormFile(...)'
       - pattern: '($R : *http.Request).Body'
       - pattern: $C.Request.Header
       - pattern: $C.Request.Body
@@ -1472,13 +3001,15 @@ rules:
               regex: ^(Should|Must)?Bind[A-Za-z]*$
           - focus-metavariable: $X
     pattern-sanitizers:
-      # A qualified or method call's result is not request input: see the pack
-      # header. A bare call (a function of this package, a builtin, a
-      # conversion) keeps its arguments' taint, as Semgrep's default; that is
-      # what lets the helper sinks below follow a call into this file.
+      # A call's result is not request input (see the pack header), unless the
+      # call is a source, one of this rule's sinks, a call that hands its input
+      # back, or a function of this file that returns an expression of its
+      # string parameter or passes it to this rule's sink (the helper sinks
+      # below). len, cap and make are clean like any other call, and so is a
+      # function of another file of the package: its body cannot be seen.
       - exact: true
         patterns:
-          - pattern: $RECEIVER.$FUNC(...)
+          - pattern: $FUNC(...)
           # Sources.
           - pattern-not: $R.URL.Query()
           - pattern-not: $R.URL.Query().$GET(...)
@@ -1490,6 +3021,7 @@ rules:
           - pattern-not: $R.Form.Get(...)
           - pattern-not: $R.PostForm.Get(...)
           - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: '($R : *http.Request).FormFile(...)'
           - pattern-not: mux.Vars(...)
           - pattern-not: chi.URLParam(...)
           - pattern-not: '($C : *gin.Context).$GIN(...)'
@@ -1516,6 +3048,10 @@ rules:
           - pattern-not: $VALUE.Bytes()
           - pattern-not: $VALUE.Query()
           - pattern-not: $VALUE.Hostname()
+          - pattern-not: $RE.ReplaceAllString(...)
+          - pattern-not: $RE.ReplaceAllLiteralString(...)
+          - pattern-not: $RE.ReplaceAllStringFunc(...)
+          - pattern-not: $REPLACER.Replace(...)
           - pattern-not: $CODEC.DecodeString(...)
           - pattern-not: $CODEC.Unescape(...)
           - pattern-not: $CODEC.UnescapeString(...)
@@ -1533,6 +3069,82 @@ rules:
           - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
           # This rule's sinks.
           - pattern-not: $TPL.Parse(...)
+          # A function of this file that hands back an expression of its string
+          # parameter (a transform of the input). Only string functions are
+          # looked at: a wider signature makes Semgrep try every parameter of every
+          # function, which costs seconds per large file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                return <... $RETURNED ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                return <... $RETURNED ...>, $SECOND
+              }
+              ...
+          # The same, through one variable: out := re.ReplaceAllString(s, "");
+          # return out.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) string {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $RETURNED string, ...) (string, error) {
+                ...
+                $OUT := <... $RETURNED ...>;
+                ...
+                return <... $OUT ...>, $SECOND
+              }
+              ...
+          # A function of this file whose parameter reaches this rule's sink. A
+          # sink method or function named by a list (Query, Exec, ...) is written
+          # out once per name: as a metavariable in this file-spanning pattern
+          # it makes Semgrep try every call of every function, a minute on a
+          # large generated file.
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                template.New(...).Parse($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                template.New(...).$CONFIG(...).Parse($PARAM)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $FUNC(..., $PARAM string, ...) {
+                ...
+                $TPL := template.New(...)
+                ...
+                $TPL.Parse($PARAM)
+                ...
+              }
+              ...
 
       # A value parsed as a number, a boolean or a UUID carries no syntax.
       - pattern: strconv.Atoi(...)
@@ -1542,7 +3154,13 @@ rules:
       - pattern: strconv.ParseBool(...)
       - pattern: uuid.Parse(...)
       - pattern: uuid.MustParse(...)
-      # A number formatted back into a string is digits only.
+      # A number formatted back into a string is digits only, and so is a Sprintf
+      # whose every verb is numeric ("$%d" placeholders).
+      - patterns:
+          - pattern: fmt.Sprintf($NUMERICFORMAT, ...)
+          - metavariable-regex:
+              metavariable: $NUMERICFORMAT
+              regex: ^"([^%"\\]|%%|%[-+# 0]*[0-9]*(\.[0-9]*)?[dboxXeEfFgG])*"$
       - pattern: strconv.Itoa(...)
       - pattern: strconv.FormatInt(...)
       - pattern: strconv.FormatUint(...)
@@ -1672,7 +3290,7 @@ rules:
   # A string parameter of the enclosing function parsed as a template.
   - id: go-ssti-sink
     languages: [go]
-    # Go test code: *_test.go and the conventional helper directories. Matched
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
     # against paths below the scan root, so a checkout that itself lies under a
     # directory named test is still scanned.
     paths:
@@ -1685,6 +3303,12 @@ rules:
         - "**/testing/**"
         - "**/test/**"
         - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
     severity: WARNING
     message: >-
       Go template parsed from a function parameter: if callers pass request input, this is template injection.

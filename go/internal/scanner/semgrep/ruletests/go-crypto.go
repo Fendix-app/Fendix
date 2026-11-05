@@ -237,6 +237,22 @@ func newOTP() int {
 	return rand.Intn(1000000)
 }
 
+// An acronym before the secret word.
+func GenerateCSRFToken() int {
+	// ruleid: go-weak-random-token
+	return rand.Intn(1000000)
+}
+
+func newAPIToken() string {
+	// ruleid: go-weak-random-token
+	return fmt.Sprintf("%x", rand.Uint64())
+}
+
+func GenerateSessionTimeout() int {
+	// ok: go-weak-random-token
+	return rand.Intn(100)
+}
+
 func sessionTimeoutJitter() int {
 	// ok: go-weak-random-token
 	return rand.Intn(1000)

@@ -130,8 +130,9 @@ func TestGoTaintRuleFromRealSemgrepOpensTheGate(t *testing.T) {
 	requireShim(t, find())
 }
 
-// The Go pack skips Go test code: *_test.go files and the conventional
-// helper directories (testdata, testhelpers, testutil, testing, test, tests).
+// The Go pack skips Go test code: *_test.go files, mocks and the
+// conventional helper directories (testdata, testhelpers, testutil,
+// testutils, testing, test, tests, unittest, mock, mocks, fakes).
 // The patterns match below the scan root, so a checkout that itself lies
 // under a directory named test is scanned like any other.
 func TestGoRulesSkipGoTestCode(t *testing.T) {
@@ -149,6 +150,12 @@ func TestGoRulesSkipGoTestCode(t *testing.T) {
 		"testdata/handler.go":           goHandler,
 		"test/handler.go":               goHandler,
 		"tests/handler.go":              goHandler,
+		"models/unittest/handler.go":    goHandler,
+		"internal/mock/handler.go":      goHandler,
+		"internal/mocks/handler.go":     goHandler,
+		"internal/fakes/handler.go":     goHandler,
+		"app/mock_handler.go":           goHandler,
+		"app/handler_mock.go":           goHandler,
 	})
 
 	evs, err := Scan(context.Background(), root)

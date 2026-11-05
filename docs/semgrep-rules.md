@@ -242,6 +242,14 @@ categories match, and textscan reports these as `injection`. A Semgrep rule
 with its own category would be reported a second time beside textscan's
 finding for the same code.
 
+One pair does not collapse. The Go pack's `go-weak-password-hash-taint` and
+`-sink` use `crypto`, while textscan's `GO_WEAK_HASH_PASSWORD` uses
+`secrets`. An `md5.Sum` or `sha1.Sum` of a password variable is therefore
+reported twice on the same line, once by each scanner. The Go rules stay
+out of `secrets` because a `secrets` finding is fingerprinted by rule and
+file only, and verification re-runs the secret scanner, which knows nothing
+of a Semgrep taint flow.
+
 ---
 
 ## The JavaScript and TypeScript pack

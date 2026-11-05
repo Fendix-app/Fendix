@@ -1143,25 +1143,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **One call into the same file.** Semgrep OSS follows taint within one
     function. A call that passes request input to a function of the same
     file whose string parameter reaches the sink is reported at the call.
-  - **Lookups are not request input.** A qualified or method call's result
-    (a row, a cache entry, a stored file name looked up by request input) is
-    clean, except the calls that hand their input back (`fmt.Sprintf`, the
-    `strings`, `filepath`, `path` and `url` functions, decoders). A map
-    lookup keyed by request input is clean too.
-  - **Guards.** Placeholders and prepared statements for SQL; a host
-    allowlist that exits (on the parsed URL or the string it came from) for
-    SSRF; a local-path check (starts with `/`, not with `//`) that exits or
-    replaces the target for redirects; `filepath.Base`, `filepath.Rel` or a
-    separator-terminated prefix check that exits for paths; escaping or
-    `html/template` for XSS; a literal scheme-and-host or local-path prefix
-    for SSRF and redirects. A denylist, a `//` check alone, a prefix check
-    without a separator, or an `if` that only logs guards nothing.
+  - **Lookups are not request input.** A call's result (a row, a cache
+    entry, a stored file name looked up by request input, `len`, `cap` or
+    `make`) is clean, except the calls that hand their input back
+    (`fmt.Sprintf`, the `strings`, `filepath`, `path` and `url` functions,
+    regexp replacement, decoders) and a function of the same file that
+    returns its string parameter or a value computed from it, or passes it
+    to the sink. A map lookup keyed by request input is clean too, and so
+    is a `fmt.Sprintf` whose verbs are all numeric (`"$%d"` placeholders).
+  - **Guards.** Placeholders and prepared statements for SQL, and an
+    identifier (an `ORDER BY` column, a sort direction) checked against an
+    allowlist, compared with each allowed literal, or settled by a `switch`
+    default; a host allowlist (map, `slices.Contains`, a set's `Has`) or a
+    fixed-host comparison that exits, on the parsed URL or the string it came
+    from, for SSRF; a local-path check (starts with `/`, not with `//`) that
+    exits or replaces the target for redirects; `filepath.Base`,
+    `filepath.Rel` or a separator-terminated prefix check that exits for
+    paths, a `..` check only for a name then joined onto a base, and an
+    upload's `Filename`; escaping or `html/template` for XSS; a literal
+    scheme-and-host or local-path prefix for SSRF and redirects, and a value
+    placed after a literal `?` or `#`. A guard counts only when its `if`
+    block ends in a `return` (or, where stated, replaces the value with a
+    literal) and its check is the whole condition or one alternative of an
+    `||`. A check joined to another by `&&` or wrapped in `!(...)` guards
+    nothing, and a passing check covers only its own block, not the `else`.
+    A denylist, a `//` check alone, a prefix check without a separator, or
+    an `if` that only logs guards nothing either.
   - **Shape rules** report an exported function whose string parameter is
     formatted into a SQL value, a shell command line, an HTML response, an
     outbound URL, a joined file path or a redirect target, for callers in
     other files.
-  - **Go test code is skipped:** `*_test.go`, and `testdata`, `testhelpers`,
-    `testutil`, `testutils`, `testing`, `test` and `tests` directories.
+  - **GORM.** A `Where`, `Or`, `Not`, `Order`, `Group`, `Having` or `Joins`
+    condition built with `fmt.Sprintf` or `+`, taken straight from a request
+    accessor (`Where(c.Query("filter"))`), or held in a variable assigned
+    one of those is a sink; `Where("name = ?", v)` and a map or struct
+    condition are not.
+  - **Go test code is skipped:** `*_test.go`, `mock_*.go` and `*_mock.go`,
+    and `testdata`, `testhelpers`, `testutil`, `testutils`, `testing`,
+    `test`, `tests`, `unittest`, `mock`, `mocks` and `fakes` directories.
+  - **Weak password hashing is reported twice.** `go-weak-password-hash-*`
+    uses the `crypto` category and textscan's `GO_WEAK_HASH_PASSWORD` uses
+    `secrets`, so the two findings on one `md5.Sum(password)` line do not
+    collapse (see `docs/semgrep-rules.md`).
   - **Parity.** net/http and Gin recall rises from 36% to 100% each, with no
     new false positive (the four left are textscan's, on the SQL and command
     lookalikes).

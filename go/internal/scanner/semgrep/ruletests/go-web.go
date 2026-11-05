@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -645,4 +646,26 @@ func RedirectLocal(w http.ResponseWriter, r *http.Request, target string) {
 func redirectToSection(w http.ResponseWriter, r *http.Request, section string) {
 	// ok: go-open-redirect-sink
 	http.Redirect(w, r, "/help#"+url.PathEscape(section), http.StatusFound)
+}
+
+// --- Same-file helpers that hand their input back --------------------------------
+
+var scriptTag = regexp.MustCompile(`<script[^>]*>.*</script>`)
+
+// Hands back a filtered copy of its input, through a variable.
+func stripScripts(text string) string {
+	output := scriptTag.ReplaceAllString(text, "")
+	return output
+}
+
+func xssFilteredHelper(w http.ResponseWriter, r *http.Request) {
+	term := stripScripts(r.FormValue("term"))
+	// ruleid: go-xss-taint
+	greetingPage.Execute(w, map[string]any{"Name": template.HTML(term)})
+}
+
+func xssFilteredInline(w http.ResponseWriter, r *http.Request) {
+	term := scriptTag.ReplaceAllString(r.FormValue("term"), "")
+	// ruleid: go-xss-taint
+	greetingPage.Execute(w, map[string]any{"Name": template.HTML(term)})
 }
