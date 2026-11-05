@@ -294,7 +294,17 @@ var patterns = []pattern{
 		// blanks just the credential. Adding a group cannot change RE2 match
 		// extents, so detection behaviour is byte-identical to the ungrouped
 		// form this replaced.
-		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+`),
+		//
+		// Two shapes, one rule id (so no existing identity moves):
+		//   1. URL userinfo: scheme://user:PASSWORD@host
+		//   2. JDBC properties, which carry the password as a pair rather than
+		//      as userinfo: jdbc:postgresql://h/app?user=u&password=PASSWORD,
+		//      jdbc:sqlserver://h:1433;databaseName=a;password=PASSWORD
+		// The value group of each is the password; the credential is the LAST
+		// participating group, so redaction treats both the same. A value
+		// starting with `$` is an interpolation (${DB_PASSWORD}) and does not
+		// match.
+		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+|jdbc:[a-z0-9]+:(?://)?[^\s"'?;]+[?;][^\s"']*?\bpassword=([^&;\s"'$]+)`),
 		severity: models.SeverityHigh,
 		cwe:      "CWE-214",
 	},

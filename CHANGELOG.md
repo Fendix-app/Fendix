@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The secrets scanner detects passwords embedded in JDBC URLs.**
+  `DB_CONNECTION_STRING` gains a second shape under the same rule id (no
+  existing fingerprint moves): `jdbc:postgresql://h/app?user=u&password=...`
+  and `jdbc:sqlserver://h:1433;databaseName=a;user=u;password=...`. Evidence
+  keeps the URL readable and redacts the password only. An interpolated
+  `password=${DB_PASSWORD}` does not fire, and a placeholder such as
+  `password=changeme` is reported and marked a placeholder, as for any other
+  secret. Files are scanned by the scanner's existing extension list, which
+  does not include `.properties`.
 - **Java password hashing is reported apart from general MD5 use.** A new
   textscan rule `JAVA_WEAK_HASH_PASSWORD` (CWE-916, `crypto`, HIGH) fires when
   a password-named value (`password`, `userPassword`, `pwd`, `passphrase`) is

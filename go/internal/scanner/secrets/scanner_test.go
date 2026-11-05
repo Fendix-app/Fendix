@@ -1126,3 +1126,85 @@ func TestProviderAnchoredPartitionsTheRuleSet(t *testing.T) {
 			"needs an explicit side", got, total)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// JDBC URLs carry the password in a query or property pair, not as
+// `user:password@host`, so the URL-userinfo form of DB_CONNECTION_STRING never
+// saw them. The second alternative of the same rule id covers them.
+// ---------------------------------------------------------------------------
+
+func dbConnectionFindings(t *testing.T, name, line string) []evidence.Evidence {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, dir, name, line+"\n")
+	fs, err := Scan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	var out []evidence.Evidence
+	for _, f := range fs {
+		if f.ID == "SEC-DB_CONNECTION_STRING" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestJDBCURLWithQueryPasswordFires(t *testing.T) {
+	const pw = "Xk2mQ9vLp4Zt7RwB5nHc"
+	got := dbConnectionFindings(t, "application.yml",
+		`url: jdbc:postgresql://db.internal:5432/app?user=app&password=`+pw)
+	if len(got) != 1 {
+		t.Fatalf("SEC-DB_CONNECTION_STRING = %d findings; want 1", len(got))
+	}
+	assertNoLeak(t, "JDBC evidence", got[0].Evidence, pw, 6)
+	for _, keep := range []string{"jdbc:postgresql://db.internal:5432/app", "user=app"} {
+		if !strings.Contains(got[0].Evidence, keep) {
+			t.Errorf("evidence lost retained signal %q: %q", keep, got[0].Evidence)
+		}
+	}
+}
+
+func TestJDBCURLWithSemicolonPasswordFires(t *testing.T) {
+	const pw = "Xk2mQ9vLp4Zt7RwB5nHc"
+	got := dbConnectionFindings(t, "Db.java",
+		`String url = "jdbc:sqlserver://h:1433;databaseName=a;user=u;password=`+pw+`";`)
+	if len(got) != 1 {
+		t.Fatalf("SEC-DB_CONNECTION_STRING = %d findings; want 1", len(got))
+	}
+	assertNoLeak(t, "JDBC evidence", got[0].Evidence, pw, 6)
+	if got[0].Evidence == "" || !strings.Contains(got[0].Evidence, "databaseName=a") {
+		t.Errorf("evidence lost retained signal: %q", got[0].Evidence)
+	}
+}
+
+func TestJDBCURLWithInterpolatedPasswordDoesNotFire(t *testing.T) {
+	for _, line := range []string{
+		`url: jdbc:postgresql://h/app?user=app&password=${DB_PASSWORD}`,
+		`url: jdbc:postgresql://h/app?user=app&password=$DB_PASSWORD`,
+		`url: jdbc:postgresql://h/app?user=app`,
+	} {
+		if got := dbConnectionFindings(t, "application.yml", line); len(got) != 0 {
+			t.Errorf("%q fired %d findings; want none", line, len(got))
+		}
+	}
+}
+
+func TestJDBCURLWithPlaceholderPasswordIsMarkedPlaceholder(t *testing.T) {
+	got := dbConnectionFindings(t, "application.yml", `url: jdbc:mysql://h/app?password=changeme`)
+	if len(got) != 1 {
+		t.Fatalf("SEC-DB_CONNECTION_STRING = %d findings; want 1 (a placeholder is reported, marked)", len(got))
+	}
+	if !got[0].Placeholder {
+		t.Errorf("password=changeme must be marked Placeholder by the existing heuristics: %+v", got[0])
+	}
+}
+
+func TestDBConnectionStringIdentityUnchangedByJDBCForm(t *testing.T) {
+	// Same id and rule id as before: the JDBC form is an alternative of the
+	// existing detector, not a new rule.
+	got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://h/app?password=Xk2mQ9vLp4Zt7RwB5nHc`)
+	if len(got) != 1 || got[0].RuleID != "secrets/DB_CONNECTION_STRING" {
+		t.Errorf("want one finding with rule id secrets/DB_CONNECTION_STRING, got %+v", got)
+	}
+}
