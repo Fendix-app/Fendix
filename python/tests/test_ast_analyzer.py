@@ -7097,6 +7097,67 @@ class TestJinjaAutoescapeEnvironment:
         )
         assert [f for f in _collect_src(src) if f["id"] == "SEC-PY_XSS_HTML_SINK"] == []
 
+    @pytest.mark.parametrize("name", ["page.j2", "page.txt", "page", "page.HTML", "page.html.j2"])
+    def test_flask_jinja_env_does_not_escape_other_extensions(self, name: str) -> None:
+        """Flask's `select_jinja_autoescape` escapes only .html, .htm, .xml,
+        .xhtml and .svg templates, so `get_template('page.j2')` is still XSS."""
+        found = self._xss(
+            "",
+            f'app.jinja_env.get_template("{name}").render(n=request.args["n"])',
+        )
+        assert len(found) == 1, found
+
+    @pytest.mark.parametrize("name", ["a.html", "a.htm", "a.xml", "a.xhtml", "a.svg"])
+    def test_flask_jinja_env_escapes_flasks_extensions(self, name: str) -> None:
+        found = self._xss(
+            "",
+            f'app.jinja_env.get_template("{name}").render(n=request.args["n"])',
+        )
+        assert found == []
+
+    def test_flask_jinja_env_with_a_computed_template_name_is_xss(self) -> None:
+        src = (
+            self._HEAD
+            + '@app.route("/")\n'
+            "def v():\n"
+            '    page = request.args["p"] + ".html"\n'
+            '    return app.jinja_env.get_template(page).render(n=request.args["n"])\n'
+        )
+        found = [f for f in _collect_src(src) if f["id"] == "SEC-PY_XSS_HTML_SINK"]
+        assert len(found) == 1, found
+
+    def test_flask_jinja_env_from_string_is_autoescaping(self) -> None:
+        found = self._xss(
+            "",
+            'app.jinja_env.from_string("<p>{{ n }}</p>").render(n=request.args["n"])',
+        )
+        assert found == []
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "<p>{{ n|safe }}</p>",
+            "<p>{{ n | safe }}</p>",
+            "{% autoescape false %}<p>{{ n }}</p>{% endautoescape %}",
+            "{%- autoescape False -%}<p>{{ n }}</p>{% endautoescape %}",
+        ],
+        ids=["safe", "spaced-safe", "autoescape-false", "autoescape-False-trimmed"],
+    )
+    @pytest.mark.parametrize(
+        "env_line",
+        ["env = Environment(autoescape=True)", ""],
+        ids=["environment", "flask-jinja-env"],
+    )
+    def test_an_inline_template_that_switches_escaping_off_is_still_xss(
+        self, env_line: str, template: str
+    ) -> None:
+        target = "env" if env_line else "app.jinja_env"
+        found = self._xss(
+            env_line,
+            f'{target}.from_string("{template}").render(n=request.args["n"])',
+        )
+        assert len(found) == 1, found
+
     @pytest.mark.parametrize(
         "env_line, name",
         [

@@ -5234,11 +5234,17 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
           (default ``html``, ``htm``, ``xml``; a non-constant name is given the
           benefit of the doubt, as Flask's ``render_template`` is) and for
           ``from_string`` unless ``default_for_string=False``;
-        - Flask's own ``<app>.jinja_env`` in a file that imports Flask.
+        - Flask's own ``<app>.jinja_env`` in a file that imports Flask, only
+          for the templates Flask's ``select_jinja_autoescape`` escapes
+          (``.html``, ``.htm``, ``.xml``, ``.xhtml``, ``.svg``, and
+          ``from_string``); a template name that is not a string constant is
+          not taken to be one of them.
 
         Not honoured: no ``autoescape`` argument (Jinja2's default is off),
-        ``autoescape=False`` or any value this cannot read, and an
-        environment the file switches off later (``env.autoescape = False``)."""
+        ``autoescape=False`` or any value this cannot read, an environment the
+        file switches off later (``env.autoescape = False``), and a constant
+        inline template that switches escaping off itself (``|safe``,
+        ``{% autoescape false %}``)."""
         if _depth >= _MAX_TAINT_HOPS:
             return False
         if isinstance(expr, ast.Name):
@@ -5252,6 +5258,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return False
         if self._autoescape_is_switched_off():
             return False
+        if expr.func.attr == "from_string" and self._inline_template_unescapes(expr):
+            return False
+        if self._is_flask_jinja_env(expr.func.value):
+            return self._flask_autoescapes(expr)
         setting = self._environment_autoescape(expr.func.value)
         if setting is None:
             return False
@@ -5263,23 +5273,61 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return False
         return self._select_autoescape_covers(setting, expr)
 
+    def _is_flask_jinja_env(self, env: ast.AST, _depth: int = 0) -> bool:
+        """True when ``env`` is, directly or through the names it is bound to,
+        a ``<app>.jinja_env`` attribute in a file that imports Flask."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(env, ast.Name):
+            bound = self._scope_binding(env.id)
+            return bound is not None and self._is_flask_jinja_env(bound, _depth + 1)
+        if isinstance(env, ast.Attribute) and env.attr == "jinja_env":
+            return "flask" in self._imported_modules.values() or any(
+                module.split(".")[0] == "flask" for module, _ in self._from_imports.values()
+            )
+        return False
+
+    def _flask_autoescapes(self, load: ast.Call) -> bool:
+        """True when Flask's ``select_jinja_autoescape`` escapes the template
+        ``load`` (a call on ``jinja_env``) loads: any ``from_string`` template,
+        and a named one only when the name is a string constant ending in one
+        of `_FLASK_AUTOESCAPE_EXTENSIONS` (case-sensitive, as Flask matches it)."""
+        assert isinstance(load.func, ast.Attribute)
+        if load.func.attr == "from_string":
+            return True
+        name = load.args[0] if load.args else next(
+            (kw.value for kw in load.keywords if kw.arg == "name"), None
+        )
+        return (
+            isinstance(name, ast.Constant)
+            and isinstance(name.value, str)
+            and name.value.endswith(_FLASK_AUTOESCAPE_EXTENSIONS)
+        )
+
+    def _inline_template_unescapes(self, load: ast.Call) -> bool:
+        """True when the text ``from_string`` is given is a string constant that
+        switches escaping off itself (``|safe``, ``{% autoescape false %}``)."""
+        text = load.args[0] if load.args else next(
+            (kw.value for kw in load.keywords if kw.arg == "source"), None
+        )
+        return (
+            isinstance(text, ast.Constant)
+            and isinstance(text.value, str)
+            and _TEMPLATE_UNESCAPES.search(text.value) is not None
+        )
+
     def _environment_autoescape(
         self, env: ast.AST, _depth: int = 0
     ) -> ast.AST | None:
         """The ``autoescape`` setting of the Jinja2 environment ``env`` is,
         directly or through the names it is bound to: the ``autoescape``
-        keyword of the call that built it (None when it has none), or a
-        ``True`` constant for Flask's ``jinja_env``. None for anything else."""
+        keyword of the call that built it (None when it has none). None for
+        anything else (Flask's ``jinja_env`` is `_flask_autoescapes`)."""
         if _depth >= _MAX_TAINT_HOPS:
             return None
         if isinstance(env, ast.Name):
             bound = self._scope_binding(env.id)
             return None if bound is None else self._environment_autoescape(bound, _depth + 1)
-        if isinstance(env, ast.Attribute) and env.attr == "jinja_env":
-            flask_file = "flask" in self._imported_modules.values() or any(
-                module.split(".")[0] == "flask" for module, _ in self._from_imports.values()
-            )
-            return ast.Constant(value=True) if flask_file else None
         if isinstance(env, ast.Call) and self._callee_origin(env.func) in _TEMPLATE_ENVIRONMENTS:
             setting = next((kw.value for kw in env.keywords if kw.arg == "autoescape"), None)
             if isinstance(setting, ast.Name):
@@ -6449,6 +6497,13 @@ _JINJA_TEMPLATE_LOADERS: frozenset[str] = frozenset(
 )
 _SELECT_AUTOESCAPE: frozenset[str] = frozenset(
     {"jinja2.select_autoescape", "jinja2.utils.select_autoescape"}
+)
+# What Flask's `select_jinja_autoescape` escapes by template name.
+_FLASK_AUTOESCAPE_EXTENSIONS: tuple[str, ...] = (".html", ".htm", ".xml", ".xhtml", ".svg")
+# What a constant inline template contains to switch escaping off itself: the
+# `safe` filter, or an `{% autoescape false %}` block.
+_TEMPLATE_UNESCAPES = re.compile(
+    r"\|\s*safe\b|\{%-?\s*autoescape\s+(?:false|off)\b", re.IGNORECASE
 )
 # The extensions `select_autoescape()` enables when it is given none.
 _SELECT_AUTOESCAPE_ENABLED: tuple[str, ...] = ("html", "htm", "xml")
