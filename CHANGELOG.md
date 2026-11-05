@@ -1143,14 +1143,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **One call into the same file.** Semgrep OSS follows taint within one
     function. A call that passes request input to a function of the same
     file whose string parameter reaches the sink is reported at the call.
-  - **Lookups are not request input.** A call's result (a row, a cache
-    entry, a stored file name looked up by request input, `len`, `cap` or
-    `make`) is clean, except the calls that hand their input back
-    (`fmt.Sprintf`, the `strings`, `filepath`, `path` and `url` functions,
-    regexp replacement, decoders) and a function of the same file that
-    returns its string parameter or a value computed from it, or passes it
-    to the sink. A map lookup keyed by request input is clean too, and so
-    is a `fmt.Sprintf` whose verbs are all numeric (`"$%d"` placeholders).
+  - **Lookups are not request input, helpers are followed.** A
+    package-qualified or method call's result (a row, a cache entry, a stored
+    file name looked up by request input) is clean, except the calls that
+    hand their input back (`fmt.Sprintf`, the `strings`, `filepath`, `path`
+    and `url` functions, regexp replacement, decoders) and a call of a method
+    of the same file. A call of a function (or method) of the same file is
+    clean only when its body is in the file and every return is constant: a
+    string literal, a lookup in a map of string literals with a literal
+    fallback, or a `switch` or `if` over literals. Every other call keeps the
+    taint of its arguments, as Semgrep does by default: a function of another
+    file of the package, a helper that builds its result (through a variable,
+    a `strings.Builder`, a struct or a second return value), and a helper
+    that validates its parameter and returns it. `len`, `cap`, a map lookup
+    keyed by request input, and a `fmt.Sprintf` whose verbs are all numeric
+    (`"$%d"` placeholders) are clean.
   - **Guards.** Placeholders and prepared statements for SQL, and an
     identifier (an `ORDER BY` column, a sort direction) checked against an
     allowlist, compared with each allowed literal, or settled by a `switch`
@@ -1162,7 +1169,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     paths, a `..` check only for a name then joined onto a base, and an
     upload's `Filename`; escaping or `html/template` for XSS; a literal
     scheme-and-host or local-path prefix for SSRF and redirects, and a value
-    placed after a literal `?` or `#`. A guard counts only when its `if`
+    placed after a literal `?` or `#`. The comma-ok membership test
+    (`if _, ok := allowed[u.Host]; !ok { return }`, for a set or a bool map,
+    in the `if` or as two statements) is an allowlist for SSRF hosts and SQL
+    identifiers, and so is a conjunction of negated host equalities
+    (`u.Host != "a.example.com" && u.Host != "b.example.com"`). A guard
+    counts only when its `if`
     block ends in a `return` (or, where stated, replaces the value with a
     literal) and its check is the whole condition or one alternative of an
     `||`. A check joined to another by `&&` or wrapped in `!(...)` guards

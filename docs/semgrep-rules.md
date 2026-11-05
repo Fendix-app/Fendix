@@ -318,6 +318,46 @@ is `HIGH` and the others' `MEDIUM`. A reachable finding is escalated one
 level, and a taint rule's `MEDIUM` confidence caps severity at `HIGH`, so
 every proven finding of the pack reports `HIGH`.
 
+## Go taint rules: calls, helpers and known false positives
+
+The Go taint rules (`go-<class>-taint`) follow request input within one
+function, as Semgrep OSS does, and treat a call by what can be seen of it in
+the same file:
+
+- A call of a function or method **of the same file** is clean only when its
+  body is in the file and every `return` is constant: every return is a
+  string literal (a `switch` or `if` over literals, of any size), or the body
+  looks its result up in a map of string literals with a literal fallback (the
+  map declared in the function, or above it at package level). `len` and
+  `cap` are clean too.
+- Every other call keeps the taint of its arguments, which is Semgrep's
+  default: a function of another file of the package, a helper that builds
+  its result (through variables, a `strings.Builder`, a struct or a second
+  return value), and a call whose body is not one of those shapes.
+- A **package-qualified or method call** (`store.Find(id)`, `cache.Get(k)`)
+  is a lookup: its result is not request input, unless it hands its input
+  back (`fmt.Sprintf`, `strings`, `filepath`, `path`, `url`, decoders) or is a
+  call of a method of the same file, which follows the rules above. Keeping
+  these calls tainted was measured on 30 public Go repositories and raised
+  the taint findings from 14 to 63, almost all of them a file path or a
+  redirect read from a stored record, so they stay clean.
+
+Known false positives:
+
+- **A validate-then-return-input helper.** A helper such as
+  `func sortCol(s string) string { if sortCols[s] { return s }; return "id" }`
+  returns its parameter on one path, so the rules treat it as handing its
+  input back and report `db.Query("... ORDER BY " + sortCol(q))`. Return a
+  value from the map or a literal instead (`return sortCols[s]`, or a
+  `switch` with a literal in each case), or check the value inline, which the
+  rules accept (`if !sortCols[s] { s = "id" }`).
+- **A helper outside the shapes.** A constant helper that is not a set of
+  literal returns or a map lookup (a helper that builds its result from
+  constants, or a lookup in a map declared below the helper at package level)
+  is reported when it is given request input. A method of the same file that
+  takes a string and returns a string is followed like a function; a method
+  with another signature is a lookup.
+
 ---
 
 ## Severity guidance

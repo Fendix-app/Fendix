@@ -264,3 +264,18 @@ func handleTokenPageFeatured(w http.ResponseWriter, r *http.Request) {
 	// ok: go-weak-random-token
 	rand.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
 }
+
+// --- Weak password hashing: unknown calls keep the input's taint -------------------------
+
+func paddedPassword(p string) string {
+	out := p + "-pad"
+	return out
+}
+
+func hashUnknownCalls(w http.ResponseWriter, r *http.Request) {
+	password := r.FormValue("password")
+	// ruleid: go-weak-password-hash-taint
+	md5.Sum([]byte(otherFilePassword(password)))
+	// ruleid: go-weak-password-hash-taint
+	md5.Sum([]byte(paddedPassword(password)))
+}

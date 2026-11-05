@@ -125,6 +125,138 @@ func ssrfAllowlistPositive(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// The comma-ok membership test inside the if, for a set and for a bool map.
+var guardHostSet = map[string]struct{}{"api.example.com": {}}
+
+func ssrfCommaOkSet(w http.ResponseWriter, r *http.Request) {
+	u, err := url.Parse(r.URL.Query().Get("url"))
+	if err != nil {
+		return
+	}
+	if _, ok := guardHostSet[u.Host]; !ok {
+		http.Error(w, "url not allowed", http.StatusBadRequest)
+		return
+	}
+	// ok: go-ssrf-taint
+	http.Get(u.String())
+}
+
+func ssrfCommaOkBool(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.Query().Get("url")
+	u, err := url.Parse(raw)
+	if err != nil {
+		return
+	}
+	if _, ok := guardAllowed[u.Hostname()]; !ok {
+		return
+	}
+	// ok: go-ssrf-taint
+	http.Get(u.String())
+	// ok: go-ssrf-taint
+	http.Get(raw)
+}
+
+func ssrfCommaOkGin(c *gin.Context) {
+	u, err := url.Parse(c.Query("url"))
+	if err != nil {
+		return
+	}
+	if _, ok := guardAllowed[u.Host]; !ok {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	// ok: go-ssrf-taint
+	http.Get(u.String())
+}
+
+// The exit must be a direct return, and the check the whole condition.
+func ssrfCommaOkLogged(w http.ResponseWriter, r *http.Request) {
+	u, _ := url.Parse(r.URL.Query().Get("url"))
+	if _, ok := guardAllowed[u.Host]; !ok {
+		if verbose {
+			return
+		}
+		log.Printf("unexpected host %q", u.Host)
+	}
+	// ruleid: go-ssrf-taint
+	http.Get(u.String())
+}
+
+func ssrfCommaOkUnderAnd(w http.ResponseWriter, r *http.Request) {
+	u, _ := url.Parse(r.URL.Query().Get("url"))
+	if _, ok := guardAllowed[u.Host]; !ok && strict {
+		return
+	}
+	// ruleid: go-ssrf-taint
+	http.Get(u.String())
+}
+
+func ssrfCommaOkOnlyLogs(w http.ResponseWriter, r *http.Request) {
+	u, _ := url.Parse(r.URL.Query().Get("url"))
+	if _, ok := guardAllowed[u.Host]; !ok {
+		log.Printf("unexpected host %q", u.Host)
+	}
+	// ruleid: go-ssrf-taint
+	http.Get(u.String())
+}
+
+// A conjunction of negated host equalities is a de Morgan allowlist.
+func ssrfNegatedEqualities(w http.ResponseWriter, r *http.Request) {
+	u, err := url.Parse(r.URL.Query().Get("url"))
+	if err != nil {
+		return
+	}
+	if u.Host != "a.example.com" && u.Host != "b.example.com" {
+		return
+	}
+	// ok: go-ssrf-taint
+	http.Get(u.String())
+}
+
+func ssrfNegatedEqualitiesHostname(c *gin.Context) {
+	raw := c.Query("url")
+	u, err := url.Parse(raw)
+	if err != nil {
+		return
+	}
+	if u.Hostname() != "a.example.com" && u.Hostname() != "b.example.com" && u.Hostname() != "c.example.com" {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	// ok: go-ssrf-taint
+	http.Get(raw)
+}
+
+// Any term that is not a negated host equality guards nothing.
+func ssrfNegatedEqualitiesWithScheme(w http.ResponseWriter, r *http.Request) {
+	u, _ := url.Parse(r.URL.Query().Get("url"))
+	if u.Host != "a.example.com" && u.Scheme != "https" {
+		return
+	}
+	// ruleid: go-ssrf-taint
+	http.Get(u.String())
+}
+
+func ssrfNegatedAllowlistWithScheme(w http.ResponseWriter, r *http.Request) {
+	u, _ := url.Parse(r.URL.Query().Get("url"))
+	if u.Scheme == "https" && !guardAllowed[u.Host] {
+		return
+	}
+	// ruleid: go-ssrf-taint
+	http.Get(u.String())
+}
+
+func ssrfNegatedEqualitiesNested(w http.ResponseWriter, r *http.Request) {
+	u, _ := url.Parse(r.URL.Query().Get("url"))
+	if u.Host != "a.example.com" && u.Host != "b.example.com" {
+		if verbose {
+			return
+		}
+	}
+	// ruleid: go-ssrf-taint
+	http.Get(u.String())
+}
+
 // Request input after a "?" lands in the query string: the base decides
 // where the request goes.
 var statusBase = "http://localhost:8080/api"
@@ -385,4 +517,42 @@ func readAfterLoggedCheck(name string) ([]byte, error) {
 		log.Println("dot-dot")
 	}
 	return os.ReadFile(filepath.Join(guardBase, name))
+}
+
+// --- The call sanitizers of the web classes ------------------------------------------
+
+func constantHost() string { return "api.example.com" }
+
+func constantPage(kind string) string {
+	if kind == "help" {
+		return "/help"
+	}
+	return "/"
+}
+
+func trimmedInput(s string) string {
+	out := strings.TrimSpace(s)
+	return out
+}
+
+func unknownCallsWeb(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	// ok: go-ssrf-taint
+	http.Get("https://" + constantHost() + "/v1")
+	// ruleid: go-ssrf-taint
+	http.Get(otherFileURL(q))
+	// ruleid: go-ssrf-taint
+	http.Get(trimmedInput(q))
+	// ok: go-open-redirect-taint
+	http.Redirect(w, r, constantPage(q), http.StatusFound)
+	// ruleid: go-open-redirect-taint
+	http.Redirect(w, r, otherFileTarget(q), http.StatusFound)
+	// ruleid: go-open-redirect-taint
+	http.Redirect(w, r, trimmedInput(q), http.StatusFound)
+	// ok: go-path-traversal-taint
+	os.ReadFile(filepath.Join(guardBase, constantPage(q)))
+	// ruleid: go-path-traversal-taint
+	os.ReadFile(otherFilePath(q))
+	// ruleid: go-path-traversal-taint
+	os.ReadFile(trimmedInput(q))
 }

@@ -13,8 +13,9 @@ import (
 // Semgrep rejects YAML anchors in rule files, so the Go pack repeats its
 // shared blocks in every rule that uses them: the request sources and the
 // taint options in each of the nine taint rules, the numeric sanitizers in
-// seven of them, the shared part of the call sanitizer, Go test-code paths in
-// all nineteen rules, and each helper sink once per argument position. These
+// seven of them, the call sanitizers (the constant-helper shapes, and the
+// shared part of the qualified-call sanitizer), Go test-code paths in all
+// nineteen rules, and each helper sink once per argument position. These
 // tests hold the copies to one another, so an edit to one copy cannot
 // silently leave the others behind.
 
@@ -82,15 +83,26 @@ func numericBlock(sanitizers []any) []any {
 	return sanitizers[start : end+1]
 }
 
-// callSanitizerShared returns the part of a taint rule's call sanitizer that
-// every rule shares: the sources and the calls that hand their input back
-// (up to and including the function-literal exclusion), and the
-// returns-its-parameter exclusions. A rule's own sinks and helper shapes are
-// left out.
-func callSanitizerShared(sanitizers []any) (prefix, returned []any, ok bool) {
+// isQualifiedCallSanitizer tells the sanitizer for qualified and method calls
+// (the only call sanitizer that carries a rule's own sinks) from the others.
+func isQualifiedCallSanitizer(m map[string]any) bool {
+	return strings.Contains(asYAML(m["patterns"]), "$OUTER(")
+}
+
+// callSanitizerShared returns the parts of a taint rule's call sanitizers
+// that every rule shares: the constant-helper sanitizers (len and cap, and
+// the function and method shapes whose every return is constant), and, of
+// the qualified-call sanitizer, the sources and the calls that hand their
+// input back (up to and including the function-literal exclusion) and the
+// same-file-method exclusions at its end. A rule's own sinks are left out.
+func callSanitizerShared(sanitizers []any) (constant, prefix, methods []any, ok bool) {
 	for _, s := range sanitizers {
 		m, _ := s.(map[string]any)
 		if exact, _ := m["exact"].(bool); !exact {
+			continue
+		}
+		if !isQualifiedCallSanitizer(m) {
+			constant = append(constant, s)
 			continue
 		}
 		patterns, _ := m["patterns"].([]any)
@@ -98,13 +110,12 @@ func callSanitizerShared(sanitizers []any) (prefix, returned []any, ok bool) {
 			if strings.Contains(asYAML(p), "$OUTER(") {
 				prefix = patterns[:i+1]
 			}
-			if strings.Contains(asYAML(p), "$RETURNED") {
-				returned = append(returned, p)
+			if strings.Contains(asYAML(p), "$RTYPE") {
+				methods = append(methods, p)
 			}
 		}
-		return prefix, returned, prefix != nil
 	}
-	return nil, nil, false
+	return constant, prefix, methods, constant != nil && prefix != nil && methods != nil
 }
 
 // helperSinkGroups returns a taint rule's helper sinks, normalised for their
@@ -137,7 +148,7 @@ func helperSinkGroups(sinks []any) [][]string {
 func goPackDrift(rules []packRule) []string {
 	var out []string
 	var first *packRule
-	var numeric, callPrefix, callReturned []any
+	var numeric, callConstant, callPrefix, callMethods []any
 	numericRules := 0
 	for i := range rules {
 		r := &rules[i]
@@ -164,18 +175,21 @@ func goPackDrift(rules []packRule) []string {
 				out = append(out, fmt.Sprintf("%s: numeric sanitizers differ", r.ID))
 			}
 		}
-		prefix, returned, ok := callSanitizerShared(sanitizers)
+		constant, prefix, methods, ok := callSanitizerShared(sanitizers)
 		switch {
 		case !ok:
 			out = append(out, fmt.Sprintf("%s: no call sanitizer", r.ID))
 		case callPrefix == nil:
-			callPrefix, callReturned = prefix, returned
+			callConstant, callPrefix, callMethods = constant, prefix, methods
 		default:
+			if !reflect.DeepEqual(constant, callConstant) {
+				out = append(out, fmt.Sprintf("%s: call sanitizer's constant-helper shapes differ", r.ID))
+			}
 			if !reflect.DeepEqual(prefix, callPrefix) {
 				out = append(out, fmt.Sprintf("%s: call sanitizer's shared part differs", r.ID))
 			}
-			if !reflect.DeepEqual(returned, callReturned) {
-				out = append(out, fmt.Sprintf("%s: call sanitizer's returns-its-parameter exclusions differ", r.ID))
+			if !reflect.DeepEqual(methods, callMethods) {
+				out = append(out, fmt.Sprintf("%s: call sanitizer's same-file-method exclusions differ", r.ID))
 			}
 		}
 		sinks, _ := r.Raw["pattern-sinks"].([]any)
@@ -263,12 +277,32 @@ func TestGoPackDriftIsCaught(t *testing.T) {
 		}, "go-ssrf-taint: numeric sanitizers differ"},
 		{"the call sanitizer's shared part", func(rules []packRule) {
 			for _, s := range taintRule(rules, "go-path-traversal-taint")["pattern-sanitizers"].([]any) {
-				if m, _ := s.(map[string]any); m["exact"] == true {
+				if m, _ := s.(map[string]any); m["exact"] == true && isQualifiedCallSanitizer(m) {
 					patterns := m["patterns"].([]any)
 					m["patterns"] = append([]any{patterns[0]}, patterns[2:]...)
 				}
 			}
 		}, "go-path-traversal-taint: call sanitizer's shared part differs"},
+		{"a constant-helper shape", func(rules []packRule) {
+			for _, s := range taintRule(rules, "go-open-redirect-taint")["pattern-sanitizers"].([]any) {
+				if m, _ := s.(map[string]any); m["exact"] == true && !isQualifiedCallSanitizer(m) && m["patterns"] != nil {
+					patterns := m["patterns"].([]any)
+					if either, _ := patterns[1].(map[string]any)["pattern-either"].([]any); len(either) > 0 {
+						patterns[1].(map[string]any)["pattern-either"] = either[1:]
+						return
+					}
+				}
+			}
+			panic("no constant-helper map family to mutate")
+		}, "go-open-redirect-taint: call sanitizer's constant-helper shapes differ"},
+		{"the same-file-method exclusions", func(rules []packRule) {
+			for _, s := range taintRule(rules, "go-jwt-no-verify-taint")["pattern-sanitizers"].([]any) {
+				if m, _ := s.(map[string]any); m["exact"] == true && isQualifiedCallSanitizer(m) {
+					patterns := m["patterns"].([]any)
+					m["patterns"] = patterns[:len(patterns)-1]
+				}
+			}
+		}, "go-jwt-no-verify-taint: call sanitizer's same-file-method exclusions differ"},
 		{"one position of a helper sink", func(rules []packRule) {
 			sinks := taintRule(rules, "go-sqli-taint")["pattern-sinks"].([]any)
 			for i := len(sinks) - 1; i >= 0; i-- {

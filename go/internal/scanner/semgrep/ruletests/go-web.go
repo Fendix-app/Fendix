@@ -669,3 +669,22 @@ func xssFilteredInline(w http.ResponseWriter, r *http.Request) {
 	// ruleid: go-xss-taint
 	greetingPage.Execute(w, map[string]any{"Name": template.HTML(term)})
 }
+
+// --- XSS: unknown calls keep the input's taint ---------------------------------------
+
+func fixedMarkup(kind string) string { return "<b>help</b>" }
+
+func escapedInput(s string) string {
+	out := strings.TrimSpace(s)
+	return out
+}
+
+func xssUnknownCalls(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	// ok: go-xss-taint
+	_ = template.HTML(fixedMarkup(q))
+	// ruleid: go-xss-taint
+	_ = template.HTML(otherFileMarkup(q))
+	// ruleid: go-xss-taint
+	_ = template.HTML(escapedInput(q))
+}
