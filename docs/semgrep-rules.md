@@ -27,11 +27,16 @@ The Semgrep runner lives at
 2. Extracts the embedded `//go:embed rules/*.yaml` pack to a per-process
    temp directory on the first scan call.
 3. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet
-   --dataflow-traces --timeout 30 --exclude node_modules --exclude dist
+   --dataflow-traces --timeout 30 --project-root <code_path>
+   --exclude node_modules --exclude dist
    --exclude build --exclude .next --exclude target --exclude vendor
    --exclude '*.min.js' <code_path>`, with a 300-second deadline on the
    whole run. A run that exceeds the deadline fails, and the scan has no
-   Semgrep findings.
+   Semgrep findings. A host Semgrep older than the release that added an
+   option is run without it (`--project-root` before 1.111.0,
+   `--dataflow-traces` before 0.107.0, `--timeout` before 0.17.0,
+   `--exclude` before 0.12.0): Fendix reads `semgrep --version` once, logs a
+   warning, and a run is not failed by an unknown option.
 4. Parses the JSON output and maps each result to a Fendix `Finding` via
    `resolveSeverity`, `resolveConfidence`, `resolveCategory`,
    `resolveCWE`.

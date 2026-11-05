@@ -46,7 +46,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -305,22 +304,12 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 	runCtx, cancel := contextWithDefaultTimeout(ctx, defaultTimeout)
 	defer cancel()
 
+	version := semgrepVersionOf(runCtx, bin)
 	args := []string{
 		"--config", rules,
 		"--json",
 		"--no-git-ignore",
 		"--quiet",
-		// A taint rule's trace details a reachable finding's chain when
-		// semgrep sends it (ADR-011). Pattern rules have no trace.
-		"--dataflow-traces",
-		// A slow rule loses its matches on one file, not the whole run.
-		"--timeout", strconv.Itoa(ruleTimeoutSeconds),
-		// Semgrep matches a rule's paths.exclude and its default ignore list
-		// relative to its project root, which inside a git work tree is the
-		// git root. Scanning <gitroot>/fixtures/repo would then apply the
-		// packs' "fixtures/" exclusion to every file of the target and scan
-		// nothing, with no error. The scan target is the root.
-		"--project-root", codePath,
 		// Without this, every run first asks semgrep.dev whether a newer
 		// Semgrep exists. Fendix pins Semgrep itself and --quiet hides the
 		// answer, so the check only adds outbound traffic, and with no route
@@ -329,9 +318,7 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 		// record semgrep failed/timeout on an offline scan.
 		"--disable-version-check",
 	}
-	for _, pattern := range buildOutputExcludes {
-		args = append(args, "--exclude", pattern)
-	}
+	args = append(args, optionalArgs(version, codePath)...)
 	for _, rel := range includes {
 		args = append(args, "--include", rel)
 	}

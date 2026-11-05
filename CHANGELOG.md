@@ -1419,6 +1419,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   import and by assignment, `def`, `class`, loop or `with` no longer names the
   imported function, so the helper's finding stays, unproven.
 
+- **A host Semgrep older than 1.111.0 no longer fails the whole run on an
+  unknown option.** The scanner always passed `--project-root`, which Semgrep
+  1.110.0 and older reject ("No such option"), so a host `semgrep` on PATH at
+  the 1.45.0 that v3.7.0 documents support for recorded `failed` and lost
+  every Semgrep finding. Fendix now reads `semgrep --version` once per binary
+  and leaves out an option the version predates: `--project-root` (1.111.0),
+  `--dataflow-traces` (0.107.0), `--timeout` (0.17.0), `--exclude` (0.12.0),
+  logging a warning. An unreadable version is run with every option. Documented
+  in `docs/checks/semgrep.md`; the docs also name `--project-root` in the
+  command, and `ADR-011` gives the 300 s run timeout.
+
 - **The Go taint rules keep their `ok` cases clean on Semgrep 1.182.1, the
   version Fendix ships.** The Go pack was written on Semgrep 1.141.0. Semgrep
   1.182.1 keeps the taint of a variable assigned from a call that an exact
