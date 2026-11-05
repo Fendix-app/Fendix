@@ -1414,8 +1414,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The engine's `SEC-JS_*` pattern checks (`SEC-JS_EVAL`,
     `SEC-JS_INNER_HTML`, `SEC-JS_DOCUMENT_WRITE`, `SEC-JS_SQL_TEMPLATE`) are
     now the fallback for a scan without Semgrep** (`--fast`, or no binary).
-    When the run-level `semgrep` scanner status is `ok`, they are dropped
-    and the Semgrep JavaScript pack answers, so one sink is reported once.
+    When the run-level `semgrep` scanner status is `ok` AND Semgrep's
+    JavaScript/TypeScript taint findings can block (both languages are in
+    `semgrep.ReachabilityLanguages`), they are dropped and the Semgrep pack
+    answers, so one sink is reported once. Until then (the shipped state:
+    those findings are warnings) they stay, because `SEC-JS_SQL_TEMPLATE` is
+    the only JavaScript SQL finding that blocks; dropping it blocked nothing
+    in nine express, NestJS and Next.js `sqli` corpus cases.
   - **A Semgrep run that could not load a rule is now recorded `failed`**
     (reason `execution_error`, detail naming the rule errors). Semgrep exits 7
     with a parseable document and no results for a rule it rejects, which was

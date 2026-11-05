@@ -10,6 +10,7 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/Fendix-app/Fendix/go/internal/reporters"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/semgrep"
 )
 
 // The Python engine's JavaScript pattern checks (rule ids SEC-JS_*) are the
@@ -29,7 +30,16 @@ func jsFallbackEvidence() []evidence.Evidence {
 	}
 }
 
+// openJSGate opens Semgrep's JS/TS taint gate for one test, as the pack tests do.
+func openJSGate(t *testing.T) {
+	t.Helper()
+	orig := semgrep.ReachabilityLanguages
+	semgrep.ReachabilityLanguages = map[string]bool{"javascript": true, "typescript": true}
+	t.Cleanup(func() { semgrep.ReachabilityLanguages = orig })
+}
+
 func TestDropFallbackJSPatterns(t *testing.T) {
+	openJSGate(t)
 	cases := []struct {
 		name   string
 		status scannerStatusList
@@ -68,10 +78,24 @@ func TestDropFallbackJSPatterns(t *testing.T) {
 	}
 }
 
-// One JavaScript SQL sink that both the Python engine's pattern check and the
-// Semgrep pack recognise is reported once, by Semgrep. Needs Semgrep and the
+// While Semgrep's JS/TS taint matches cannot block (the shipped state,
+// semgrep.ReachabilityLanguages is empty), the Python engine's JS check is the
+// only blocking JavaScript SQL signal, so a successful Semgrep run must not drop it.
+func TestDropFallbackJSPatternsKeepsThemWhileTheJSGateIsClosed(t *testing.T) {
+	if jsSemgrepPackBlocks() {
+		t.Fatal("the shipped gate is expected to be closed (R-pf81); update this test with it")
+	}
+	status := scannerStatusList{{Name: AnalyzerSemgrep, State: reporters.ScannerOK}}
+	if got := dropFallbackJSPatterns(jsFallbackEvidence(), status); len(got) != 4 {
+		t.Errorf("kept %d findings; want all 4 while the JS taint gate is closed", len(got))
+	}
+}
+
+// With the JS/TS taint gate open, one JavaScript SQL sink that both the Python
+// engine's pattern check and the Semgrep pack recognise is reported once, by Semgrep. Needs Semgrep and the
 // Python engine's dependencies (the semgrep-enabled CI job has both).
 func TestJSSQLTemplateSinkSeenByBothEnginesReportsOnce(t *testing.T) {
+	openJSGate(t)
 	if _, err := exec.LookPath("semgrep"); err != nil {
 		t.Skip("semgrep not on PATH")
 	}

@@ -350,18 +350,31 @@ func (l scannerStatusList) semgrepRunSucceeded() bool {
 	return false
 }
 
+// jsSemgrepPackBlocks reports whether Semgrep's JavaScript and TypeScript taint
+// matches can block: both languages are in semgrep.ReachabilityLanguages
+// (ADR-011). While they are not (ruling R-pf81: real-world precision is too low),
+// every JS/TS Semgrep taint match is a plain warning, and the Python engine's
+// JS_SQL_TEMPLATE pattern is the only JavaScript SQL finding that can block.
+// Dropping it then would turn nine blocking corpus cases (express, nestjs and
+// nextjs sqli direct, indirect and cross_file) into warnings.
+func jsSemgrepPackBlocks() bool {
+	return semgrep.ReachabilityLanguages["javascript"] && semgrep.ReachabilityLanguages["typescript"]
+}
+
 // dropFallbackJSPatterns removes the Python engine's JavaScript pattern
-// findings (rule ids SEC-JS_*) when the Semgrep run succeeded. They are the
-// fallback for a scan with no Semgrep (--fast, or no binary), where nothing
-// else reads JavaScript beyond textscan; once Semgrep's JavaScript pack has run
-// they only repeat it, less precisely (D4). A Semgrep run that is skipped or
-// failed, including one that could not load a rule, keeps them.
+// findings (rule ids SEC-JS_*) when Semgrep's JavaScript pack has taken over:
+// the Semgrep run succeeded AND its JS/TS taint findings can block
+// (jsSemgrepPackBlocks). They are the fallback for a scan without Semgrep
+// (--fast, or no binary), where nothing else reads JavaScript beyond textscan;
+// once the pack answers they only repeat it, less precisely (D4). A Semgrep run
+// that is skipped or failed, including one that could not load a rule, keeps
+// them, and so does a run whose JS/TS taint gate is closed.
 //
 // evid is the Python engine's output only. A Semgrep finding's ID also starts
 // with SEC-JS_ (js-cmdi-taint reports as SEC-JS_CMDI_TAINT), but its RuleID is
 // the bundled rule's own, and Semgrep findings are never passed here.
 func dropFallbackJSPatterns(evid []evidence.Evidence, status scannerStatusList) []evidence.Evidence {
-	if !status.semgrepRunSucceeded() {
+	if !status.semgrepRunSucceeded() || !jsSemgrepPackBlocks() {
 		return evid
 	}
 	kept := evid[:0:0]
