@@ -1,0 +1,153 @@
+{
+ "engine_requested": "OSS",
+ "errors": [
+  {
+   "code": 3,
+   "level": "warn",
+   "message": "Syntax error at line /t/syntax2/bad.py:2:\n `)))) (((( class class [[[ \n x = = = 1` was unexpected",
+   "path": "/t/syntax2/bad.py",
+   "spans": [
+    {
+     "end": {
+      "col": 11,
+      "line": 3,
+      "offset": 37
+     },
+     "file": "/t/syntax2/bad.py",
+     "start": {
+      "col": 3,
+      "line": 2,
+      "offset": 0
+     }
+    }
+   ],
+   "type": [
+    "PartialParsing",
+    [
+     {
+      "end": {
+       "col": 11,
+       "line": 3,
+       "offset": 37
+      },
+      "path": "/t/syntax2/bad.py",
+      "start": {
+       "col": 3,
+       "line": 2,
+       "offset": 0
+      }
+     }
+    ]
+   ]
+  }
+ ],
+ "paths": {
+  "scanned": [
+   "/t/syntax2/bad.py",
+   "/t/syntax2/good.py"
+  ]
+ },
+ "profiling_results": [],
+ "results": [
+  {
+   "check_id": "rules.python-subprocess-shell-true-with-variable",
+   "end": {
+    "col": 31,
+    "line": 2,
+    "offset": 48
+   },
+   "extra": {
+    "engine_kind": "OSS",
+    "fingerprint": "requires login",
+    "lines": "requires login",
+    "message": "subprocess with shell=True and a non-literal command \u2014 command injection risk. Drop shell=True and pass argv as a list, OR shlex.quote() each interpolated argument if shell semantics are truly required.\n",
+    "metadata": {
+     "category": "injection",
+     "confidence": "HIGH",
+     "cwe": "CWE-78",
+     "fendix_severity": "CRITICAL"
+    },
+    "severity": "ERROR",
+    "validation_state": "NO_VALIDATOR"
+   },
+   "path": "/t/syntax2/good.py",
+   "start": {
+    "col": 1,
+    "line": 2,
+    "offset": 18
+   }
+  }
+ ],
+ "skipped_rules": [],
+ "time": {
+  "fixpoint_timeouts": [],
+  "matching_time": {
+   "per_file_and_rule_time": {
+    "mean": 0.000300902586716872,
+    "std_dev": 4.92598224438294e-07
+   },
+   "total_time": 0.003911733627319336,
+   "very_slow_rules_on_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "max_memory_bytes": 106266880,
+  "parsing_time": {
+   "per_file_time": {
+    "mean": 0.0004870157975416917,
+    "std_dev": 1.3053681465146855e-06
+   },
+   "total_time": 0.006331205368041992,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "prefiltering": {
+   "file_level_time": 0.0,
+   "project_level_time": 0.0,
+   "rules_matched_ratio": 0.2826086956521739,
+   "rules_selected_ratio": 0.2826086956521739,
+   "rules_with_file_prefilters_ratio": 0.7391304347826086,
+   "rules_with_project_prefilters_ratio": 0.0
+  },
+  "profiling_times": {
+   "config_time": 0.19815278053283691,
+   "core_time": 0.18216466903686523,
+   "ignores_time": 5.6743621826171875e-05,
+   "total_time": 0.38461804389953613
+  },
+  "rules": [],
+  "rules_parse_time": 0.0008718967437744141,
+  "scanning_time": {
+   "per_file_time": {
+    "mean": 0.00530397891998291,
+    "std_dev": 7.063150064823276e-09
+   },
+   "total_time": 0.01060795783996582,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "tainting_time": {
+   "per_def_and_rule_time": {
+    "mean": 0.0,
+    "std_dev": 0.0
+   },
+   "total_time": 0.0,
+   "very_slow_rules_on_defs": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "targets": [],
+  "total_bytes": 0
+ },
+ "version": "1.182.1"
+}

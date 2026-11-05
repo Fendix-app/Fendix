@@ -1,0 +1,93 @@
+{
+ "engine_requested": "OSS",
+ "errors": [
+  {
+   "code": 2,
+   "level": "warn",
+   "message": "Timeout when running c.slow.slow-probe on /t/slow2/s.py:\n ",
+   "path": "/t/slow2/s.py",
+   "rule_id": "c.slow.slow-probe",
+   "type": "Timeout"
+  }
+ ],
+ "paths": {
+  "scanned": [
+   "/t/slow2/ok.py",
+   "/t/slow2/s.py"
+  ]
+ },
+ "profiling_results": [],
+ "results": [],
+ "skipped_rules": [],
+ "time": {
+  "fixpoint_timeouts": [],
+  "matching_time": {
+   "per_file_and_rule_time": {
+    "mean": 0.002310037612915039,
+    "std_dev": 0.0
+   },
+   "total_time": 0.002310037612915039,
+   "very_slow_rules_on_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "max_memory_bytes": 1958332928,
+  "parsing_time": {
+   "per_file_time": {
+    "mean": 0.0020749568939208984,
+    "std_dev": 0.0
+   },
+   "total_time": 0.0020749568939208984,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "prefiltering": {
+   "file_level_time": 0.0,
+   "project_level_time": 0.0,
+   "rules_matched_ratio": 1.0,
+   "rules_selected_ratio": 1.0,
+   "rules_with_file_prefilters_ratio": 0.0,
+   "rules_with_project_prefilters_ratio": 0.0
+  },
+  "profiling_times": {
+   "config_time": 0.08005332946777344,
+   "core_time": 1.3154044151306152,
+   "ignores_time": 5.4836273193359375e-05,
+   "total_time": 1.399961233139038
+  },
+  "rules": [],
+  "rules_parse_time": 0.00017690658569335938,
+  "scanning_time": {
+   "per_file_time": {
+    "mean": 0.568173885345459,
+    "std_dev": 0.31756602512905374
+   },
+   "total_time": 1.136347770690918,
+   "very_slow_files": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "tainting_time": {
+   "per_def_and_rule_time": {
+    "mean": 0.0,
+    "std_dev": 0.0
+   },
+   "total_time": 0.0,
+   "very_slow_rules_on_defs": [],
+   "very_slow_stats": {
+    "count_ratio": 0.0,
+    "time_ratio": 0.0
+   }
+  },
+  "targets": [],
+  "total_bytes": 0
+ },
+ "version": "1.182.1"
+}

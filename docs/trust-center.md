@@ -78,9 +78,9 @@ fendix scan --code . --offline --python-engine=false --no-plugins
 # Reproduce the benchmark baseline:
 fendix benchmark run --target all
 
-# Verify the current public container at its immutable v3.6.2 digest:
-REF='docker.io/fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.6.2$'
+# Verify the current public container at its immutable v3.7.0 digest:
+REF='docker.io/fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015'
+IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0$'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify \

@@ -608,7 +608,11 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			slog.Debug("code path missing — skipping native semgrep scan")
 			scanStatus.fail(AnalyzerSemgrep, reporters.ReasonInputError, err)
 		default:
-			slog.Warn("native semgrep scan failed", "error", err)
+			// A fatal run (semgrep.ErrFatal) still returns the findings
+			// Semgrep printed before it failed. They are real, so they are
+			// kept; the run is recorded failed, never ok.
+			evid = append(evid, semgrepRun.Findings...)
+			slog.Warn("native semgrep scan failed", "error", err, "partial_findings", len(semgrepRun.Findings))
 			scanStatus.fail(AnalyzerSemgrep, classifyErr(err), err)
 		}
 	}

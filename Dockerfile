@@ -59,21 +59,41 @@ RUN make embed-engine && \
 # ---- Stage 2: Runtime image ----
 FROM python:3.14-slim@sha256:7a500125bc50693f2214e842a621440a1b1b9cbb2188f74ab045d29ed2ea5856
 
-# Install Python dependencies for whitebox analysis.
-# build-essential (gcc + libc6-dev + standard C headers) is needed
-# transiently to compile C-extension deps that lack a manylinux wheel for
-# this image's CPython: semgrep pins ruamel.yaml.clib==0.2.14, which has no
-# cp314 wheel, so pip builds it from source. Bare gcc is insufficient — the
-# build needs libc dev headers (assert.h) that python:*-slim omits. The
-# toolchain is installed only long enough to build the wheels, then purged
-# in the same layer so the final runtime image ships no compiler.
-COPY python/requirements.txt /tmp/requirements.txt
+# Debian security refresh. The base is pinned by digest, so its packages are
+# as old as that digest; this applies the trixie security updates published
+# since, so a rebuild carries current OS fixes (perl-base, openssl,
+# util-linux, ...) without moving the Python interpreter or the pip the base
+# ships. apt-get upgrade installs no new package. Until v3.6.4 the transient
+# build-essential install upgraded some of these (perl-base, libc6) as a side
+# effect; installing from wheels only removed that, so the refresh is explicit.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential && \
-    pip install --no-cache-dir -r /tmp/requirements.txt && \
-    apt-get purge -y build-essential && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/* /tmp/requirements.txt
+    apt-get upgrade -y --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for whitebox analysis from
+# python/requirements.lock, the hash-locked set the composite Action
+# installs, so the image and the Action run the same Semgrep, MCP and
+# Pydantic versions. --require-hashes checks every file against the lock;
+# --only-binary=:all: refuses source builds, so the layer needs no compiler
+# (every pinned version ships a cp314 wheel for linux/amd64 and
+# linux/arm64). pip check fails the build if the lock, resolved for the
+# Action's CPython 3.11, leaves a dependency of this CPython unmet.
+COPY python/requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: \
+        -r /tmp/requirements.lock && \
+    pip check && \
+    rm /tmp/requirements.lock
+
+# Semgrep must run, not only install. The probe the Action runs before every
+# code scan (scripts/action/analyzer_preflight.py) runs this Semgrep on a
+# bundled rule and file, offline, and requires their one match, so a build
+# whose Semgrep cannot scan (no semgrep-core, a damaged install, a binary for
+# another architecture, a crash or a hang) fails here instead of shipping.
+# The script is bind-mounted, not copied, and Semgrep's home is temporary, so
+# the image gains no file from the check.
+RUN --mount=type=bind,source=scripts/action/analyzer_preflight.py,target=/tmp/analyzer_preflight.py \
+    HOME=/tmp/fendix-preflight-home python3 /tmp/analyzer_preflight.py --analyzers semgrep && \
+    rm -rf /tmp/fendix-preflight-home
 
 # Copy the Go binary
 COPY --from=go-builder /fendix /usr/local/bin/fendix

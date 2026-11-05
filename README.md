@@ -15,7 +15,7 @@ Fendix can combine runtime probes and static analyzers in one scan. When both en
 
 Reproducible numbers from the last published capture (`v2.0.1`, 2026-08-24).
 They remain historical measurement evidence and are not relabeled as a
-v3.6.4 run:
+v3.7.0 run:
 
 | Track | P / R / F1 | Reproduce |
 |---|---|---|
@@ -166,6 +166,8 @@ brew install fendix
 Current Homebrew refuses to load a formula from a third-party tap until you
 trust it; `brew trust --formula` trusts the `fendix` formula only, not the
 whole tap. A Homebrew without the `brew trust` command does not need that line.
+`brew uninstall fendix` removes that trust, so run the `brew trust` line again
+before you install it again.
 
 ### curl (macOS / Linux)
 
@@ -173,7 +175,7 @@ whole tap. A Homebrew without the `brew trust` command does not need that line.
 curl -fsSL https://get.fendix.dev/install.sh | sh
 ```
 
-Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.6.4`.
+Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.7.0`.
 
 `get.fendix.dev` is served from the official [`homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix) repository through GitHub Pages. To inspect the script before piping to a shell:
 
@@ -187,7 +189,7 @@ If `get.fendix.dev` is ever unreachable, the `raw.githubusercontent.com` URL is 
 
 ```bash
 ARCH=$(dpkg --print-architecture)   # amd64 or arm64
-VERSION=v3.6.4
+VERSION=v3.7.0
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${ARCH}.deb"
 curl -fsSL -o fendix.deb "${URL}"
 sudo dpkg -i fendix.deb && sudo apt-get install -f
@@ -203,7 +205,7 @@ case "$(uname -m)" in
   x86_64)  PKG_ARCH=amd64 ;;
   aarch64) PKG_ARCH=arm64 ;;
 esac
-VERSION=v3.6.4
+VERSION=v3.7.0
 sudo dnf install \
   "https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
 ```
@@ -211,8 +213,8 @@ sudo dnf install \
 ### Docker
 
 ```bash
-docker pull fendixapp/fendix:3.6.4
-docker run --rm fendixapp/fendix:3.6.4 scan --url https://api.example.com
+docker pull fendixapp/fendix:3.7.0
+docker run --rm fendixapp/fendix:3.7.0 scan --url https://api.example.com
 ```
 
 The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and includes Python and the static-analysis dependencies, so hybrid mode works out of the box. Pin a version or digest for reproducible use.
@@ -222,7 +224,7 @@ The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and inc
 Pick a binary for your platform from the [latest official engine release](https://github.com/Fendix-app/Fendix/releases/latest) (`linux/amd64`, `linux/arm64`, `darwin/amd64`, or `darwin/arm64`), verify the matching `.sha256` file, and place it on your PATH:
 
 ```bash
-curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.6.4/fendix-v3.6.4-darwin-arm64
+curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.7.0/fendix-v3.7.0-darwin-arm64
 shasum -a 256 fendix  # compare against the .sha256 alongside the binary
 chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 ```
@@ -253,7 +255,7 @@ Every release artifact (binary, `.deb`, `.rpm`, multi-arch Docker manifest) ship
 Verify a binary:
 
 ```bash
-VERSION=v3.6.4
+VERSION=v3.7.0
 ASSET=fendix-${VERSION}-linux-amd64
 BASE="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}"
 
@@ -275,7 +277,7 @@ Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity. Binar
 For the current Docker image, use `cosign verify` against the immutable digest and the official workflow identity:
 
 ```bash
-cosign verify fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529 \
+cosign verify fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015 \
   --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com"
 ```
@@ -465,7 +467,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix version` | Print version, OS, and architecture information |
 | `fendix managed` | **Preview (ADR-010), new in v3.5.0:** create context and submit evidence under the managed-CI contract |
 
-The published stable release is v3.6.4. `managed` and its two hidden producer
+The published stable release is v3.7.0. `managed` and its two hidden producer
 flags ship in it as a preview under ADR-010: they sit outside the stable
 compatibility contract and are not a product availability claim. No command defines a Cobra alias. Run
 `fendix <command> --help` for the executable flag contract.
@@ -534,7 +536,7 @@ Machine-readable findings with scan metadata.
     "target": "https://api.example.com",
     "started_at": "2026-09-07T10:30:00Z",
     "duration": "4.521s",
-    "version": "3.6.4",
+    "version": "3.7.0",
     "mode": "hybrid",
     "endpoints_scanned": 1,
     "active_probes": false,
@@ -666,8 +668,8 @@ also accepts an optional `FENDIX_SHA256` pin.
 ### GitHub Actions
 
 **Recommended: the Fendix Action.** It is listed on GitHub Marketplace as
-[Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan). Use `Fendix-app/Fendix@v1` with an explicit
-`version`:
+[Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan). Pin it to the full commit of the v3.7.0
+release, with an explicit `version`:
 
 ```yaml
 name: Security Scan
@@ -686,30 +688,38 @@ jobs:
         with:
           fetch-depth: 0      # diff mode compares against the PR base ref
 
-      - uses: Fendix-app/Fendix@v1
+      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
         with:
-          version: v3.6.2
+          version: v3.7.0
           code: .
           url: ${{ secrets.STAGING_API_URL }}   # optional, adds DAST
           spec: openapi.yaml                     # optional
           fail-on: HIGH
 ```
 
-`@v1` follows compatible stable releases of the v1 Action; `version` pins the
-Fendix release it installs. For high-assurance or reproducible pipelines, pin
-the Action to the full commit of the validated release instead, which is
-immutable:
-
-```yaml
-      - uses: Fendix-app/Fendix@b9e1fad6e1d9531ac899ab44b01f413424f30a7a # v3.6.2
-        with:
-          version: v3.6.2
-```
+The commit pins the Action's own code and cannot change; `version` pins the
+Fendix release it installs. `@v1` follows compatible stable releases of the v1
+Action. Since 2026-10-27 it resolves to the v3.7.0 release commit `90adf6a`,
+so it has v3.7.0's fail-closed required analyzers, but it moves when a later
+compatible release is published; pin the commit for a reference that cannot
+change. With `@v1`, set `version: v3.7.0`. A workflow that set
+`version: v3.6.5` while `@v1` was the v3.6.2 Action now runs the v3.7.0
+Action with that release, a pairing that has not been tested end to end;
+move it to `version: v3.7.0`.
 
 Never reference `@main`; it changes without review. The permissions above are
 all the Action needs; it uses the job token only for the SARIF upload. The
-v3.6.2 Action, by its release commit and as literal `@v1`, passed the
-external-user end-to-end matrix in public and private repositories.
+v3.7.0 release commit with `version: v3.7.0` was tested end to end in a public
+repository on 2026-10-25 (`Fendix-app/fendix-action-e2e-public`, runs
+40225358870 to 40225440001). After the move, literal `@v1` with
+`version: v3.7.0` repeated four of those scenarios on 2026-10-27 with the same
+outcome and exit code: no findings (0), a `BLOCK` finding (1), a scan error
+(2), and a required Semgrep with no wheel for glibc 2.31, which fails setup
+with exit 2 before any scan (runs 40568280529 to 40568281493). Before the
+move, the v3.6.2 Action, by its release commit and as literal `@v1`, passed
+the external-user end-to-end matrix in public and private repositories, and
+literal `@v1` with `version: v3.6.5` passed the v3.6.5 release's end-to-end
+run.
 
 #### What the Action does
 
@@ -739,19 +749,46 @@ external-user end-to-end matrix in public and private repositories.
   caller-managed `engine_path` must contain `engine.py` and `requirements.txt`;
   its `requirements.txt` is installed with the same bound (a lock inside it is
   not used), and matching it to the binary is the caller's responsibility.
-  Both use an isolated Python 3.11 venv. `setup-python` does not change the
-  rest of the job's environment, but the venv's `bin/` and `FENDIX_ENGINE`
-  stay available to later steps.
+  Both use an isolated Python 3.11 venv and install wheels only
+  (`--only-binary=:all:`): nothing is built from source. `setup-python` does
+  not change the rest of the job's environment, but the venv's `bin/` and
+  `FENDIX_ENGINE` stay available to later steps.
+- **Required analyzers fail closed (from v3.7.0, and with `@v1` since
+  2026-10-27).** `require-analyzers`
+  defaults to `auto`, which requires `semgrep` whenever `code` is set. A
+  required Semgrep must install from a wheel, then pass a preflight before the
+  scan: the Action runs it, offline, on a bundled rule and file and requires
+  their one match. A Semgrep that is missing, has no `semgrep-core`, crashes,
+  hangs, is built for another architecture or reports nothing fails setup with
+  exit 2 and an error naming it. The required list is also passed to the engine
+  as `--require-analyzers`, so an analyzer not delivered during the scan exits
+  2 as well, and `extra-args` cannot cancel it. Set an explicit comma-separated
+  list of analyzer names to require others, or `none` to opt out: nothing is
+  then required, and the gate warns that coverage is not enforced.
+- **Self-hosted Linux runners.** Semgrep 1.182.1, which v3.6.5 and later
+  lock, publishes Linux wheels only for glibc 2.34 or later or musl 1.2 or
+  later, on x86_64 or aarch64. Ubuntu 20.04, Debian 11, RHEL 8 and Amazon
+  Linux 2 have an older glibc. There, from v3.7.0, a code scan fails at setup
+  with exit 2 and names the runner's glibc and architecture (until v3.6.5 it
+  passed with Semgrep failed). Run Fendix in the official image as a container
+  job ([INTEGRATION_GUIDE §3.4](docs/INTEGRATION_GUIDE.md#34-the-docker-image-invoked-directly)),
+  move the runner to glibc 2.34 or later, or set `require-analyzers: none` to
+  scan without Semgrep. GitHub-hosted runners and the official image are not
+  affected.
 - **Diff mode.** On `pull_request` events (`diff: auto`) the native secrets,
   text and Semgrep scanners read only the changed files, whole files, so
   existing issues in them are reported; dependency checks run when a manifest
   changed; the Python engine and DAST always scan the full target. Use a
   baseline to report only new findings.
 - **Gate.** The last step decides the job from the scan's exit code: `0`
-  passes, `1` is a policy `BLOCK`, `2` a scan error. A setup failure before the
-  scan, or any other value, fails closed with `2`.
+  passes, `1` is a policy `BLOCK`, `2` a scan error or a required analyzer not
+  delivered. A setup failure before the scan, or any other value, fails closed
+  with `2`. A pass prints the clean-scan line only when coverage was complete
+  and enforced; with coverage incomplete or `require-analyzers: none` it is a
+  warning, and the job summary says so.
 - **SARIF.** Uploaded with `github/codeql-action/upload-sarif` pinned to
-  v4.38.3, and only when the scan wrote a report. A private or internal
+  v4.39.1, and only when the scan finished (exit 0 or 1) and wrote a report:
+  a partial report from a failed scan would close every alert missing from it. A private or internal
   repository needs GitHub Code Security and `actions: read`; without Code
   Security, set `upload-sarif: 'false'`. Pull requests from forks get a
   read-only token and no secrets, so the upload cannot succeed there and a
@@ -768,7 +805,7 @@ external-user end-to-end matrix in public and private repositories.
           cosign-release: "v2.4.1"
       - name: Install Fendix (signature required)
         env:
-          FENDIX_VERSION: v3.6.4
+          FENDIX_VERSION: v3.7.0
           FENDIX_REQUIRE_SIGNATURE: "1"
         run: curl -fsSL https://get.fendix.dev/install.sh | sh
       - name: Run scan
@@ -794,14 +831,15 @@ external-user end-to-end matrix in public and private repositories.
 #### Alternative: the digest-pinned reference workflow
 
 For teams that want the container-based path and to own the workflow file
-directly, the reference workflow runs the official v3.6.2 container by digest,
-pins every third-party Action to a full commit SHA, and was tested end to end
-from fresh repositories. Install it from its tested commit, not from `main`:
+directly, the reference workflow runs the official v3.7.0 container by digest
+and pins every third-party Action to a full commit SHA. Its content was tested
+end to end; the integration guide has the record. Install it from that commit,
+not from `main`:
 
 ```bash
 mkdir -p .github/workflows
 curl -fsSL -o .github/workflows/fendix-scan.yml \
-  https://raw.githubusercontent.com/Fendix-app/Fendix/41da3ae48fc17412893112061175120958b8b91e/examples/github-actions/fendix-scan.yml
+  https://raw.githubusercontent.com/Fendix-app/Fendix/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml
 ```
 
 The [integration guide](docs/INTEGRATION_GUIDE.md#32-alternative--the-digest-pinned-reference-workflow)

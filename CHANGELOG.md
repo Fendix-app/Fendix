@@ -1259,12 +1259,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     least 10 triaged real-world findings, and the corpus gate. The mechanism
     and its tests stay.
 
-- **The images pin Semgrep 1.141.0.** `python/requirements.txt` asked for
-  `semgrep>=1.45.0`, so both Dockerfiles installed whatever Semgrep was
-  newest at build time, while the rules, their tests and the lock are written
-  against 1.141.0. It is now `semgrep==1.141.0`, as is the Semgrep install in
-  the enterprise benchmark workflow. The lock already held 1.141.0.
-
 - **`python-random-for-token-generation` reports more token generators.**
   - **More calls.** `random.choices`, `random.randrange` and
     `random.randbytes` are reported beside `random.random`, `choice`,
@@ -1396,6 +1390,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     The findings the run did produce are kept, as for a partial dependency
     lookup. `--fail-on-scanner-error` exits 2 on it, and
     `coverage.configured_complete` is false.
+    This is stricter than v3.7.0, which left a run `ok` when Semgrep
+    reported only per-file or per-rule timeouts and counted them in `detail`.
+    A rule that lost its matches on a file is no longer called a complete
+    run. The other per-file problems v3.7.0 counts (a file that does not
+    fully parse, a per-file memory limit) still leave it `ok`.
   - **A malformed `errors` entry is skipped.** Each entry is decoded on its
     own, and an `errors` field that is not a list is ignored, so the results
     beside them are always kept.
@@ -1822,6 +1821,355 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one under `node_modules/`, `vendor/`, `dist/` or `build/` was judged by a
   re-scan rooted at its own directory instead of the scan root. Both are now
   `unknown`, with the skip named.
+
+- **The Action says enforcement was off in every outcome.** With
+  `require-analyzers: none`, the gate warned "Fendix coverage not enforced"
+  only on a pass. A BLOCK (exit 1), a scan error (exit 2) or a setup failure
+  printed its error without saying that required-analyzer enforcement was
+  off. The job was already red, but its output did not show that coverage was
+  never enforced. Now every outcome adds the warning when the requirement is
+  `none`. Found by the v3.7.0 Action end-to-end run.
+- **A required analyzer disabled by another flag no longer reads as complete
+  coverage in the gate.** Under `extra-args: --fast`, the engine prints
+  `coverage: complete` next to `required: not delivered (semgrep)`, and
+  the gate's job summary showed "Coverage: complete" for the failed run. The
+  engine line stays as it is, because it is `coverage.configured_complete`,
+  which by contract (`docs/schema.md`) never counts a disabled analyzer as a
+  gap and is not changed by `--require-analyzers`, and a test pins it. The
+  gate now words it "complete for the analyzers configured to run, but
+  required not delivered (semgrep)", in its message and its job summary.
+
+
+## [3.7.0] - 2026-10-25
+
+The GitHub Action now fails closed when an analyzer it requires cannot run,
+Semgrep first. Until v3.6.5 a runner whose Semgrep could not scan passed the
+gate: on a self-hosted runner with glibc older than 2.34, pip built Semgrep
+1.182.1 from source without `semgrep-core`, the scan recorded `semgrep`
+failed and coverage incomplete, and the job still went green. An unavailable
+required analyzer can no longer produce a green release gate.
+
+The engine gets the same fix: a fatal Semgrep run is now recorded `failed`,
+never `ok`, so a Semgrep that dies on the scanned tree fails a required
+Semgrep there too. Report schema, SARIF structure, fingerprints, finding
+identity, decision policy, CLI flags and defaults, and the meaning of each
+exit code are otherwise the same as v3.6.5. The Python lock is v3.6.5's
+(Semgrep 1.182.1, MCP 1.29.0).
+
+**Why a minor release:** it adds a public Action input, `require-analyzers`,
+and makes failing closed the default, so the Action now exits 2 on a runner
+whose Semgrep cannot run, and a fatal Semgrep run exits 2 under
+`--require-analyzers`, `--fail-on-coverage-gap` or `--fail-on-scanner-error`.
+The Action stays on `v1`: inputs are only added, and `require-analyzers: none`
+opts out explicitly.
+
+### Security
+
+- **The Action requires Semgrep for every code scan, and checks it runs.** A
+  new `require-analyzers` input defaults to `auto`, which requires `semgrep`
+  whenever `code` is set. A required analyzer fails closed twice:
+  - **Before the scan.** A new step, *Preflight required analyzers*, runs the
+    Semgrep the scan will run, from the prepared environment, on a bundled
+    rule and file, offline (`--metrics=off --disable-version-check`), with a
+    90 s bound, and requires their one match. A missing executable, a Semgrep
+    without `semgrep-core`, a damaged install that reports nothing, a startup
+    crash, a binary for another architecture and a hang each fail setup with
+    exit 2 and their own message, under an error titled *Fendix required
+    analyzer semgrep is unavailable*.
+  - **During the scan.** The required list is passed to the engine as
+    `--require-analyzers`, so an analyzer that passed the preflight and then
+    is not delivered (recorded anything but `ok` or `not_applicable`) exits 2.
+    `extra-args` cannot cancel it: a repeated `--require-analyzers` only adds
+    names, and a flag that disables a required analyzer, such as `--fast`,
+    exits 2.
+- **No source builds.** The Action installs the engine's Python dependencies
+  from wheels only (`--only-binary=:all:`), for the release lock and for a
+  caller-managed `engine_path`, as the official image already did. A package
+  with no wheel for the runner stops preparation with exit 2. The error names
+  the package, the runner's C library and version, its architecture and the
+  supported floor (glibc 2.34 or later, or musl 1.2 or later, on x86_64 or
+  aarch64 for Semgrep), with the remedies.
+- **No upload of a partial result.** SARIF goes to code scanning only when the
+  scan finished (exit 0 or 1). A report a failed scan left, for example one
+  without the required Semgrep, is no longer uploaded: code scanning would
+  have closed every alert missing from it.
+- **No misleading success.** The gate prints its clean-scan line only when the
+  scan ran, its required analyzers were delivered and coverage was complete.
+  A pass with coverage incomplete is a warning that names the gaps; a pass with
+  `require-analyzers: none` is a warning that coverage is not enforced. Every
+  local-mode run now writes a job summary with the result, the exit code, the
+  required analyzers and the coverage.
+
+- **A fatal Semgrep run is `failed`, not `ok`** (engine, every
+  integration). Until v3.6.5 the engine accepted any parseable Semgrep JSON
+  envelope whatever the exit code, and read stdout that was not JSON as zero
+  findings. A Semgrep whose engine was killed mid-run, for example by the
+  kernel for memory, prints a valid envelope with an error and no results
+  and exits 2. That was recorded `semgrep ok` with no findings, and passed
+  `--require-analyzers semgrep` with exit 0. The preflight cannot catch it,
+  because it happens only on the scanned tree. Now, following Semgrep
+  1.182.1's own contract (its `error.py`, `output.py` and `core_output.py`,
+  and recorded runs of the real binary):
+  - **`failed/execution_error`:** a non-zero exit other than 1, a death by
+    signal, or any error of level `error`. That covers an invalid or missing
+    config (exit 7), a rule that does not parse (exit 2), and an engine killed
+    or crashed, out of memory included (exit 2). An error-level entry counts
+    even on exit 0, because Semgrep sets its exit code from its last error
+    only: a rule parse error followed by per-file warnings exits 0. The detail
+    names the first error, bounded to one line.
+  - **`failed/malformed_output`:** exit 0 with no JSON results envelope.
+  - **Still `ok`:** per-file problems of level `warn` (a file that does not
+    fully parse, a per-file or per-rule timeout, a per-file memory limit) are
+    normal on real trees and leave the run `ok`. They are no longer
+    invisible: `detail` counts them by type, for example `1 non-fatal
+    per-file problem(s) reported by semgrep (PartialParsing 1)`, never with
+    the message, which can quote the source. Only an error's `level` is read,
+    never its `code`, because a per-file timeout has `code` 2 at level `warn`.
+  - **Findings kept.** Findings Semgrep still printed in a failed run stay in
+    the report.
+
+### Changed
+
+- **`require-analyzers` input** (default `auto`). `auto` requires `semgrep`
+  when `code` is set and nothing for a URL-only scan, where the engine records
+  Semgrep `not_applicable`. An explicit comma-separated list requires exactly
+  those engine analyzer names; an unknown name fails setup. `none` is the
+  explicit opt-out: nothing is required, a Semgrep with no wheel for the runner
+  is left out with a warning (the scan records it `unavailable`), and the gate
+  warns that coverage is not enforced. Managed mode accepts only `auto`,
+  because the binding's backend policy decides what is required there; Semgrep
+  must still pass its preflight before evidence is submitted.
+- **Engine preparation exits 2** on failure (was 1), the engine's setup-failure
+  code. The job outcome is unchanged: the gate already failed closed with 2.
+- **The official images check that Semgrep scans.** `Dockerfile` and
+  `Dockerfile.app` run the Action's preflight against the installed Semgrep
+  after the lock install, so an image whose Semgrep cannot scan fails to
+  build. The release smoke still requires `semgrep` `ok` in a real scan.
+
+### Upgrading
+
+- **Self-hosted Linux runners with glibc older than 2.34 now fail code scans
+  at setup.** This affects Ubuntu 20.04 and Debian 11 (glibc 2.31), RHEL,
+  Rocky Linux and AlmaLinux 8 (2.28) and Amazon Linux 2 (2.26), with v3.6.5 or
+  later installed (`version: v3.6.5`, or `latest`). Until v3.6.5 the Action
+  passed there with Semgrep failed; now it exits 2 before the scan, naming
+  Semgrep, the runner's glibc and architecture. GitHub-hosted runners, the
+  official image and hosts with glibc 2.34 or later (Ubuntu 22.04, Debian 12,
+  RHEL 9, Amazon Linux 2023) are not affected. Choose one:
+  - run Fendix in the official image as a container job, pinned by digest
+    (`docker.io/fendixapp/fendix@sha256:...`;
+    [INTEGRATION_GUIDE §3.4](docs/INTEGRATION_GUIDE.md#34-the-docker-image-invoked-directly)
+    has the job and the current digest);
+  - move the runner to glibc 2.34 or later;
+  - `version: v3.6.4`, whose Semgrep 1.141.0 has a wheel for glibc 2.17. It
+    passes the preflight, but gives up v3.6.5's fixes (see its Upgrading
+    notes);
+  - `require-analyzers: none`, to scan without Semgrep. The job can pass, and
+    its gate warns that coverage is not enforced.
+- **`extra-args: --fast` now fails a code scan** with exit 2, because it
+  disables the required Semgrep. Set `require-analyzers: none`, or a list
+  without `semgrep`, to keep using it.
+- **`extra-args: --require-analyzers semgrep`**, recommended in v3.6.5's notes,
+  is no longer needed for code scans; keeping it is harmless.
+- **A scan that exits 2 no longer uploads SARIF.** Code-scanning alerts stay as
+  the last finished scan left them.
+- **The native CLI keeps its defaults.** Semgrep stays optional: without it
+  the scan records `semgrep` unavailable and coverage incomplete, and the exit
+  code is decided by the analyzers that ran. `--require-analyzers semgrep`
+  makes it required. What changes is that a Semgrep that ran and failed
+  fatally is now recorded `failed`. A scan with `--fail-on-scanner-error`,
+  `--fail-on-coverage-gap` or `--require-analyzers semgrep` therefore exits 2
+  on such a run, where v3.6.5 passed it. Without those flags the exit code is
+  unchanged, and the report shows the gap.
+- **`semgrep` `ok` can now carry a `detail`** counting per-file problems.
+  Consumers that read `detail` only for non-ok entries are unaffected.
+- **`@v1` still points to the v3.6.2 release commit.** It moves to the v3.7.0
+  release commit after that release's external-user end-to-end run; until
+  then, the fail-closed Action is available by pinning the v3.7.0 release
+  commit.
+
+## [3.6.5] - 2026-10-25
+
+A security patch on v3.6.4. It fixes the two HIGH vulnerability sets left in
+the official image:
+- golang.org/x/mod in the `fendix` binary;
+- MCP in the image's Python environment and the Action's hash-locked install.
+
+Fixing MCP moves Semgrep from 1.141.0 to 1.182.1. The image now installs its
+Python packages from the same hash-locked file the Action installs, and its
+build applies the Debian security updates. One engine change goes with the
+upgrade: Fendix now runs Semgrep without Semgrep's version check (see Fixed).
+
+Report schema, SARIF structure, fingerprints, finding identity, decision
+policy, exit codes and the Action's inputs and outputs are unchanged.
+
+> **Addendum, 2026-10-25.** As first published, this entry did not mention a
+> new platform requirement: Semgrep 1.182.1 runs only on Linux with glibc
+> 2.34 or later. That affects the Action and other installs of this
+> release's Python dependencies on older self-hosted runners. See the new
+> item under Upgrading. The v3.6.5 tag message keeps the original wording.
+
+### Security
+
+- **golang.org/x/mod 0.40.0** (was 0.35.0). It is linked into the `fendix`
+  binary through golang.org/x/vuln, so every release artifact carries it:
+  standalone binaries, `.deb`/`.rpm`, Homebrew and the official image. It
+  fixes:
+  - GO-2026-6180 (CVE-2026-56864): `sumdb` accepted unrelated,
+    unauthenticated hashes in `Lookup`, so a coordinating GOPROXY and GOSUMDB
+    could serve module content that is not in the transparency log.
+  - GO-2026-6179 (CVE-2026-56865): a `sumdb/tlog` tile verification bypass
+    let a malicious GOPROXY forge tiles and get module content past the
+    GOSUMDB check.
+
+  Minimal version selection also moves golang.org/x/tools 0.44.0 to 0.49.0,
+  x/sync 0.20.0 to 0.22.0, x/sys 0.43.0 to 0.47.0 and x/telemetry, because
+  x/mod 0.40.0 requires them. x/vuln stays at 1.3.0.
+- **MCP 1.29.0** (was 1.16.0), through Semgrep 1.182.1. Semgrep pins MCP
+  exactly, and 1.173.0 is the first Semgrep release on 1.29.0. It fixes:
+  - CVE-2025-66416 (GHSA-9h52-p55h-vw2f, fixed in 1.23.0): DNS rebinding
+    protection was not enabled by default.
+  - CVE-2026-52869 (GHSA-jpw9-pfvf-9f58, fixed in 1.27.2): the HTTP
+    transports served session requests without verifying the authenticated
+    principal.
+  - CVE-2026-59950 (GHSA-vj7q-gjh5-988w, fixed in 1.28.1): the WebSocket
+    server transport did not support Host/Origin validation.
+
+  Fendix runs `semgrep scan` and never starts Semgrep's MCP server. The
+  package still shipped in the image and in the Action's environment, and it
+  is upgraded in both.
+- **Debian security updates in the image.** The image build now runs
+  `apt-get upgrade`, so the image carries the Debian 13 security updates
+  published after its base image digest (see Changed).
+- **Image scan.** A linux/amd64 candidate built from this tree on 2026-10-25,
+  against the published v3.6.4 image, scanned with Trivy 0.75.0 (`--severity
+  HIGH,CRITICAL --scanners vuln`, one database, updated 2026-10-25T01:20Z):
+  - CRITICAL: 0 in both.
+  - HIGH: 102 in v3.6.4, 44 in the candidate. No row was added.
+  - The 58 rows that go are the two x/mod rows, the three MCP rows and 53
+    Debian rows in util-linux and its libraries (CVE-2026-53612 to
+    CVE-2026-53615), OpenSSL (CVE-2026-14456, CVE-2026-45447,
+    CVE-2026-84782), PCRE2, SQLite, gzip and libcap2.
+  - The 44 that remain are Debian packages with no fixed version published:
+    util-linux (CVE-2026-76642, CVE-2026-78408 to CVE-2026-78410), ncurses
+    (CVE-2025-69720), systemd's libsystemd0 and libudev1 (CVE-2026-16742),
+    libacl1 (CVE-2026-54369) and perl-base (CVE-2026-9538, fix deferred).
+  - A release build applies the updates published on its own build day, so
+    its Debian rows can differ from this candidate's.
+
+### Fixed
+
+- **Semgrep no longer contacts semgrep.dev on every scan.** Fendix now runs
+  Semgrep with `--disable-version-check`. Before, every run first asked
+  semgrep.dev whether a newer Semgrep existed. That held for every scan that
+  ran Semgrep, `--offline` included, although the README says Semgrep runs
+  locally and that Fendix does not phone home.
+  - With no route out, the check waited before the scan started: about 25 s
+    with Semgrep 1.141.0 and 96 s with 1.182.1.
+  - With 1.182.1 that wait was enough to push an offline scan of a mid-size
+    repository past Semgrep's 120 s limit. A candidate without this fix
+    recorded `semgrep` failed/timeout and incomplete coverage on a
+    repository of about 760 Python files, where v3.6.4 recorded `semgrep` ok.
+  - With the flag, an offline Semgrep run over an empty directory takes
+    about 1 s with either Semgrep, and the accuracy benchmark's four offline
+    runs took 39 s instead of v3.6.4's 2 min 6 s.
+
+### Changed
+
+- **Semgrep 1.182.1** (was 1.141.0) in the official image and in the
+  Action's hash-locked install. `python/requirements.txt` now requires
+  `semgrep>=1.182.1`.
+  - **The rule pack.** All 23 bundled rules load under 1.182.1 with no error,
+    skipped rule or warning, as under 1.141.0. `semgrep --validate` reports 0
+    configuration errors with both versions.
+  - **Detection, titles and fingerprints: no change measured.** On the
+    accuracy corpus, Semgrep 1.182.1 reports the same 11 matches as 1.141.0,
+    with the same rule, location, message and metadata. The accuracy
+    benchmark (`scripts/accuracy`, run as for the v3.6.3 measurement: linux/amd64,
+    `--network none`, three runs with `--python-engine` and one without)
+    gives 38 TP, 0 FP, 0 FN and 18 TN, F1 1.000. All four raw outputs are
+    byte-identical to v3.6.3's and v3.6.4's.
+  - **Finding by finding.** Compared with v3.6.4, nothing differs in rule id,
+    title, severity, status, confidence, fix text, fingerprint, `fingerprint_v1`
+    or occurrence fingerprints. The scans compared are the benchmark scan, the
+    Semgrep-only corpus scan, the deterministic and online coverage smokes
+    (govulncheck, pip and npm findings included) and an offline scan of a
+    real Django repository. The four Semgrep finding groups and nine
+    occurrences of the published v3.6.3 Semgrep-only measurement are
+    reproduced exactly.
+- **The image installs the hash-locked Python dependencies.** `Dockerfile`
+  and `Dockerfile.app` install `python/requirements.lock` with
+  `--require-hashes --only-binary=:all:`, then run `pip check`. Until v3.6.4
+  they installed `requirements.txt` without the lock, so the image got
+  whatever versions the package index served on its build day, and these
+  could differ from the Action's. The image and the Action now install the
+  same Python package versions. The interpreters still differ: the image
+  runs CPython 3.14, and the Action's venv runs 3.11.
+  - The lock moves only where Semgrep 1.182.1 requires it: click 8.4.2,
+    glom 25.12.0, jsonschema 4.25.1 (was 4.26.0), ruamel-yaml-clib 0.2.15
+    and tomli 2.4.1. It adds pyjwt 2.15.1 with cryptography 50.0.2, cffi and
+    pycparser, `opentelemetry-instrumentation-threading` and
+    `semantic-version`. Pydantic stays at 2.13.5, and certifi at 2026.10.23.
+  - `openapi-spec-validator` is removed from `requirements.txt`, together
+    with the six packages only it needed. Its 0.9.0 requires
+    `jsonschema>=4.26.0`, Semgrep 1.182.1 requires `jsonschema~=4.25.1`, and
+    nothing in Fendix imports it.
+  - ruamel-yaml-clib 0.2.15 ships CPython 3.14 wheels, so the image build no
+    longer compiles it and no longer installs `build-essential`. In v3.6.4
+    that toolchain's purge left `binutils`, `cpp`, `dpkg-dev`,
+    `libcrypt-dev` and `perl` in the image. They are gone.
+- **The image build applies Debian security updates.** The base image is
+  pinned by digest, so its packages are as old as that digest. Until v3.6.4
+  only the transient `build-essential` install upgraded some of them, as a
+  side effect (`libc6`, `perl-base`, `liblzma5`). An explicit `apt-get
+  upgrade` now applies every published update. The Python interpreter and
+  pip are the base image's, unchanged.
+
+### Upgrading
+
+- **Nothing to migrate.** No configuration, baseline or `.fendix-ignore`
+  change is needed, and finding identity is unchanged.
+- **Your own Semgrep.** A standalone binary runs the `semgrep` on the
+  host's `PATH` and now passes it `--disable-version-check`. Semgrep 1.45.0,
+  1.141.0 and 1.182.1 all accept the flag (checked).
+- **Installing `python/requirements.txt` yourself** now resolves Semgrep
+  1.182.1 or later, and no longer installs `openapi-spec-validator`.
+- **The GitHub Action is unchanged,** and `@v1` still points to the v3.6.2
+  release commit. To install this release, set `version: v3.6.5`, or leave
+  `version` unset to install the latest release. Either way, the Action
+  installs this release's lock, so its Python environment moves to Semgrep
+  1.182.1 and MCP 1.29.0 too.
+- **Self-hosted Linux runners need glibc 2.34 or later for Semgrep.** No
+  Semgrep release with the MCP fix supports an older glibc. Semgrep 1.173.0
+  to 1.182.1 publish Linux wheels only for glibc 2.34 or later
+  (`manylinux_2_34`) and musl 1.2 or later (`musllinux_1_2`). Semgrep 1.141.0
+  published `manylinux2014` wheels, which need only glibc 2.17. On an older
+  glibc, pip builds Semgrep 1.182.1 from its source distribution, and that
+  build has no `semgrep-core`.
+  - **Affected:** the Action on a self-hosted Linux runner with glibc older
+    than 2.34, and any other install of this release's
+    `python/requirements.lock` or `requirements.txt` on such a host,
+    including a caller-managed `engine_path`. Examples are Ubuntu 20.04 and
+    Debian 11 (glibc 2.31), RHEL, Rocky Linux and AlmaLinux 8 (2.28), and
+    Amazon Linux 2 (2.26).
+  - **Not affected:** GitHub-hosted runners, the official image (Debian 13,
+    glibc 2.41), hosts with glibc 2.34 or later (Ubuntu 22.04, Debian 12,
+    RHEL 9, Amazon Linux 2023), and scans that do not run Semgrep.
+  - **What happens:** the install succeeds and the scan runs. The scan
+    records `semgrep` as `failed` (`execution_error`: "Failed to find
+    semgrep-core in PATH or in the semgrep package.") and coverage as
+    incomplete. It does not fail because of this: the exit code, and so the
+    Action's gate, is decided by the analyzers that ran. This was reproduced
+    on Debian 11 with the Action's install command. With v3.6.4's lock,
+    Semgrep 1.141.0 installs from its wheel and runs.
+  - **What to do:** run the official container image, or move the runner to
+    a distribution with glibc 2.34 or later. Setting `version: v3.6.4` also
+    works, but it gives up this release's fixes: v3.6.4 keeps MCP 1.16.0 with
+    its three HIGH advisories (Fendix never starts Semgrep's MCP server),
+    golang.org/x/mod 0.35.0 in the binary, and the semgrep.dev version check
+    on every Semgrep run. To make the job fail when Semgrep does not run, add
+    `extra-args: --require-analyzers semgrep`. The scan then exits 2 when
+    Semgrep is not delivered.
 
 ## [3.6.4] - 2026-10-24
 

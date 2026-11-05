@@ -43,23 +43,32 @@ FROM python:3.14-slim@sha256:7a500125bc50693f2214e842a621440a1b1b9cbb2188f74ab04
 # git is required for the clone step in the App's pull_request handler.
 # ca-certificates so HTTPS to api.github.com + github.com works.
 # tini for clean signal forwarding under non-PID-1 init.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade is the same Debian security refresh as Dockerfile's.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && \
+    apt-get install -y --no-install-recommends \
         git \
         ca-certificates \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps for the embedded white-box engine. Same shape as Dockerfile:
-# semgrep pins ruamel.yaml.clib, which has no cp314 wheel, so pip must build
-# it from source and needs gcc + libc headers; the toolchain is installed
-# only for that layer and purged in it, so the runtime ships no compiler.
-COPY python/requirements.txt /tmp/requirements.txt
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential && \
-    pip install --no-cache-dir -r /tmp/requirements.txt && \
-    apt-get purge -y build-essential && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/* /tmp/requirements.txt
+# the hash-locked python/requirements.lock, wheels only, then pip check.
+COPY python/requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: \
+        -r /tmp/requirements.lock && \
+    pip check && \
+    rm /tmp/requirements.lock
+
+# Semgrep must run, not only install. The probe the Action runs before every
+# code scan (scripts/action/analyzer_preflight.py) runs this Semgrep on a
+# bundled rule and file, offline, and requires their one match, so a build
+# whose Semgrep cannot scan (no semgrep-core, a damaged install, a binary for
+# another architecture, a crash or a hang) fails here instead of shipping.
+# The script is bind-mounted, not copied, and Semgrep's home is temporary, so
+# the image gains no file from the check.
+RUN --mount=type=bind,source=scripts/action/analyzer_preflight.py,target=/tmp/analyzer_preflight.py \
+    HOME=/tmp/fendix-preflight-home python3 /tmp/analyzer_preflight.py --analyzers semgrep && \
+    rm -rf /tmp/fendix-preflight-home
 
 COPY --from=go-builder /fendix     /usr/local/bin/fendix
 COPY --from=go-builder /fendix-app /usr/local/bin/fendix-app

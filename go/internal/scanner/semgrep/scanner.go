@@ -49,6 +49,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
@@ -69,6 +70,18 @@ var ErrCodePathMissing = errors.New("semgrep: code path does not exist")
 // exceeds defaultTimeout, so the orchestrator can classify it as a timeout
 // rather than a generic execution error.
 var ErrTimeout = errors.New("semgrep: timed out")
+
+// ErrFatal is wrapped into the error returned when semgrep ran but the run
+// was fatal by Semgrep's own contract (see classifyRun): an exit other than 0
+// or 1, a death by signal, or an error of level "error" in its JSON. The orchestrator records it
+// failed/execution_error. Findings semgrep still reported are returned with it.
+var ErrFatal = errors.New("semgrep: fatal error")
+
+// ErrMalformedOutput is wrapped into the error returned when semgrep exited
+// as if it succeeded but stdout is not a JSON results envelope. With --json a
+// working semgrep always writes one, so zero findings cannot be assumed; the
+// orchestrator records failed/malformed_output.
+var ErrMalformedOutput = errors.New("semgrep: no JSON results envelope")
 
 // defaultTimeout bounds one semgrep run, so a runaway rule can't hold the
 // orchestrator hostage. One run executes every bundled pack, and the pack is
@@ -139,9 +152,11 @@ var commandContext = exec.CommandContext
 // host's semgrep binary. Returns ErrSemgrepUnavailable when semgrep
 // isn't installed; ErrCodePathMissing when codePath doesn't exist.
 //
-// Other failures (timeout, malformed JSON, non-success exit) return a
-// wrapped error and an empty findings slice — the orchestrator logs +
-// continues so a flaky semgrep run can't fail the whole scan.
+// Other failures return a wrapped error — ErrTimeout, ErrFatal (a fatal run
+// by Semgrep's own contract; see classifyRun) or ErrMalformedOutput (no JSON
+// results envelope) — and the orchestrator records semgrep failed and
+// continues, so one broken analyzer cannot stop the scan, and is never
+// mistaken for a clean run.
 //
 // The provided ctx is honoured: cancellation kills the semgrep
 // subprocess. A 300 s deadline is layered onto ctx if ctx has no
@@ -170,30 +185,75 @@ type RuleError struct {
 // Run is what one semgrep run produced.
 type Run struct {
 	Findings []evidence.Evidence
-	// RuleErrors lists the rules Semgrep could not load. ScanRun returns no
-	// error for them: Semgrep exits non-zero (7) with a parseable document
-	// and, for a rule it rejects, no result at all, and ScanRun accepts any
-	// parseable document. The orchestrator records such a run failed, so a
-	// broken pack is never mistaken for a pack that found nothing.
+	// RuleErrors lists the rules Semgrep could not load. Semgrep exits
+	// non-zero (7) for them, which classifyRun reports as ErrFatal, so
+	// ScanRun returns this Run together with that error and the orchestrator
+	// records the run failed: a broken pack is never mistaken for a pack
+	// that found nothing. RuleErrors still names each rule error by type,
+	// including one reported at a level other than "error", which
+	// classifyRun alone would let pass.
 	RuleErrors []RuleError
 	// Timeouts lists the rules Semgrep stopped on a file. ScanRun returns
 	// no error for them, since Findings holds everything else the run
 	// found; the orchestrator records such a run failed with reason
 	// timeout, its findings partial.
 	Timeouts []RuleTimeout
+	// Report counts the other non-fatal, per-file problems Semgrep reported.
+	Report Report
 }
 
-// ScanWithAllowlist is ScanRun without the timeouts: the findings alone.
+// Report is what one Semgrep run said about itself besides its findings.
+type Report struct {
+	// Incomplete counts the non-fatal, per-file problems Semgrep reported
+	// (level "warn": a file that did not parse fully, a per-file or per-rule
+	// timeout, a per-file memory limit), by Semgrep error type. The run is
+	// still ok by Semgrep's own contract; findings in those files may be
+	// missing. A rule Timeout is counted here and, separately, in
+	// Run.Timeouts, which the orchestrator records as a failed run.
+	Incomplete map[string]int
+}
+
+// Summary is the scanner-status detail for a clean run with per-file
+// problems, or "" when there were none. Counts and Semgrep error types only:
+// never a message, which can quote the scanned source.
+func (r Report) Summary() string {
+	if len(r.Incomplete) == 0 {
+		return ""
+	}
+	types := make([]string, 0, len(r.Incomplete))
+	total := 0
+	for t, n := range r.Incomplete {
+		types = append(types, t)
+		total += n
+	}
+	sort.Strings(types)
+	parts := make([]string, len(types))
+	for i, t := range types {
+		parts[i] = fmt.Sprintf("%s %d", t, r.Incomplete[t])
+	}
+	return fmt.Sprintf("%d non-fatal per-file problem(s) reported by semgrep (%s); findings in those files may be incomplete",
+		total, strings.Join(parts, ", "))
+}
+
+// ScanWithAllowlist is ScanRun without the run's report: the findings alone.
 func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
 	run, err := ScanRun(ctx, codePath, allow)
 	return run.Findings, err
 }
 
+// ScanWithReport is ScanWithAllowlist that also returns the run's Report.
+// On ErrFatal it returns whatever findings semgrep still reported, so no
+// evidence is lost while the run is recorded failed.
+func ScanWithReport(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, Report, error) {
+	run, err := ScanRun(ctx, codePath, allow)
+	return run.Findings, run.Report, err
+}
+
 // ScanRun is Scan scoped to a diff-aware file allowlist, returning the rules
-// Semgrep timed out on beside the findings. A nil allowlist scans the whole
-// codePath (full-scan parity). When set, the changed files are passed to
-// semgrep as `--include` path filters so the engine only analyses the diff —
-// the semgrep half of `fendix scan --diff`.
+// Semgrep timed out on and could not load beside the findings. A nil
+// allowlist scans the whole codePath (full-scan parity). When set, the
+// changed files are passed to semgrep as `--include` path filters so the
+// engine only analyses the diff — the semgrep half of `fendix scan --diff`.
 //
 // semgrep's --include takes a glob/path relative to the scan root; passing
 // the exact relative path of each changed file restricts the run to those
@@ -261,6 +321,13 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 		// packs' "fixtures/" exclusion to every file of the target and scan
 		// nothing, with no error. The scan target is the root.
 		"--project-root", codePath,
+		// Without this, every run first asks semgrep.dev whether a newer
+		// Semgrep exists. Fendix pins Semgrep itself and --quiet hides the
+		// answer, so the check only adds outbound traffic, and with no route
+		// out it is a wait: about 25 s on Semgrep 1.141.0 and 96 s on
+		// 1.182.1, enough to push a mid-size tree past defaultTimeout and
+		// record semgrep failed/timeout on an offline scan.
+		"--disable-version-check",
 	}
 	for _, pattern := range buildOutputExcludes {
 		args = append(args, "--exclude", pattern)
@@ -271,6 +338,8 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 	args = append(args, codePath)
 
 	cmd := commandContext(runCtx, bin, args...)
+	var stderr strings.Builder
+	cmd.Stderr = &limitedWriter{w: &stderr, n: stderrKeep}
 	stdout, err := cmd.Output()
 	if err != nil {
 		// Context errors (cancel/deadline) are always real failures —
@@ -281,45 +350,257 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 		if errors.Is(runCtx.Err(), context.Canceled) {
 			return Run{}, runCtx.Err()
 		}
-		// If semgrep emitted parseable JSON we accept it regardless of
-		// exit code. Semgrep returns 1 for "matches found" (success
-		// case), and 2/5/7 for various rule-parse / engine errors —
-		// in all cases the JSON envelope is well-formed and the
-		// `results` field is meaningful (often empty when rules
-		// failed to parse). Matches python semgrep_runner.py which
-		// silently absorbs non-{0,1} exits as long as stdout parses.
-		if run := parseRun(stdout, codePath); len(run.Findings) > 0 || isParseableEmpty(stdout) {
-			return run, nil
-		}
-		// Truly broken: no parseable output AND non-zero exit.
-		var exitErr *exec.ExitError
-		stderr := ""
-		if errors.As(err, &exitErr) {
-			stderr = strings.TrimSpace(string(exitErr.Stderr))
-			if len(stderr) > 200 {
-				stderr = stderr[:200] + "..."
-			}
-		}
-		return Run{}, fmt.Errorf("semgrep: %w (stderr: %s)", err, stderr)
 	}
-
-	return parseRun(stdout, codePath), nil
+	status := exitStatus{code: 0}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return Run{}, fmt.Errorf("semgrep: %w", err)
+		}
+		status = exitStatusOf(exitErr)
+	}
+	out, report, cerr := classifyRun(status, stdout, stderr.String())
+	if out == nil {
+		return Run{Report: report}, cerr
+	}
+	// A fatal run still returns its findings, rule errors and timeouts: the
+	// orchestrator keeps the findings and records the run failed.
+	run := runFromOutput(out, codePath)
+	run.Report = report
+	return run, cerr
 }
 
-// isParseableEmpty reports whether stdout decodes as a Semgrep JSON
-// envelope, even one with zero results — this is how we distinguish
-// "rule parse failure with valid JSON envelope" (treat as 0 findings)
-// from "subprocess crashed before writing JSON" (real failure).
-func isParseableEmpty(stdout []byte) bool {
-	if len(stdout) == 0 {
-		return false
+// stderrKeep bounds how much of semgrep's stderr is kept for an error
+// message; only its tail is ever shown.
+const stderrKeep = 64 * 1024
+
+// limitedWriter keeps the first n bytes written to it and discards the rest,
+// so a chatty semgrep cannot grow memory without bound.
+type limitedWriter struct {
+	w interface{ WriteString(string) (int, error) }
+	n int
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if l.n > 0 {
+		keep := p
+		if len(keep) > l.n {
+			keep = keep[:l.n]
+		}
+		_, _ = l.w.WriteString(string(keep))
+		l.n -= len(keep)
 	}
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal(stdout, &probe); err != nil {
-		return false
+	return len(p), nil
+}
+
+// exitStatus is how the semgrep process ended: an exit code, or the signal
+// that killed it (code -1).
+type exitStatus struct {
+	code   int
+	signal string
+}
+
+// signalName names the signal that killed the process, "signal 9 (killed)".
+func signalName(e *exec.ExitError) string {
+	if ws, ok := e.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		sig := ws.Signal()
+		return fmt.Sprintf("signal %d (%s)", int(sig), sig.String())
 	}
-	_, hasResults := probe["results"]
-	return hasResults
+	return "a signal"
+}
+
+func exitStatusOf(e *exec.ExitError) exitStatus {
+	st := exitStatus{code: e.ExitCode()}
+	if st.code == -1 {
+		st.signal = signalName(e)
+	}
+	return st
+}
+
+// semgrepError is one entry of the envelope's "errors" list.
+//
+// Level and Message are kept raw: an entry whose message is of an unexpected
+// type must still be read for its level, and never cost the results beside it.
+type semgrepError struct {
+	LevelRaw   json.RawMessage `json:"level"`
+	Type       json.RawMessage `json:"type"`
+	MessageRaw json.RawMessage `json:"message"`
+}
+
+// level is the error's level ("warn", "error"), or "" when it has none.
+func (e semgrepError) level() string { return rawString(e.LevelRaw) }
+
+// message is the error's message, or "" when it has none or it is not a string.
+func (e semgrepError) message() string { return rawString(e.MessageRaw) }
+
+// typeName is the error's Semgrep type: a JSON string ("Timeout") or the
+// first element of a constructor array (["PartialParsing", [...]]).
+func (e semgrepError) typeName() string {
+	var s string
+	if json.Unmarshal(e.Type, &s) == nil && s != "" {
+		return s
+	}
+	var parts []json.RawMessage
+	if json.Unmarshal(e.Type, &parts) == nil && len(parts) > 0 && json.Unmarshal(parts[0], &s) == nil && s != "" {
+		return s
+	}
+	return "unknown"
+}
+
+// Interfile-analysis errors Semgrep itself reports at level "error" yet does
+// not fail the run on (output.py, is_special_interfile_analysis_error): the
+// per-file results are still produced. They need --pro, which Fendix never
+// passes; they are counted like any per-file problem rather than failing.
+var nonBlockingErrorTypes = map[string]bool{
+	"OutOfMemoryDuringInterfile": true,
+	"TimeoutDuringInterfile":     true,
+}
+
+// classifyRun decides what a finished semgrep run means, from how the process
+// ended and what it wrote. Semgrep 1.182.1's contract, read from its source
+// (semgrep/error.py, output.py `_final_raise`, core_output.py) and exercised
+// against the real binary (fixtures in testdata/runs):
+//
+//   - Fendix passes neither --error nor --strict, so a working run exits 0
+//     whether or not it found anything. Exit 1 means findings under --error
+//     and is accepted like 0 when it comes with an envelope.
+//   - Per-file problems are level "warn" and leave the exit code at 0: a file
+//     that does not fully parse (PartialParsing, Syntax error, Lexical error),
+//     a per-file or per-rule Timeout, a per-file OutOfMemory. Their JSON
+//     "code" can be 2 or 3 anyway, so "code" is never read: only "level".
+//     Such a run is ok; the problems are counted in the Report.
+//   - A fatal problem is level "error": an invalid or missing config (exit 7),
+//     a rule that does not parse (exit 2, and other rules' results are still
+//     printed), an engine killed or crashed mid-run, which includes out of
+//     memory ("You are seeing this because the engine was killed", exit 2,
+//     with a valid envelope and no results).
+//   - Semgrep sets its exit code from the LAST error only, so an error-level
+//     entry followed by per-file warnings exits 0 (observed: a rule parse
+//     error plus syntax errors in three files). Any level "error" entry is
+//     therefore fatal, whatever the exit code.
+//
+// So: a non-zero exit other than 1, a death by signal, exit 1 without an
+// envelope, or any level "error" entry (bar the two interfile types above) is
+// ErrFatal, named by the first error message or the tail of stderr; exit 0
+// without a JSON results envelope is ErrMalformedOutput. The envelope, when
+// there is one, is returned with the error so findings it carries are kept.
+func classifyRun(status exitStatus, stdout []byte, stderr string) (*semgrepOutput, Report, error) {
+	report := Report{}
+	out, envErr := decodeEnvelope(stdout)
+	var fatal *semgrepError
+	if out != nil {
+		entries := out.errorList()
+		for i := range entries {
+			e := entries[i]
+			typ := e.typeName()
+			if strings.EqualFold(e.level(), "error") && !nonBlockingErrorTypes[typ] {
+				if fatal == nil {
+					fatal = &entries[i]
+				}
+				continue
+			}
+			if strings.EqualFold(e.level(), "warn") || strings.EqualFold(e.level(), "warning") || nonBlockingErrorTypes[typ] {
+				if report.Incomplete == nil {
+					report.Incomplete = map[string]int{}
+				}
+				report.Incomplete[typ]++
+			}
+		}
+	}
+
+	// Exit 1 is "findings" only with an envelope; without one it is how
+	// Semgrep's Python entrypoint exits on an exception (observed: a
+	// semgrep-core it cannot exec).
+	exitedClean := status.signal == "" && (status.code == 0 || (status.code == 1 && out != nil))
+	switch {
+	case !exitedClean:
+		how := fmt.Sprintf("exited %d", status.code)
+		if status.signal != "" {
+			how = "was killed by " + status.signal
+		}
+		cause := firstNonEmpty(errorText(fatal), tailText(stderr), "no error message")
+		if out == nil {
+			return nil, report, fmt.Errorf("%w: semgrep %s and wrote no JSON results: %s", ErrFatal, how, cause)
+		}
+		return out, report, fmt.Errorf("%w: semgrep %s: %s", ErrFatal, how, cause)
+	case out == nil:
+		return nil, report, fmt.Errorf("%w: semgrep exited %d but stdout is %s (stderr: %s)",
+			ErrMalformedOutput, status.code, envErr, firstNonEmpty(tailText(stderr), "empty"))
+	case fatal != nil:
+		return out, report, fmt.Errorf("%w: semgrep exited %d but reported a fatal error: %s", ErrFatal, status.code, errorText(fatal))
+	}
+	return out, report, nil
+}
+
+// decodeEnvelope returns the JSON results envelope, or nil and why not.
+func decodeEnvelope(stdout []byte) (*semgrepOutput, string) {
+	if len(strings.TrimSpace(string(stdout))) == 0 {
+		return nil, "empty"
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(stdout, &keys); err != nil {
+		return nil, "not JSON"
+	}
+	if _, ok := keys["results"]; !ok {
+		return nil, "JSON without a results list"
+	}
+	var out semgrepOutput
+	if err := json.Unmarshal(stdout, &out); err != nil {
+		return nil, "JSON whose results or errors do not decode"
+	}
+	return &out, ""
+}
+
+// errorText is a Semgrep error on one line: its type and message, bounded
+// (a FatalError message can carry a stack trace).
+func errorText(e *semgrepError) string {
+	if e == nil {
+		return ""
+	}
+	msg := oneLine(e.message())
+	if msg == "" {
+		return e.typeName()
+	}
+	return boundText(e.typeName() + ": " + msg)
+}
+
+// tailText is the last non-empty lines of stderr, bounded and on one line.
+func tailText(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) > 3 {
+		lines = lines[len(lines)-3:]
+	}
+	return boundText(oneLine(strings.Join(lines, " | ")))
+}
+
+// oneLine collapses whitespace and drops control characters.
+func oneLine(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// errorTextMax bounds an error message in a scanner-status detail.
+const errorTextMax = 240
+
+func boundText(s string) string {
+	if len(s) > errorTextMax {
+		return s[:errorTextMax] + "..."
+	}
+	return s
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // contextWithDefaultTimeout returns a context with the given timeout
@@ -375,13 +656,34 @@ type semgrepExtra struct {
 // semgrepOutput wraps a top-level Semgrep --json document.
 type semgrepOutput struct {
 	Results []semgrepResult `json:"results"`
-	// Errors is kept raw and decoded entry by entry (ruleTimeouts): an
-	// entry of an unexpected shape must cost that entry, never the results.
+	// Errors is kept raw and decoded entry by entry (errorList, ruleTimeouts,
+	// ruleErrors): an entry of an unexpected shape must cost that entry,
+	// never the results.
 	Errors json.RawMessage `json:"errors"`
 }
 
-// semgrepError is one entry of the document's `errors`. Semgrep 1.141.0
-// reports a rule it stopped on a file at --timeout as
+// errorList decodes the envelope's errors entry by entry, for classifyRun: an
+// entry of an unexpected shape, or an `errors` that is not a list, costs that
+// entry and never the results beside it.
+func (o *semgrepOutput) errorList() []semgrepError {
+	var entries []json.RawMessage
+	if len(o.Errors) == 0 || json.Unmarshal(o.Errors, &entries) != nil {
+		return nil
+	}
+	list := make([]semgrepError, 0, len(entries))
+	for _, entry := range entries {
+		var e semgrepError
+		if json.Unmarshal(entry, &e) != nil {
+			continue
+		}
+		list = append(list, e)
+	}
+	return list
+}
+
+// semgrepErrorDetail is one entry of the document's `errors`, read for the
+// rule it names and the file it was about. Semgrep 1.141.0 reports a rule it
+// stopped on a file at --timeout as
 //
 //	{"code": 2, "level": "warn", "type": "Timeout", "rule_id": "<id>",
 //	 "message": "Timeout when running <id> on <path>:", "path": "<path>"}
@@ -391,7 +693,7 @@ type semgrepOutput struct {
 //
 // The message fields are kept raw as well, so a message of an unexpected type
 // costs the message and never the entry (a Timeout is still counted).
-type semgrepError struct {
+type semgrepErrorDetail struct {
 	Type     json.RawMessage `json:"type"`
 	RuleID   string          `json:"rule_id"`
 	Path     string          `json:"path"`
@@ -415,7 +717,7 @@ var ruleErrorTypes = map[string]bool{
 
 // typeTag is the error's type: a plain string, or the first element of an ATD
 // variant array. "" when it is neither.
-func (e semgrepError) typeTag() string {
+func (e semgrepErrorDetail) typeTag() string {
 	var tag string
 	if json.Unmarshal(e.Type, &tag) == nil {
 		return tag
@@ -439,7 +741,7 @@ func rawString(raw json.RawMessage) string {
 // the message to show for it. Semgrep reports a configuration file it rejected
 // as a SemgrepError "invalid configuration file found", after the specific
 // InvalidRuleSchemaError.
-func (e semgrepError) ruleError() (RuleError, bool) {
+func (e semgrepErrorDetail) ruleError() (RuleError, bool) {
 	tag := e.typeTag()
 	message := rawString(e.Message)
 	switch {
@@ -461,23 +763,20 @@ func (e semgrepError) ruleError() (RuleError, bool) {
 }
 
 // isTimeout reports whether the error is a rule timing out on a file.
-func (e semgrepError) isTimeout() bool {
+func (e semgrepErrorDetail) isTimeout() bool {
 	return e.typeTag() == "Timeout"
 }
 
 // parseAndMap decodes Semgrep's stdout JSON and converts each result
 // into a fendix Finding. Empty or malformed stdout returns (nil, nil)
-// so the orchestrator treats the scan as zero-findings rather than
-// failed — matches python semgrep_runner.py which silently absorbs
-// JSONDecodeError and returns an empty list. The Scan caller is
-// responsible for surfacing real failures (timeout, ctx cancel,
-// non-success exit with no parseable output).
+// so the caller treats it as zero-findings; ScanRun does not rely on this
+// leniency, it classifies the run first (classifyRun) and only then maps.
 func parseAndMap(stdout []byte, codeRoot string) ([]evidence.Evidence, error) {
 	return parseRun(stdout, codeRoot).Findings, nil
 }
 
-// parseRun is parseAndMap with the run's rule timeouts, each logged here, so
-// a rule that lost its matches on a file is never silent.
+// parseRun is parseAndMap with the run's rule timeouts and rule errors, each
+// logged here, so a rule that lost its matches on a file is never silent.
 func parseRun(stdout []byte, codeRoot string) Run {
 	if len(stdout) == 0 {
 		return Run{}
@@ -486,21 +785,37 @@ func parseRun(stdout []byte, codeRoot string) Run {
 	if err := json.Unmarshal(stdout, &out); err != nil {
 		return Run{}
 	}
+	return runFromOutput(&out, codeRoot)
+}
+
+// runFromOutput maps a decoded envelope to a Run: its findings, the rules
+// Semgrep timed out on and the rules it could not load, each logged.
+func runFromOutput(out *semgrepOutput, codeRoot string) Run {
 	absRoot, err := filepath.Abs(codeRoot)
 	if err != nil {
 		absRoot = codeRoot
 	}
-	run := Run{Findings: make([]evidence.Evidence, 0, len(out.Results))}
+	run := Run{Findings: mapResults(out, codeRoot)}
+	run.Timeouts = ruleTimeouts(out.Errors, absRoot)
+	run.RuleErrors = ruleErrors(out.Errors)
+	return run
+}
+
+// mapResults converts every result of a decoded envelope to a Finding.
+func mapResults(out *semgrepOutput, codeRoot string) []evidence.Evidence {
+	absRoot, err := filepath.Abs(codeRoot)
+	if err != nil {
+		absRoot = codeRoot
+	}
+	findings := make([]evidence.Evidence, 0, len(out.Results))
 	for i := range out.Results {
 		f, ok := mapResult(&out.Results[i], absRoot)
 		if !ok {
 			continue
 		}
-		run.Findings = append(run.Findings, f)
+		findings = append(findings, f)
 	}
-	run.Timeouts = ruleTimeouts(out.Errors, absRoot)
-	run.RuleErrors = ruleErrors(out.Errors)
-	return run
+	return findings
 }
 
 // ruleErrors decodes the entries of a document's `errors` that say a rule could
@@ -513,7 +828,7 @@ func ruleErrors(raw json.RawMessage) []RuleError {
 	}
 	var out []RuleError
 	for _, entry := range entries {
-		var e semgrepError
+		var e semgrepErrorDetail
 		if json.Unmarshal(entry, &e) != nil {
 			continue
 		}
@@ -537,7 +852,7 @@ func ruleTimeouts(raw json.RawMessage, absRoot string) []RuleTimeout {
 	}
 	var out []RuleTimeout
 	for _, entry := range entries {
-		var e semgrepError
+		var e semgrepErrorDetail
 		if json.Unmarshal(entry, &e) != nil || !e.isTimeout() {
 			continue
 		}

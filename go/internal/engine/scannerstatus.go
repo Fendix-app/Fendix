@@ -163,6 +163,9 @@ func classifyErr(err error) reporters.ScannerReason {
 	if errors.Is(err, semgrep.ErrTimeout) {
 		return reporters.ReasonTimeout
 	}
+	if errors.Is(err, semgrep.ErrMalformedOutput) {
+		return reporters.ReasonMalformedOutput
+	}
 	switch neterr.Classify(err) {
 	case neterr.KindTimeout:
 		return reporters.ReasonTimeout
@@ -203,7 +206,14 @@ func recordSemgrepRun(status *scannerStatusList, findings *[]evidence.Evidence, 
 		return
 	}
 	if len(run.Timeouts) == 0 {
-		status.ok(AnalyzerSemgrep)
+		// Per-file problems Semgrep reports as non-fatal (a file that did
+		// not fully parse, a per-file memory limit) leave the run ok, counted
+		// in the detail so they are not invisible.
+		if detail := run.Report.Summary(); detail != "" {
+			status.okDetail(AnalyzerSemgrep, detail)
+		} else {
+			status.ok(AnalyzerSemgrep)
+		}
 		return
 	}
 	pairs := make([]string, 0, len(run.Timeouts))

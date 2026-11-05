@@ -33,7 +33,7 @@ choose between them or want signature-verification details.
 | Source checkout | Available from the checkout's `./python` directory. |
 
 `--code` auto-enables the Python phase unless `--python-engine=false` is
-explicit. On a standalone v3.6.4 install with no version-matched tree supplied
+explicit. On a standalone v3.7.0 install with no version-matched tree supplied
 through `FENDIX_ENGINE` or an engine pin, that phase is recorded
 `skipped/dependency_missing`; native secrets, textscan, Semgrep orchestration,
 and native dependency analyzers continue. Use the official container or a
@@ -53,6 +53,8 @@ brew install fendix
 Current Homebrew refuses to load a formula from a third-party tap until you
 trust it; `brew trust --formula` trusts the `fendix` formula only, not the
 whole tap. A Homebrew without the `brew trust` command does not need that line.
+`brew uninstall fendix` removes that trust, so run the `brew trust` line again
+before you install it again.
 
 The formula auto-selects the right binary for your arch (Apple Silicon vs
 Intel; arm64 Linux vs amd64 Linux). Updates land via `brew upgrade fendix`
@@ -68,7 +70,7 @@ Downloads the latest release binary, verifies its sha256 checksum, and
 installs to `/usr/local/bin/fendix`. Override:
 
 - `FENDIX_DIR=$HOME/.local/bin` — install to a user-writable directory.
-- `FENDIX_VERSION=v3.6.4` — pin a specific version.
+- `FENDIX_VERSION=v3.7.0` — pin a specific version.
 - `FENDIX_REPO=...` — pull from a fork or private mirror.
 - `FENDIX_SHA256=<hex>` — refuse any binary whose SHA-256 differs (a pin
   that holds even if the release is later replaced). From v3.5.1.
@@ -100,7 +102,7 @@ curl -fsSL https://get.fendix.dev/install.sh | less
 ```bash
 # Pick the right architecture for your host
 ARCH=$(dpkg --print-architecture)         # amd64 or arm64
-VERSION=v3.6.4                            # current release at time of writing
+VERSION=v3.7.0                            # current release at time of writing
 FILE="fendix-${VERSION}-linux-${ARCH}.deb"
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/${FILE}"
 
@@ -127,7 +129,7 @@ case "$ARCH" in
   x86_64)  PKG_ARCH=amd64 ;;
   aarch64) PKG_ARCH=arm64 ;;
 esac
-VERSION=v3.6.4
+VERSION=v3.7.0
 FILE="fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/${FILE}"
 
@@ -147,8 +149,8 @@ Uninstall with `sudo dnf remove fendix`.
 ## Docker
 
 ```bash
-docker pull fendixapp/fendix:3.6.4
-docker run --rm fendixapp/fendix:3.6.4 scan --url https://api.example.com
+docker pull fendixapp/fendix:3.7.0
+docker run --rm fendixapp/fendix:3.7.0 scan --url https://api.example.com
 ```
 
 The image is multi-arch (linux/amd64 + linux/arm64); `docker pull` picks
@@ -160,7 +162,7 @@ mode works out of the box.
 > produced by one of those cannot say which engine version wrote it — including
 > SARIF `driver.version`. From v2.0.1 the build takes the git tag, matching how
 > the platform binaries have always been stamped. Pin a tag
-> (`fendixapp/fendix:3.6.4`) or a digest rather than `:latest`
+> (`fendixapp/fendix:3.7.0`) or a digest rather than `:latest`
 > if you need that to be reproducible. A locally built image still reports
 > `docker`, deliberately: a plain `docker build .` has no tag to claim.
 
@@ -172,7 +174,7 @@ Pick a binary for your platform from the
 matching `.sha256` file, and place it on your PATH:
 
 ```bash
-VERSION=v3.6.4
+VERSION=v3.7.0
 FILE="fendix-${VERSION}-darwin-arm64"
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/${FILE}"
 
@@ -220,28 +222,28 @@ Certificates through v3.4.1 keep their pre-transfer identity; see
 
 ```bash
 cosign verify-blob \
-  --certificate fendix-v3.6.4-linux-amd64.crt \
-  --signature   fendix-v3.6.4-linux-amd64.sig \
-  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.6.4" \
+  --certificate fendix-v3.7.0-linux-amd64.crt \
+  --signature   fendix-v3.7.0-linux-amd64.sig \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  fendix-v3.6.4-linux-amd64
+  fendix-v3.7.0-linux-amd64
 ```
 
 Verify a `.deb` or `.rpm` package (same pattern, swap the asset name):
 
 ```bash
 cosign verify-blob \
-  --certificate fendix-v3.6.4-linux-amd64.deb.crt \
-  --signature   fendix-v3.6.4-linux-amd64.deb.sig \
-  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.6.4" \
+  --certificate fendix-v3.7.0-linux-amd64.deb.crt \
+  --signature   fendix-v3.7.0-linux-amd64.deb.sig \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  fendix-v3.6.4-linux-amd64.deb
+  fendix-v3.7.0-linux-amd64.deb
 ```
 
 Verify the Docker image (signs the multi-arch manifest digest):
 
 ```bash
-cosign verify fendixapp/fendix@sha256:7a8234194fa963f894e1fb77f2b728272230ab9b1ac5c05ffd75c0ab10ea2529 \
+cosign verify fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015 \
   --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```

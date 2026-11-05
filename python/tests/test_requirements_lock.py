@@ -2,8 +2,9 @@
 
 requirements.txt declares the engine's dependencies; the lock is the exact set
 the composite Action installs (with --require-hashes) for a Fendix release's
-own Python tree. These checks run on the committed files only: regenerating
-the lock is a deliberate maintenance step,
+own Python tree, and the set the official images install. These checks run on
+the committed files only: regenerating the lock is a deliberate maintenance
+step,
 
     sh scripts/release/regenerate-python-lock.sh
 
@@ -23,9 +24,13 @@ DECLARED = PYTHON / "requirements.txt"
 LOCK = PYTHON / "requirements.lock"
 MARK = "# Resolved from python/requirements.txt sha256:"
 REGENERATE = "run sh scripts/release/regenerate-python-lock.sh"
-# The Semgrep/MCP/Pydantic line v3.6.1 ships. Moving it is a deliberate
-# dependency-line upgrade (#111), made by changing this table with the lock.
-PROVEN_LINE = {"semgrep": "1.141.0", "mcp": "1.16.0", "pydantic": "2.13.5"}
+# The Semgrep/MCP/Pydantic line v3.6.5 ships (v3.6.1 to v3.6.4 shipped
+# 1.141.0/1.16.0/2.13.5). Moving it is a deliberate dependency-line upgrade
+# (#111), made by changing this table with the lock.
+PROVEN_LINE = {"semgrep": "1.182.1", "mcp": "1.29.0", "pydantic": "2.13.5"}
+# Both images install the lock rather than requirements.txt, so they carry the
+# versions the Action installs and the Action smoke validates.
+IMAGE_DOCKERFILES = ("Dockerfile", "Dockerfile.app")
 
 
 def declared_requirements():
@@ -85,6 +90,17 @@ class RequirementsLockTests(unittest.TestCase):
         for name, version in PROVEN_LINE.items():
             with self.subTest(package=name):
                 self.assertEqual(self.pins[name][0], version)
+
+    def test_images_install_the_lock_with_hashes(self):
+        for name in IMAGE_DOCKERFILES:
+            with self.subTest(dockerfile=name):
+                text = (PYTHON.parent / name).read_text()
+                self.assertIn("COPY python/requirements.lock /tmp/requirements.lock", text)
+                install = re.search(r"pip install[^\n]*", text.replace("\\\n", " "))
+                self.assertIsNotNone(install, f"{name} has no pip install")
+                for flag in ("--require-hashes", "--only-binary=:all:", "-r /tmp/requirements.lock"):
+                    self.assertIn(flag, install.group(0))
+                self.assertNotIn("requirements.txt", text)
 
 
 if __name__ == "__main__":
