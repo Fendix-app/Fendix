@@ -290,15 +290,19 @@ func JavaRules() []Rule {
 			// "a password is fed to it" (High, CWE-916). A textscan Rule has
 			// one Severity and one Pattern, so they cannot be one rule.
 			//
-			// Fires on the digest()/update() line when its argument is a
-			// password-named value (password, userPassword, pwd, passphrase,
-			// getPassword()); FileGuard limits it to a file that asks for MD5
+			// Fires on the digest()/update() line when the RECEIVER is
+			// MessageDigest-shaped (md, md5, sha1, digest, messageDigest, or a
+			// `MessageDigest.getInstance(...)` chain: update() alone is a
+			// repository/JDBC method name too) and its argument is a
+			// password-named value ending at a word boundary (password,
+			// userPassword, pwd, passphrase, getPassword(); not
+			// passwordForm); FileGuard limits it to a file that asks for MD5
 			// or SHA-1 at all, because the digest line of
 			// `MessageDigest md = ...getInstance("MD5"); md.digest(password...)`
 			// does not name the algorithm. FP class: a file that uses MD5
 			// elsewhere and SHA-256 on the password line. FN class: the
 			// password reaches digest() through a differently named variable.
-			Pattern:   regexp.MustCompile(`\.(?:digest|update)\s*\(\s*(?:[\w]+\.)*(?:\w*[Pp]assword|\w*[Pp]wd|\w*[Pp]assphrase)`),
+			Pattern:   regexp.MustCompile(`(?i:\b(?:md\w*|sha\w*|digest\w*|messageDigest\w*)|MessageDigest\.getInstance\s*\([^)]*\))\.(?:digest|update)\s*\(\s*(?:\w+\.)*(?:\w*[Pp]assword|\w*[Pp]wd|\w*[Pp]assphrase)\b`),
 			FileGuard: regexp.MustCompile(`MessageDigest\.getInstance\s*\(\s*"(?i:MD5|SHA-?1)"`),
 			Applies:   HasJavaExtension,
 			Fix:       "Use bcrypt, scrypt, argon2, or PBKDF2 for password hashing. Raw MD5/SHA-1 is unsuitable: fast hashes with no work factor and no per-record salt.",

@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Java password hashing is reported apart from general MD5 use.** A new
   textscan rule `JAVA_WEAK_HASH_PASSWORD` (CWE-916, `crypto`, HIGH) fires when
   a password-named value (`password`, `userPassword`, `pwd`, `passphrase`) is
-  passed to `digest()` or `update()` in a file that asks for an MD5 or SHA-1
-  `MessageDigest`, as `GO_WEAK_HASH_PASSWORD` does in Go. `JAVA_WEAK_CRYPTO` is
+  passed to `digest()` or `update()` of a MessageDigest-style receiver (`md`,
+  `md5`, `sha1`, `digest`, `messageDigest` or a `MessageDigest.getInstance(...)`
+  chain) in a file that asks for an MD5 or SHA-1 `MessageDigest`, as `GO_WEAK_HASH_PASSWORD` does in Go. `JAVA_WEAK_CRYPTO` is
   unchanged (MD5/SHA-1 anywhere, MEDIUM), so an MD5 ETag still gets that
   hygiene note but is no longer counted as a weak password hash by the parity
   harness. The catalog contract lists the new check.

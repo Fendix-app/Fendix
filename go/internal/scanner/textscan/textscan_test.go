@@ -1030,3 +1030,49 @@ func TestInterpolatedIdentsAreFileConstants_EveryArgument(t *testing.T) {
 		}
 	}
 }
+
+// digest()/update() are common names: only a MessageDigest-style receiver, and
+// only a password-named argument that ends at a word boundary, counts.
+func TestJavaRules_WeakHashPasswordIgnoresRepositoryUpdates(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  String etag(byte[] data) throws Exception {
+    return hex(MessageDigest.getInstance("MD5").digest(data));
+  }
+  void a(String id) {
+    jdbcTemplate.update(updatePasswordSql, id);
+    repo.update(passwordForm);
+    session.update(passwordResetToken);
+    this.users.update(userPassword, id);
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if n := len(by["JAVA_WEAK_HASH_PASSWORD"]); n != 0 {
+		var lines []string
+		for _, f := range by["JAVA_WEAK_HASH_PASSWORD"] {
+			lines = append(lines, f.Endpoint+" "+f.Evidence)
+		}
+		t.Errorf("JAVA_WEAK_HASH_PASSWORD = %d; want 0 (a repository update and a word that only starts with password are not a password hash): %v", n, lines)
+	}
+}
+
+func TestJavaRules_WeakHashPasswordReceiverForms(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Hash.java", `public class Hash {
+  byte[] a(String password) throws Exception {
+    return MessageDigest.getInstance("MD5").digest(password.getBytes());
+  }
+  byte[] b(java.security.MessageDigest md5, String password) {
+    return md5.digest(password.getBytes());
+  }
+  void c(java.security.MessageDigest messageDigest, char[] passphrase) {
+    this.messageDigest.update(passphrase);
+  }
+  byte[] d(java.security.MessageDigest md, String req) {
+    return md.digest(req.getPassword());
+  }
+}`)
+	if n := len(findingsByID(mustScan(t, dir, JavaRules()))["JAVA_WEAK_HASH_PASSWORD"]); n != 4 {
+		t.Errorf("JAVA_WEAK_HASH_PASSWORD = %d; want 4", n)
+	}
+}
