@@ -746,3 +746,79 @@ def test_a_failure_while_proving_proves_nothing(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ProjectCallIndex, "_caller", boom)
     assert index.tainted_args("app.services.q", "find", 0, "name") == []
+
+
+# -- a name bound both by an import and by an assignment or def -----------------
+
+
+@pytest.mark.parametrize(
+    "rebind",
+    [
+        "find = print\n",
+        "def find(name):\n    return name\n",
+        "class find:\n    pass\n",
+        "for find in (print,):\n    pass\n",
+        "with open('x') as find:\n    pass\n",
+    ],
+    ids=["assign", "def", "class", "for", "with"],
+)
+def test_a_name_the_scope_rebinds_after_the_import_names_no_function(tmp_path, rebind):
+    # `from app.services.q import find` then `find = print`: the call is not
+    # of `app.services.q.find`, so no caller is recorded for it.
+    index = _index(
+        tmp_path,
+        _package(
+            {
+                "app/services/q.py": _QUERY,
+                "app/views.py": (
+                    "from flask import request\n"
+                    "from app.services.q import find\n"
+                    + rebind
+                    + "def view():\n"
+                    '    return find(request.args["n"])\n'
+                ),
+            }
+        ),
+    )
+    assert index.tainted_args("app.services.q", "find", 0, "name") == []
+
+
+def test_a_function_that_rebinds_the_imported_name_names_no_function_inside_it(tmp_path):
+    index = _index(
+        tmp_path,
+        _package(
+            {
+                "app/services/q.py": _QUERY,
+                "app/views.py": (
+                    "from flask import request\n"
+                    "from app.services.q import find\n"
+                    "def view():\n"
+                    "    find = print\n"
+                    '    return find(request.args["n"])\n'
+                    "def other():\n"
+                    '    return find(request.args["n"])\n'
+                ),
+            }
+        ),
+    )
+    # Only `other`, which reads the module's import, is a caller.
+    assert [link.line for link in index.tainted_args("app.services.q", "find", 0, "name")] == [7]
+
+
+def test_an_import_nothing_rebinds_still_names_the_function(tmp_path):
+    index = _index(
+        tmp_path,
+        _package(
+            {
+                "app/services/q.py": _QUERY,
+                "app/views.py": (
+                    "from flask import request\n"
+                    "from app.services.q import find\n"
+                    "other = print\n"
+                    "def view():\n"
+                    '    return find(request.args["n"])\n'
+                ),
+            }
+        ),
+    )
+    assert [link.line for link in index.tainted_args("app.services.q", "find", 0, "name")] == [5]

@@ -1412,6 +1412,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   analyzer cannot read, and a file that later sets `<env>.autoescape` to
   anything but `True` are still reported.
 
+- **A rebound import no longer proves a cross-file SQL or command injection.**
+  `from svc import find`, then `find = print` (or a later `def find`), then
+  `find(request.args["n"])` was reported against `svc.find` with a proven
+  path, though the call is not of `svc.find`. A name one scope binds both by
+  import and by assignment, `def`, `class`, loop or `with` no longer names the
+  imported function, so the helper's finding stays, unproven.
+
 - **The Go taint rules keep their `ok` cases clean on Semgrep 1.182.1, the
   version Fendix ships.** The Go pack was written on Semgrep 1.141.0. Semgrep
   1.182.1 keeps the taint of a variable assigned from a call that an exact

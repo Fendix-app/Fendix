@@ -1701,3 +1701,49 @@ def test_a_helper_that_is_also_a_django_view_binds_its_route_once_proven():
     assert f.get("reachable") is True
     assert f["taint_chain"][0]["file"] == "app/views.py"
     assert f["route"]["file"] == "app/urls.py"
+
+
+_REBOUND_HELPER = (
+    "import sqlite3\n"
+    "def find(name):\n"
+    '    cur = sqlite3.connect("db").cursor()\n'
+    "    cur.execute(f\"SELECT * FROM t WHERE n = '{name}'\")\n"
+)
+
+
+@pytest.mark.parametrize("rebind", ["find = print\n", "def find(name):\n    return name\n"])
+def test_a_rebound_import_gives_no_cross_file_proof(rebind):
+    # `from svc import find; find = print; ... find(request_arg)` calls
+    # `print`, so the SQL sink in `svc.find` is not reached by the request.
+    files = {
+        "svc.py": _REBOUND_HELPER,
+        "app.py": (
+            "from flask import Flask, request\n"
+            "from svc import find\n"
+            + rebind
+            + "app = Flask(__name__)\n"
+            '@app.route("/x")\n'
+            "def view():\n"
+            '    return find(request.args["n"])\n'
+        ),
+    }
+    found = [f for f in _scan(files) if f["id"] == "SEC-PY_SQL_INJECTION" and f["line"].startswith("svc.py:")]
+    assert len(found) == 1, found
+    _assert_unproven(found[0])
+
+
+def test_an_unrebound_import_still_gives_the_cross_file_proof():
+    files = {
+        "svc.py": _REBOUND_HELPER,
+        "app.py": (
+            "from flask import Flask, request\n"
+            "from svc import find\n"
+            "app = Flask(__name__)\n"
+            '@app.route("/x")\n'
+            "def view():\n"
+            '    return find(request.args["n"])\n'
+        ),
+    }
+    found = [f for f in _scan(files) if f["id"] == "SEC-PY_SQL_INJECTION" and f["line"].startswith("svc.py:")]
+    assert len(found) == 1, found
+    assert found[0].get("reachable") is True, found[0]

@@ -595,18 +595,21 @@ def _resolve_import(
     `scope`: the scopes the code reads names from, innermost first (a class
     body only for code directly in it). The first scope that binds `head`
     decides: through an import, its target; through anything else (a
-    parameter, an assignment, a def or class), None."""
+    parameter, an assignment, a def or class), None. A scope that binds
+    `head` both ways (`from svc import find` then `find = print`, or a later
+    `def find`) gives None too: which binding a call reads depends on the order
+    of the statements, so no call of it is taken to name the import."""
     node = scope
     while node is not None:
         if node is scope or not isinstance(node, ast.ClassDef):
             imported = imports.get(node)
-            if imported is not None and head in imported:
-                return imported[head]
             names = bound.get(node)
             if names is None:
                 names = bound[node] = _bound_names(node)
             if head in names:
                 return None
+            if imported is not None and head in imported:
+                return imported[head]
         node = parents.get(node)
     return None
 
