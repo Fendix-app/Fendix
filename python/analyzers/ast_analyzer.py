@@ -6626,9 +6626,14 @@ def _binds_name(node: ast.AST, name: str) -> bool:
         return node.name == name
     if isinstance(node, ast.alias):
         return (node.asname or node.name.split(".")[0]) == name
-    if isinstance(node, (ast.MatchAs, ast.MatchStar)):
+    # The `match` statement's nodes exist from Python 3.10; the engine runs on 3.9.
+    match_captures = tuple(
+        cls for cls in (getattr(ast, "MatchAs", None), getattr(ast, "MatchStar", None)) if cls
+    )
+    if match_captures and isinstance(node, match_captures):
         return node.name == name
-    if isinstance(node, ast.MatchMapping):
+    match_mapping = getattr(ast, "MatchMapping", None)
+    if match_mapping is not None and isinstance(node, match_mapping):
         return node.rest == name
     return False
 

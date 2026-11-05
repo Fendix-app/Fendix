@@ -4,6 +4,7 @@ Verifies Python AST and JavaScript heuristic detection of dangerous patterns.
 """
 from __future__ import annotations
 
+import ast
 import tempfile
 from pathlib import Path
 
@@ -6995,3 +6996,35 @@ class TestWeakHashAndJwtTaintProof:
             '    return jwt.decode(SAMPLE_TOKEN, key, options={"verify_signature": False})\n',
             _JWT_WEAK,
         )
+
+
+class TestPython39Compatibility:
+    """The docs promise Python 3.9+. `ast.MatchAs`, `ast.MatchStar` and
+    `ast.MatchMapping` do not exist before 3.10, so a bare reference in
+    `_binds_name` raised AttributeError and lost the whole file's findings."""
+
+    _SRC = (
+        "from fastapi import FastAPI\n"
+        "from fastapi.responses import HTMLResponse\n"
+        "app = FastAPI()\n"
+        '@app.get("/greet")\n'
+        'def greet(name: str = ""):\n'
+        '    return HTMLResponse(f"<h1>{name}</h1>")\n'
+    )
+
+    @pytest.fixture
+    def no_match_nodes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for cls in ("MatchAs", "MatchStar", "MatchMapping"):
+            monkeypatch.delattr(ast, cls, raising=False)
+
+    def test_binds_name_without_the_match_node_classes(self, no_match_nodes) -> None:
+        from analyzers.ast_analyzer import _binds_name
+
+        assign = ast.parse("full = 1").body[0].targets[0]
+        assert _binds_name(assign, "full") is True
+        # A node that is none of the earlier kinds reaches the `match` checks.
+        assert _binds_name(ast.parse("print(full)").body[0], "full") is False
+
+    def test_a_file_is_still_analysed_without_the_match_node_classes(self, no_match_nodes) -> None:
+        found = [f for f in _collect_src(self._SRC) if f["id"] == "SEC-PY_XSS_HTML_SINK"]
+        assert len(found) == 1, found
