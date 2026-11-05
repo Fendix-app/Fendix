@@ -671,17 +671,19 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 	}
 
 	if f.Category == "secrets" {
-		// textscan reads more extensions (.mjs, .cjs, ...) than the secrets
-		// scanner, so a finding in such a file can never be re-emitted here.
-		// Its absence would say nothing about the file, so do not call it
-		// resolved.
-		if !secrets.ReadsFile(filepath.Base(absFile)) {
+		// textscan reads more than the secrets scanner does: more extensions
+		// (.mjs, .cjs, ...), and files under node_modules/ or over 1 MiB.
+		// A finding in a file the scanner skips can never be re-emitted, so
+		// its absence says nothing about the file: not resolved. (A skipped
+		// directory counts relative to the scan root, which the re-scan below
+		// does not, because it starts at the file's own directory.)
+		if why := secrets.SkipReason(opts.CodePath, absFile); why != "" {
 			out.Status = StatusUnknown
 			out.Reason = fmt.Sprintf(
-				"the secrets scanner does not read %q files (%s), so verify cannot re-test this "+
-					"finding and will not call it resolved. Re-run `fendix scan --code <path>` and "+
-					"diff against the baseline for a verdict.",
-				strings.ToLower(filepath.Ext(absFile)), relPath)
+				"the secrets scanner skips %s (%s), so verify cannot re-test this finding and will "+
+					"not call it resolved. Re-run `fendix scan --code <path>` and diff against the "+
+					"baseline for a verdict.",
+				relPath, why)
 			return
 		}
 		// Re-run the native secrets scanner against the file's dir.

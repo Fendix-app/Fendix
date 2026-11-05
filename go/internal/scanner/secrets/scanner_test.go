@@ -1239,3 +1239,37 @@ func TestReadsFile(t *testing.T) {
 		}
 	}
 }
+
+func TestSkipReason(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string, size int) string {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(strings.Repeat("x", size)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		rel  string
+		size int
+		want string // substring of the reason; "" means read
+	}{
+		{"src/a.js", 10, ""},
+		{"src/a.mjs", 10, "extension"},
+		{"node_modules/p/a.js", 10, "node_modules"},
+		{"a/vendor/b/a.py", 10, "vendor"},
+		{"src/a.js", maxFileBytes, ""},
+		{"src/big.js", maxFileBytes + 1, "larger than"},
+	} {
+		if got := SkipReason(root, write(tc.rel, tc.size)); (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+			t.Errorf("SkipReason(%s, %d bytes) = %q, want %q", tc.rel, tc.size, got, tc.want)
+		}
+	}
+	// The scan root's own name is never a skipped directory.
+	if got := SkipReason(filepath.Join(root, "node_modules"), write("node_modules/a.js", 10)); got != "" {
+		t.Errorf("a root named node_modules should be read, got %q", got)
+	}
+}

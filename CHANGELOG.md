@@ -1817,6 +1817,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolved` because the re-test could never re-emit it. It is now `unknown`,
   with the extension named. A Semgrep-tier finding is kept before any other
   scanner re-tests it.
+- **`fendix verify` no longer resolves a secret the scanner skips by path or
+  size.** A `secrets` finding in a file over 1 MiB was reported `resolved`, and
+  one under `node_modules/`, `vendor/`, `dist/` or `build/` was judged by a
+  re-scan rooted at its own directory instead of the scan root. Both are now
+  `unknown`, with the skip named.
 
 ## [3.6.4] - 2026-10-24
 
