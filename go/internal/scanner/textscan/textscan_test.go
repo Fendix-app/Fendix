@@ -982,3 +982,51 @@ const cp = require("child_process"); cp.exec(cmd);
 		t.Errorf("require(...).exec(cmd): JS_CHILD_PROCESS_SHELL = %d; want 2 (cp.exec through an alias is the documented FN)", n)
 	}
 }
+
+// A constant operand must not hide a tainted ARGUMENT: the check covers every
+// argument of the matched call, not the `+` operands of the whole line.
+func TestGoRules_TaintedArgumentBesideAConstantStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", `package main
+
+const TABLE = "users"
+
+func h(user string) {
+	out, err := exec.Command("sh", "-c", user, "x="+TABLE).CombinedOutput()
+	rows, err := db.Query(buildQuery(user), "a"+TABLE)
+	rows2, err := db.Query(user, fmt.Sprintf("%s", TABLE))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if n := len(by["GO_EXEC_COMMAND_INJECTION"]); n != 1 {
+		t.Errorf("GO_EXEC_COMMAND_INJECTION = %d; want 1 (a bare variable argument beside a constant)", n)
+	}
+	if n := len(by["GO_SQL_INJECTION"]); n != 2 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 2 (a call or a variable argument beside a constant)", n)
+	}
+}
+
+func TestInterpolatedIdentsAreFileConstants_EveryArgument(t *testing.T) {
+	goSrc := []byte("package x\n\nconst a = \"x\"\nconst b = \"y\"\n")
+	javaSrc := []byte("class X {\n  static final String A = \"x\";\n}\n")
+	cases := []struct {
+		name string
+		line string
+		src  []byte
+		lang string
+		want bool
+	}{
+		{"variable argument beside a constant", `exec.Command("sh", "-c", user, "x="+a)`, goSrc, "go", false},
+		{"call argument beside a constant", `db.Query(build(user), "q "+a)`, goSrc, "go", false},
+		{"all arguments constant", `exec.Command("sh", "-c", "x="+a, b)`, goSrc, "go", true},
+		{"statement prefix is not part of the call", `rows, err := db.Query(fmt.Sprintf("S %s", a))`, goSrc, "go", true},
+		{"java array of constants", `Runtime.getRuntime().exec(new String[]{"sh","-c","du " + A})`, javaSrc, "java", true},
+		{"java array with a variable", `Runtime.getRuntime().exec(new String[]{"sh","-c","du " + A, host})`, javaSrc, "java", false},
+		{"unclosed call fails closed", `db.Query("S "+a,`, goSrc, "go", false},
+		{"a trailing variable after the call is not an argument", `db.Query("S "+a).Scan(&user)`, goSrc, "go", true},
+	}
+	for _, c := range cases {
+		if got := interpolatedIdentsAreFileConstants(c.line, c.src, c.lang); got != c.want {
+			t.Errorf("%s: %q = %v; want %v", c.name, c.line, got, c.want)
+		}
+	}
+}

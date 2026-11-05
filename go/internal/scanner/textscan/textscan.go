@@ -517,8 +517,12 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 				(r.NegException == nil || !r.NegException.MatchString(line)) {
 				continue
 			}
-			if r.ConstArgSafe && operandsAreConstants(line, constsOf()) {
-				continue
+			if r.ConstArgSafe {
+				// The call as the rule matched it: from the match start, so
+				// a statement prefix (`rows, err := `) is not an argument.
+				if loc := r.Pattern.FindStringIndex(line); loc != nil && callArgsAreConstants(line[loc[0]:], constsOf()) {
+					continue
+				}
 			}
 			// Per-line suppression runs LAST, after Pattern and NegPattern,
 			// so its cost is only paid on a line that already matched.
