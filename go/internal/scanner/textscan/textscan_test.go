@@ -729,3 +729,78 @@ func TestInterpolatedIdentsAreFileConstants(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// JdbcTemplate and JPA. These APIs take the SQL as `query`/`update`/
+// `createNativeQuery(...)`, names too generic to match without a receiver.
+// ---------------------------------------------------------------------------
+
+func TestJavaRules_JdbcTemplateAndJPAConcatenationFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  java.util.List<?> a(String name) {
+    return jdbcTemplate.queryForList("SELECT * FROM users WHERE name = '" + name + "'");
+  }
+  Object b(String x) {
+    return entityManager.createNativeQuery("SELECT * FROM users WHERE id = " + x).getResultList();
+  }
+  void c(String x) {
+    this.namedParameterJdbcTemplate.update("DELETE FROM users WHERE id = " + x, java.util.Map.of());
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_SQL_INJECTION"]) != 3 {
+		t.Errorf("JAVA_SQL_INJECTION = %d; want 3: %+v", len(by["JAVA_SQL_INJECTION"]), by["JAVA_SQL_INJECTION"])
+	}
+}
+
+func TestJavaRules_JdbcTemplateParameterizedStaysClean(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  java.util.List<?> a(String name) {
+    return jdbcTemplate.queryForList("SELECT * FROM users WHERE name = ?", name);
+  }
+  Object b(String x) {
+    return entityManager.createNativeQuery("SELECT * FROM users WHERE id = ?1").setParameter(1, x).getResultList();
+  }
+}`)
+	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
+		t.Errorf("parameterized JdbcTemplate/JPA must stay clean, got %+v", got)
+	}
+}
+
+// TestJavaRules_ExecutorExecuteWithUpdateStringStaysClean guards the bare
+// `execute`/`update` names: an Executor's execute(Runnable) with a SQL-looking
+// word and a concat must stay clean, including through one level of nested
+// call, now that the argument pattern crosses inner parentheses.
+func TestJavaRules_ExecutorExecuteWithUpdateStringStaysClean(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Exec.java", `public class Exec {
+  void a(java.util.concurrent.Executor executor, String x) {
+    executor.execute(makeTask("update " + x));
+    executor.execute(wrap(task("delete from cache " + x)));
+    pool.submit(() -> run("update view " + x));
+    queue.update("select " + x);
+  }
+}`)
+	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
+		t.Errorf("Executor.execute with an update string must stay clean, got %+v", got)
+	}
+}
+
+func TestJavaRules_JdbcTemplateConstantTableIsNotSQLInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  private static final String USERS_TABLE = "users";
+  java.util.List<?> a() {
+    return jdbcTemplate.queryForList("SELECT id FROM " + USERS_TABLE + " WHERE active = true");
+  }
+  java.util.List<?> b(String name) {
+    return jdbcTemplate.queryForList("SELECT id FROM " + USERS_TABLE + " WHERE n = '" + name + "'");
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_SQL_INJECTION"]) != 1 || by["JAVA_SQL_INJECTION"][0].Line == nil || !strings.HasSuffix(*by["JAVA_SQL_INJECTION"][0].Line, ":7") {
+		t.Errorf("want one JAVA_SQL_INJECTION, on line 7 (the variable one): %+v", by["JAVA_SQL_INJECTION"])
+	}
+}

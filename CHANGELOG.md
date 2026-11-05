@@ -1387,6 +1387,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The regex scanner now detects SQL concatenation through JdbcTemplate and
+  JPA.** `JAVA_SQL_INJECTION` also fires on `jdbcTemplate.queryForList("SELECT
+  ... '" + name + "'")` and `entityManager.createNativeQuery("SELECT ... " +
+  x)`, for the receivers `jdbcTemplate`, `namedParameterJdbcTemplate`,
+  `template`, `stmt`, `statement`, `em`, `entityManager` and `session` with
+  `query*`, `update`, `execute`, `batchUpdate`, `createQuery`,
+  `createNativeQuery` and `createSQLQuery`. The receiver is required, so a
+  bare `executor.execute(makeTask("update " + x))` stays clean, and a
+  parameterized `queryForList("... WHERE name = ?", name)` does not fire. A
+  query concatenated only from `static final String` constants of the file is
+  not reported (the same file-constant check as `GO_SQL_INJECTION`).
 - **The regex scanner no longer flags SQL and exec calls built only from
   file constants.** `GO_SQL_INJECTION`, `GO_EXEC_COMMAND_INJECTION` and
   `JAVA_EXEC_COMMAND_INJECTION` skip a call when every value interpolated into

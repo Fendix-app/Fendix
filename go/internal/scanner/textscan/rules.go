@@ -224,20 +224,29 @@ func JavaRules() []Rule {
 			Confidence: models.ConfidenceMedium,
 			Category:   "injection",
 			CWE:        "CWE-89",
-			// executeQuery/executeUpdate/prepareStatement whose SQL string
-			// literal is immediately concatenated. These three are JDBC-specific
-			// names, so an Executor's execute(Runnable) cannot collide; bare
-			// `execute` is deliberately NOT matched (it would fire on a non-SQL
-			// Executor.execute(...) whose argument merely contains a SQL-looking
-			// word). The name alternation is what keeps
-			// ex.execute(makeTask("update " + x)) clean, not the argument
-			// pattern: callArgs crosses one level of inner call (a
-			// `conn.prepareStatement(table("u") + "SELECT ...")` still matches).
-			// FN class: Statement.execute("raw sql" + x) and SQL assembled on a
-			// prior line (needs taint, not line-local regex).
-			Pattern: regexp.MustCompile(`(?:executeQuery|executeUpdate|prepareStatement)\s*\(` + callArgs + `"[^"]*(?i:select|insert|update|delete|from|where)[^"]*"\s*\+`),
-			Applies: HasJavaExtension,
-			Fix:     "Use a PreparedStatement with bound `?` parameters: conn.prepareStatement(\"… WHERE x = ?\"). Never concatenate user input into SQL.",
+			// Two alternations on one SQL-literal-then-`+` tail.
+			//   1. executeQuery/executeUpdate/prepareStatement, matched bare.
+			//      These three are JDBC-specific names, so an Executor's
+			//      execute(Runnable) cannot collide; bare `execute`/`update`/
+			//      `query` are deliberately NOT matched here (they would fire on
+			//      a non-SQL Executor.execute(...) whose argument merely
+			//      contains a SQL-looking word).
+			//   2. Spring JdbcTemplate and JPA calls (query*, update, execute,
+			//      batchUpdate, createQuery, createNativeQuery, createSQLQuery),
+			//      which need a RECEIVER named like one: jdbcTemplate,
+			//      namedParameterJdbcTemplate, template, stmt, statement, em,
+			//      entityManager, session. The receiver is what keeps
+			//      executor.execute(makeTask("update " + x)) out.
+			// callArgs crosses one level of inner call, so
+			// `conn.prepareStatement(table("u") + "SELECT ...")` still matches.
+			// ConstArgSafe: a query concatenated only from `static final
+			// String` constants of the file is not injectable.
+			// FN class: execute("raw sql" + x) on a receiver not named above, and
+			// SQL assembled on a prior line (needs taint, not line-local regex).
+			Pattern:      regexp.MustCompile(`(?:(?:executeQuery|executeUpdate|prepareStatement)|\b(?:jdbcTemplate|namedParameterJdbcTemplate|template|stmt|statement|em|entityManager|session)\.(?:query|queryForList|queryForObject|queryForMap|queryForRowSet|update|execute|batchUpdate|createQuery|createNativeQuery|createSQLQuery))\s*\(` + callArgs + `"[^"]*(?i:select|insert|update|delete|from|where)[^"]*"\s*\+`),
+			ConstArgSafe: true,
+			Applies:      HasJavaExtension,
+			Fix:          "Use a PreparedStatement with bound `?` parameters: conn.prepareStatement(\"… WHERE x = ?\"). Never concatenate user input into SQL.",
 		},
 		{
 			ID:         "JAVA_WEAK_CRYPTO",
