@@ -1387,6 +1387,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A proven taint chain survives when two analyzers report the same line.**
+  When textscan and a taint analyzer both flagged one sink, the collapse kept
+  the textscan finding on a tie and dropped the other member's taint chain,
+  `reachable` and `proven_path`, so a proven injection read as an unproven
+  pattern match. The kept finding now takes the chain of the member with the
+  longest one, with its `reachable` and `proven_path` flags. Its severity and
+  wording stay its own, and nothing is synthesized when no member proved a
+  flow.
+
 - **Semgrep now scans a target inside a git work tree as its own project.**
   Semgrep matches a rule's `paths.exclude` patterns, and its default ignore
   list, relative to its project root, which inside a git work tree is the git

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -156,5 +157,116 @@ func TestTrustRankOrdering(t *testing.T) {
 	if models.TierSemgrepTaint.TrustRank() != models.TierNativeGo.TrustRank() {
 		t.Errorf("semgrep_taint TrustRank = %d, want native_go's %d",
 			models.TierSemgrepTaint.TrustRank(), models.TierNativeGo.TrustRank())
+	}
+}
+
+// A textscan finding and a proven Semgrep taint finding on one line are one
+// sink. Whichever member represents the location, the proof it was found with
+// (chain, Reachable, ProvenPath) must survive: dropping it makes a proven
+// injection read as an unproven pattern match downstream.
+func TestCollapseKeepsReachableFromLowerRankMember(t *testing.T) {
+	chain := []models.TaintLink{
+		{File: "db.go", Line: 12, Expr: "r.URL.Query().Get(\"name\")"},
+		{File: "db.go", Line: 14, Expr: "db.Query(q)"},
+	}
+	text := wbAt("injection", "db.go:14", "SQL injection: query built via string formatting",
+		models.SeverityHigh, models.TierNativeGo)
+	taint := wbAt("injection", "db.go:14", "SQL injection: request input reaches db.Query()",
+		models.SeverityHigh, models.TierSemgrepTaint)
+	taint.Reachable, taint.ProvenPath, taint.TaintChain = true, true, chain
+
+	for name, in := range map[string][]models.Finding{
+		"textscan first": {text, taint},
+		"taint first":    {taint, text},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := CollapseDuplicateLocations(in)
+			if len(got) != 1 {
+				t.Fatalf("got %d findings %v, want 1", len(got), collapseTitles(got))
+			}
+			if !got[0].Reachable || !got[0].ProvenPath {
+				t.Errorf("Reachable=%v ProvenPath=%v, want both kept from the taint member",
+					got[0].Reachable, got[0].ProvenPath)
+			}
+			if !reflect.DeepEqual(got[0].TaintChain, chain) {
+				t.Errorf("TaintChain = %v, want the taint member's chain %v", got[0].TaintChain, chain)
+			}
+		})
+	}
+}
+
+// When no member carries a chain, nothing is synthesized, and a representative
+// that already has a chain keeps its own rather than being replaced by a
+// longer one from a lower-ranked member.
+func TestCollapseTaintChainSelection(t *testing.T) {
+	short := []models.TaintLink{{File: "a.py", Line: 1, Expr: "x"}}
+	long := []models.TaintLink{{File: "a.py", Line: 1, Expr: "x"}, {File: "a.py", Line: 2, Expr: "y"}, {File: "a.py", Line: 3, Expr: "z"}}
+
+	t.Run("no chain anywhere stays empty", func(t *testing.T) {
+		got := CollapseDuplicateLocations([]models.Finding{
+			wbAt("injection", "a.py:3", "native", models.SeverityHigh, models.TierNativeGo),
+			wbAt("injection", "a.py:3", "shim", models.SeverityHigh, models.TierSemgrepShim),
+		})
+		if len(got) != 1 || len(got[0].TaintChain) != 0 || got[0].Reachable || got[0].ProvenPath {
+			t.Errorf("got %+v, want one finding with no proof", got)
+		}
+	})
+	t.Run("representative keeps its own chain", func(t *testing.T) {
+		rep := wbAt("injection", "a.py:3", "ast", models.SeverityHigh, models.TierTreeSitter)
+		rep.TaintChain = short
+		other := wbAt("injection", "a.py:3", "taint", models.SeverityHigh, models.TierSemgrepTaint)
+		other.TaintChain = long
+		got := CollapseDuplicateLocations([]models.Finding{other, rep})
+		if len(got) != 1 || !reflect.DeepEqual(got[0].TaintChain, short) {
+			t.Errorf("got %+v, want the representative's own chain", got)
+		}
+	})
+	t.Run("longest chain wins among donors", func(t *testing.T) {
+		rep := wbAt("injection", "a.py:3", "ast", models.SeverityHigh, models.TierTreeSitter)
+		a := wbAt("injection", "a.py:3", "taint-a", models.SeverityHigh, models.TierSemgrepTaint)
+		a.TaintChain, a.Reachable = short, true
+		b := wbAt("injection", "a.py:3", "taint-b", models.SeverityHigh, models.TierSemgrepShim)
+		b.TaintChain, b.Reachable = long, true
+		for _, in := range [][]models.Finding{{rep, a, b}, {b, a, rep}, {a, rep, b}} {
+			got := CollapseDuplicateLocations(in)
+			if len(got) != 1 || !reflect.DeepEqual(got[0].TaintChain, long) {
+				t.Errorf("order %v: got %+v, want the longest chain", collapseTitles(in), got)
+			}
+		}
+	})
+}
+
+// Copying proof across members must never copy severity: the representative's
+// stays, and a lower-trust member's higher severity does not leak in.
+func TestCollapseNeverRaisesSeverity(t *testing.T) {
+	rep := wbAt("injection", "a.go:9", "native", models.SeverityMedium, models.TierNativeGo)
+	taint := wbAt("injection", "a.go:9", "taint", models.SeverityCritical, models.TierSemgrepShim)
+	taint.Reachable, taint.TaintChain = true, []models.TaintLink{{File: "a.go", Line: 9, Expr: "db.Query(q)"}}
+	got := CollapseDuplicateLocations([]models.Finding{rep, taint})
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1", len(got))
+	}
+	if got[0].Severity != models.SeverityMedium {
+		t.Errorf("severity = %s, want the representative's MEDIUM", got[0].Severity)
+	}
+	if got[0].SourceTier != models.TierNativeGo {
+		t.Errorf("tier = %s, want the representative's native_go", got[0].SourceTier)
+	}
+	if !got[0].Reachable || len(got[0].TaintChain) != 1 {
+		t.Errorf("the proof must still be carried: %+v", got[0])
+	}
+}
+
+// A Semgrep taint match can be Reachable without sending a dataflow trace.
+// The flag still survives the collapse, though there is no chain to copy.
+func TestCollapseKeepsReachableWhenNoChainExists(t *testing.T) {
+	text := wbAt("injection", "db.go:14", "textscan", models.SeverityHigh, models.TierNativeGo)
+	taint := wbAt("injection", "db.go:14", "taint", models.SeverityHigh, models.TierSemgrepTaint)
+	taint.Reachable = true
+	for _, in := range [][]models.Finding{{text, taint}, {taint, text}} {
+		got := CollapseDuplicateLocations(in)
+		if len(got) != 1 || !got[0].Reachable || len(got[0].TaintChain) != 0 {
+			t.Errorf("got %+v, want one Reachable finding with no synthesized chain", got)
+		}
 	}
 }
