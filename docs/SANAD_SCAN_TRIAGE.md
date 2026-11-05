@@ -213,7 +213,7 @@ passes a tainted (or, for shape-based SQLi, a non-constant string-building)
 argument at that position/keyword. Bounded to 1 hop (`_interproc_depth`), so no
 recursion into callers' callers and no RecursionError surface.
 
-**Measured impact (labeled benchmark):** `cmdi-interprocedural` flips to
+**Measured impact (labeled Python benchmark corpus):** `cmdi-interprocedural` flips to
 **NOW DETECTED ✓**; HONEST F1 **0.889 → 0.919** (recall 0.80 → 0.85), precision
 stays 1.000. **Zero new false positives** on the real corpora (TwiScope 35, Sanad
 40, vulpy 8, dvpwa 5 — all unchanged), confirming the single-hop bound + the

@@ -23,7 +23,7 @@ v3.6.4 run:
 | SAST synthetic corpus (full binary, 38 TP / 0 FP / 0 FN / 18 TN) | 1.000 / 1.000 / **1.000** | `python3 scripts/accuracy/run.py --python-engine bin/fendix` |
 | DAST DVWA / Juice Shop (regression coverage) | 13 found · 0 FP / 12 found · 0 FP | `fendix benchmark run --target all` |
 
-The synthetic-corpus F1 was **1.000 in that capture and is CI-gated** (the one
+The F1 on the Python synthetic corpus, excluding documented known gaps, was **1.000 in that capture and is CI-gated** (the one
 multi-hop SSRF case v0.26 disclosed as a false negative was fixed in v0.27),
 not the stale v0.11.0 claim. Full methodology, caveats, and the
 OWASP/Java omission are in **[BENCHMARKS.md](BENCHMARKS.md)**. Every number there
@@ -35,8 +35,7 @@ legitimate and 5 false positives, where the config-file-exposure check flagged
 `/.env`, `/.git/HEAD`, `/.htaccess` and friends because Juice Shop's Express SPA
 answers **any** unknown path with HTTP 200 and a byte-identical body. On v2.0.1
 that scan returns 12 findings and no false positives. The committed baseline had
-simply not been re-run since June. `fendix benchmark compare` does gate
-precision — the same delta in the opposite direction is a −29.4% move that trips
+simply not been re-run since June. On the Juice Shop baseline, `fendix benchmark compare` does gate precision — the same delta in the opposite direction is a −29.4% move that trips
 its 10% threshold — but an improvement correctly never fails a gate, so a stale
 baseline stays stale until somebody runs it. The baseline was re-captured on
 v2.0.1 at the same time as this table.
@@ -59,7 +58,7 @@ Fendix has measured support for nine web frameworks in four languages. "Classes 
 | Go | net/http | 11 of 11 | No: taint findings are warnings. Hardcoded secrets still block | **Yes** |
 | Go | Gin | 11 of 11 | No: same as net/http | **Yes** |
 
-**Every non-Python row requires Semgrep.** The JavaScript/TypeScript, Java and Go taint rules run only through Semgrep. Without it, for example in the standalone binary or in a Homebrew install that has no Semgrep, only the regex scanner (textscan) runs for those languages, and the coverage above does not apply. Python needs no Semgrep: its taint engine ships in the Fendix Python engine.
+**Every non-Python row requires Semgrep.** The JavaScript/TypeScript, Java and Go taint rules run only through Semgrep. Without it, for example in the standalone binary or in a Homebrew install that has no Semgrep, only the regex scanner (textscan) and the secrets scanner run for those languages, and the coverage above does not apply. Python needs no Semgrep: its taint engine ships in the Fendix Python engine.
 
 Why the non-Python taint findings do not block: on a blind evaluation of 70 real-world repositories their blocking precision was 0.08 for JavaScript/TypeScript, 0.11 for Java and 0.09 for Go, against the 0.80 required to block ([evidence](benchmarks/frameworks/REALWORLD.md), [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
 
@@ -1185,8 +1184,7 @@ Its findings then count as reachable once every language in the rule's
 `languages` is enabled in `semgrep.ReachabilityLanguages`. When Semgrep sends
 a dataflow trace (only to a logged-in account), it becomes the finding's
 `taint_chain`. Until the language is enabled, they are reported like any other
-Semgrep finding, as warnings. A language is enabled only when its taint pack
-clears the precision gate in
+Semgrep finding, as warnings. A language (JavaScript, TypeScript, Java or Go) is enabled only when its taint pack clears the precision gate in
 [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md), including 0.80
 precision on at least 10 triaged real-world findings. No language is enabled:
 the JavaScript, TypeScript, Java and Go packs measured 0.077, 0.111 and 0.091,

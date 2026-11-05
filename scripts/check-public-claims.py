@@ -187,24 +187,55 @@ def find_matches(content: str) -> list[tuple[str, re.Match[str]]]:
 ACCURACY_METRIC = re.compile(
     r"\bF1\b|\bprecision\b|\brecall\b|\baccuracy\b|\baccurate\b", re.IGNORECASE
 )
-# A ratio (0.944, 1.000, .75) or a percentage (94%, 94.4 %). A ratio needs two
-# decimals and must not touch another dot-digit group, so versions such as
-# 3.6.2 or 1.141.0 and short numbers such as 3.6 stay out.
+# A ratio (0.944, 1.000, .75) or a percentage (94%, 94.4 %) anywhere near a
+# metric word. A ratio needs two decimals and must not touch another dot-digit
+# group, so versions such as 3.6.2 or 1.141.0 and short numbers such as 3.6
+# stay out.
 ACCURACY_FIGURE = re.compile(
     r"(?<![\w.])(?:[01]?\.\d{2,}|\d{1,3}(?:\.\d+)?[ ]?%)(?![\w]|\.\d)"
 )
-ACCURACY_WINDOW = 80
-ACCURACY_SCOPE = re.compile(
-    r"\b(?:python|django|flask|fastapi|javascript|typescript|node(?:\.?js)?|"
-    r"express|nestjs|next\.?js|java|spring|golang|gin|net/http|kotlin|php|ruby|"
-    r"rust|js/ts|js|ts|"
-    r"corpus|corpora|holdout|hold-out|benchmarks?|dataset|data set|"
-    r"development set|dev set|dev|test set|labell?ed|fixtures?|real-world|"
-    r"juice shop|dvwa|webgoat|cases?|samples?|repos(?:itories)?)\b",
+# A bare integer or one-decimal value ("F1 = 1.0", "F1 of 1", "recall: 94")
+# only counts when it follows the metric word directly, so "recall ... 10
+# findings" and "precision on Track 4" stay out.
+ACCURACY_FIGURE_AFTER_METRIC = re.compile(
+    r"\b(?:F1|precision|recall|accuracy)\b(?:[\s*_`|]|\b(?:score|rate|of|is|was|at|reaches|hits)\b|[=:≥>~≈])*"
+    r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w]|\.\d)",
     re.IGNORECASE,
 )
-# "go" is also a verb, so only the capitalised language name counts.
-ACCURACY_SCOPE_GO = re.compile(r"\bGo\b")
+# "0.5% lower than expected" is a difference, not a measurement.
+ACCURACY_RELATIVE = re.compile(
+    r"^[ ]?%?\s*(?:points?\s+)?(?:lower|higher|less|more|better|worse|smaller|larger|faster|slower)\b",
+    re.IGNORECASE,
+)
+ACCURACY_WINDOW = 80
+# Scope: a language or framework, or an explicitly named corpus. Generic words
+# such as "cases", "samples", "benchmark", "dataset" or "dev" name nothing.
+ACCURACY_SCOPE = re.compile(
+    r"\b(?:python|django|flask|fastapi|javascript|typescript|node\.?js|"
+    r"golang|net/http|kotlin|php|js/ts|"
+    r"java|"
+    r"synthetic(?:\s+python)?\s+corpus|juliet|holdout|hold-out|"
+    r"(?:development|dev)\s+(?:corpus|set)|parity\s+(?:corpus|gate|holdout)|"
+    r"heavy-eval\s+corpus|twiscope|pygoat|juice\s+shop|dvwa|webgoat|bwapp)\b",
+    re.IGNORECASE,
+)
+# Names that are ordinary words in lower case count only capitalised.
+ACCURACY_SCOPE_CAPITALISED = re.compile(r"\b(?:Go|Express|NestJS|Next\.js|Spring|Gin|Rust|Ruby)\b")
+# An F1 of 1 is the strongest claim Fendix makes, and the one that was
+# repeated without its scope: it must carry the language and the known gaps.
+ACCURACY_F1_ONE = re.compile(
+    r"\bF1\b(?:[\s*_`|]|\b(?:score|of|is|was|at|reaches|hits)\b|[=:≥>~≈])*"
+    r"(?<![\w.])1(?:\.0+)?(?![\w]|\.\d)"
+    r"|(?<![\w.])1\.0+(?![\w]|\.\d)[\s*_`|]*F1\b",
+    re.IGNORECASE,
+)
+# A table row's F1 label followed by a cell holding exactly 1.
+ACCURACY_F1_ROW_ONE = re.compile(r"\bF1\b[^|]*\|[\s*]*1(?:\.0+)?[\s*]*(?:\||$)", re.IGNORECASE)
+# A confidence interval's upper bound ("[0.953, 1.000]", "0.953–1.000") is not
+# an F1 of 1.
+ACCURACY_F1_INTERVAL = re.compile(r"\[[^\]]*\]|[\d.]+\s*[–-]\s*[\d.]+")
+ACCURACY_F1_PYTHON = re.compile(r"\bpython\b", re.IGNORECASE)
+ACCURACY_F1_GAPS = re.compile(r"\bknown[- ]gaps?\b", re.IGNORECASE)
 _BLOCK_START = re.compile(r"^\s*(?:\||#{1,6}\s|[-*+]\s|\d+[.)]\s)")
 _QUOTE_MARKER = re.compile(r"^\s*(?:>\s?)+")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z`*(\[\"'])")
@@ -253,19 +284,54 @@ def _accuracy_units(text: str) -> list[tuple[int, str]]:
     return units
 
 
+def _has_accuracy_figure(sentence: str) -> bool:
+    metrics = list(ACCURACY_METRIC.finditer(sentence))
+    if not metrics:
+        return False
+    for figure in ACCURACY_FIGURE.finditer(sentence):
+        if ACCURACY_RELATIVE.match(sentence[figure.end():]):
+            continue
+        if any(abs(m.start() - figure.start()) <= ACCURACY_WINDOW for m in metrics):
+            return True
+    for figure in ACCURACY_FIGURE_AFTER_METRIC.finditer(sentence):
+        if not ACCURACY_RELATIVE.match(sentence[figure.end():]):
+            return True
+    return False
+
+
+def _is_scoped(sentence: str) -> bool:
+    return bool(
+        ACCURACY_SCOPE.search(sentence) or ACCURACY_SCOPE_CAPITALISED.search(sentence)
+    )
+
+
+def _is_unscoped_f1_one(sentence: str) -> bool:
+    """An F1 of 1 without both the language (Python) and the known gaps."""
+    if not re.search(r"\bF1\b", sentence, re.IGNORECASE):
+        return False
+    sentence = ACCURACY_F1_INTERVAL.sub(" ", sentence)
+    claims_one = ACCURACY_F1_ONE.search(sentence) or (
+        # A table row: "| F1 (scope) | 1.000 |".
+        sentence.lstrip().startswith("|") and ACCURACY_F1_ROW_ONE.search(sentence)
+    )
+    if not claims_one:
+        return False
+    return not (
+        ACCURACY_F1_PYTHON.search(sentence) and ACCURACY_F1_GAPS.search(sentence)
+    )
+
+
 def find_unscoped_accuracy(text: str) -> list[tuple[int, str]]:
-    """Return (line, sentence) for every accuracy figure with no scope."""
+    """Return (line, sentence) for every accuracy figure with no scope.
+
+    Two rules: any accuracy figure needs a language, framework or named corpus
+    in its sentence; an F1 of 1 also needs "Python" and "known gaps" there.
+    """
     found: list[tuple[int, str]] = []
     for line, sentence in _accuracy_units(text):
-        metrics = list(ACCURACY_METRIC.finditer(sentence))
-        figures = list(ACCURACY_FIGURE.finditer(sentence))
-        near = any(
-            abs(metric.start() - figure.start()) <= ACCURACY_WINDOW
-            for metric in metrics
-            for figure in figures
-        )
-        scoped = ACCURACY_SCOPE.search(sentence) or ACCURACY_SCOPE_GO.search(sentence)
-        if near and not scoped:
+        if _is_unscoped_f1_one(sentence) or (
+            _has_accuracy_figure(sentence) and not _is_scoped(sentence)
+        ):
             found.append((line, sentence.strip()))
     return found
 
@@ -440,7 +506,7 @@ def self_test() -> None:
         # Scoped by a language, framework or corpus in the same sentence.
         ("Python recall is 0.756 on the blind holdout.", 0),
         ("Dev recall 1.000 on the development corpus.", 0),
-        ("HANDLED F1 == 1.000 on the benchmark corpus.", 0),
+        ("HANDLED F1 == 1.000 on the Python synthetic corpus, excluding documented known gaps.", 0),
         ("| JS/TS | 0.889 | recall |", 0),
         ("Java (Spring) precision was 0.11 on real-world code.", 0),
         ("Go precision 0.09.", 0),
@@ -451,6 +517,40 @@ def self_test() -> None:
         # A blockquote wrapped over lines is one sentence.
         ("> Recall is 0.99 on the\n> Python corpus.", 0),
         ("> Recall is 0.99 on\n> the full set.", 1),
+        # (a) A generic word is not a scope: name a language, framework or corpus.
+        ("Overall F1 of 0.97 across all cases.", 1),
+        ("The benchmark shows precision of 0.99.", 1),
+        ("recall of 94 across the dataset", 1),
+        ("Recall is 0.92 on these samples, in dev.", 1),
+        ("Precision is 0.9 for js and ts.", 1),
+        ("Recall is 0.99 on the development corpus.", 0),
+        ("Recall is 0.75 on the parity holdout.", 0),
+        ("Precision is 0.04 on TWISCOPE.", 0),
+        ("Recall is 0.99 on the Juliet-style Python corpus.", 0),
+        ("Recall is 0.9 for JS/TS.", 0),
+        # (b) Integers and one-decimal values count as figures.
+        ("F1 = 1.0", 1),
+        ("F1 of 1 across the board.", 1),
+        ("Precision is 0.9 everywhere.", 1),
+        ("Recall: 94 everywhere.", 1),
+        ("F1 **1** everywhere.", 1),
+        ("Python recall is 0.9.", 0),
+        # (c) An F1 of 1 needs Python and the known gaps in the same sentence.
+        ("F1 = 1.000 on the Python synthetic corpus.", 1),
+        ("F1 = 1.000 on the synthetic corpus, excluding documented known gaps.", 1),
+        ("F1 = 1.000 on the Go development corpus, excluding documented known gaps.", 1),
+        ("F1 = 1.000 on the Python synthetic corpus, excluding documented known gaps.", 0),
+        ("1.000 F1 on the Python synthetic corpus, excluding documented known gaps.", 0),
+        ("| F1 (Python synthetic corpus, excluding documented known gaps) | 1.000 |", 0),
+        ("| F1 (Python synthetic corpus) | 1.000 |", 1),
+        ("| F1 (Python synthetic corpus) | **1.000** |", 1),
+        ("| 4a Juliet | F1 = 0.987 (P 0.974 / R 1.000) |", 0),
+        ("F1 95% bootstrap CI [0.953, 1.000] on the Juliet-style Python corpus.", 0),
+        ("1.000 F1 on the Python corpus (CI 0.953–1.000, bootstrapped).", 1),
+        ("F1 is 0.987 on the Juliet-style Python corpus.", 0),
+        ("Python recall is 1.000 on the development corpus.", 0),
+        # (d) A relative difference is not an accuracy figure.
+        ("recall is 0.5% lower than expected value", 0),
         # Not accuracy claims.
         ("Fendix v3.6.2 ships a precision-focused gate.", 0),
         ("Requires Python 3.11 and Semgrep 1.141.0.", 0),

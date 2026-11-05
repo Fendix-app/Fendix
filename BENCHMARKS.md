@@ -26,7 +26,7 @@ cd python && PYTHONPATH=. python3 benchmark/run_benchmark.py
 |---|---:|
 | Precision (Python taint corpus) | **1.000** |
 | Recall (Python taint corpus) | **1.000** |
-| F1 (Python taint corpus) | **1.000** |
+| F1 (Python taint corpus, 0 known gaps) | **1.000** |
 | Cases | 51 labeled (22 vulnerable / 29 safe), 10 categories |
 | Known gaps | 0 (HANDLED == HONEST) |
 
@@ -47,9 +47,9 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
 
 | Metric | Value |
 |---|---:|
-| Precision (synthetic corpus) | **1.000** |
-| Recall (synthetic corpus) | **1.000** |
-| F1 (synthetic corpus) | **1.000** |
+| Precision (Python synthetic corpus, excluding documented known gaps) | **1.000** |
+| Recall (Python synthetic corpus, excluding documented known gaps) | **1.000** |
+| F1 (Python synthetic corpus, excluding documented known gaps) | **1.000** |
 | True positives | 38 / 38 expected |
 | False positives | 0 |
 | False negatives | 0 |
@@ -62,8 +62,7 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
   taint didn't propagate through the scheme-concatenation into the
   `requests.get` sink). v0.27 fixed the taint engine (a bare/unterminated
   scheme literal is no longer treated as a fixed host), so this case is now
-  detected and F1 is **1.000 — legitimately reproduced and CI-gated**, not the
-  stale v0.11.0 claim. Re-run the command above to verify.
+  detected and F1 is **1.000 on the Python synthetic corpus, excluding documented known gaps — legitimately reproduced and CI-gated**, not the stale v0.11.0 claim. Re-run the command above to verify.
 - **CI-gated:** on push/PR (`.github/workflows/heavy-eval.yml`), floor F1 ≥ 0.99 on the
   synthetic corpus (trips on the first real regression, e.g. re-introducing the SSRF FN → 0.987).
 - **Caveat:** canonical-pattern corpus we author; it measures whether the full
@@ -113,7 +112,7 @@ fendix benchmark run --target all      # requires Docker
   is not attributed to a specific release here: it happened somewhere between
   `v0.19.0-3` and `v2.0.1` and was never bisected. It went unnoticed because
   it went unrecorded for two months simply because nobody re-ran the suite.
-  `fendix benchmark compare` does gate precision — `higherIsBetter["precision"]`
+  On the Juice Shop baseline, `fendix benchmark compare` does gate precision — `higherIsBetter["precision"]`
   is true, and the same 5-FP delta in the *opposite* direction is a −29.4% move
   that trips the 10% threshold. An improvement correctly never fails a gate, so
   the only thing standing between a stale baseline and a current one is somebody
@@ -185,7 +184,7 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 | Total findings emitted | 72 |
 | SAST taint findings (the only labeled surface) | **5** (was ~90 pre-Phase-B) |
 | Labeled findings that still fire | 3 (1 tp, 2 fp) |
-| Precision over labeled | **33.3 %** (thin-denominator lower bound — see caveat) |
+| Precision over labeled (TWISCOPE Python corpus) | **33.3 %** (thin-denominator lower bound — see caveat) |
 | Confirmed TP retained | 1 (Instagram-proxy SSRF, `views.py:602`) |
 | False negatives | **0** |
 | Labeled FP classes eliminated | **8 of 11** |
@@ -320,7 +319,7 @@ and the report is
   block CI, because real-world blocking precision is far below the 0.80 bar
   (evidence: [`REALWORLD.md`](benchmarks/frameworks/REALWORLD.md)). These
   rows require Semgrep. Without it (the standalone binary, or a Homebrew
-  install without Semgrep) only the regex scanner (textscan) runs for them.
+  install without Semgrep) only the regex scanner (textscan) and the secrets scanner run for these languages.
 - **Classes:** SQL injection, command injection, XSS, SSRF, path traversal,
   open redirect, hardcoded secrets, weak password hashing, JWT without
   verification, weak random tokens and template injection. The

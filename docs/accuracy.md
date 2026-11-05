@@ -3,7 +3,7 @@
 > ⚠️ **Historical snapshot — pinned to v0.11.0 (2026-05-13/14).** For current,
 > reproducible numbers on the latest binary see **[BENCHMARKS.md](../BENCHMARKS.md)**,
 > which is the single source of truth and is re-checked in CI. The Track 1
-> headline on the synthetic Python corpus below reflects the current binary: **F1 1.000** after the
+> headline on the Python synthetic corpus, excluding documented known gaps, below reflects the current binary: **F1 1.000** after the
 > v0.27 SSRF taint fix (v0.26 disclosed one multi-hop SSRF false negative; v0.27
 > fixed it). The other tracks remain as captured at v0.11.0.
 
@@ -23,7 +23,7 @@ Four independent evaluation tracks against v0.11.0 (2026-05-13/14):
    synthetic corpus can't see, and produces JSON CI can hold a line
    on.
 
-**Headline (current binary): 1.000 F1 on the synthetic corpus (P 1.000 / R
+**Headline (current binary): 1.000 F1 on the Python synthetic corpus, excluding documented known gaps (P 1.000 / R
 1.000; the v0.26 SSRF false negative was fixed in v0.27) + 0.987 F1 on a stricter Juliet-style
 real-shape corpus (CI 0.953–1.000, bootstrapped) + 5/5 real-detection
 bandit-examples cross-validator (+5 permissive advisories) + 1.000 recall over
@@ -69,9 +69,9 @@ What it measures: the same vulnerability, in different web frameworks. The corpu
   not need Semgrep.
 - **JavaScript/TypeScript, Java and Go need Semgrep.** Their taint rules report
   findings as warnings and do not block CI. Without Semgrep (the standalone
-  binary, or a Homebrew install without Semgrep) only the regex scanner
-  (textscan) runs for them.
-- **Real-world blocking precision is why blocking is off.** The bar is 0.80.
+  binary, or a Homebrew install without Semgrep) only the regex scanner (textscan)
+  and the secrets scanner run for these languages.
+- **Real-world blocking precision is why blocking is off for JavaScript/TypeScript, Java and Go.** The bar is 0.80.
   Evidence: [`REALWORLD.md`](../benchmarks/frameworks/REALWORLD.md) and
   [ADR-011](adr/ADR-011-semgrep-taint-reachability.md).
 
@@ -93,9 +93,9 @@ fixtures under
 
 | Metric | Value |
 |---|---:|
-| **F1** (synthetic Python corpus)          | **1.000** |
-| Precision (synthetic Python corpus)       | 1.000 |
-| Recall (synthetic Python corpus)          | 1.000 |
+| **F1** (Python synthetic corpus, excluding documented known gaps)          | **1.000** |
+| Precision (Python synthetic corpus, excluding documented known gaps)       | 1.000 |
+| Recall (Python synthetic corpus, excluding documented known gaps)          | 1.000 |
 | True positives  | 38 / 38 expected |
 | False positives | 0 |
 | False negatives | 0 |
@@ -138,8 +138,7 @@ Real bugs the corpus caught (now fixed; commits in git log):
    `redirect(request.args.get("x"))`; multi-hop
    `url = request.args["x"]; return redirect(url)` was silently
    missed. Other six reachable sinks already had the constant-vs-
-   non-constant filter from TASK-114/120/121/134. Open-redirect
-   recall: 0/3 → 3/3.
+   non-constant filter from TASK-114/120/121/134. Open-redirect recall on the Python synthetic corpus: 0/3 → 3/3.
 2. **cmdi posture aligned with other reachable sinks.** Pre-fix,
    `os.system("echo hello")` (literal-string, zero exploitability)
    fired HIGH because TASK-121 chose to emit on every shell-out. New
@@ -380,7 +379,7 @@ the whole-repo scan to **9.0 s**. Correctness unchanged (locked by
   eliminated** by B1–B8.
 - **2 residual labeled FPs** quantified (`safe-api-misread` at
   `dispatchers.py:108`, `constant-authority` at `connection_views.py:236`).
-- Precision over the labeled surface is **33.3 %**, a **thin-denominator lower
+- Precision over the labeled TWISCOPE surface is **33.3 %**, a **thin-denominator lower
   bound**: suppressed FPs produce no finding and drop out of `tp+fp`, so the
   ratio understates the win. The honest headline is the TP-retained / FN-zero /
   8-of-11-eliminated statement, not the ratio.
@@ -400,7 +399,7 @@ the whole-repo scan to **9.0 s**. Correctness unchanged (locked by
 
 | Track | What it measures | Result |
 |---|---|---|
-| **Synthetic corpus** (Track 1) | Precision / recall on canonical patterns we control | **F1 = 1.000** (38/38 TPs, 0 FPs, 0 FNs across 7 categories; current binary, CI-gated — v0.26's disclosed SSRF FN was fixed in v0.27) |
+| **Synthetic corpus** (Track 1) | Precision / recall on canonical patterns we control | **F1 = 1.000** on the Python synthetic corpus, excluding documented known gaps (38/38 TPs, 0 FPs, 0 FNs across 7 categories; current binary, CI-gated — v0.26's disclosed SSRF FN was fixed in v0.27) |
 | **Juice Shop** (Track 2) | DAST findings on a known-vulnerable web target | **+5 CRITICALs vs v0.6.1**; 35 % faster scan; every TASK-133 config-leak pattern fired correctly |
 | **PyGoat** (Track 3) | SAST findings on a real Django OWASP-Top-10 demo | **147 findings in 17 s** covering 12 distinct vulnerability classes; every category PyGoat advertises was detected |
 | **TWISCOPE** (Track 5, v1.1) | Labeled SAST precision on a real ~1,188-file production repo | **1 confirmed TP retained, 0 FN, 8/11 FP classes eliminated**, SAST taint noise ~90 → 5; 33.3 % over the (thin) labeled surface — a lower bound |
@@ -447,7 +446,7 @@ The honest follow-ups, ranked by leverage:
 4. **Run the synthetic harness in CI** against every PR so accuracy
    regressions surface immediately. The `--output-json` flag is
    ready for that; just needs a GitHub Actions workflow that gates
-   on the synthetic-corpus `F1 >= 0.95` or similar.
+   on `F1 >= 0.95` on the Python synthetic corpus or similar.
 
 ---
 
@@ -600,9 +599,9 @@ ID. 7 new bandit-B610/B611-parity unit tests lock the behaviour in.
 |---|---|---:|---|---|
 | `node-nodegoat`         | `c5cb68a7` | 399 | **2 / 2 real** | 395 dep CVEs surfaced from `package-lock.json` (TASK-119 native npm-audit) + 3 hardcoded secrets |
 | `node-juice-shop-src`   | `39b46860` |   7 | 0 real (2 permissive) | Source tree only ships `package.json` — fendix emits a single INFO advisory (SEC-NPM_LOCKFILE_MISSING); both rows are min_count:0 → **recall n/a** |
-| `node-dvna`             | `9ba473ad` |   2 | 0 real (2 permissive) | INFO advisory; both rows min_count:0 → **recall n/a** (not 1.000) |
-| `node-vulnerable-app`   | `6a025cdf` |   2 | 0 real (2 permissive) | INFO advisory; both rows min_count:0 → **recall n/a** (not 1.000) |
-| **Aggregate**           |            | **410** | **2 / 2 real (1.000)** + 6 permissive | Real-detection recall = 1.000 over node-nodegoat's 2 falsifiable rows; the other 3 targets contribute only `permitted_absent` advisories (corrected v0.27 — was a fabricated "8 / 8 = 1.000") |
+| `node-dvna`             | `9ba473ad` |   2 | 0 real (2 permissive) | INFO advisory; both rows min_count:0 → **Node.js recall n/a** (not 1.000) |
+| `node-vulnerable-app`   | `6a025cdf` |   2 | 0 real (2 permissive) | INFO advisory; both rows min_count:0 → **Node.js recall n/a** (not 1.000) |
+| **Aggregate (Node.js repos)** |            | **410** | **2 / 2 real (1.000)** + 6 permissive | Real-detection recall = 1.000 over node-nodegoat's 2 falsifiable rows; the other 3 targets contribute only `permitted_absent` advisories (corrected v0.27 — was a fabricated "8 / 8 = 1.000") |
 
 **Phase 2.6 engine improvement:** the npm-audit scanner used to skip
 silently when `package-lock.json` was absent. Now, when `package.json`
@@ -656,7 +655,7 @@ cleanly (status: `docker boot failed`).
 | `dast-webgoat`          | 10 | 1 / 1 | 0 | 480 missing-headers findings |
 | `dast-bwapp`            | 12 | 1 / 1 | 0 | 480 missing-headers findings |
 | `dast-vulnerableapp`    |  — | skip   | — | boot wait exceeded (Java app on macOS Docker) |
-| **Aggregate (4/5 booted DAST benchmark targets)** | **45** | **5 / 5** | **0** | **expectation-recall = 1.000** |
+| **Aggregate (4/5 booted DAST targets: Juice Shop, DVWA, WebGoat, bWAPP)** | **45** | **5 / 5** | **0** | **expectation-recall = 1.000** |
 
 Header-count figures (184–480) are post-explode counts via
 `affected_endpoints`; the engine collapses duplicate `(title, category)`
@@ -728,7 +727,7 @@ stages 4c/4d, just not benchmarked here. Raw samples per target in
 across 16 working targets (1.000)** plus a line-anchored F1 of
 **0.987** on the 56-case Juliet corpus (one intentional FP on
 `requests.get("https://const-host/" + path)`, an honest cost of
-recall not a bug). Bootstrap 95% CI shows the F1 is unlikely to drop
+recall not a bug). Bootstrap 95% CI shows the Juliet-style Python corpus F1 is unlikely to drop
 below 0.953 even on a differently-sampled corpus of the same size.
 
 **Engine quality lift attributable to the Phase-2 fixes in this

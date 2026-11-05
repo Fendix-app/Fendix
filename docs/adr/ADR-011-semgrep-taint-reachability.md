@@ -80,7 +80,7 @@ map empty; each language is added in the change that carries its evidence.
 
 **R-pf81: the real-world gate.** The development set is the packs' own
 corpus, so it cannot show how they behave on code nobody wrote them against.
-A language is enabled only if, in addition, a blind evaluation on fresh public
+A language (JavaScript/TypeScript, Java or Go) is enabled only if, in addition, a blind evaluation on fresh public
 production repositories finds precision of at least 0.80 on at least 10
 triaged taint-tier findings. JavaScript and TypeScript, Java and Go met the
 development gate and failed this one, and shipped warn-only (the map is empty).
@@ -268,7 +268,7 @@ The evaluation scanned 70 fresh public production repositories (12 JavaScript
 and TypeScript, 20 Java and 38 Go; none over about 300 kLOC) at commit
 `6901cf7`, and triaged every taint-tier finding by reading the handler and
 the helpers it calls (34 in all, no sampling). The decision rule was fixed in
-advance: a language ships blocking only with precision of at least 0.80 on at
+advance: a language (JavaScript/TypeScript, Java or Go) ships blocking only with precision of at least 0.80 on at
 least 10 real-world findings. All three languages (JavaScript/TypeScript, Java
 and Go) had at least 10 findings and precision far below 0.80. The outcome does not change if the one unclear Java finding is counted
 as true (0.20), or if every borderline label is flipped.
