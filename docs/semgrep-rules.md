@@ -140,7 +140,7 @@ fails otherwise. It also holds two naming rules:
   `pattern-not-inside` for the language's constant binding: `const $X = ...`
   in JavaScript and TypeScript, `static final String $X = ...` in Java, and
   both `const $X = "..."` and a one-binding block, `const (` / `$X = "..."` /
-  `)` followed by `...`, in Go. Semgrep 1.141.0 does not parse the wider
+  `)` followed by `...`, in Go. Semgrep 1.182.1 does not parse the wider
   block form `const ( ... $X = "..." ... )`: a rule using it fails to load
   with "Invalid pattern for Go". Write the one-binding form.
 

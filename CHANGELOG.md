@@ -1405,6 +1405,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Go taint rules keep their `ok` cases clean on Semgrep 1.182.1, the
+  version Fendix ships.** The Go pack was written on Semgrep 1.141.0. Semgrep
+  1.182.1 keeps the taint of a variable assigned from a call that an exact
+  sanitizer clears (`$x := f(...)`, `x = f(...)`, `var x = f(...)`), which 1.141.0
+  cleared, so `go-sqli-taint` and `go-path-traversal-taint` reported a column
+  or a row looked up through a constant helper or a same-file method. Each Go
+  call sanitizer now also matches the assignment, in every Go taint rule. The
+  sink-in-receiver case (`exec.Command(...).Run()`) is kept: the sanitizers are
+  not made non-exact. The rule tests (51) pass on 1.182.1 and on 1.141.0.
 - **The Python engine's JavaScript SQL check no longer fires on tagged
   templates or constant-only templates, and steps aside when Semgrep ran.**
   `SEC-JS_SQL_TEMPLATE` flagged every template literal with a SQL keyword and

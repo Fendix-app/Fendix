@@ -34,6 +34,19 @@
 # validates its parameter and returns it (if allowed[s] { return s }) hands
 # its input back, so it is not clean: a known false positive.
 #
+# Assigned calls. Semgrep 1.182 keeps the taint of a variable assigned from a
+# call that an exact sanitizer clears ($x := f(...), x = f(...), var x = f(...)),
+# where 1.141 cleared it. Each call sanitizer therefore also matches the
+# assignment: the constant-helper shapes and len and cap list the assignment
+# forms next to the call, and the qualified-call sanitizer has a second entry
+# for the assignment (its call conditions run in a metavariable-pattern, on
+# the call bound by a second list of the forms; the file conditions are
+# repeated on the assignment). Do not drop "exact: true" instead: a sanitizer
+# that is not exact also clears a sink inside its range, such as
+# exec.Command(...).Run(). Rule tests: sqliAssignedHelpers and
+# (*guardServer).assigned in ../ruletests/go-injection.guards.go,
+# assignedLookups in ../ruletests/go-web.guards.go.
+#
 # Cost note. Semgrep joins the results of a file-spanning pattern with the
 # calls of the file, so a pattern that has a result for every function or
 # method of the file is quadratic in the file's size (150 s for the 1,400
@@ -162,6 +175,22 @@ rules:
         pattern-either:
           - pattern: len(...)
           - pattern: cap(...)
+          - pattern: $ASSIGNED := len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := len(...)
+          - pattern: $ASSIGNED = len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED = len(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = len(...)
+          - pattern: $ASSIGNED := cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := cap(...)
+          - pattern: $ASSIGNED = cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED = cap(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = cap(...)
       # A function or method of this file whose every return is a string literal
       # (a switch or an if over literals). The pattern ends at the helper, or at
       # a later function that calls it, and the regex on the body is part of
@@ -172,6 +201,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside:
                   patterns:
@@ -225,6 +270,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside: |
                   package $PKG
@@ -598,6 +659,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside: |
                   package $PKG
@@ -1031,6 +1108,190 @@ rules:
           - pattern-not: $DB.Group(...)
           - pattern-not: $DB.Having(...)
           - pattern-not: $DB.Joins(...)
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+
+      # The same sanitizer for a call assigned to a variable ($x := f(...),
+      # var x = f(...), x = f(...)): Semgrep 1.182 keeps the taint of a variable
+      # assigned from an exact-sanitized call, so the assignment is a sanitizer too.
+      # The assignment forms are listed twice: with the call as $CALLEXPR, which
+      # the call conditions are matched against, and with the call written out,
+      # which binds its receiver and function for them and for the file conditions
+      # (a condition is only judged for the outermost call).
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $ASSIGNED := $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $CALLEXPR
+              - pattern: $ASSIGNED = $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED = $CALLEXPR
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $CALLEXPR
+          - pattern-either:
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - metavariable-pattern:
+              metavariable: $CALLEXPR
+              patterns:
+                - pattern: $RECEIVER.$FUNC(...)
+                # Sources.
+                - pattern-not: $R.URL.Query()
+                - pattern-not: $R.URL.Query().$GET(...)
+                - pattern-not: $R.FormValue(...)
+                - pattern-not: $R.PostFormValue(...)
+                - pattern-not: $R.PathValue(...)
+                - pattern-not: $R.Header.Get(...)
+                - pattern-not: $R.Header.Values(...)
+                - pattern-not: $R.Form.Get(...)
+                - pattern-not: $R.PostForm.Get(...)
+                - pattern-not: '($R : *http.Request).Cookie(...)'
+                - pattern-not: '($R : *http.Request).FormFile(...)'
+                - pattern-not: mux.Vars(...)
+                - pattern-not: chi.URLParam(...)
+                - pattern-not: '($C : *gin.Context).$GIN(...)'
+                # Calls that hand their input back.
+                - pattern-not: fmt.Sprintf(...)
+                - pattern-not: fmt.Sprint(...)
+                - pattern-not: fmt.Sprintln(...)
+                - pattern-not: strings.$STRINGS(...)
+                - pattern-not: bytes.$BYTES(...)
+                - pattern-not: filepath.$FILEPATH(...)
+                - pattern-not: path.$PATH(...)
+                - pattern-not: url.$URL(...)
+                - pattern-not: html.UnescapeString(...)
+                - pattern-not: strconv.Unquote(...)
+                - pattern-not: string(...)
+                - pattern-not: '[]byte(...)'
+                - pattern-not: '[]rune(...)'
+                - pattern-not: append(...)
+                - pattern-not: $VALUE.String()
+                - pattern-not: $VALUE.Bytes()
+                - pattern-not: $VALUE.Query()
+                - pattern-not: $VALUE.Hostname()
+                - pattern-not: $RE.ReplaceAllString(...)
+                - pattern-not: $RE.ReplaceAllLiteralString(...)
+                - pattern-not: $RE.ReplaceAllStringFunc(...)
+                - pattern-not: $REPLACER.Replace(...)
+                - pattern-not: $CODEC.DecodeString(...)
+                - pattern-not: $CODEC.Unescape(...)
+                - pattern-not: $CODEC.UnescapeString(...)
+                - pattern-not: $CODEC.QueryUnescape(...)
+                - pattern-not: $CODEC.PathUnescape(...)
+                - pattern-not: $CODEC.Unquote(...)
+                - pattern-not: io.ReadAll(...)
+                - pattern-not: ioutil.ReadAll(...)
+                - pattern-not: json.NewDecoder(...)
+                - pattern-not: $DECODER.Decode(...)
+                - pattern-not: json.Unmarshal(...)
+                # A call that takes a function literal (router.GET(path, func(c
+                # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+                # does not judge the calls inside a sanitized range one by one.
+                - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+                # This rule's sinks.
+                - pattern-not: $DB.Query(...)
+                - pattern-not: $DB.QueryRow(...)
+                - pattern-not: $DB.Exec(...)
+                - pattern-not: $DB.Prepare(...)
+                - pattern-not: $DB.Queryx(...)
+                - pattern-not: $DB.QueryRowx(...)
+                - pattern-not: $DB.MustExec(...)
+                - pattern-not: $DB.Raw(...)
+                - pattern-not: $DB.QueryContext(...)
+                - pattern-not: $DB.QueryRowContext(...)
+                - pattern-not: $DB.ExecContext(...)
+                - pattern-not: $DB.PrepareContext(...)
+                - pattern-not: $DB.QueryxContext(...)
+                - pattern-not: $DB.QueryRowxContext(...)
+                - pattern-not: $DB.MustExecContext(...)
+                - pattern-not: $DB.Where(...)
+                - pattern-not: $DB.Or(...)
+                - pattern-not: $DB.Not(...)
+                - pattern-not: $DB.Order(...)
+                - pattern-not: $DB.Group(...)
+                - pattern-not: $DB.Having(...)
+                - pattern-not: $DB.Joins(...)
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
           - pattern-not-inside: |
               package $PKG
               ...
@@ -2760,6 +3021,22 @@ rules:
         pattern-either:
           - pattern: len(...)
           - pattern: cap(...)
+          - pattern: $ASSIGNED := len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := len(...)
+          - pattern: $ASSIGNED = len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED = len(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = len(...)
+          - pattern: $ASSIGNED := cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := cap(...)
+          - pattern: $ASSIGNED = cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED = cap(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = cap(...)
       # A function or method of this file whose every return is a string literal
       # (a switch or an if over literals). The pattern ends at the helper, or at
       # a later function that calls it, and the regex on the body is part of
@@ -2770,6 +3047,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside:
                   patterns:
@@ -2823,6 +3116,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside: |
                   package $PKG
@@ -3196,6 +3505,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside: |
                   package $PKG
@@ -3611,6 +3936,172 @@ rules:
           - pattern-not: exec.CommandContext(...)
           - pattern-not: syscall.Exec(...)
           - pattern-not: os.StartProcess(...)
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+
+      # The same sanitizer for a call assigned to a variable ($x := f(...),
+      # var x = f(...), x = f(...)): Semgrep 1.182 keeps the taint of a variable
+      # assigned from an exact-sanitized call, so the assignment is a sanitizer too.
+      # The assignment forms are listed twice: with the call as $CALLEXPR, which
+      # the call conditions are matched against, and with the call written out,
+      # which binds its receiver and function for them and for the file conditions
+      # (a condition is only judged for the outermost call).
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $ASSIGNED := $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $CALLEXPR
+              - pattern: $ASSIGNED = $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED = $CALLEXPR
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $CALLEXPR
+          - pattern-either:
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - metavariable-pattern:
+              metavariable: $CALLEXPR
+              patterns:
+                - pattern: $RECEIVER.$FUNC(...)
+                # Sources.
+                - pattern-not: $R.URL.Query()
+                - pattern-not: $R.URL.Query().$GET(...)
+                - pattern-not: $R.FormValue(...)
+                - pattern-not: $R.PostFormValue(...)
+                - pattern-not: $R.PathValue(...)
+                - pattern-not: $R.Header.Get(...)
+                - pattern-not: $R.Header.Values(...)
+                - pattern-not: $R.Form.Get(...)
+                - pattern-not: $R.PostForm.Get(...)
+                - pattern-not: '($R : *http.Request).Cookie(...)'
+                - pattern-not: '($R : *http.Request).FormFile(...)'
+                - pattern-not: mux.Vars(...)
+                - pattern-not: chi.URLParam(...)
+                - pattern-not: '($C : *gin.Context).$GIN(...)'
+                # Calls that hand their input back.
+                - pattern-not: fmt.Sprintf(...)
+                - pattern-not: fmt.Sprint(...)
+                - pattern-not: fmt.Sprintln(...)
+                - pattern-not: strings.$STRINGS(...)
+                - pattern-not: bytes.$BYTES(...)
+                - pattern-not: filepath.$FILEPATH(...)
+                - pattern-not: path.$PATH(...)
+                - pattern-not: url.$URL(...)
+                - pattern-not: html.UnescapeString(...)
+                - pattern-not: strconv.Unquote(...)
+                - pattern-not: string(...)
+                - pattern-not: '[]byte(...)'
+                - pattern-not: '[]rune(...)'
+                - pattern-not: append(...)
+                - pattern-not: $VALUE.String()
+                - pattern-not: $VALUE.Bytes()
+                - pattern-not: $VALUE.Query()
+                - pattern-not: $VALUE.Hostname()
+                - pattern-not: $RE.ReplaceAllString(...)
+                - pattern-not: $RE.ReplaceAllLiteralString(...)
+                - pattern-not: $RE.ReplaceAllStringFunc(...)
+                - pattern-not: $REPLACER.Replace(...)
+                - pattern-not: $CODEC.DecodeString(...)
+                - pattern-not: $CODEC.Unescape(...)
+                - pattern-not: $CODEC.UnescapeString(...)
+                - pattern-not: $CODEC.QueryUnescape(...)
+                - pattern-not: $CODEC.PathUnescape(...)
+                - pattern-not: $CODEC.Unquote(...)
+                - pattern-not: io.ReadAll(...)
+                - pattern-not: ioutil.ReadAll(...)
+                - pattern-not: json.NewDecoder(...)
+                - pattern-not: $DECODER.Decode(...)
+                - pattern-not: json.Unmarshal(...)
+                # A call that takes a function literal (router.GET(path, func(c
+                # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+                # does not judge the calls inside a sanitized range one by one.
+                - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+                # This rule's sinks.
+                - pattern-not: exec.Command(...)
+                - pattern-not: exec.CommandContext(...)
+                - pattern-not: syscall.Exec(...)
+                - pattern-not: os.StartProcess(...)
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
           - pattern-not-inside: |
               package $PKG
               ...
@@ -4120,6 +4611,22 @@ rules:
         pattern-either:
           - pattern: len(...)
           - pattern: cap(...)
+          - pattern: $ASSIGNED := len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := len(...)
+          - pattern: $ASSIGNED = len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED = len(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = len(...)
+          - pattern: $ASSIGNED := cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := cap(...)
+          - pattern: $ASSIGNED = cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED = cap(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = cap(...)
       # A function or method of this file whose every return is a string literal
       # (a switch or an if over literals). The pattern ends at the helper, or at
       # a later function that calls it, and the regex on the body is part of
@@ -4130,6 +4637,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside:
                   patterns:
@@ -4183,6 +4706,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside: |
                   package $PKG
@@ -4556,6 +5095,22 @@ rules:
           - pattern-either:
               - pattern: $FUNC(...)
               - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
           - pattern-either:
               - pattern-inside: |
                   package $PKG
@@ -4968,6 +5523,169 @@ rules:
           - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
           # This rule's sinks.
           - pattern-not: $TPL.Parse(...)
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+
+      # The same sanitizer for a call assigned to a variable ($x := f(...),
+      # var x = f(...), x = f(...)): Semgrep 1.182 keeps the taint of a variable
+      # assigned from an exact-sanitized call, so the assignment is a sanitizer too.
+      # The assignment forms are listed twice: with the call as $CALLEXPR, which
+      # the call conditions are matched against, and with the call written out,
+      # which binds its receiver and function for them and for the file conditions
+      # (a condition is only judged for the outermost call).
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $ASSIGNED := $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $CALLEXPR
+              - pattern: $ASSIGNED = $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED = $CALLEXPR
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $CALLEXPR
+          - pattern-either:
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - metavariable-pattern:
+              metavariable: $CALLEXPR
+              patterns:
+                - pattern: $RECEIVER.$FUNC(...)
+                # Sources.
+                - pattern-not: $R.URL.Query()
+                - pattern-not: $R.URL.Query().$GET(...)
+                - pattern-not: $R.FormValue(...)
+                - pattern-not: $R.PostFormValue(...)
+                - pattern-not: $R.PathValue(...)
+                - pattern-not: $R.Header.Get(...)
+                - pattern-not: $R.Header.Values(...)
+                - pattern-not: $R.Form.Get(...)
+                - pattern-not: $R.PostForm.Get(...)
+                - pattern-not: '($R : *http.Request).Cookie(...)'
+                - pattern-not: '($R : *http.Request).FormFile(...)'
+                - pattern-not: mux.Vars(...)
+                - pattern-not: chi.URLParam(...)
+                - pattern-not: '($C : *gin.Context).$GIN(...)'
+                # Calls that hand their input back.
+                - pattern-not: fmt.Sprintf(...)
+                - pattern-not: fmt.Sprint(...)
+                - pattern-not: fmt.Sprintln(...)
+                - pattern-not: strings.$STRINGS(...)
+                - pattern-not: bytes.$BYTES(...)
+                - pattern-not: filepath.$FILEPATH(...)
+                - pattern-not: path.$PATH(...)
+                - pattern-not: url.$URL(...)
+                - pattern-not: html.UnescapeString(...)
+                - pattern-not: strconv.Unquote(...)
+                - pattern-not: string(...)
+                - pattern-not: '[]byte(...)'
+                - pattern-not: '[]rune(...)'
+                - pattern-not: append(...)
+                - pattern-not: $VALUE.String()
+                - pattern-not: $VALUE.Bytes()
+                - pattern-not: $VALUE.Query()
+                - pattern-not: $VALUE.Hostname()
+                - pattern-not: $RE.ReplaceAllString(...)
+                - pattern-not: $RE.ReplaceAllLiteralString(...)
+                - pattern-not: $RE.ReplaceAllStringFunc(...)
+                - pattern-not: $REPLACER.Replace(...)
+                - pattern-not: $CODEC.DecodeString(...)
+                - pattern-not: $CODEC.Unescape(...)
+                - pattern-not: $CODEC.UnescapeString(...)
+                - pattern-not: $CODEC.QueryUnescape(...)
+                - pattern-not: $CODEC.PathUnescape(...)
+                - pattern-not: $CODEC.Unquote(...)
+                - pattern-not: io.ReadAll(...)
+                - pattern-not: ioutil.ReadAll(...)
+                - pattern-not: json.NewDecoder(...)
+                - pattern-not: $DECODER.Decode(...)
+                - pattern-not: json.Unmarshal(...)
+                # A call that takes a function literal (router.GET(path, func(c
+                # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+                # does not judge the calls inside a sanitized range one by one.
+                - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+                # This rule's sinks.
+                - pattern-not: $TPL.Parse(...)
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
           - pattern-not-inside: |
               package $PKG
               ...

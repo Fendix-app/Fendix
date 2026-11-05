@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"example.com/app/downloads"
 )
 
 const guardBase = "/srv/app/files"
@@ -555,4 +557,32 @@ func unknownCallsWeb(w http.ResponseWriter, r *http.Request) {
 	os.ReadFile(otherFilePath(q))
 	// ruleid: go-path-traversal-taint
 	os.ReadFile(trimmedInput(q))
+}
+
+// --- A qualified call assigned to a variable ---------------------------------------
+//
+// Semgrep 1.182 keeps the taint of a variable that is assigned from an
+// exact-sanitized call, so the sanitizer also matches the assignment (:=, =,
+// var). A sink inside the call, and the input itself, stay tainted.
+
+func assignedLookups(c *gin.Context) {
+	var found, err = downloads.Find(c.Param("id"))
+	if err != nil {
+		return
+	}
+	// ok: go-path-traversal-taint
+	c.File(found.Path)
+	var other string
+	other, err = downloads.Find(c.Param("id"))
+	// ok: go-path-traversal-taint
+	c.File(other)
+	name := c.Query("name")
+	// ruleid: go-path-traversal-taint
+	opened, err := os.Open(name)
+	_ = opened
+	// ruleid: go-path-traversal-taint
+	listed, err := downloads.Find(os.Open(name))
+	_ = listed
+	// ruleid: go-path-traversal-taint
+	c.File(name)
 }

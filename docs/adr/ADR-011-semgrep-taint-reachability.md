@@ -18,6 +18,11 @@ three packs report warnings. The evidence is under
 [Enabled languages](#enabled-languages) and
 [Real-world precision](#real-world-precision).
 
+The packs were written and reviewed on Semgrep 1.141.0. Fendix ships Semgrep
+1.182.1, and the rule tests and the parity gate were rerun on it; the Go
+packs needed a change for 1.182.1 (see the "Assigned calls" note in
+`go-injection.yaml`).
+
 ## Context
 
 Fendix proves that request input reaches a sink for Python only. The Python
@@ -43,9 +48,9 @@ weight in three places:
 Granting the flag to a pack nobody has measured would let that pack's false
 positives block builds.
 
-A spike on a one-file Express app found one more fact. Semgrep 1.141.0 with no
-Semgrep account logged in leaves `extra.dataflow_trace` out of its `--json`
-output, and `codeFlows` out of its `--sarif` output. Its text output prints
+A spike on a one-file Express app found one more fact. Semgrep 1.141.0 (and
+1.182.1, which Fendix ships, rechecked) with no Semgrep account logged in
+leaves `extra.dataflow_trace` out of its `--json` output, and `codeFlows` out of its `--sarif` output. Its text output prints
 the trace. The same formatter replaces `extra.lines` with `requires login`,
 which Fendix already works around by reading the line from disk. The trace
 exists inside the CLI before that formatter runs, and its shape is the one
@@ -194,7 +199,7 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
   change.
 
 **Negative:**
-- **A logged-out run shows no path.** Semgrep 1.141.0 with no account logged
+- **A logged-out run shows no path.** Semgrep 1.182.1 with no account logged
   in leaves `dataflow_trace` out of `--json`, so a default run's chain is the
   finding's own location alone. That is the CLI and the GitHub Action, neither
   of which logs in to Semgrep, and the parity harness. A reader sees where

@@ -524,3 +524,41 @@ func unknownCallsTemplates(w http.ResponseWriter, r *http.Request) {
 	// ruleid: go-ssti-taint
 	template.New("a").Parse(withFlag(source))
 }
+
+// --- A sanitized call assigned to a variable ---------------------------------------
+//
+// Semgrep 1.182 keeps the taint of a variable that is assigned from an
+// exact-sanitized call, so the sanitizers also match the assignment (:=, =,
+// var). The input stays tainted after the call.
+
+func sqliAssignedHelpers(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("sort")
+	order := direction(key)
+	// ok: go-sqli-taint
+	guardDB.Query("SELECT id FROM users ORDER BY name " + order)
+	var table = tableFor(key)
+	// ok: go-sqli-taint
+	guardDB.Query("SELECT id FROM " + table)
+	var col string = sortColumn(key)
+	// ok: go-sqli-taint
+	guardDB.Query("SELECT id FROM users ORDER BY " + col)
+	var chosen string
+	chosen = sortColumn(key)
+	// ok: go-sqli-taint
+	guardDB.Query("SELECT id FROM users ORDER BY " + chosen)
+	width := len(key)
+	// ok: go-sqli-taint
+	guardDB.Query(fmt.Sprint("SELECT id FROM users LIMIT ", width))
+	// ruleid: go-sqli-taint
+	guardDB.Query("SELECT id FROM users WHERE name = '" + key + "'")
+}
+
+func (s *guardServer) assigned(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("sort")
+	col := s.column(key)
+	// ok: go-sqli-taint
+	guardDB.Query("SELECT * FROM users ORDER BY " + col)
+	query := s.build(key)
+	// ruleid: go-sqli-taint
+	guardDB.Query(query)
+}

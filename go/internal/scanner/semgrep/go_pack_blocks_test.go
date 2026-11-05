@@ -83,39 +83,79 @@ func numericBlock(sanitizers []any) []any {
 	return sanitizers[start : end+1]
 }
 
-// isQualifiedCallSanitizer tells the sanitizer for qualified and method calls
-// (the only call sanitizer that carries a rule's own sinks) from the others.
-func isQualifiedCallSanitizer(m map[string]any) bool {
-	return strings.Contains(asYAML(m["patterns"]), "$OUTER(")
+// isAssignmentCallSanitizer tells the assignment form of the qualified-call
+// sanitizer (a call assigned to a variable, matched through
+// metavariable-pattern) from its call form.
+func isAssignmentCallSanitizer(m map[string]any) bool {
+	return strings.Contains(asYAML(m["patterns"]), "metavariable-pattern") &&
+		strings.Contains(asYAML(m["patterns"]), "$OUTER(")
 }
 
-// callSanitizerShared returns the parts of a taint rule's call sanitizers
-// that every rule shares: the constant-helper sanitizers (len and cap, and
-// the function and method shapes whose every return is constant), and, of
-// the qualified-call sanitizer, the sources and the calls that hand their
-// input back (up to and including the function-literal exclusion) and the
-// same-file-method exclusions at its end. A rule's own sinks are left out.
-func callSanitizerShared(sanitizers []any) (constant, prefix, methods []any, ok bool) {
+// isQualifiedCallSanitizer tells the call form of the sanitizer for qualified
+// and method calls (the only call sanitizer that carries a rule's own sinks)
+// from the others.
+func isQualifiedCallSanitizer(m map[string]any) bool {
+	return !isAssignmentCallSanitizer(m) && strings.Contains(asYAML(m["patterns"]), "$OUTER(")
+}
+
+// callSanitizers are the parts of a taint rule's call sanitizers that every
+// rule shares: the constant-helper sanitizers (len and cap, and the function
+// and method shapes whose every return is constant, each also as the right-hand
+// side of an assignment), and, of the qualified-call sanitizer, the sources
+// and the calls that hand their input back (up to and including the
+// function-literal exclusion) and the same-file-method exclusions at its end,
+// for the call form and for the assignment form. A rule's own sinks are left
+// out.
+type callSanitizers struct {
+	constant, prefix, methods             []any
+	assignPrefix, assignMethods           []any
+	hasConstant, hasPrefix, hasAssignment bool
+}
+
+func callSanitizerShared(sanitizers []any) callSanitizers {
+	var out callSanitizers
 	for _, s := range sanitizers {
 		m, _ := s.(map[string]any)
 		if exact, _ := m["exact"].(bool); !exact {
 			continue
 		}
-		if !isQualifiedCallSanitizer(m) {
-			constant = append(constant, s)
-			continue
-		}
 		patterns, _ := m["patterns"].([]any)
-		for i, p := range patterns {
-			if strings.Contains(asYAML(p), "$OUTER(") {
-				prefix = patterns[:i+1]
+		switch {
+		case isAssignmentCallSanitizer(m):
+			for i, p := range patterns {
+				if mvp, ok := p.(map[string]any)["metavariable-pattern"].(map[string]any); ok {
+					// The forms, then the conditions on the call up to and
+					// including the function-literal exclusion.
+					inner, _ := mvp["patterns"].([]any)
+					out.assignPrefix = append([]any{}, patterns[:i]...)
+					out.assignPrefix = append(out.assignPrefix, mvp["metavariable"])
+					for j, q := range inner {
+						if strings.Contains(asYAML(q), "$OUTER(") {
+							out.assignPrefix = append(out.assignPrefix, inner[:j+1]...)
+						}
+					}
+				}
+				if strings.Contains(asYAML(p), "$RTYPE") {
+					out.assignMethods = append(out.assignMethods, p)
+				}
 			}
-			if strings.Contains(asYAML(p), "$RTYPE") {
-				methods = append(methods, p)
+		case isQualifiedCallSanitizer(m):
+			for i, p := range patterns {
+				if strings.Contains(asYAML(p), "$OUTER(") {
+					out.prefix = patterns[:i+1]
+				}
+				if strings.Contains(asYAML(p), "$RTYPE") {
+					out.methods = append(out.methods, p)
+				}
 			}
+		default:
+			out.constant = append(out.constant, s)
 		}
 	}
-	return constant, prefix, methods, constant != nil && prefix != nil && methods != nil
+	out.hasConstant = out.constant != nil
+	out.hasPrefix = out.prefix != nil && out.methods != nil
+	out.hasAssignment = out.assignPrefix != nil && out.assignMethods != nil
+	return out
 }
 
 // helperSinkGroups returns a taint rule's helper sinks, normalised for their
@@ -148,7 +188,8 @@ func helperSinkGroups(sinks []any) [][]string {
 func goPackDrift(rules []packRule) []string {
 	var out []string
 	var first *packRule
-	var numeric, callConstant, callPrefix, callMethods []any
+	var numeric []any
+	var calls *callSanitizers
 	numericRules := 0
 	for i := range rules {
 		r := &rules[i]
@@ -175,21 +216,29 @@ func goPackDrift(rules []packRule) []string {
 				out = append(out, fmt.Sprintf("%s: numeric sanitizers differ", r.ID))
 			}
 		}
-		constant, prefix, methods, ok := callSanitizerShared(sanitizers)
+		shared := callSanitizerShared(sanitizers)
 		switch {
-		case !ok:
+		case !shared.hasConstant || !shared.hasPrefix:
 			out = append(out, fmt.Sprintf("%s: no call sanitizer", r.ID))
-		case callPrefix == nil:
-			callConstant, callPrefix, callMethods = constant, prefix, methods
+		case !shared.hasAssignment:
+			out = append(out, fmt.Sprintf("%s: no assignment form of the call sanitizer", r.ID))
+		case calls == nil:
+			calls = &shared
 		default:
-			if !reflect.DeepEqual(constant, callConstant) {
+			if !reflect.DeepEqual(shared.constant, calls.constant) {
 				out = append(out, fmt.Sprintf("%s: call sanitizer's constant-helper shapes differ", r.ID))
 			}
-			if !reflect.DeepEqual(prefix, callPrefix) {
+			if !reflect.DeepEqual(shared.prefix, calls.prefix) {
 				out = append(out, fmt.Sprintf("%s: call sanitizer's shared part differs", r.ID))
 			}
-			if !reflect.DeepEqual(methods, callMethods) {
+			if !reflect.DeepEqual(shared.methods, calls.methods) {
 				out = append(out, fmt.Sprintf("%s: call sanitizer's same-file-method exclusions differ", r.ID))
+			}
+			if !reflect.DeepEqual(shared.assignPrefix, calls.assignPrefix) {
+				out = append(out, fmt.Sprintf("%s: assignment sanitizer's shared part differs", r.ID))
+			}
+			if !reflect.DeepEqual(shared.assignMethods, calls.assignMethods) {
+				out = append(out, fmt.Sprintf("%s: assignment sanitizer's same-file-method exclusions differ", r.ID))
 			}
 		}
 		sinks, _ := r.Raw["pattern-sinks"].([]any)
@@ -303,6 +352,26 @@ func TestGoPackDriftIsCaught(t *testing.T) {
 				}
 			}
 		}, "go-jwt-no-verify-taint: call sanitizer's same-file-method exclusions differ"},
+		{"the assignment sanitizer's shared part", func(rules []packRule) {
+			for _, s := range taintRule(rules, "go-ssrf-taint")["pattern-sanitizers"].([]any) {
+				if m, _ := s.(map[string]any); m["exact"] == true && isAssignmentCallSanitizer(m) {
+					for _, p := range m["patterns"].([]any) {
+						if mvp, ok := p.(map[string]any)["metavariable-pattern"].(map[string]any); ok {
+							inner := mvp["patterns"].([]any)
+							mvp["patterns"] = append([]any{inner[0]}, inner[2:]...)
+						}
+					}
+				}
+			}
+		}, "go-ssrf-taint: assignment sanitizer's shared part differs"},
+		{"the assignment sanitizer's same-file-method exclusions", func(rules []packRule) {
+			for _, s := range taintRule(rules, "go-xss-taint")["pattern-sanitizers"].([]any) {
+				if m, _ := s.(map[string]any); m["exact"] == true && isAssignmentCallSanitizer(m) {
+					patterns := m["patterns"].([]any)
+					m["patterns"] = patterns[:len(patterns)-1]
+				}
+			}
+		}, "go-xss-taint: assignment sanitizer's same-file-method exclusions differ"},
 		{"one position of a helper sink", func(rules []packRule) {
 			sinks := taintRule(rules, "go-sqli-taint")["pattern-sinks"].([]any)
 			for i := len(sinks) - 1; i >= 0; i-- {
