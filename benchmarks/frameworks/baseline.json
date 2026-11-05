@@ -366,8 +366,8 @@
       "blocks": false
     },
     "express-sqli-safe_lookalike": {
-      "outcome": "FP",
-      "blocks": true
+      "outcome": "TN",
+      "blocks": false
     },
     "express-ssrf-alt_api": {
       "outcome": "TP",
@@ -950,7 +950,7 @@
       "blocks": false
     },
     "gin-cmdi-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "gin-hardcoded_secret-alt_api": {
@@ -1062,7 +1062,7 @@
       "blocks": false
     },
     "gin-sqli-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "gin-ssrf-alt_api": {
@@ -1294,8 +1294,8 @@
       "blocks": false
     },
     "nestjs-sqli-safe_lookalike": {
-      "outcome": "FP",
-      "blocks": true
+      "outcome": "TN",
+      "blocks": false
     },
     "nestjs-ssrf-alt_api": {
       "outcome": "TP",
@@ -1414,7 +1414,7 @@
       "blocks": false
     },
     "nethttp-cmdi-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "nethttp-hardcoded_secret-alt_api": {
@@ -1526,7 +1526,7 @@
       "blocks": false
     },
     "nethttp-sqli-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "nethttp-ssrf-alt_api": {
@@ -1758,8 +1758,8 @@
       "blocks": false
     },
     "nextjs-sqli-safe_lookalike": {
-      "outcome": "FP",
-      "blocks": true
+      "outcome": "TN",
+      "blocks": false
     },
     "nextjs-ssrf-alt_api": {
       "outcome": "TP",
@@ -1878,12 +1878,12 @@
       "blocks": false
     },
     "spring-cmdi-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "spring-hardcoded_secret-alt_api": {
-      "outcome": "FN",
-      "blocks": false
+      "outcome": "TP",
+      "blocks": true
     },
     "spring-hardcoded_secret-cross_file": {
       "outcome": "TP",
@@ -2046,7 +2046,7 @@
       "blocks": false
     },
     "spring-weak_password_hash-safe_lookalike": {
-      "outcome": "FP",
+      "outcome": "TN",
       "blocks": false
     },
     "spring-weak_random_token-direct": {
