@@ -302,9 +302,11 @@ var patterns = []pattern{
 		//      jdbc:sqlserver://h:1433;databaseName=a;password=PASSWORD
 		// The value group of each is the password; the credential is the LAST
 		// participating group, so redaction treats both the same. A value
-		// starting with `$` is an interpolation (${DB_PASSWORD}) and does not
-		// match.
-		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+|jdbc:[a-z0-9]+:(?://)?[^\s"'?;]+[?;][^\s"']*?\bpassword=([^&;\s"'$]+)`),
+		// STARTING with `$` is an interpolation (${DB_PASSWORD}) and does not
+		// match; a `$` later in the value is part of the password, and the
+		// whole value is the capture (a value class that excluded `$` anywhere
+		// stopped at it and published the rest of the password).
+		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+|jdbc:[a-z0-9]+:(?://)?[^\s"'?;]+[?;][^\s"']*?\bpassword=([^&;\s"'$][^&;\s"']*)`),
 		severity: models.SeverityHigh,
 		cwe:      "CWE-214",
 	},

@@ -1208,3 +1208,23 @@ func TestDBConnectionStringIdentityUnchangedByJDBCForm(t *testing.T) {
 		t.Errorf("want one finding with rule id secrets/DB_CONNECTION_STRING, got %+v", got)
 	}
 }
+
+// A password that contains `$` (not as its first character) is one value: the
+// whole of it is redacted, none of it is published.
+func TestJDBCURLPasswordWithDollarIsFullyRedacted(t *testing.T) {
+	for _, pw := range []string{"pa$$word1234567", "Xk2$mQ9vLp4Zt7RwB5nHc", "abc$"} {
+		got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://host/db?user=app&password=`+pw)
+		if len(got) != 1 {
+			t.Fatalf("%q: SEC-DB_CONNECTION_STRING = %d findings; want 1", pw, len(got))
+		}
+		ev := got[0].Evidence
+		for _, frag := range []string{"$word", "$$", "$mQ9", "Q9vL", "7RwB", "abc$"} {
+			if strings.Contains(ev, frag) {
+				t.Errorf("%q: evidence leaks %q: %q", pw, frag, ev)
+			}
+		}
+		if !strings.Contains(ev, fmt.Sprintf("len=%d", len(pw))) {
+			t.Errorf("%q: the redaction marker must cover the whole value (len=%d): %q", pw, len(pw), ev)
+		}
+	}
+}
