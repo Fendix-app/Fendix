@@ -169,14 +169,12 @@ var semgrepMetavariable = regexp.MustCompile(`\$(?:\.\.\.)?[A-Z_][A-Z0-9_]*\b`)
 
 // TestRulepack_ValidatesViaSemgrepCLI invokes `semgrep --validate` against
 // the bundled rules. Skipped when semgrep is not on PATH (the common dev
-// case + CI runners without semgrep installed). Catches pattern-syntax
+// case, and the go job's runners), failed when FENDIX_REQUIRE_SEMGREP is set
+// (the e2e job). Catches pattern-syntax
 // errors the YAML-only catalog tests above can't see — e.g. a malformed
 // pattern-either body or a metavariable-regex with invalid Go regex syntax.
 func TestRulepack_ValidatesViaSemgrepCLI(t *testing.T) {
-	bin, err := exec.LookPath("semgrep")
-	if err != nil {
-		t.Skip("semgrep not on PATH; skipping --validate check")
-	}
+	bin := requireSemgrep(t)
 	resetRulesCacheForTesting()
 	dir, err := ensureRules()
 	if err != nil {

@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -72,9 +71,7 @@ const (
 // still be reported once. (The twin collapse alone is pinned by
 // TestCollapseMergesTaintRuleAndSinkTwin.)
 func TestSemgrepTaintAndSinkTwinReportOnceFromBareExec(t *testing.T) {
-	if _, err := exec.LookPath("semgrep"); err != nil {
-		t.Skip("semgrep not on PATH")
-	}
+	requireSemgrep(t)
 	tree := t.TempDir()
 	src := `import { exec } from "child_process";
 import express from "express";
@@ -226,9 +223,7 @@ func TestMixedLanguageTreeReportsEachSinkOnce(t *testing.T) {
 // report the TypeScript and Go sinks, and the collapse must keep one finding
 // that still carries the proof.
 func TestMixedLanguageTreeKeepsSemgrepTaintProofWhenGateIsOpen(t *testing.T) {
-	if _, err := exec.LookPath("semgrep"); err != nil {
-		t.Skip("semgrep not on PATH")
-	}
+	requireSemgrep(t)
 	orig := semgrep.ReachabilityLanguages
 	semgrep.ReachabilityLanguages = map[string]bool{"javascript": true, "typescript": true, "go": true}
 	t.Cleanup(func() { semgrep.ReachabilityLanguages = orig })

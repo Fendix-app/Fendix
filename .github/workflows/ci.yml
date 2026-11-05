@@ -177,16 +177,23 @@ jobs:
         with:
           python-version: "3.11"
 
+      # The locked, hashed set the images and the parity gate install, not
+      # the unpinned python/requirements.txt: this job must run the Semgrep
+      # that ships.
       - name: Install Python runtime dependencies
-        run: pip install -r python/requirements.txt
+        run: pip install --require-hashes -r python/requirements.lock
 
-      # The rule-behaviour tests need semgrep and skip without it, which is
-      # every runner of the go job. This job installs it (python/requirements.txt),
-      # so run them here and fail rather than skip if it is missing.
-      - name: Semgrep rule-behaviour tests
+      # The semgrep-dependent tests skip without Semgrep, which is every
+      # runner of the go job: the rule-behaviour tests of the semgrep package
+      # and the engine package's mixed-language, JavaScript-fallback and
+      # tagged-template tests. This job installs Semgrep and the Python engine's
+      # dependencies (python/requirements.lock), so it runs them here with
+      # FENDIX_REQUIRE_SEMGREP=1, which makes each fail instead of skip when
+      # Semgrep or the Python engine did not run.
+      - name: Semgrep-dependent tests (semgrep and engine packages)
         env:
           FENDIX_REQUIRE_SEMGREP: "1"
-        run: cd go && go test -count=1 ./internal/scanner/semgrep/
+        run: cd go && go test -count=1 ./internal/scanner/semgrep/ ./internal/engine/
 
       - name: Run e2e tests
         run: make e2e
@@ -202,17 +209,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Same exact patch as the release build (see the go job); `make parity`
       # builds bin/fendix-parity from source with it.
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.3"
 
       # 3.11 is the version python/requirements.lock was compiled with;
       # `make parity-venv` installs it with --require-hashes.
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
@@ -224,9 +231,9 @@ jobs:
       # upload-artifact skips unless include-hidden-files is set.
       - name: Upload parity results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: framework-parity-${{ github.run_id }}
+          name: framework-parity-${{ github.run_id }}-${{ github.run_attempt }}
           path: .parity/results.json
           include-hidden-files: true
           retention-days: 30

@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -96,9 +95,7 @@ func TestDropFallbackJSPatternsKeepsThemWhileTheJSGateIsClosed(t *testing.T) {
 // Python engine's dependencies (the semgrep-enabled CI job has both).
 func TestJSSQLTemplateSinkSeenByBothEnginesReportsOnce(t *testing.T) {
 	openJSGate(t)
-	if _, err := exec.LookPath("semgrep"); err != nil {
-		t.Skip("semgrep not on PATH")
-	}
+	requireSemgrep(t)
 	src := "import express from \"express\";\n" +
 		"import { Pool } from \"pg\";\n" +
 		"const pool = new Pool();\n" +
@@ -122,10 +119,10 @@ func TestJSSQLTemplateSinkSeenByBothEnginesReportsOnce(t *testing.T) {
 	NewOrchestrator(cfg, "dev").Run(context.Background())
 	report := readReport(t, out)
 	if st, ok := statusFor(report, "python-engine"); !ok || st.State != reporters.ScannerOK {
-		t.Skipf("python engine did not run: %+v", st)
+		skipUnlessRequired(t, "the python engine did not run: %+v", st)
 	}
 	if st, ok := statusFor(report, "semgrep"); !ok || st.State != reporters.ScannerOK {
-		t.Skipf("semgrep did not run cleanly: %+v", st)
+		skipUnlessRequired(t, "semgrep did not run cleanly: %+v", st)
 	}
 	var atSink []string
 	for _, f := range report.Findings {
@@ -158,7 +155,7 @@ func TestJSSQLTemplateFallbackReportsWithoutSemgrep(t *testing.T) {
 	NewOrchestrator(cfg, "dev").Run(context.Background())
 	report := readReport(t, out)
 	if st, ok := statusFor(report, "python-engine"); !ok || st.State != reporters.ScannerOK {
-		t.Skipf("python engine did not run: %+v", st)
+		skipUnlessRequired(t, "the python engine did not run: %+v", st)
 	}
 	found := false
 	for _, f := range report.Findings {
