@@ -214,7 +214,7 @@ JavaScript, Java and Go rules (`native_go`, rank 2) on the same lines.
   took 1.52 s without the flag and 1.55 s with it, and one run per framework
   directory (nine runs) took 9.29 s and 9.61 s in total. With a taint rule
   added the totals were 9.63 s and 9.91 s. That is about 3%, within the
-  run-to-run spread, and far inside the 120 s timeout.
+  run-to-run spread, and far inside the 300 s timeout.
 - `semgrep_taint` is a new value of the published `source_tier` enum
   (`docs/schema.json`, `docs/reporting-contract.json`). The change is
   additive, but `fendix_frontend` needs a `npm run docs:contracts:sync`
