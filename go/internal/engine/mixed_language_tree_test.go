@@ -64,10 +64,13 @@ const (
 	goSink = "api/db.go:11"
 )
 
-// A bare exec(...) import is not a textscan pattern (JS_CHILD_PROCESS_SHELL
-// wants child_process.exec), so on this line only Semgrep reports: its taint
-// rule and its -sink twin. With the taint gate closed both are semgrep_shim,
-// and the line was reported twice before ruling R-pf83.
+// A bare exec(...) import used to be reported only by Semgrep (its taint rule
+// and its -sink twin), and with the taint gate closed both were semgrep_shim, so
+// the line was reported twice before ruling R-pf83. JS_CHILD_PROCESS_SHELL now
+// also matches a destructured exec( in a file that imports child_process, so
+// textscan, the taint rule and the sink twin all describe this line: it must
+// still be reported once. (The twin collapse alone is pinned by
+// TestCollapseMergesTaintRuleAndSinkTwin.)
 func TestSemgrepTaintAndSinkTwinReportOnceFromBareExec(t *testing.T) {
 	if _, err := exec.LookPath("semgrep"); err != nil {
 		t.Skip("semgrep not on PATH")
@@ -99,8 +102,11 @@ app.get("/ping", (req, res) => {
 		}
 		t.Fatalf("server.ts:8 reported %d times %v, want once", len(fs), ids)
 	}
-	if fs[0].RuleID != "js-cmdi-taint" {
-		t.Errorf("kept %q, want the taint member js-cmdi-taint", fs[0].RuleID)
+	// The native textscan member outranks a Semgrep warning (the taint gate
+	// is closed), so it is the one kept; the taint member is kept when it
+	// wins. Either is one finding; a Semgrep sink twin alone is not.
+	if r := fs[0].RuleID; r != "js-cmdi-taint" && r != "JS_CHILD_PROCESS_SHELL" {
+		t.Errorf("kept %q, want js-cmdi-taint or JS_CHILD_PROCESS_SHELL", r)
 	}
 }
 
