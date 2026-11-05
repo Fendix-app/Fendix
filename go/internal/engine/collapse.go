@@ -3,6 +3,7 @@ package engine
 import (
 	"log/slog"
 	"sort"
+	"strings"
 
 	"github.com/Fendix-app/Fendix/go/internal/models"
 )
@@ -35,7 +36,10 @@ import (
 //     distinct HTTP observations);
 //   - correlated findings are untouched (they already represent a merge, and
 //     collapsing them could drop the half that carries the taint chain);
-//   - a group with a single member is returned verbatim.
+//   - a group with a single member is returned verbatim;
+//   - one exception to "cross-tier only": a Semgrep <base>-taint finding and
+//     its <base>-sink twin on one line collapse even within one tier, because
+//     they are one sink seen by two rules (see semgrepTwinSinks).
 //
 // Runs BEFORE Deduplicate, while each finding is still one (endpoint, title)
 // pair — afterwards the endpoint sets have already been merged and the
@@ -75,12 +79,36 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 		groups[k] = append(groups[k], i)
 	}
 
+	// A Semgrep taint rule and its -sink twin on one line are one sink even
+	// when both are the same tier (gate closed). Drop each twin sink now, so
+	// the tier logic below sees the group without it.
+	twinSink := make(map[int]int) // dropped sink index -> the taint member that absorbs it
+	for _, k := range order {
+		for sink, taint := range semgrepTwinSinks(findings, groups[k]) {
+			twinSink[sink] = taint
+		}
+	}
+	if len(twinSink) > 0 {
+		for _, k := range order {
+			live := make([]int, 0, len(groups[k]))
+			for _, i := range groups[k] {
+				if _, dropped := twinSink[i]; !dropped {
+					live = append(live, i)
+				}
+			}
+			groups[k] = live
+		}
+	}
+
 	// winner[i] is true when finding i survives its group.
 	winner := make([]bool, len(findings))
 	extraRefs := make(map[int][]string)
 	// proofFrom[best] is the group member whose taint proof the winner adopts.
 	proofFrom := make(map[int]int)
-	collapsed := 0
+	collapsed := len(twinSink)
+	for sink, taint := range twinSink {
+		extraRefs[taint] = append(extraRefs[taint], findings[sink].References...)
+	}
 	for _, k := range order {
 		idxs := groups[k]
 		// CROSS-TIER ONLY. Two findings from the SAME analyzer at one location
@@ -216,4 +244,56 @@ func proofDonor(findings []models.Finding, idxs []int, rep int) (int, bool) {
 		}
 	}
 	return donor, found
+}
+
+const (
+	twinTaintSuffix = "-taint"
+	twinSinkSuffix  = "-sink"
+)
+
+// semgrepTwinSinks finds, within one (category, location) group, the Semgrep
+// -sink findings whose -taint twin (same rule base: js-cmdi-taint and
+// js-cmdi-sink) is also in the group. It returns each such sink index mapped
+// to the taint member that represents the pair (ruling R-pf83).
+//
+// The pair is one sink seen by two rules: the taint rule proves a request
+// source reaches it, the sink rule matches the same call by shape. Only an
+// exact base match pairs, so js-cmdi-taint beside js-ssti-sink or
+// js-ssti-taint stays two findings. The taint member is kept untouched, so its
+// severity (never raised by the twin) and fingerprint are unchanged. With
+// several taint members of one base, the findingLess minimum represents the
+// pair, so the result does not depend on input order (F-L6).
+func semgrepTwinSinks(findings []models.Finding, idxs []int) map[int]int {
+	if len(idxs) < 2 {
+		return nil
+	}
+	taintOf := map[string]int{} // base -> representative taint member
+	for _, i := range idxs {
+		f := findings[i]
+		base, ok := strings.CutSuffix(f.RuleID, twinTaintSuffix)
+		if !ok || base == "" || !f.SourceTier.IsSemgrep() {
+			continue
+		}
+		if cur, seen := taintOf[base]; !seen || findingLess(f, findings[cur]) {
+			taintOf[base] = i
+		}
+	}
+	if len(taintOf) == 0 {
+		return nil
+	}
+	var out map[int]int
+	for _, i := range idxs {
+		f := findings[i]
+		base, ok := strings.CutSuffix(f.RuleID, twinSinkSuffix)
+		if !ok || !f.SourceTier.IsSemgrep() {
+			continue
+		}
+		if taint, paired := taintOf[base]; paired {
+			if out == nil {
+				out = map[int]int{}
+			}
+			out[i] = taint
+		}
+	}
+	return out
 }

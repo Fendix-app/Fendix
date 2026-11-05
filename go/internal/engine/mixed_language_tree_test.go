@@ -64,6 +64,46 @@ const (
 	goSink = "api/db.go:11"
 )
 
+// A bare exec(...) import is not a textscan pattern (JS_CHILD_PROCESS_SHELL
+// wants child_process.exec), so on this line only Semgrep reports: its taint
+// rule and its -sink twin. With the taint gate closed both are semgrep_shim,
+// and the line was reported twice before ruling R-pf83.
+func TestSemgrepTaintAndSinkTwinReportOnceFromBareExec(t *testing.T) {
+	if _, err := exec.LookPath("semgrep"); err != nil {
+		t.Skip("semgrep not on PATH")
+	}
+	tree := t.TempDir()
+	src := `import { exec } from "child_process";
+import express from "express";
+
+const app = express();
+
+app.get("/ping", (req, res) => {
+  const host = req.query.host as string;
+  exec("ping -c 1 " + host, (err, out) => res.send(out));
+});
+`
+	if err := os.WriteFile(filepath.Join(tree, "server.ts"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "report.json")
+	cfg := &models.ScanConfig{CodePath: tree, Workers: 1, Timeout: 60, Format: "json", OutputPath: out}
+	if code := NewOrchestrator(cfg, "dev").Run(context.Background()); code != 0 {
+		t.Fatalf("scan exit = %d, want 0", code)
+	}
+	fs := injectionBySink(readReport(t, out))["server.ts:8"]
+	if len(fs) != 1 {
+		ids := make([]string, len(fs))
+		for i, f := range fs {
+			ids[i] = f.RuleID
+		}
+		t.Fatalf("server.ts:8 reported %d times %v, want once", len(fs), ids)
+	}
+	if fs[0].RuleID != "js-cmdi-taint" {
+		t.Errorf("kept %q, want the taint member js-cmdi-taint", fs[0].RuleID)
+	}
+}
+
 // scanMixedTree runs the whole orchestrator over mixedTree and returns the
 // report, plus whether the Python engine ran (it needs its dependencies).
 func scanMixedTree(t *testing.T) (reporters.JSONReport, bool) {

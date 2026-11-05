@@ -1387,6 +1387,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Semgrep taint rule and its sink twin on one line are reported once.**
+  With the taint gate closed, `js-cmdi-taint` and `js-cmdi-sink` (and the
+  other `<base>-taint` / `<base>-sink` pairs of the JavaScript, Java and Go
+  packs) both report as `semgrep_shim` findings, so one `exec("ping " + host)`
+  showed twice. The pair now collapses into the taint finding, with the sink
+  rule's references folded in. Severity is never raised, the taint finding's
+  fingerprint is unchanged, and two different rule bases on one line stay two
+  findings.
 - **A proven taint chain survives when two analyzers report the same line.**
   When textscan and a taint analyzer both flagged one sink, the collapse kept
   the textscan finding on a tie and dropped the other member's taint chain,

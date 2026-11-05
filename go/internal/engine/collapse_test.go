@@ -270,3 +270,91 @@ func TestCollapseKeepsReachableWhenNoChainExists(t *testing.T) {
 		}
 	}
 }
+
+// A Semgrep taint rule and its -sink twin (ruling R-pf83) describe one sink.
+// With the taint gate closed both are semgrep_shim, so the cross-tier rule
+// never merged them and the line was reported twice.
+func ruleAt(rule, endpoint, title string, sev models.Severity, tier models.SourceTier) models.Finding {
+	f := wbAt("injection", endpoint, title, sev, tier)
+	f.RuleID = rule
+	return f
+}
+
+func TestCollapseMergesTaintRuleAndSinkTwin(t *testing.T) {
+	taint := ruleAt("js-cmdi-taint", "web/server.ts:8", "Request input reaches a shell command", models.SeverityHigh, models.TierSemgrepShim)
+	taint.References = []string{"CWE-78"}
+	sink := ruleAt("js-cmdi-sink", "web/server.ts:8", "A shell command built from a non-constant value", models.SeverityCritical, models.TierSemgrepShim)
+	sink.References = []string{"CWE-77"}
+
+	for name, in := range map[string][]models.Finding{
+		"taint first": {taint, sink},
+		"sink first":  {sink, taint},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := CollapseDuplicateLocations(in)
+			if len(got) != 1 {
+				t.Fatalf("got %d findings %v, want the twins collapsed into one", len(got), collapseTitles(got))
+			}
+			if got[0].RuleID != "js-cmdi-taint" || got[0].Title != taint.Title {
+				t.Errorf("kept %s %q, want the taint member", got[0].RuleID, got[0].Title)
+			}
+			if got[0].Severity != models.SeverityHigh {
+				t.Errorf("severity = %s, want the taint member's HIGH (never raised by the sink twin)", got[0].Severity)
+			}
+			if joined := strings.Join(got[0].References, ","); !strings.Contains(joined, "CWE-77") || !strings.Contains(joined, "CWE-78") {
+				t.Errorf("references = %v, want both CWEs kept", got[0].References)
+			}
+		})
+	}
+}
+
+// The twin collapse keeps the taint member's proof and identity fields as they
+// are, in both tier states, and a lone sink or lone taint finding is untouched.
+func TestCollapseTwinKeepsTaintMemberUnchanged(t *testing.T) {
+	chain := []models.TaintLink{{File: "a.go", Line: 9, Expr: "db.Query(q)"}}
+	taint := ruleAt("go-sqli-taint", "a.go:9", "taint", models.SeverityCritical, models.TierSemgrepTaint)
+	taint.Reachable, taint.TaintChain, taint.Sink, taint.Fingerprint = true, chain, "db.Query(q)", "fp-taint"
+	sink := ruleAt("go-sqli-sink", "a.go:9", "sink", models.SeverityMedium, models.TierSemgrepShim)
+
+	got := CollapseDuplicateLocations([]models.Finding{sink, taint})
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1", len(got))
+	}
+	want := taint
+	got[0].References, want.References = nil, nil
+	if !reflect.DeepEqual(got[0], want) {
+		t.Errorf("taint member changed by the collapse:\n got %+v\nwant %+v", got[0], want)
+	}
+
+	for _, one := range []models.Finding{sink, taint} {
+		if got := CollapseDuplicateLocations([]models.Finding{one}); len(got) != 1 {
+			t.Errorf("lone %s dropped", one.RuleID)
+		}
+	}
+}
+
+// Only a -taint and -sink pair of ONE base merge. Two different bases on a line
+// (a command-injection and a template-injection match) are two issues, and a
+// taint rule next to another base's sink is not a twin either.
+func TestCollapseDoesNotMergeDifferentRuleBases(t *testing.T) {
+	cmdi := ruleAt("js-cmdi-taint", "a.ts:5", "cmdi", models.SeverityHigh, models.TierSemgrepShim)
+	ssti := ruleAt("js-ssti-taint", "a.ts:5", "ssti", models.SeverityHigh, models.TierSemgrepShim)
+	sstiSink := ruleAt("js-ssti-sink", "a.ts:5", "ssti-sink", models.SeverityHigh, models.TierSemgrepShim)
+
+	if got := CollapseDuplicateLocations([]models.Finding{cmdi, ssti}); len(got) != 2 {
+		t.Errorf("js-cmdi-taint + js-ssti-taint: got %d findings %v, want both kept", len(got), collapseTitles(got))
+	}
+	if got := CollapseDuplicateLocations([]models.Finding{cmdi, sstiSink}); len(got) != 2 {
+		t.Errorf("js-cmdi-taint + js-ssti-sink: got %d findings %v, want both kept", len(got), collapseTitles(got))
+	}
+	// A sink with no taint twin on its line stays, and so do two sinks.
+	other := ruleAt("js-xss-sink", "a.ts:5", "xss-sink", models.SeverityHigh, models.TierSemgrepShim)
+	if got := CollapseDuplicateLocations([]models.Finding{sstiSink, other}); len(got) != 2 {
+		t.Errorf("two sinks of different bases: got %d, want both kept", len(got))
+	}
+	// Different file lines never pair.
+	far := ruleAt("js-ssti-sink", "a.ts:6", "ssti-sink-6", models.SeverityHigh, models.TierSemgrepShim)
+	if got := CollapseDuplicateLocations([]models.Finding{ssti, far}); len(got) != 2 {
+		t.Errorf("taint and sink on different lines: got %d, want both kept", len(got))
+	}
+}
