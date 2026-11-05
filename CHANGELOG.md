@@ -1387,6 +1387,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The regex scanner no longer flags SQL and exec calls built only from
+  file constants.** `GO_SQL_INJECTION`, `GO_EXEC_COMMAND_INJECTION` and
+  `JAVA_EXEC_COMMAND_INJECTION` skip a call when every value interpolated into
+  it (a `+` operand, or a `fmt.Sprintf` argument after the format string) is a
+  string constant declared in the same file: Go `const X = "..."` (alone or in
+  a `const ( ... )` block) or Java `static final String X = "...";`. A `var`, a
+  non-final field, a call, a field access or any mix with a variable still
+  fires. This removes the false positives on `db.Query(fmt.Sprintf("... FROM
+  %s", usersTable))` and `sh -c "df -h " + dataVolume`.
 - **The regex scanner now matches calls whose arguments contain a nested
   call.** `GO_SQL_INJECTION`, `GO_EXEC_COMMAND_INJECTION`,
   `JAVA_EXEC_COMMAND_INJECTION`, `JAVA_SQL_INJECTION`, `JAVA_SSRF`,

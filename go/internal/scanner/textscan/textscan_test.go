@@ -588,3 +588,144 @@ func TestGoRules_NestedPatternStaysLinear(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// File-level constants. A query or command built only from values that are
+// declared as constant strings in the same file cannot carry user input, so it
+// is not reported. (corpus v2 safe_lookalike cases)
+// ---------------------------------------------------------------------------
+
+func TestGoRules_ConstantTableNameIsNotSQLInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "ok.go", `package main
+
+const activeUsersTable = "users"
+
+func h() {
+	rows, err := db.Query(fmt.Sprintf("SELECT id FROM %s WHERE active = true", activeUsersTable))
+}`)
+	if got := mustScan(t, dir, GoRules()); len(got) != 0 {
+		t.Errorf("a Sprintf over a file constant must stay clean, got %+v", got)
+	}
+}
+
+func TestGoRules_ConstantInConstBlockIsNotFlagged(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "ok.go", `package main
+
+const (
+	other      = 3
+	dataVolume string = "/data" // mount point
+)
+
+func h() {
+	out, err := exec.Command("sh", "-c", "df -h "+dataVolume).CombinedOutput()
+}`)
+	if got := mustScan(t, dir, GoRules()); len(got) != 0 {
+		t.Errorf("a const-block constant must stay clean, got %+v", got)
+	}
+}
+
+func TestGoRules_ShellWithConstantOperandIsNotCommandInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "ok.go", `package main
+
+const dataVolume = "/data"
+
+func h() {
+	out, err := exec.Command("sh", "-c", "df -h "+dataVolume).CombinedOutput()
+}`)
+	if got := mustScan(t, dir, GoRules()); len(got) != 0 {
+		t.Errorf("sh -c over a file constant must stay clean, got %+v", got)
+	}
+}
+
+func TestJavaRules_StaticFinalOperandIsNotCommandInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Ok.java", `public class Ok {
+  private static final String DATA_DIR = "/data";
+  void run() throws Exception {
+    Runtime.getRuntime().exec(new String[]{"sh","-c","du -sh " + DATA_DIR});
+  }
+}`)
+	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
+		t.Errorf("a static final String operand must stay clean, got %+v", got)
+	}
+}
+
+func TestGoRules_ConstantMixedWithVariableStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", `package main
+
+const prefix = "df -h "
+
+func h(vol string) {
+	out, err := exec.Command("sh", "-c", prefix+vol).CombinedOutput()
+	rows, err := db.Query(fmt.Sprintf("SELECT id FROM %s WHERE n = '%s'", prefix, vol))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_EXEC_COMMAND_INJECTION"]) != 1 || len(by["GO_SQL_INJECTION"]) != 1 {
+		t.Errorf("a constant mixed with a variable must still fire: exec=%d sql=%d", len(by["GO_EXEC_COMMAND_INJECTION"]), len(by["GO_SQL_INJECTION"]))
+	}
+}
+
+func TestGoRules_VarDeclarationStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", `package main
+
+var activeUsersTable = "users"
+
+func h() {
+	rows, err := db.Query(fmt.Sprintf("SELECT id FROM %s", activeUsersTable))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_SQL_INJECTION"]) != 1 {
+		t.Errorf("a var (not const) must still fire, got %d", len(by["GO_SQL_INJECTION"]))
+	}
+}
+
+func TestJavaRules_NonFinalFieldOperandStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Bad.java", `public class Bad {
+  private static String DATA_DIR = "/data";
+  void run() throws Exception {
+    Runtime.getRuntime().exec(new String[]{"sh","-c","du -sh " + DATA_DIR});
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_EXEC_COMMAND_INJECTION"]) != 1 {
+		t.Errorf("a non-final field must still fire, got %d", len(by["JAVA_EXEC_COMMAND_INJECTION"]))
+	}
+}
+
+func TestInterpolatedIdentsAreFileConstants(t *testing.T) {
+	goSrc := []byte("package x\n\nconst a = \"x\"\nconst (\n\tb = \"y\"\n)\nvar c = \"z\"\nconst n = 3\n")
+	javaSrc := []byte("class X {\n  static final String A = \"x\";\n  final static String B = \"y\";\n  static String C = \"z\";\n}\n")
+	cases := []struct {
+		name string
+		line string
+		src  []byte
+		lang string
+		want bool
+	}{
+		{"go sprintf const", `db.Query(fmt.Sprintf("S %s", a))`, goSrc, "go", true},
+		{"go concat consts", `exec.Command("sh", "-c", "x "+a+" "+b)`, goSrc, "go", true},
+		{"go sprintf var", `db.Query(fmt.Sprintf("S %s", c))`, goSrc, "go", false},
+		{"go sprintf param", `db.Query(fmt.Sprintf("S %s", id))`, goSrc, "go", false},
+		{"go sprintf call arg", `db.Query(fmt.Sprintf("S %s", r.URL.Query().Get("x")))`, goSrc, "go", false},
+		{"go numeric const is not a string const", `db.Query("S " + n)`, goSrc, "go", false},
+		{"go no operands", `exec.Command("sh", "-c", cmd)`, goSrc, "go", false},
+		{"go literal operand only", `exec.Command("sh", "-c", "a"+"b")`, goSrc, "go", true},
+		{"java concat final", `exec("x " + A)`, javaSrc, "java", true},
+		{"java final static order", `exec("x " + B)`, javaSrc, "java", true},
+		{"java non-final", `exec("x " + C)`, javaSrc, "java", false},
+		{"java mixed", `exec("x " + A + host)`, javaSrc, "java", false},
+		{"java qualified name", `exec("x " + Other.A)`, javaSrc, "java", false},
+		{"plus inside a string is not an operator", `exec("a + b", host)`, javaSrc, "java", false},
+	}
+	for _, c := range cases {
+		if got := interpolatedIdentsAreFileConstants(c.line, c.src, c.lang); got != c.want {
+			t.Errorf("%s: interpolatedIdentsAreFileConstants(%q) = %v; want %v", c.name, c.line, got, c.want)
+		}
+	}
+}

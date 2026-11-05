@@ -78,6 +78,12 @@ type Rule struct {
 	// matches an md5/sha1 CALL, not a credential, and blanking that would
 	// destroy the only useful part of its evidence.
 	RedactMatch bool
+	// ConstArgSafe drops a match whose interpolated values are all
+	// file-level constant strings (see interpolatedIdentsAreFileConstants):
+	// `db.Query(fmt.Sprintf("... FROM %s", usersTable))` with
+	// `const usersTable = "users"` cannot carry user input. Set it on the
+	// injection rules whose Pattern fires on any `+` or Sprintf.
+	ConstArgSafe bool
 	// Applies returns true when path falls under this rule's
 	// language-extension set.
 	Applies func(path string) bool
@@ -459,6 +465,17 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20) // 1 MiB max line
 
+	// File-level string constants, read lazily and once: only a line that
+	// already matched a ConstArgSafe rule needs them.
+	var fileConsts map[string]struct{}
+	constsOf := func() map[string]struct{} {
+		if fileConsts == nil {
+			src, _ := os.ReadFile(path)
+			fileConsts = fileStringConstants(src, langOf(path))
+		}
+		return fileConsts
+	}
+
 	var findings []evidence.Evidence
 	lineNo := 0
 	for sc.Scan() {
@@ -475,6 +492,9 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 				continue
 			}
 			if r.NegPattern != nil && r.NegPattern.MatchString(line) {
+				continue
+			}
+			if r.ConstArgSafe && operandsAreConstants(line, constsOf()) {
 				continue
 			}
 			// Per-line suppression runs LAST, after Pattern and NegPattern,

@@ -45,9 +45,10 @@ func GoRules() []Rule {
 			// The "query built one line earlier and passed as a bare
 			// identifier" case is the dominant real-world shape but
 			// needs taint analysis — carried to Sprint 04.5.
-			Pattern: regexp.MustCompile(`(?:db|conn|tx)\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\(` + callArgs + `(?:\+|%[sv]|fmt\.Sprintf)`),
-			Applies: HasGoExtension,
-			Fix:     "Use parameterised queries: db.Query(\"SELECT … WHERE x = ?\", value). Never concatenate or fmt.Sprintf user-controlled values into SQL.",
+			Pattern:      regexp.MustCompile(`(?:db|conn|tx)\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\(` + callArgs + `(?:\+|%[sv]|fmt\.Sprintf)`),
+			ConstArgSafe: true,
+			Applies:      HasGoExtension,
+			Fix:          "Use parameterised queries: db.Query(\"SELECT … WHERE x = ?\", value). Never concatenate or fmt.Sprintf user-controlled values into SQL.",
 		},
 		{
 			ID:         "GO_EXEC_COMMAND_INJECTION",
@@ -60,9 +61,10 @@ func GoRules() []Rule {
 			//   1. exec.Command("sh","-c", …) / bash / cmd / powershell — shell semantics.
 			//   2. exec.Command(…) with `+` concat anywhere in the argv list.
 			//   3. exec.Command(…) with fmt.Sprintf building an argv element.
-			Pattern: regexp.MustCompile(`exec\.(?:Command|CommandContext)\(` + callArgs + `(?:"(?:sh|bash|cmd|powershell)"\s*,\s*"-c"|\+|fmt\.Sprintf)`),
-			Applies: HasGoExtension,
-			Fix:     "Pass argv as a list rather than going through `sh -c`. If shell semantics are required, sanitise inputs with shellescape or use os/exec with explicit env+argv.",
+			Pattern:      regexp.MustCompile(`exec\.(?:Command|CommandContext)\(` + callArgs + `(?:"(?:sh|bash|cmd|powershell)"\s*,\s*"-c"|\+|fmt\.Sprintf)`),
+			ConstArgSafe: true,
+			Applies:      HasGoExtension,
+			Fix:          "Pass argv as a list rather than going through `sh -c`. If shell semantics are required, sanitise inputs with shellescape or use os/exec with explicit env+argv.",
 		},
 		{
 			ID:         "GO_WEAK_HASH_PASSWORD",
@@ -206,11 +208,14 @@ func JavaRules() []Rule {
 			CWE:        "CWE-78",
 			// Runtime.getRuntime().exec(...) or new ProcessBuilder(...) whose
 			// argument is built with `+` concat or String.format. FP class:
-			// concat of two constants. FN class: argv built on a prior line
-			// (needs taint, not line-local regex).
-			Pattern: regexp.MustCompile(`(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\(` + callArgs + `(?:\+|String\.format)`),
-			Applies: HasJavaExtension,
-			Fix:     "Pass the command + args as a String[] / List<String> of literals; never build a shell string from user input. If a shell is unavoidable, validate against an allowlist.",
+			// concat of values the file declares as constants is dropped
+			// (ConstArgSafe); a constant defined elsewhere still fires. FN
+			// class: argv built on a prior line (needs taint, not line-local
+			// regex).
+			Pattern:      regexp.MustCompile(`(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\(` + callArgs + `(?:\+|String\.format)`),
+			ConstArgSafe: true,
+			Applies:      HasJavaExtension,
+			Fix:          "Pass the command + args as a String[] / List<String> of literals; never build a shell string from user input. If a shell is unavoidable, validate against an allowlist.",
 		},
 		{
 			ID:         "JAVA_SQL_INJECTION",
