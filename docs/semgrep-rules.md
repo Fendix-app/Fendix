@@ -190,7 +190,19 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
   or length, `Collections.nCopies` of a literal, a stream mapped to a
   literal, a lookup with a literal default in a final `Map.of` of
   literals, or a call of a method of the same class whose every `return`
-  is a literal.
+  is a literal. A same-class helper whose whole body is one `return` of
+  one of these also counts as constant, so the call is clean:
+  `MAP.getOrDefault(k, "lit")`, `MAP.get(k)` or
+  `MAP.containsKey(k) ? MAP.get(k) : "lit"` on a final `Map.of` or
+  `Map.ofEntries` of string literals, or `SET.contains(k) ? k : "lit"` on
+  a final `Set.of` or `List.of` of string literals. A helper with a
+  `HashMap` or non-final map, a non-literal value, a fallback that is the
+  parameter, any other statement, a mixed return, or an overload that
+  returns its argument still reports. Other shapes of a constant helper,
+  such as `if (ALLOWED.contains(k)) return k; return "id";`, also still
+  report: that is a known false-positive class (the call result is
+  tainted because taint does not follow a return), so write the helper as
+  a single `return` or check the value before building the query.
 - **Test code.** Every Java rule carries the same `paths: exclude:` list:
   `**/src/test/**`, `**/src/integrationTest/**`, `**/src/testFixtures/**`,
   `**/src/it/**`, `*Test.java`, `*Tests.java`, `*IT.java`, `**/mock/**`,

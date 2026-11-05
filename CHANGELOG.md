@@ -699,8 +699,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     confidence, the same as `python-random-for-token-generation`. Without
     corroboration its findings warn.
   - **Identity.** Its findings are new, with a new SARIF `ruleId`,
-    `python-random-token-assignment`. The rule pack has 23 rules, and the
-    security catalog lists 106 checks.
+    `python-random-token-assignment`. With this rule the pack had 23 rules
+    and the security catalog 106 checks; later entries add more.
 
 - **A Python sink in a helper is now proven when a view in another module
   passes it request input.** The one-hop helper check followed a helper's
@@ -1040,7 +1040,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       mapped to a literal (IN-list placeholders), a `get` or a
       `getOrDefault` with a literal default on a final `Map.of` or
       `Map.ofEntries` of literals, and a call of a method of the same class
-      whose every `return` is a literal (or a choice between two literals).
+      whose every `return` is a literal (or a choice between two literals),
+      or whose whole body is one `return` of a constant lookup: a final
+      `Map.of`/`Map.ofEntries` of string literals read with `getOrDefault`
+      (literal default), `get`, or `containsKey(k) ? get(k) : "lit"`, or
+      `SET.contains(k) ? k : "lit"` on a final `Set.of` or `List.of` of
+      string literals. Such a helper used to leave the call tainted, which
+      blocked a build on `ORDER BY " + col(sort)`. A helper on a `HashMap`
+      or non-final map, with a fallback that is the parameter, with another
+      statement, or with a mixed return still reports, as does the
+      `if (ALLOWED.contains(k)) return k; return "id";` form (a known
+      false positive).
       `"... ORDER BY " + sort` and `String.join(",", ids)` stay reported.
     - Test, fixture and mock code: every Java rule skips `src/test`,
       `src/integrationTest`, `src/testFixtures` and `src/it`, files named

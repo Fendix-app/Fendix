@@ -28,7 +28,10 @@
 # A SQL identifier (a sort column, a direction, IN-list placeholders) is not
 # request text when it is a count, copies or a stream map of a literal, a
 # lookup in a final map of literals with a literal default, or a call of a
-# method of this class that returns only literals; or when it passed an
+# method of this class that returns only literals or whose whole body is one
+# `return` of such a lookup (a final map's getOrDefault, get, or a
+# containsKey ternary, or `SET.contains(k) ? k : "lit"` on a final Set.of or
+# List.of of literals); or when it passed an
 # allowlist or a set of literals (a membership or negated-equalities check
 # that exits or replaces it with a literal, a ternary, or a switch that
 # replaces it in its default). java-sqli-sink carries the same guards as
@@ -525,6 +528,87 @@ rules:
                 - metavariable-regex:
                     metavariable: $GRET
                     regex: '(?s)^(?!"[^"\\\n]*"$)(?![^?]*\?\s*"[^"\\\n]*"\s*:\s*"[^"\\\n]*"$)'
+      # A call of a method of this class whose whole body is one `return` of a
+      # constant lookup: a final map of literals read with a literal default
+      # (or by get, or behind containsKey), or a final set or list of literals
+      # that the argument is checked against before it is returned. The result
+      # is then one of the literals, but taint does not follow a return, so the
+      # call must be cleaned here. The body is matched whole (`{ return ...; }`
+      # with no `...` around it), as in the literal-helper block above, so the
+      # cost stays one class-wide match per call. Any other method of that name
+      # with a return that is not one of these lookups (an overload that returns
+      # its argument) keeps the call tainted.
+      - patterns:
+          - pattern: $GH(...)
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          class $GC {
+                            ...
+                            $GRT $GH(...) {
+                              return $GM.getOrDefault($GK, "...");
+                            }
+                            ...
+                          }
+                      - pattern-inside: |
+                          class $GC {
+                            ...
+                            $GRT $GH(...) {
+                              return $GM.get($GK);
+                            }
+                            ...
+                          }
+                      - pattern-inside: |
+                          class $GC {
+                            ...
+                            $GRT $GH(...) {
+                              return $GM.containsKey($GK) ? $GM.get($GK2) : "...";
+                            }
+                            ...
+                          }
+                  - pattern-inside: |
+                      class $GC {
+                        ...
+                        final $GMT $GM = $GMINIT;
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $GMINIT
+                      regex: '(?s)^(?:Map|ImmutableMap)\s*\.\s*of\s*\(\s*(?:"[^"\\\n]*"\s*(?:,\s*"[^"\\\n]*"\s*)*)?\)$|^Map\s*\.\s*ofEntries\s*\(\s*(?:(?:Map\s*\.\s*)?entry\s*\(\s*"[^"\\\n]*"\s*,\s*"[^"\\\n]*"\s*\)\s*(?:,\s*(?:Map\s*\.\s*)?entry\s*\(\s*"[^"\\\n]*"\s*,\s*"[^"\\\n]*"\s*\)\s*)*)?\)$'
+              - patterns:
+                  - pattern-inside: |
+                      class $GC {
+                        ...
+                        $GRT $GH(...) {
+                          return $GS.contains($GP) ? $GP : "...";
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $GC {
+                        ...
+                        final $GST $GS = $GSINIT;
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $GSINIT
+                      regex: '(?s)^(?:Set|List|ImmutableSet|ImmutableList)\s*\.\s*of\s*\(\s*(?:"[^"\\\n]*"\s*(?:,\s*"[^"\\\n]*"\s*)*)?\)$'
+          - pattern-not:
+              patterns:
+                - pattern: $GH(...)
+                - pattern-inside: |
+                    class $GC {
+                      ...
+                      $GRT $GH(...) {
+                        ...
+                        return $GRET;
+                      }
+                      ...
+                    }
+                - metavariable-regex:
+                    metavariable: $GRET
+                    regex: '(?s)^(?!\s*\w+\s*\.\s*getOrDefault\s*\((?:[^()"]|"[^"\\\n]*"|\((?:[^()"]|"[^"\\\n]*")*\))*,\s*"[^"\\\n]*"\s*\)\s*$)(?!\s*\w+\s*\.\s*get\s*\((?:[^()"]|"[^"\\\n]*"|\((?:[^()"]|"[^"\\\n]*")*\))*\)\s*$)(?!\s*\w+\s*\.\s*containsKey\s*\((?:[^()"]|"[^"\\\n]*"|\((?:[^()"]|"[^"\\\n]*")*\))*\)\s*\?\s*\w+\s*\.\s*get\s*\((?:[^()"]|"[^"\\\n]*"|\((?:[^()"]|"[^"\\\n]*")*\))*\)\s*:\s*"[^"\\\n]*"\s*$)(?!\s*\w+\s*\.\s*contains\s*\(((?:[^()"]|"[^"\\\n]*"|\((?:[^()"]|"[^"\\\n]*")*\))*)\)\s*\?\s*\1\s*:\s*"[^"\\\n]*"\s*$)'
       # An identifier checked against an allowlist or a set of literals: the
       # same guards as java-sqli-sink's negations.
       - patterns:

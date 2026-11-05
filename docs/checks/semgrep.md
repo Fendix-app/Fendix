@@ -1,7 +1,7 @@
 # Semgrep Rules Check
 
 **Engine:** Go (white-box) — `go/internal/scanner/semgrep/`, native since TASK-116
-**Category:** `semgrep` (rules carry `metadata.category`: `auth`, `injection`, `secrets`)
+**Category:** `semgrep` (rules carry `metadata.category`: `auth`, `injection`, `secrets`, `xss`, `crypto`)
 **Default severity:** Varies by rule (`metadata.fendix_severity`)
 **Active probing:** No (static analysis)
 

@@ -8,12 +8,16 @@ import (
 	"time"
 )
 
-// largeSpringController writes a Spring controller of about 2,000 lines: one
+// largeSpringController writes a Spring controller of about 2,300 lines: one
 // handler that concatenates @RequestParam into SQL (the line ending in
 // "// SQLI"), then 120 handlers, each with a constant-column helper (a switch,
-// a map lookup or a literal return), a guard, a parameterized query and a
-// response. It is the shape of a real controller, and the size at which a
-// sanitiser or helper-hop construction that spans the file goes superlinear.
+// a helper that returns a lookup in a final map of literals, or a literal
+// return), a guard, a query that orders by the helper's result and a response.
+// The helpers are all constant, so only the first handler is a finding; the
+// line ending in "// CONST" marks the 40 handlers of the map-lookup helper,
+// the shape the pack cleans with a class-wide match per call. It is the shape
+// of a real controller, and the size at which a sanitiser or helper-hop
+// construction that spans the file goes superlinear.
 func largeSpringController() (src string, sqliLine int) {
 	var b strings.Builder
 	b.WriteString("package app;\n\n")
@@ -45,7 +49,11 @@ func largeSpringController() (src string, sqliLine int) {
 		fmt.Fprintf(&b, "    @GetMapping(\"/items%d/{id}\")\n", i)
 		fmt.Fprintf(&b, "    public ResponseEntity<?> handler%d(@PathVariable Long id, @RequestParam String sort) {\n", i)
 		b.WriteString("        if (id == null) {\n            return ResponseEntity.badRequest().build();\n        }\n")
-		fmt.Fprintf(&b, "        List<Map<String, Object>> rows = jdbcTemplate.queryForList(\"SELECT * FROM items ORDER BY \" + column%d(sort) + \" LIMIT ?\", id);\n", i)
+		mark := ""
+		if i%3 == 0 {
+			mark = " // CONST"
+		}
+		fmt.Fprintf(&b, "        List<Map<String, Object>> rows = jdbcTemplate.queryForList(\"SELECT * FROM items ORDER BY \" + column%d(sort) + \" LIMIT ?\", id);%s\n", i, mark)
 		b.WriteString("        if (rows.isEmpty()) {\n            return ResponseEntity.notFound().build();\n        }\n")
 		b.WriteString("        return ResponseEntity.ok(rows);\n    }\n\n")
 	}
@@ -61,7 +69,9 @@ func largeSpringController() (src string, sqliLine int) {
 
 // The Java packs stay linear on a large controller: with the shipped
 // arguments (--timeout 30 per rule and file), the real SQL injection in a
-// 2,000-line, 241-method controller is reported, no rule times out, and the
+// 2,300-line, 241-method controller is reported, no rule times out, the 40
+// handlers that order by a same-class map-lookup helper are not reported (a
+// helper that returns the lookup is constant, not request text), and the
 // whole bundled pack finishes in under 30 s, the per-rule bound a superlinear
 // rule would hit.
 func TestJavaPackStaysLinearOnALargeController(t *testing.T) {
@@ -88,14 +98,29 @@ func TestJavaPackStaysLinearOnALargeController(t *testing.T) {
 		t.Errorf("rules timed out: %+v", run.Timeouts)
 	}
 	want := fmt.Sprintf("src/main/java/app/ItemController.java:%d", sqliLine)
+	constLines := map[string]bool{}
+	for n, line := range strings.Split(src, "\n") {
+		if strings.HasSuffix(line, "// CONST") {
+			constLines[fmt.Sprintf("src/main/java/app/ItemController.java:%d", n+1)] = true
+		}
+	}
+	if len(constLines) != 40 {
+		t.Fatalf("generated %d map-lookup helper handlers, want 40", len(constLines))
+	}
 	byRule := map[string]int{}
 	found := false
 	for _, f := range run.Findings {
 		byRule[f.RuleID]++
 		found = found || (f.RuleID == "java-sqli-taint" && f.Endpoint == want)
+		if constLines[f.Endpoint] {
+			t.Errorf("%s reported at %s, a query ordered by a constant map-lookup helper", f.RuleID, f.Endpoint)
+		}
 	}
 	if !found {
 		t.Errorf("no java-sqli-taint finding at %s among %d findings", want, len(run.Findings))
+	}
+	if len(run.Findings) != 1 {
+		t.Errorf("%d findings %v, want only the SQL injection at %s", len(run.Findings), byRule, want)
 	}
 	const bound = 30 * time.Second
 	t.Logf("spring: %d lines, %d findings %v, %s", strings.Count(src, "\n"), len(run.Findings), byRule, elapsed.Round(time.Millisecond))
