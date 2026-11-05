@@ -269,8 +269,8 @@ and TypeScript, 20 Java and 38 Go; none over about 300 kLOC) at commit
 `6901cf7`, and triaged every taint-tier finding by reading the handler and
 the helpers it calls (34 in all, no sampling). The decision rule was fixed in
 advance: a language ships blocking only with precision of at least 0.80 on at
-least 10 findings. All three had at least 10 findings and precision far below
-0.80. The outcome does not change if the one unclear Java finding is counted
+least 10 real-world findings. All three languages (JavaScript/TypeScript, Java
+and Go) had at least 10 findings and precision far below 0.80. The outcome does not change if the one unclear Java finding is counted
 as true (0.20), or if every borderline label is flipped.
 
 The three true positives are low impact: one authenticated path traversal

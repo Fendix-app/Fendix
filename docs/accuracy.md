@@ -3,7 +3,7 @@
 > ⚠️ **Historical snapshot — pinned to v0.11.0 (2026-05-13/14).** For current,
 > reproducible numbers on the latest binary see **[BENCHMARKS.md](../BENCHMARKS.md)**,
 > which is the single source of truth and is re-checked in CI. The Track 1
-> synthetic headline below reflects the current binary: **F1 1.000** after the
+> headline on the synthetic Python corpus below reflects the current binary: **F1 1.000** after the
 > v0.27 SSRF taint fix (v0.26 disclosed one multi-hop SSRF false negative; v0.27
 > fixed it). The other tracks remain as captured at v0.11.0.
 
@@ -41,6 +41,45 @@ the [`CHANGELOG.md`](../CHANGELOG.md) entry for the diffs.
 
 ---
 
+## Framework parity: per-framework support and holdout numbers
+
+What it measures: the same vulnerability, in different web frameworks. The corpus is
+`benchmarks/frameworks/` (9 frameworks, 11 vulnerability classes; method in
+[`SPEC.md`](../benchmarks/frameworks/SPEC.md), per-case outcomes in
+[`baseline.json`](../benchmarks/frameworks/baseline.json), report in
+[`RESULTS.md`](../benchmarks/frameworks/RESULTS.md)). Two sets are scored apart:
+
+- **The development corpus.** Rules may be tuned against it, so a development
+  figure is a statement about that corpus only.
+- **The blind holdout.** Labelled cases written by authors who never saw the
+  rules. Public accuracy figures come from this set, or are scoped to the
+  development corpus as below.
+
+| Language | Dev recall | Dev block recall | Blind holdout recall | Real-world blocking precision |
+|---|---|---|---|---|
+| Python (Django, Flask, FastAPI) | 1.000 | 0.944 | 0.756 | n/a |
+| JavaScript / TypeScript (Express, NestJS, Next.js) | 0.889 | 0.194 | 0.689 | 0.08 |
+| Java (Spring) | 0.972 | 0.083 | 0.812 | 0.11 |
+| Go (net/http, Gin) | 1.000 | 0.111 | 0.750 | 0.09 |
+
+- **Holdout recall is lower than dev recall for every language, and the drop
+  exceeds the 0.10 limit in all four.** Python recall on the blind holdout is
+  0.756; use the holdout column for any claim about unseen code.
+- **Python findings are taint-proven, and a proven flow blocks.** Python does
+  not need Semgrep.
+- **JavaScript/TypeScript, Java and Go need Semgrep.** Their taint rules report
+  findings as warnings and do not block CI. Without Semgrep (the standalone
+  binary, or a Homebrew install without Semgrep) only the regex scanner
+  (textscan) runs for them.
+- **Real-world blocking precision is why blocking is off.** The bar is 0.80.
+  Evidence: [`REALWORLD.md`](../benchmarks/frameworks/REALWORLD.md) and
+  [ADR-011](adr/ADR-011-semgrep-taint-reachability.md).
+
+The per-framework class table is in the
+[README](../README.md#language--framework-support).
+
+---
+
 ## Track 1 — Synthetic labeled corpus
 
 56 labeled test cases across 7 detection categories. Each category
@@ -54,15 +93,15 @@ fixtures under
 
 | Metric | Value |
 |---|---:|
-| **F1**          | **1.000** |
-| Precision       | 1.000 |
-| Recall          | 1.000 |
+| **F1** (synthetic Python corpus)          | **1.000** |
+| Precision (synthetic Python corpus)       | 1.000 |
+| Recall (synthetic Python corpus)          | 1.000 |
 | True positives  | 38 / 38 expected |
 | False positives | 0 |
 | False negatives | 0 |
-| Categories at 100 % precision + recall | **7 of 7** |
+| Categories at 100 % precision + recall (synthetic corpus) | **7 of 7** |
 
-> Reproduced on the current binary (2026-06-30) and CI-gated (F1 ≥ 0.99). v0.26
+> Reproduced on the current binary (2026-06-30) and, on the synthetic corpus, CI-gated (F1 ≥ 0.99). v0.26
 > disclosed one multi-hop SSRF false negative (`ssrf.py:19`); v0.27 fixed the
 > taint engine, so it is now detected — a legitimate 1.000, not the stale
 > v0.11.0 claim. See [BENCHMARKS.md](../BENCHMARKS.md).
@@ -105,7 +144,7 @@ Real bugs the corpus caught (now fixed; commits in git log):
    `os.system("echo hello")` (literal-string, zero exploitability)
    fired HIGH because TASK-121 chose to emit on every shell-out. New
    `_cmdi_arg_is_dangerous` helper skips Constant args, same pattern
-   the other sinks use. cmdi precision: 0.833 → 1.000.
+   the other sinks use. cmdi precision on the synthetic corpus: 0.833 → 1.000.
 3. **Orchestrator `code_path` abspath fix.** `runWhiteboxScan` now
    resolves `code_path` and `spec` to absolute paths before sending
    the ScanRequest. The Python spawner sets `cmd.Dir = engineDir`
@@ -121,7 +160,7 @@ string concatenation (`url = "https://" + request.args["x"]`) — and
 v0.27 fixed it: the taint engine no longer treats a bare/unterminated
 scheme literal as a fixed host, so taint now flows through the
 concatenation `BinOp` into the `requests.get` sink (symmetric to the
-open-redirect multi-hop fix). This 1.000 is reproduced on the current
+open-redirect multi-hop fix). This 1.000 on the synthetic corpus is reproduced on the current
 binary and CI-gated (F1 ≥ 0.99) — not the stale v0.11.0 claim. A
 perfect score here means fendix flags *these specific canonical
 patterns*, not that it never misses any vulnerability anywhere.
@@ -408,7 +447,7 @@ The honest follow-ups, ranked by leverage:
 4. **Run the synthetic harness in CI** against every PR so accuracy
    regressions surface immediately. The `--output-json` flag is
    ready for that; just needs a GitHub Actions workflow that gates
-   on `F1 >= 0.95` or similar.
+   on the synthetic-corpus `F1 >= 0.95` or similar.
 
 ---
 
@@ -436,10 +475,10 @@ constant-host SSRF).
 
 | Metric | Value |
 |---|---:|
-| **F1**                   | **0.987** |
-| F1 95% bootstrap CI       | **[0.953, 1.000]** (1000 iterations, seed=20260514) |
-| Precision                 | 0.974 |
-| Recall                    | 1.000 |
+| **F1** (Juliet-style Python corpus)                   | **0.987** |
+| F1 95% bootstrap CI (Juliet-style Python corpus)       | **[0.953, 1.000]** (1000 iterations, seed=20260514) |
+| Precision (Juliet-style Python corpus)                 | 0.974 |
+| Recall (Juliet-style Python corpus)                    | 1.000 |
 | True positives            | 37 / 37 expected |
 | False positives           | 1 |
 | False negatives           | 0 |
@@ -459,7 +498,7 @@ constant-host SSRF).
 
 Stage 4a surfaced six real engine gaps that were invisible to Track 1
 (which scored 1.000 on the canonical-shape corpus). Each is now fixed
-and locked in by unit tests; the F1 lift from **0.921 → 0.987** is
+and locked in by unit tests; the F1 lift on the Juliet-style corpus from **0.921 → 0.987** is
 attributable to these six commits.
 
 1. **`urllib.request.urlopen` / `urlretrieve` / `six.moves.urllib.*`
@@ -510,7 +549,7 @@ at `8309bc39605ef3e78eb5ec85096eb638bff1b025`.
 > presence-advisories that **can never miss** (e.g. "an INFO advisory is
 > permitted"). As of **v0.27** the scorer (`scripts/heavy-eval/score.py`)
 > reports those as `permitted_absent` and **excludes them from the recall
-> denominator** — a target whose rows are ALL permissive has **undefined
+> denominator** — a target in the heavy-eval corpus whose rows are ALL permissive has **undefined
 > recall, not 1.000**. The historical "N / N = 1.000" cells below predate that
 > fix and counted permissive rows as hits; read them as "N expectations met",
 > and see the real-detection split called out per stage. BENCHMARKS.md is the
@@ -520,7 +559,7 @@ at `8309bc39605ef3e78eb5ec85096eb638bff1b025`.
 |---|---:|
 | Targets       | 91 labeled `.py` files |
 | Expectations  | 10 (5 real min_count≥1 + 5 permissive min_count:0) |
-| Real detections | **5 / 5 (recall 1.000)** + 5 permissive advisories (`permitted_absent`) |
+| Real detections | **5 / 5 (Python recall 1.000)** + 5 permissive advisories (`permitted_absent`) |
 | Engine gaps surfaced and fixed | 1 (os.popen2/3/4) |
 
 The bandit corpus is deliberately scoped to weaknesses fendix targets;
@@ -545,7 +584,7 @@ finding"). All 5 repos clone cleanly post-fix.
 | `py-vulpy`            | `5249cc8b` |   3 | 1 real (+2 permissive) | SQL injection detected; XSS/secrets are permissive advisories |
 | `py-django-vuln`      | `a48901f1` |  42 | 2 real (+1 permissive) | SQLi + XSS detected; 1 permissive row |
 | `py-flask-vuln`       | `b6a4f97a` |   8 | 1 real (+3 permissive) | SQLi detected; XSS/SSRF/secrets are permissive advisories |
-| **Aggregate**         |            | **262** | **16 / 16 real (1.000)** + 7 permissive | Real-detection recall = 1.000; permissive (min_count:0) rows excluded — reproduced 2026-06-30 (was a fabricated "23 / 23"). |
+| **Aggregate (Python repos)** |            | **262** | **16 / 16 real (1.000)** + 7 permissive | Real-detection recall = 1.000; permissive (min_count:0) rows excluded — reproduced 2026-06-30 (was a fabricated "23 / 23"). |
 
 Track 4 surfaced the PyGoat-SQLi gap that Track 3 had silently
 accepted: fendix's AST matcher only checked `cursor.execute()`, not
@@ -617,7 +656,7 @@ cleanly (status: `docker boot failed`).
 | `dast-webgoat`          | 10 | 1 / 1 | 0 | 480 missing-headers findings |
 | `dast-bwapp`            | 12 | 1 / 1 | 0 | 480 missing-headers findings |
 | `dast-vulnerableapp`    |  — | skip   | — | boot wait exceeded (Java app on macOS Docker) |
-| **Aggregate (4/5 booted)** | **45** | **5 / 5** | **0** | **expectation-recall = 1.000** |
+| **Aggregate (4/5 booted DAST benchmark targets)** | **45** | **5 / 5** | **0** | **expectation-recall = 1.000** |
 
 Header-count figures (184–480) are post-explode counts via
 `affected_endpoints`; the engine collapses duplicate `(title, category)`

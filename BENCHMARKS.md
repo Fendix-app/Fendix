@@ -275,10 +275,57 @@ same class or file, not across files. A match is reported as a warning and
 does not block: a blind evaluation on 70 fresh public production repositories
 triaged every taint-tier finding and measured precision of 0.077 (JS/TS, 1 of
 13), 0.111 (Java, 1 of 10) and 0.091 (Go, 1 of 11), against the 0.80 required
-to block, so `semgrep.ReachabilityLanguages` is empty (ADR-011; evidence in [benchmarks/frameworks/REALWORLD.md](benchmarks/frameworks/REALWORLD.md)). We publish **no JS/TS, Java or Go recall/precision number**:
-the framework parity corpus the rules were tuned on is a development set, and
-public numbers come only from its held-out twin. Deep, interprocedural taint
+to block, so `semgrep.ReachabilityLanguages` is empty (ADR-011; evidence in [benchmarks/frameworks/REALWORLD.md](benchmarks/frameworks/REALWORLD.md)). The JS/TS, Java and Go recall numbers are published below, in
+*Framework parity*, as blind-holdout figures and as figures scoped to the
+development corpus the rules were tuned on. Deep, interprocedural taint
 analysis (what OWASP Benchmark needs) is a future phase.
+
+---
+
+## Framework parity: per-framework support and holdout recall
+
+```
+make parity-venv parity   # the development corpus, gated in CI; see the Makefile
+```
+
+The blind holdout corpus is private, so a holdout number is checked by the
+release workflow (`run_parity.py --compare-recall-to`) and cannot be re-run
+from this repository.
+
+The framework parity corpus (`benchmarks/frameworks/`) holds one labelled
+case per vulnerability class and variant in each of 9 frameworks and 11
+classes. Its per-case outcomes are in
+[`benchmarks/frameworks/baseline.json`](benchmarks/frameworks/baseline.json)
+and the report is
+[`benchmarks/frameworks/RESULTS.md`](benchmarks/frameworks/RESULTS.md).
+
+- **Development corpus:** the rules may be tuned against it, so its figures
+  are scoped to it.
+- **Blind holdout:** labelled cases written by authors who never saw the
+  rules. Public accuracy numbers come from this set.
+
+| Language | Dev recall | Dev block recall | Blind holdout recall | Real-world blocking precision |
+|---|---|---|---|---|
+| Python (Django, Flask, FastAPI) | 1.000 | 0.944 | 0.756 | n/a |
+| JavaScript / TypeScript (Express, NestJS, Next.js) | 0.889 | 0.194 | 0.689 | 0.08 |
+| Java (Spring) | 0.972 | 0.083 | 0.812 | 0.11 |
+| Go (net/http, Gin) | 1.000 | 0.111 | 0.750 | 0.09 |
+
+- **Caveat: holdout recall is lower than dev recall for every language, and
+  the drop exceeds the 0.10 limit in all four.** The development corpus
+  overstates recall on code the rules have not seen.
+- **Python:** taint-proven findings, and a proven flow blocks. No Semgrep
+  needed.
+- **JS/TS, Java, Go:** the Semgrep taint rules report warnings and do not
+  block CI, because real-world blocking precision is far below the 0.80 bar
+  (evidence: [`REALWORLD.md`](benchmarks/frameworks/REALWORLD.md)). These
+  rows require Semgrep. Without it (the standalone binary, or a Homebrew
+  install without Semgrep) only the regex scanner (textscan) runs for them.
+- **Classes:** SQL injection, command injection, XSS, SSRF, path traversal,
+  open redirect, hardcoded secrets, weak password hashing, JWT without
+  verification, weak random tokens and template injection. The
+  [README](README.md#language--framework-support) lists, per framework, the
+  classes whose `direct` case is detected.
 
 ---
 

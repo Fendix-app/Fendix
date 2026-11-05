@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A language and framework support matrix, and a scope rule for accuracy figures.** `README.md`, `docs/accuracy.md` and `BENCHMARKS.md` now list, for the nine parity frameworks, which vulnerability classes are covered, whether a proven flow blocks, and which rows need Semgrep (every non-Python row), with blind-holdout recall beside the development-corpus figures. `scripts/check-public-claims.sh` now fails an `F1`, precision, recall or percentage accuracy figure in `README.md` or `docs/` that names no language or corpus in its sentence; existing unscoped figures in `docs/accuracy.md`, `docs/benchmarks.md`, ADR-011 and two triage reports were scoped.
 - **The secrets scanner detects passwords embedded in JDBC URLs.**
   `DB_CONNECTION_STRING` gains a second shape under the same rule id (no
   existing fingerprint moves): `jdbc:postgresql://h/app?user=u&password=...`

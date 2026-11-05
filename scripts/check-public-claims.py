@@ -174,6 +174,141 @@ def find_matches(content: str) -> list[tuple[str, re.Match[str]]]:
     return matches
 
 
+# ---------------------------------------------------------------------------
+# Accuracy claims must name what they were measured on.
+#
+# A bare "F1 = 1.000" reads as a statement about every language Fendix scans.
+# Fendix's numbers differ by language and by corpus (development set versus the
+# blind holdout), so a figure is only publishable in a sentence that also names
+# a language, framework or corpus. See benchmarks/frameworks/ and
+# docs/accuracy.md.
+# ---------------------------------------------------------------------------
+
+ACCURACY_METRIC = re.compile(
+    r"\bF1\b|\bprecision\b|\brecall\b|\baccuracy\b|\baccurate\b", re.IGNORECASE
+)
+# A ratio (0.944, 1.000, .75) or a percentage (94%, 94.4 %). A ratio needs two
+# decimals and must not touch another dot-digit group, so versions such as
+# 3.6.2 or 1.141.0 and short numbers such as 3.6 stay out.
+ACCURACY_FIGURE = re.compile(
+    r"(?<![\w.])(?:[01]?\.\d{2,}|\d{1,3}(?:\.\d+)?[ ]?%)(?![\w]|\.\d)"
+)
+ACCURACY_WINDOW = 80
+ACCURACY_SCOPE = re.compile(
+    r"\b(?:python|django|flask|fastapi|javascript|typescript|node(?:\.?js)?|"
+    r"express|nestjs|next\.?js|java|spring|golang|gin|net/http|kotlin|php|ruby|"
+    r"rust|js/ts|js|ts|"
+    r"corpus|corpora|holdout|hold-out|benchmarks?|dataset|data set|"
+    r"development set|dev set|dev|test set|labell?ed|fixtures?|real-world|"
+    r"juice shop|dvwa|webgoat|cases?|samples?|repos(?:itories)?)\b",
+    re.IGNORECASE,
+)
+# "go" is also a verb, so only the capitalised language name counts.
+ACCURACY_SCOPE_GO = re.compile(r"\bGo\b")
+_BLOCK_START = re.compile(r"^\s*(?:\||#{1,6}\s|[-*+]\s|\d+[.)]\s)")
+_QUOTE_MARKER = re.compile(r"^\s*(?:>\s?)+")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z`*(\[\"'])")
+
+
+def _accuracy_units(text: str) -> list[tuple[int, str]]:
+    """Split markdown into (line, sentence) units, skipping fenced code.
+
+    A table row, heading or list item starts its own unit; a wrapped paragraph
+    is joined and split on sentence ends, so a scope in the previous sentence
+    does not carry over.
+    """
+    units: list[tuple[int, str]] = []
+    paragraph: list[str] = []
+    start = 0
+    in_fence = False
+
+    def flush() -> None:
+        if paragraph:
+            joined = " ".join(part.strip() for part in paragraph)
+            units.extend((start, part) for part in _SENTENCE_END.split(joined))
+            paragraph.clear()
+
+    for number, raw in enumerate(text.splitlines(), start=1):
+        # A blockquote continues its sentence over lines, so judge its text.
+        line = _QUOTE_MARKER.sub("", raw)
+        if line.lstrip().startswith(("```", "~~~")):
+            flush()
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if not line.strip():
+            flush()
+            continue
+        if _BLOCK_START.match(line):
+            flush()
+            if line.lstrip().startswith("|"):
+                units.append((number, line))
+                continue
+            start = number
+        elif not paragraph:
+            start = number
+        paragraph.append(line)
+    flush()
+    return units
+
+
+def find_unscoped_accuracy(text: str) -> list[tuple[int, str]]:
+    """Return (line, sentence) for every accuracy figure with no scope."""
+    found: list[tuple[int, str]] = []
+    for line, sentence in _accuracy_units(text):
+        metrics = list(ACCURACY_METRIC.finditer(sentence))
+        figures = list(ACCURACY_FIGURE.finditer(sentence))
+        near = any(
+            abs(metric.start() - figure.start()) <= ACCURACY_WINDOW
+            for metric in metrics
+            for figure in figures
+        )
+        scoped = ACCURACY_SCOPE.search(sentence) or ACCURACY_SCOPE_GO.search(sentence)
+        if near and not scoped:
+            found.append((line, sentence.strip()))
+    return found
+
+
+# Dated records and design history describe a past measurement; they are not
+# current product claims.
+ACCURACY_SCOPE_EXEMPT_PREFIXES = (
+    "docs/superpowers/",
+    "docs/plans/",
+    "docs/reviews/",
+)
+
+
+def is_accuracy_surface(path: Path) -> bool:
+    value = path.as_posix()
+    if value.startswith(ACCURACY_SCOPE_EXEMPT_PREFIXES):
+        return False
+    if value == "README.md":
+        return True
+    return value.startswith("docs/") and path.suffix.lower() in {".md", ".markdown"}
+
+
+def scan_accuracy_scope(files: list[Path]) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
+    for relative in files:
+        if not is_accuracy_surface(relative):
+            continue
+        try:
+            content = (ROOT / relative).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for line, sentence in find_unscoped_accuracy(content):
+            findings.append(
+                {
+                    "path": relative.as_posix(),
+                    "detector": "unscoped_accuracy_figure",
+                    "match": sentence[:160],
+                    "line": line,
+                }
+            )
+    return findings
+
+
 def scan(files: list[Path]) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for relative in files:
@@ -295,6 +430,41 @@ def self_test() -> None:
         ("obsolete_action_claim", "whole files, so existing issues in them are reported", False),
         ("obsolete_action_claim", "Use a baseline to report only new findings.", False),
     )
+    accuracy_cases = (
+        # An accuracy figure with no language or corpus scope in its sentence.
+        ("Fendix reaches F1 = 1.000.", 1),
+        ("Precision is 0.97 across the board.", 1),
+        ("We catch 94% of vulnerabilities, a recall of 0.94.", 1),
+        ("Overall accuracy: 99%.", 1),
+        ("| recall | 0.944 |", 1),
+        # Scoped by a language, framework or corpus in the same sentence.
+        ("Python recall is 0.756 on the blind holdout.", 0),
+        ("Dev recall 1.000 on the development corpus.", 0),
+        ("HANDLED F1 == 1.000 on the benchmark corpus.", 0),
+        ("| JS/TS | 0.889 | recall |", 0),
+        ("Java (Spring) precision was 0.11 on real-world code.", 0),
+        ("Go precision 0.09.", 0),
+        # A scope in the previous sentence does not carry over.
+        ("This is the Python layer. Recall is 0.99.", 1),
+        # A paragraph wrapped over lines is one sentence.
+        ("Recall on the\nholdout corpus is 0.756.", 0),
+        # A blockquote wrapped over lines is one sentence.
+        ("> Recall is 0.99 on the\n> Python corpus.", 0),
+        ("> Recall is 0.99 on\n> the full set.", 1),
+        # Not accuracy claims.
+        ("Fendix v3.6.2 ships a precision-focused gate.", 0),
+        ("Requires Python 3.11 and Semgrep 1.141.0.", 0),
+        ("CVSS 9.8 findings are critical; 100% of CI runs are cached.", 0),
+        ("Recall matters because a miss hides a vulnerability.", 0),
+        ("Raise the confidence threshold to 0.80 to cut noise.", 0),
+        ("```\nrecall = 0.94\n```", 0),
+    )
+    for sample, expected in accuracy_cases:
+        actual = len(find_unscoped_accuracy(sample))
+        if actual != expected:
+            raise AssertionError(
+                f"unscoped accuracy regression for {sample!r}: {actual} != {expected}"
+            )
     detectors = {detector.name: detector.expression for detector in DETECTORS}
     for detector_name, sample, expected in cases:
         actual = detectors[detector_name].search(sample) is not None
@@ -350,6 +520,7 @@ def self_test() -> None:
         raise AssertionError(f"invalid app deployment accepted: {invalid_manifest!r}")
     print(
         f"public-claims self-test passed ({len(cases)} detector cases, "
+        f"{len(accuracy_cases)} accuracy-scope cases, "
         f"{len(public_samples)} surface cases, 5 application-image cases)"
     )
 
@@ -370,12 +541,14 @@ def main() -> int:
         APP_MANIFEST_PATH.read_text(encoding="utf-8"), contract
     )
     findings = scan(files)
+    scope_violations = scan_accuracy_scope(files)
     violations, counts = classify(findings, allowlist)
     stale = [
         entry
         for entry in allowlist
         if counts[str(entry["id"])] != entry["expected_count"]
     ]
+    violations = violations + scope_violations
     if violations or stale:
         for finding in violations:
             print(
