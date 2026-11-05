@@ -333,7 +333,7 @@ in `semgrep.ReachabilityLanguages`
 TypeScript are not enabled. The pack's precision on the framework-parity
 development set is 0.97, and it adds no finding to the clean
 `node-express-realworld` application, but a blind evaluation on 70 fresh
-production repositories measured its taint tier at precision 0.077 (1 true
+production repositories (at commit `6901cf7`, Semgrep 1.141.0) measured its taint tier at precision 0.077 (1 true
 positive in 13 findings), against the 0.80 required (ruling R-pf81). A taint
 finding is therefore a `semgrep_shim` finding, like a shape finding: reported
 as a warning, never blocking. The `fendix_severity` of `js-sqli-taint`,

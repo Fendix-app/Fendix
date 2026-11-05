@@ -435,7 +435,7 @@ wrapper / namespace / docstring).
   analyzer); semgrep findings are pinned to `TierSemgrepShim` until a rule pack clears the
   F1 gate. A Semgrep taint rule's match is `TierSemgrepTaint` and `Reachable`, trace or
   no trace, only for a language in `semgrep.ReachabilityLanguages`, which is empty: the JavaScript, TypeScript, Java and Go packs
-  failed the real-world precision gate (0.077, 0.111 and 0.091 against 0.80, ADR-011), so their findings stay
+  failed the real-world precision gate (0.077, 0.111 and 0.091 against 0.80, measured at commit `6901cf7` on Semgrep 1.141.0, ADR-011), so their findings stay
   `TierSemgrepShim` and warn. The tier ranks with `TierNativeGo` and is still a Semgrep tier
   (`SourceTier.IsSemgrep`): no deterministic-detection bonus, no Proven Path.
 - **Proven Path v1** is the highest-fidelity proof: a route binding + traced taint chain in

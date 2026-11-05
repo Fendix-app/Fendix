@@ -1430,6 +1430,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `docs/checks/semgrep.md`; the docs also name `--project-root` in the
   command, and `ADR-011` gives the 300 s run timeout.
 
+- **The published development-corpus figures match the committed baseline.**
+  `README.md`, `BENCHMARKS.md`, `docs/accuracy.md` and
+  `benchmarks/frameworks/RESULTS.md` quoted Java at recall 0.972 and block
+  recall 0.083, and RESULTS.md's headline, family, coverage-by-class and
+  harder-variant tables, its secrets, Java, Go and JS/TS safe-code figures
+  and its Python rows were older measurements. They are recomputed from
+  `benchmarks/frameworks/baseline.json`: Java 36/36 detected and 4 blocking
+  (recall 1.000, block recall 0.111), and no false positive in any of the nine
+  frameworks. Each place that quotes the blind holdout (commit `e03655a`) or
+  the real-world precision (commit `6901cf7`, Semgrep 1.141.0) now names the
+  commit and Semgrep version it was measured at. The holdout and real-world
+  figures are unchanged.
+
 - **The Go taint rules keep their `ok` cases clean on Semgrep 1.182.1, the
   version Fendix ships.** The Go pack was written on Semgrep 1.141.0. Semgrep
   1.182.1 keeps the taint of a variable assigned from a call that an exact

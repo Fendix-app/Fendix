@@ -21,7 +21,7 @@ authority if this page and the pack ever disagree.
 
 The JavaScript/TypeScript, Java and Go taint findings are reported as
 warnings, not blocking: a blind evaluation on 70 production repositories
-measured their precision at 0.077, 0.111 and 0.091, below the 0.80 the
+measured their precision at 0.077, 0.111 and 0.091 (at commit `6901cf7`, Semgrep 1.141.0), below the 0.80 the
 taint gate requires (`semgrep.ReachabilityLanguages` is empty, ADR-011).
 
 ### auth.yaml — Missing Authentication (4 rules)

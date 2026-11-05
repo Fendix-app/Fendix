@@ -272,7 +272,7 @@ Go net/http and Gin) are taint rules: they follow request input within one
 function, and for Java and Go also one call into a method or function of the
 same class or file, not across files. A match is reported as a warning and
 does not block: a blind evaluation on 70 fresh public production repositories
-triaged every taint-tier finding and measured precision of 0.077 (JS/TS, 1 of
+triaged every taint-tier finding (at commit `6901cf7`, Semgrep 1.141.0) and measured precision of 0.077 (JS/TS, 1 of
 13), 0.111 (Java, 1 of 10) and 0.091 (Go, 1 of 11), against the 0.80 required
 to block, so `semgrep.ReachabilityLanguages` is empty (ADR-011; evidence in [benchmarks/frameworks/REALWORLD.md](benchmarks/frameworks/REALWORLD.md)). The JS/TS, Java and Go recall numbers are published below, in
 *Framework parity*, as blind-holdout figures and as figures scoped to the
@@ -307,9 +307,15 @@ and the report is
 |---|---|---|---|---|
 | Python (Django, Flask, FastAPI) | 1.000 | 0.944 | 0.756 | n/a |
 | JavaScript / TypeScript (Express, NestJS, Next.js) | 0.889 | 0.194 | 0.689 | 0.08 |
-| Java (Spring) | 0.972 | 0.083 | 0.812 | 0.11 |
+| Java (Spring) | 1.000 | 0.111 | 0.812 | 0.11 |
 | Go (net/http, Gin) | 1.000 | 0.111 | 0.750 | 0.09 |
 
+- **Where each column was measured.** The dev columns are recomputed from
+  `benchmarks/frameworks/baseline.json`, which `make parity` reproduced at
+  commit `8b78364` on Semgrep 1.182.1. The blind-holdout column was measured
+  at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins). The
+  real-world precision column was measured at commit `6901cf7` on Semgrep
+  1.141.0.
 - **Caveat: holdout recall is lower than dev recall for every language, and
   the drop exceeds the 0.10 limit in all four.** The development corpus
   overstates recall on code the rules have not seen.

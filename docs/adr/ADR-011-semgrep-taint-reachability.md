@@ -11,7 +11,7 @@ TypeScript), 4.4 (Java) and 4.5 (Go) add the taint rules and enable a
 language once it meets the gate below. On the corpus evidence alone they
 enabled `javascript` and `typescript`, `java` and `go`.
 
-Amended by ruling R-pf81: a blind real-world evaluation measured taint-tier
+Amended by ruling R-pf81: a blind real-world evaluation (at commit `6901cf7`, Semgrep 1.141.0) measured taint-tier
 precision of 0.077 (JavaScript and TypeScript), 0.111 (Java) and 0.091 (Go),
 all below the 0.80 rule fixed in advance, so no language is enabled and the
 three packs report warnings. The evidence is under

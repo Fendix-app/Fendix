@@ -1,4 +1,4 @@
-# Framework parity results: Fendix v3.6.3
+# Framework parity results: Fendix v3.6.3, with the development figures of the current build
 
 This report measures how well the engine detects the same vulnerability in
 different web frameworks. It uses one labelled corpus, the released binary and
@@ -22,16 +22,19 @@ nine frameworks.
   - [results/v3.6.3-corpus-v2.json](results/v3.6.3-corpus-v2.json): this report.
   - [results/v3.6.3-corpus-v1.json](results/v3.6.3-corpus-v1.json): the original 252 cases alone.
 - **Reproduce:** see the header of [run_parity.py](run_parity.py).
-- **The JavaScript/TypeScript, Java and Go rows are newer than the rest.** The
-  rows of Express, NestJS, Next.js, Spring Boot, net/http and Gin, and the
-  JS/TS, Java and Go family and variant rows, were measured on the integrated
-  `[Unreleased]` build: the same corpus and command, `--isolate`, Semgrep
-  1.141.0, with the JavaScript/TypeScript, Java and Go Semgrep taint packs.
-  Their taint gate (ADR-011) is closed, so the taint findings warn and do not
-  block: a blind real-world evaluation measured their precision at 0.077
-  (JS/TS), 0.111 (Java) and 0.091 (Go) ([REALWORLD.md](REALWORLD.md)). Their per-case outcomes are in
-  [baseline.json](baseline.json). The Python rows are the v3.6.3 measurement;
-  the changes since are listed under "Closed after v3.6.3".
+- **Which figures are current.** The Headline, family, coverage-by-class and
+  harder-variant tables below, and every figure marked "now" in the Findings,
+  are the development figures of the integrated `[Unreleased]` build. They are
+  recomputed from [baseline.json](baseline.json) with the definitions under
+  "Scoring", for all nine frameworks, Python included. `make parity` on commit
+  `8b78364` with Semgrep 1.182.1 reproduced that baseline with no regression.
+  The command and corpus are the same, with `--isolate`. The v3.6.3 measurement
+  above is what the "Closed after v3.6.3" notes in the Findings are counted
+  from; its raw data is in `results/`.
+- **The JavaScript/TypeScript, Java and Go taint findings warn and do not
+  block.** Their taint gate (ADR-011) is closed. A blind real-world evaluation
+  measured their precision at 0.077 (JS/TS), 0.111 (Java) and 0.091 (Go), at
+  commit `6901cf7` on Semgrep 1.141.0 ([REALWORLD.md](REALWORLD.md)).
 
 ## Scoring
 
@@ -52,25 +55,27 @@ Scoring is per case:
 
 | Framework | Language | Detected | Recall | Blocks (of vulnerable) | False positives (of safe) | Safe code that blocks | F1 |
 |---|---|---|---|---|---|---|---|
-| Django | Python | 29/36 | **81%** | 42% | 3/22 (14%) | 2 | 0.85 |
-| Flask | Python | 30/36 | **83%** | 42% | 3/22 (14%) | 2 | 0.87 |
-| FastAPI | Python | 24/36 | **67%** | 11% | 3/22 (14%) | 0 | 0.76 |
-| Express | JS | 32/36 | **89%** | 19% | 1/22 (5%) | 1 | 0.93 |
-| NestJS | TS | 32/36 | **89%** | 19% | 1/22 (5%) | 1 | 0.93 |
-| Next.js | TS | 32/36 | **89%** | 19% | 1/22 (5%) | 1 | 0.93 |
-| Spring Boot | Java | 35/36 | **97%** | 8% | 2/22 (9%) | 0 | 0.96 |
-| net/http | Go | 36/36 | **100%** | 11% | 2/22 (9%) | 0 | 0.97 |
-| Gin | Go | 36/36 | **100%** | 11% | 2/22 (9%) | 0 | 0.97 |
+| Django | Python | 36/36 | **100%** | 94% | 0/22 (0%) | 0 | 1.00 |
+| Flask | Python | 36/36 | **100%** | 94% | 0/22 (0%) | 0 | 1.00 |
+| FastAPI | Python | 36/36 | **100%** | 94% | 0/22 (0%) | 0 | 1.00 |
+| Express | JS | 32/36 | **89%** | 19% | 0/22 (0%) | 0 | 0.94 |
+| NestJS | TS | 32/36 | **89%** | 19% | 0/22 (0%) | 0 | 0.94 |
+| Next.js | TS | 32/36 | **89%** | 19% | 0/22 (0%) | 0 | 0.94 |
+| Spring Boot | Java | 36/36 | **100%** | 11% | 0/22 (0%) | 0 | 1.00 |
+| net/http | Go | 36/36 | **100%** | 11% | 0/22 (0%) | 0 | 1.00 |
+| Gin | Go | 36/36 | **100%** | 11% | 0/22 (0%) | 0 | 1.00 |
 
-By language family (the **All** row adds the newer JS/TS, Java and Go rows to Python at v3.6.3):
+By language family:
 
 | Family | Detected | Recall | Precision | F1 | Blocks |
 |---|---|---|---|---|---|
-| Python | 83/108 | 77% | 90% | 0.83 | 31% |
-| Go | 72/72 | 100% | 95% | 0.97 | 11% |
-| Java | 35/36 | 97% | 95% | 0.96 | 8% |
-| JS/TS | 96/108 | 89% | 97% | 0.93 | 19% |
-| **All** (Python at v3.6.3) | **286/324** | **88%** | 94% | 0.91 | 20% |
+| Python | 108/108 | 100% | 100% | 1.00 | 94% |
+| Go | 72/72 | 100% | 100% | 1.00 | 11% |
+| Java | 36/36 | 100% | 100% | 1.00 | 11% |
+| JS/TS | 96/108 | 89% | 100% | 0.94 | 19% |
+| **All** | **312/324** | **96%** | 100% | 0.98 | 42% |
+
+These are figures on the development corpus, which the rules were tuned against. They are not a claim about arbitrary code: the blind-holdout recall is lower for every language, and is the figure to quote (see [docs/accuracy.md](../../docs/accuracy.md)).
 
 ## Coverage by class
 
@@ -78,17 +83,19 @@ Each cell shows `detected/vulnerable`, then the number that block (`b`), then `+
 
 | Framework | SQLi | Cmd inj. | XSS | SSRF | Path trav. | Redirect | Secrets | Weak hash | JWT no-verify | Weak random | SSTI |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Django | 4/4 (2b) +1 | 4/4 (2b) | 1/4 (1b) | 4/4 (2b) +1 | 4/4 (2b) +1 | 4/4 (2b) | 4/4 (4b) | 2/2 | 2/2 | — | — |
-| Flask | 4/4 (2b) +1 | 4/4 (2b) | 1/4 (1b) | 4/4 (2b) +1 | 4/4 (2b) +1 | 3/4 (1b) | 4/4 (4b) | 2/2 | 2/2 | — | 2/2 (1b) |
-| FastAPI | 4/4 +1 | 4/4 | 1/4 | 4/4 +1 | 3/4 +1 | — | 4/4 (4b) | 2/2 | 2/2 | — | — |
-| Express | 4/4 (3b) +1 | 4/4 | 4/4 | 2/4 | 2/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
-| NestJS | 4/4 (3b) +1 | 4/4 | 4/4 | 2/4 | 2/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
-| Next.js | 4/4 (3b) +1 | 4/4 | 4/4 | 2/4 | 2/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
-| Spring Boot | 4/4 | 4/4 +1 | 4/4 | 4/4 | 4/4 | 4/4 | 3/4 (3b) | 2/2 +1 | 2/2 | 2/2 | 2/2 |
-| net/http | 4/4 +1 | 4/4 +1 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
-| Gin | 4/4 +1 | 4/4 +1 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
+| Django | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 2/2 (2b) | 2/2 (2b) | 2/2 | 2/2 (2b) |
+| Flask | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 2/2 (2b) | 2/2 (2b) | 2/2 | 2/2 (2b) |
+| FastAPI | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 4/4 (4b) | 2/2 (2b) | 2/2 (2b) | 2/2 | 2/2 (2b) |
+| Express | 4/4 (3b) | 4/4 | 4/4 | 2/4 | 2/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
+| NestJS | 4/4 (3b) | 4/4 | 4/4 | 2/4 | 2/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
+| Next.js | 4/4 (3b) | 4/4 | 4/4 | 2/4 | 2/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
+| Spring Boot | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
+| net/http | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
+| Gin | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 | 4/4 (4b) | 2/2 | 2/2 | 2/2 | 2/2 |
 
-The four new classes only `WARN`, with one exception: Flask's `render_template_string` template injection blocks once. Across all frameworks, 22 of their 72 vulnerable cases are detected.
+No safe case is a false positive in any framework, so no cell carries a `+n`.
+
+All 72 vulnerable cases of the four new classes are detected. 18 of them block: 6 in each Python framework (every new class except weak random tokens, which warns). None blocks in the other six frameworks, whose taint findings warn (ADR-011).
 
 - Closed after v3.6.3 for JavaScript/TypeScript, Java and Go, for detection only. The Semgrep taint packs cover the new classes, and their taint findings warn: the taint gate is closed (ADR-011).
   - Express, NestJS, Next.js, Spring Boot, net/http and Gin each detect all 8 of their new-class cases, and none blocks.
@@ -99,14 +106,14 @@ Recall and blocking rate by variant, per language family:
 
 | Family | direct | indirect | cross_file | alt_api |
 |---|---|---|---|---|
-| Python | 73% / 42% | 73% / 9% | 81% / 14% | 86% / 67% |
+| Python | 100% / 91% | 100% / 91% | 100% / 100% | 100% / 100% |
 | JS/TS | 100% / 18% | 82% / 18% | 71% / 29% | 100% / 14% |
-| Java | 100% / 9% | 100% / 9% | 100% / 14% | 86% / 0% |
+| Java | 100% / 9% | 100% / 9% | 100% / 14% | 100% / 14% |
 | Go | 100% / 9% | 100% / 9% | 100% / 14% | 100% / 14% |
 
 The `direct` and `indirect` columns include the new classes.
 
-The JS/TS, Java and Go rows are measured on the integrated `[Unreleased]` build, with the taint gate closed, so only secrets and template-literal SQL (JS/TS) block. Their `cross_file` cells are the weakest for detection, because a helper in another file is reported by a shape rule: the cases are detected (71% for JS/TS, 100% for Java and Go), and block in 29% (JS/TS), 14% (Java) and 14% (Go), the secrets and template-literal SQL cases.
+The Python rows are the current development figures: every Python case is detected, and the only ones that do not block are the weak-random-token cases. The JS/TS, Java and Go rows are measured with the taint gate closed, so only secrets and template-literal SQL (JS/TS) block. Their `cross_file` cells are the weakest for detection, because a helper in another file is reported by a shape rule: the cases are detected (71% for JS/TS, 100% for Java and Go), and block in 29% (JS/TS), 14% (Java) and 14% (Go), the secrets and template-literal SQL cases.
 
 - **Python follows taint into another module, but cannot prove it.**
   - Detection holds at 81% for `cross_file`, because the sink shape alone is enough to report.
@@ -134,8 +141,8 @@ The JS/TS, Java and Go rows are measured on the integrated `[Unreleased]` build,
 
 ### Secrets are the one class at parity
 
-- 35 of 36 vulnerable secret cases are detected, all of them blocking, with no false positive.
-- The single miss is Spring's idiomatic JDBC URL: `jdbc:postgresql://...?user=app&password=...`. The connection-string detector only knows `scheme://user:password@host`.
+- All 36 vulnerable secret cases are detected now, every one blocking, with no false positive.
+- At v3.6.3 the single miss was Spring's idiomatic JDBC URL, `jdbc:postgresql://...?user=app&password=...`: the connection-string detector only knew `scheme://user:password@host`. Closed after v3.6.3: `DB_CONNECTION_STRING` has a second shape for it (see `CHANGELOG.md`, `[Unreleased]`).
 
 ### Python is deep but incomplete
 
@@ -180,7 +187,8 @@ The JS/TS, Java and Go rows are measured on the integrated `[Unreleased]` build,
     - An f-string with any other interpolation is still reported. So is a constant rebound from input before the call: in the function, at module level, by a `global` write, through `nonlocal`, or after a lambda that reads it is defined.
     - A module constant that an import of the same name replaces is no longer reported.
     - See `CHANGELOG.md`, `[Unreleased]`.
-- **Weak password hashing and unverified JWTs are found, but only warn,** even when the token comes from the request and the claims are trusted.
+- **Where this leaves the Python frameworks.** All 108 vulnerable cases are detected now, and 102 block (34 in each framework; the two that warn are its weak-random-token cases). None of the 66 safe cases is flagged.
+- **Weak password hashing and unverified JWTs are found, but only warn,** even when the token comes from the request and the claims are trusted. (At v3.6.3. Closed since: the Python frameworks' weak-hash and JWT cases block now, as the coverage table shows.)
 - **Route-auth noise:** every one of the 58 Flask routes gets two "missing auth" findings (`flask-route-no-auth-decorator` and `flask-missing-login-required`). Every FastAPI route gets one. Django gets none.
   - Closed after v3.6.3. `flask-missing-login-required` is removed (ADR-012), so each Flask route gets one, from `flask-route-no-auth-decorator`. See `CHANGELOG.md`, `[Unreleased]`.
 
@@ -196,9 +204,9 @@ The JS/TS, Java and Go rows are measured on the integrated `[Unreleased]` build,
 - Express, NestJS and Next.js score identically.
 - Closed after v3.6.3, for detection. The JavaScript/TypeScript Semgrep taint pack (Express, NestJS and Next.js) follows request input to a sink within one function, and its findings warn: they do not block (ADR-011).
   - 96 of 108 vulnerable cases are detected (89%, up from 19%), and 21 block (19%, unchanged). Each framework detects 32 of 36, and blocks on 7: the four secrets and three template-literal SQL cases.
-  - The pack met the corpus gate (precision 0.97) but not the real-world one: a blind evaluation on 70 production repositories found 1 true positive in 13 taint findings (precision 0.077), so they are reported as warnings.
+  - The pack met the corpus gate (precision 0.97 when it was added, 1.000 on the current baseline) but not the real-world one: a blind evaluation on 70 production repositories (commit `6901cf7`, Semgrep 1.141.0) found 1 true positive in 13 taint findings (precision 0.077), so they are reported as warnings.
   - Still missed: SSRF and path traversal through a helper in the same or another file (12 cases, 4 per framework).
-  - Safe code that blocks: 3 cases, the `sqli-safe_lookalike` ones, as before. They come from the Python engine's `SEC-JS_SQL_TEMPLATE`, not from the pack.
+  - Safe code that blocks: none now. At v3.6.3 the three `sqli-safe_lookalike` cases did, from the Python engine's `SEC-JS_SQL_TEMPLATE`, not from the pack; the check no longer fires on a tagged template or a constant. No safe case is a false positive in any of the three frameworks.
 
 ### Java (Spring Boot): the rules expect Servlet code
 
@@ -210,10 +218,10 @@ The JS/TS, Java and Go rows are measured on the integrated `[Unreleased]` build,
   - `java.util.Random` tokens.
 - **Not detected:** `JWT.decode` and Freemarker templates built from a request string.
 - Closed after v3.6.3, for detection. The Spring Semgrep taint pack follows `@RequestParam`, `@PathVariable`, `@RequestBody` and servlet request input to a sink within a method, plus one call into a method of the same class, and its findings warn: they do not block (ADR-011).
-  - 35 of 36 vulnerable cases are detected (97%, up from 33%), and 3 block (8%, unchanged): the secrets. The one miss is the secret in a `jdbc:postgresql://...?user=app&password=...` URL.
+  - All 36 vulnerable cases are detected now (100%, up from 33%), and 4 block (11%): the secrets. The secret in a `jdbc:postgresql://...?user=app&password=...` URL, the one miss when the pack was added, is detected since the secrets scanner learned that shape.
   - Every taint case detects and warns.
-  - The pack met the corpus gate (precision 0.946) but not the real-world one: a blind evaluation on 70 production repositories found 1 true positive in 10 Java taint findings (precision 0.111), so they are reported as warnings.
-  - 2 of 22 safe cases are false positives, both textscan's (command injection on a constant argument, and an MD5 ETag), and neither blocks.
+  - The pack met the corpus gate (precision 0.946 when it was added, 1.000 on the current baseline) but not the real-world one: a blind evaluation on 70 production repositories (commit `6901cf7`, Semgrep 1.141.0) found 1 true positive in 10 Java taint findings (precision 0.111), so they are reported as warnings.
+  - None of the 22 safe cases is a false positive now. When the pack was added, two were, both textscan's (command injection on a constant argument, and an MD5 ETag), and neither blocked.
 
 ### Go: SQL, command injection and weak hashing, warn-only
 
@@ -226,14 +234,14 @@ The JS/TS, Java and Go rows are measured on the integrated `[Unreleased]` build,
 - Closed after v3.6.3, for detection. The Go Semgrep taint packs (net/http, gorilla/mux, chi and Gin) follow request input to a sink within a function, plus one call into a function of the same file, and their findings warn: they do not block (ADR-011).
   - 72 of 72 vulnerable cases are detected in net/http and Gin (100%, up from 36%), and 8 block (11%, unchanged): the secrets.
   - Every taint case detects and warns.
-  - The packs met the corpus gate (precision 0.947) but not the real-world one: a blind evaluation on 70 production repositories found 1 true positive in 11 Go taint findings (precision 0.091), so they are reported as warnings.
-  - 4 of 44 safe cases are false positives, textscan's SQL and command-injection rules on the `safe_lookalike` cases, and none blocks.
+  - The packs met the corpus gate (precision 0.947 when they were added, 1.000 on the current baseline) but not the real-world one: a blind evaluation on 70 production repositories (commit `6901cf7`, Semgrep 1.141.0) found 1 true positive in 11 Go taint findings (precision 0.091), so they are reported as warnings.
+  - None of the 44 safe cases is a false positive now. When the packs were added, 4 were, textscan's SQL and command-injection rules on the `safe_lookalike` cases, and none blocked.
 
 ### Outside Python, the PR gate is effectively secrets-only
 
 Regex-tier findings never reach the corroboration needed to block, by design. For Java and Go, the only findings that fail a PR are secrets. For JS/TS, it is secrets plus template-literal SQL.
 
-- Not closed for JS/TS, Java and Go. A Semgrep taint finding would be reachable and block (ADR-011), but the taint gate is closed for these languages: the packs' real-world precision was 0.077 (JS/TS), 0.111 (Java) and 0.091 (Go) on a blind evaluation of 70 production repositories, below the 0.80 required. Their taint findings are reported as warnings, so the PR gate stays secrets-only for Java and Go and secrets plus template-literal SQL for JS/TS: block recall is 19% (JS/TS), 8% (Java) and 11% (Go).
+- Not closed for JS/TS, Java and Go. A Semgrep taint finding would be reachable and block (ADR-011), but the taint gate is closed for these languages: the packs' real-world precision was 0.077 (JS/TS), 0.111 (Java) and 0.091 (Go) on a blind evaluation of 70 production repositories, below the 0.80 required. Their taint findings are reported as warnings, so the PR gate stays secrets-only for Java and Go and secrets plus template-literal SQL for JS/TS: block recall is 19% (JS/TS), 11% (Java) and 11% (Go).
 
 ### Catalog gaps
 

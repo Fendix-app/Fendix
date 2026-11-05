@@ -59,11 +59,17 @@ What it measures: the same vulnerability, in different web frameworks. The corpu
 |---|---|---|---|---|
 | Python (Django, Flask, FastAPI) | 1.000 | 0.944 | 0.756 | n/a |
 | JavaScript / TypeScript (Express, NestJS, Next.js) | 0.889 | 0.194 | 0.689 | 0.08 |
-| Java (Spring) | 0.972 | 0.083 | 0.812 | 0.11 |
+| Java (Spring) | 1.000 | 0.111 | 0.812 | 0.11 |
 | Go (net/http, Gin) | 1.000 | 0.111 | 0.750 | 0.09 |
 
+- **Where each column was measured.** The dev columns are recomputed from
+  `benchmarks/frameworks/baseline.json`, which `make parity` reproduced at
+  commit `8b78364` on Semgrep 1.182.1. The blind-holdout column was measured
+  at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins). The
+  real-world precision column was measured at commit `6901cf7` on Semgrep
+  1.141.0.
 - **Holdout recall is lower than dev recall for every language, and the drop
-  exceeds the 0.10 limit in all four.** Python recall on the blind holdout is
+  exceeds the 0.10 limit in all four.** Python recall on the blind holdout (commit `e03655a`, Semgrep 1.141.0) is
   0.756; use the holdout column for any claim about unseen code.
 - **Python findings are taint-proven, and a proven flow blocks.** Python does
   not need Semgrep.

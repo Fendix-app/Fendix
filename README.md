@@ -60,7 +60,7 @@ Fendix has measured support for nine web frameworks in four languages. "Classes 
 
 **Every non-Python row requires Semgrep.** The JavaScript/TypeScript, Java and Go taint rules run only through Semgrep. Without it, for example in the standalone binary or in a Homebrew install that has no Semgrep, only the regex scanner (textscan) and the secrets scanner run for those languages, and the coverage above does not apply. Python needs no Semgrep: its taint engine ships in the Fendix Python engine.
 
-Why the non-Python taint findings do not block: on a blind evaluation of 70 real-world repositories their blocking precision was 0.08 for JavaScript/TypeScript, 0.11 for Java and 0.09 for Go, against the 0.80 required to block ([evidence](benchmarks/frameworks/REALWORLD.md), [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
+Why the non-Python taint findings do not block: on a blind evaluation of 70 real-world repositories (at commit `6901cf7`, Semgrep 1.141.0) their blocking precision was 0.08 for JavaScript/TypeScript, 0.11 for Java and 0.09 for Go, against the 0.80 required to block ([evidence](benchmarks/frameworks/REALWORLD.md), [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
 
 Recall by language, on the development corpus and on the blind holdout (a held-out set of labelled cases written by authors who never saw the rules):
 
@@ -68,8 +68,10 @@ Recall by language, on the development corpus and on the blind holdout (a held-o
 |---|---|---|---|---|
 | Python (Django, Flask, FastAPI) | 1.000 | 0.944 | 0.756 | n/a |
 | JavaScript / TypeScript | 0.889 | 0.194 | 0.689 | 0.08 |
-| Java (Spring) | 0.972 | 0.083 | 0.812 | 0.11 |
+| Java (Spring) | 1.000 | 0.111 | 0.812 | 0.11 |
 | Go (net/http, Gin) | 1.000 | 0.111 | 0.750 | 0.09 |
+
+Where each column was measured: the dev columns are recomputed from `benchmarks/frameworks/baseline.json`, which `make parity` reproduced at commit `8b78364` on Semgrep 1.182.1; the blind-holdout column was measured at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins); the real-world precision column was measured at commit `6901cf7` on Semgrep 1.141.0.
 
 Holdout recall is lower than dev recall for every language, and the drop exceeds the 0.10 limit in all four, so the development corpus overstates recall on code the rules have not seen. Quote the holdout column; the dev columns are scoped to the development corpus and are not a claim about arbitrary code. See [docs/accuracy.md](docs/accuracy.md) and [BENCHMARKS.md](BENCHMARKS.md).
 
@@ -981,7 +983,8 @@ a formula at report time:
    reachable escalation but never a Proven Path, and only for a language whose
    taint pack cleared its real-world precision gate. None has: JavaScript and
    TypeScript (precision 0.077), Java (0.111) and Go (0.091) fell far short of 0.80
-   on a blind evaluation of 70 production repositories, so their taint findings
+   on a blind evaluation of 70 production repositories (at commit `6901cf7`,
+   Semgrep 1.141.0), so their taint findings
    are reported as warnings and do not block
    ([ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
 3. **Reachability escalates the pure-SAST case** one level when an AST taint
@@ -1225,8 +1228,8 @@ a dataflow trace (only to a logged-in account), it becomes the finding's
 Semgrep finding, as warnings. A language (JavaScript, TypeScript, Java or Go) is enabled only when its taint pack clears the precision gate in
 [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md), including 0.80
 precision on at least 10 triaged real-world findings. No language is enabled:
-the JavaScript, TypeScript, Java and Go packs measured 0.077, 0.111 and 0.091,
-so their findings are warnings, not blocking.
+the JavaScript, TypeScript, Java and Go packs measured 0.077, 0.111 and 0.091
+(at commit `6901cf7`, Semgrep 1.141.0), so their findings are warnings, not blocking.
 
 ---
 
