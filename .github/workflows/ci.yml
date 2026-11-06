@@ -201,13 +201,19 @@ jobs:
   # The framework parity gate (benchmarks/frameworks/SPEC.md): 522 labelled
   # cases across nine frameworks, each scanned in its own tree. `make parity`
   # exits 1 when any case is worse than benchmarks/frameworks/baseline.json,
-  # so a detection regression fails the PR. It takes about ten minutes, which
-  # is why it is its own job and runs alongside the others rather than after
-  # them. The run: command is static, with no ${{ }} interpolation.
+  # so a detection regression fails the PR. One job per framework: the whole
+  # corpus in one job ran past 45 minutes on a hosted runner (about ten on a
+  # developer machine), and with --frameworks the gate compares only that
+  # framework's baseline cases. The run: command is static; the framework
+  # reaches make through PARITY_ARGS in env, from the fixed matrix below.
   framework-parity:
-    name: Framework parity gate
+    name: Framework parity gate (${{ matrix.framework }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [django, flask, fastapi, express, nestjs, nextjs, spring, nethttp, gin]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -224,6 +230,8 @@ jobs:
           python-version: "3.11"
 
       - name: Run the framework parity gate
+        env:
+          PARITY_ARGS: --frameworks ${{ matrix.framework }}
         run: make parity-venv parity
 
       # Kept on failure too: the per-case results are what shows which cases
@@ -233,7 +241,20 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: framework-parity-${{ github.run_id }}-${{ github.run_attempt }}
+          name: framework-parity-${{ matrix.framework }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .parity/results.json
           include-hidden-files: true
           retention-days: 30
+
+  # One result for the whole gate, to require in branch protection: it fails
+  # unless every framework's job passed.
+  framework-parity-gate:
+    name: Framework parity gate
+    runs-on: ubuntu-latest
+    needs: [framework-parity]
+    if: always()
+    steps:
+      - name: Every framework passed
+        env:
+          RESULT: ${{ needs.framework-parity.result }}
+        run: test "$RESULT" = success
