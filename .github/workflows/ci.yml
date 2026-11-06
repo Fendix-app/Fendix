@@ -195,11 +195,14 @@ jobs:
       # tagged-template tests. This job installs Semgrep and the Python engine's
       # dependencies (python/requirements.lock), so it runs them here with
       # FENDIX_REQUIRE_SEMGREP=1, which makes each fail instead of skip when
-      # Semgrep or the Python engine did not run.
+      # Semgrep or the Python engine did not run. Each test starts real
+      # Semgrep and Python engine processes: the engine package took 8.5 and
+      # then over 10 minutes on a hosted runner, past go test's default
+      # per-package limit, hence the explicit -timeout.
       - name: Semgrep-dependent tests (semgrep and engine packages)
         env:
           FENDIX_REQUIRE_SEMGREP: "1"
-        run: cd go && go test -count=1 ./internal/scanner/semgrep/ ./internal/engine/
+        run: cd go && go test -count=1 -timeout 25m ./internal/scanner/semgrep/ ./internal/engine/
 
       - name: Run e2e tests
         run: make e2e
