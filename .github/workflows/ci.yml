@@ -154,10 +154,16 @@ jobs:
       # The bundled rule pack's semgrep --test cases, run with the semgrep the
       # image ships (go/internal/scanner/semgrep/ruletests/README.md). The
       # repository is mounted read-only at the same relative paths.
+      # semgrep --test runs one process per CPU, one rule file each, and gives
+      # every rule a fixed 5 s per file that no flag changes. On a hosted
+      # runner the parallel taint rules starved each other past that limit,
+      # and a rule that times out reports no match, so a different rule
+      # failed each run. PYTHON_CPU_COUNT=1 (Python 3.13+, the image has 3.14)
+      # tests the rule files one at a time.
       - name: Semgrep rule tests
         run: |
           set -eu
-          docker run --rm --network none --entrypoint semgrep \
+          docker run --rm --network none -e PYTHON_CPU_COUNT=1 --entrypoint semgrep \
             -v "$PWD:/src:ro" -w /src fendix-ci \
             --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests
 
