@@ -640,10 +640,12 @@ def _span(node: ast.AST) -> Span:
 
 def _python_files(root: Path) -> Iterator[tuple[Path, str]]:
     """`(path, rel)` of every file the analyzer would analyse as Python: the
-    same walk as `ASTAnalyzer.run`, without symlinked or oversized files."""
+    same walk as `ASTAnalyzer.run`, without symlinked or oversized files.
+    Sorted, so the first proving caller does not depend on the order the
+    filesystem lists a directory in."""
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        for fname in filenames:
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+        for fname in sorted(filenames):
             if not fname.endswith(".py"):
                 continue
             path = Path(dirpath) / fname

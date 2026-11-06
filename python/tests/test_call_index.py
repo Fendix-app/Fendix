@@ -600,6 +600,26 @@ def test_the_first_proving_caller_is_the_only_one_parsed(tmp_path, monkeypatch):
     assert list(index._callers) == ["app/views/v0.py"]
 
 
+def test_callers_are_indexed_in_path_order_whatever_order_the_filesystem_lists(
+    tmp_path, monkeypatch
+):
+    # os.walk lists entries in directory order: sorted on APFS, arbitrary on
+    # ext4. The first proving caller must not depend on it.
+    real_walk = call_index.os.walk
+
+    def reversed_walk(top, *args, **kwargs):
+        for dirpath, dirnames, filenames in real_walk(top, *args, **kwargs):
+            dirnames.reverse()
+            filenames.reverse()
+            yield dirpath, dirnames, filenames
+
+    monkeypatch.setattr(call_index.os, "walk", reversed_walk)
+    monkeypatch.setattr(call_index, "_PARSE_CACHE_MAX_BYTES", 0)
+    index = _index(tmp_path, _views(5))
+    links = index.tainted_args("app.services.q", "find", 0, "name", first=True)
+    assert [link.file for link in links] == ["app/views/v0.py"]
+
+
 def test_the_caller_cache_is_bounded_and_an_evicted_caller_is_parsed_again(
     tmp_path, monkeypatch
 ):
