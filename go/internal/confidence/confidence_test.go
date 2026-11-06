@@ -71,6 +71,48 @@ func TestSemgrepTierPenalty(t *testing.T) {
 	}
 }
 
+// TestSemgrepTaintNeverDeterministic: a Semgrep taint finding is still a
+// Semgrep finding. Its proof counts through Reachable (+10, and an independent
+// signal), never through the deterministic-detection delta, so it cannot band
+// HIGH on its own — the confidence gate's invariant for every Semgrep tier.
+func TestSemgrepTaintNeverDeterministic(t *testing.T) {
+	for _, reachable := range []bool{false, true} {
+		ev := evidence.Evidence{
+			Source:     models.SourceWhitebox,
+			SourceTier: models.TierSemgrepTaint,
+			Confidence: models.ConfidenceHigh,
+			Reachable:  reachable,
+		}
+		if HasDeterministicDetection(ev) {
+			t.Errorf("Reachable=%v: HasDeterministicDetection = true for a semgrep_taint finding", reachable)
+		}
+		if r := Score(ev); r.Band == models.ConfidenceHigh {
+			t.Errorf("Reachable=%v: Band = HIGH (%d) for a semgrep_taint finding on its own: %v",
+				reachable, r.Value, r.Reasons)
+		}
+	}
+}
+
+// TestSemgrepTaintTierPenalty: the taint tier carries the same tier_semgrep
+// delta as the shim — the managed-CI policy keys that delta on
+// analyzer_implementation == semgrep, which both tiers export.
+func TestSemgrepTaintTierPenalty(t *testing.T) {
+	withTier := Score(evidence.Evidence{Source: models.SourceWhitebox, SourceTier: models.TierSemgrepTaint})
+	noTier := Score(evidence.Evidence{Source: models.SourceWhitebox})
+	if withTier.Value != noTier.Value+tierSemgrepPenalty {
+		t.Errorf("semgrep penalty not applied to semgrep_taint: withTier=%d noTier=%d", withTier.Value, noTier.Value)
+	}
+	found := false
+	for _, d := range withTier.Details {
+		if d.Code == CodeTierSemgrep && d.Delta == tierSemgrepPenalty {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no %s detail with delta %d: %+v", CodeTierSemgrep, tierSemgrepPenalty, withTier.Details)
+	}
+}
+
 func TestBandThresholds(t *testing.T) {
 	cases := []struct {
 		score int
@@ -137,6 +179,7 @@ func TestReasonsSumToValue(t *testing.T) {
 	cases := []evidence.Evidence{
 		{Source: models.SourceBlackbox},
 		{Source: models.SourceWhitebox, SourceTier: models.TierSemgrepShim},
+		{Source: models.SourceWhitebox, SourceTier: models.TierSemgrepTaint, Reachable: true, Confidence: models.ConfidenceHigh},
 		{Source: models.SourceCorrelated, RouteConfirmed: true, Reachable: true, ProvenPath: true, SourceTier: models.TierTreeSitter, Payload: "p", Response: "r"},
 		// The B4 de-escalation deltas are negative — the sum must still land
 		// exactly on Value.
@@ -529,6 +572,7 @@ func TestDeterministicDetectionLetsAProductionPatternMatchBandHigh(t *testing.T)
 		{"test/fixture code (FP_CORPUS P1: 31 of 35 catalogued instances)", func(e *evidence.Evidence) { e.InTest = true }},
 		{"fixture-shaped credential value", func(e *evidence.Evidence) { e.Placeholder = true }},
 		{"semgrep-shim tier (breadth before precision)", func(e *evidence.Evidence) { e.SourceTier = models.TierSemgrepShim }},
+		{"semgrep-taint tier (Semgrep-sourced, ADR-011)", func(e *evidence.Evidence) { e.SourceTier = models.TierSemgrepTaint }},
 		{"the analyzer did not assert HIGH confidence", func(e *evidence.Evidence) { e.Confidence = models.ConfidenceMedium }},
 		{"blackbox source (the DAST mirror is directObservation)", func(e *evidence.Evidence) { e.Source = models.SourceBlackbox }},
 	}

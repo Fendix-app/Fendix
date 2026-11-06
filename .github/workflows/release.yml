@@ -49,6 +49,109 @@ jobs:
           echo "::error::Tagged releases MUST set vars.COSIGN_ENABLED=true (Settings → Secrets and variables → Actions → Variables). To intentionally ship an unsigned tag, set vars.COSIGN_ENABLED=allow-unsigned."
           exit 1
 
+  # Held-out recall check. It decides which per-family detection claims may be
+  # published for this release; it does not decide whether the release ships.
+  #
+  # The job scans the private holdout corpus (Fendix-app/parity-holdout, same
+  # layout as benchmarks/frameworks/) and compares each language family's
+  # recall there with its recall on the development corpus in
+  # benchmarks/frameworks/baseline.json. Recall is compared on matching cases:
+  # only the (class, variant) pairs that both corpora have vulnerable cases
+  # for, with the development recall weighted to the holdout's mix of pairs, so
+  # a holdout of `direct` cases is not measured against development
+  # cross_file misses. A detector tuned to the development cases scores well
+  # there and badly here. The job goes red when any family's holdout recall is
+  # more than 10 points below its development recall (or cannot be measured):
+  # that family's numbers stay out of published claims until the gap closes.
+  #
+  # Nothing depends on this job. A red result is visible on the run and does
+  # not stop `release`, `publish`, `docker` or `mirror`, so a security patch
+  # still ships while a family is overfit. If the job is made a dependency of
+  # `release`, a family that fails today would stop every release.
+  #
+  # This repository is public, so its logs and artifacts are too, and a
+  # per-case holdout result would leak the holdout into the next round of
+  # tuning. The job therefore prints only the per-family lines (--quiet),
+  # uploads no artifact, and writes results.json to runner temp. Debug a
+  # failure by running run_parity.py with --corpus-root on a checkout of the
+  # holdout, without --quiet.
+  #
+  # It runs only on a tag push (the same condition as `release`). The holdout
+  # repository and its deploy key are set up outside this workflow: while
+  # secrets.PARITY_HOLDOUT_DEPLOY_KEY is empty or absent the job reports that
+  # and passes, so a holdout that does not exist yet never turns the run red.
+  parity-holdout:
+    name: Parity holdout recall
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+    steps:
+      - name: Check that the holdout is configured
+        id: holdout
+        env:
+          PARITY_HOLDOUT_DEPLOY_KEY: ${{ secrets.PARITY_HOLDOUT_DEPLOY_KEY }}
+        run: |
+          set -eu
+          if [ -z "${PARITY_HOLDOUT_DEPLOY_KEY}" ]; then
+            echo "::notice title=Parity holdout::holdout not configured; skipping (secrets.PARITY_HOLDOUT_DEPLOY_KEY is empty or absent)"
+            echo "configured=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.holdout.outputs.configured == 'true'
+        with:
+          persist-credentials: false
+
+      # Second checkout, into a subdirectory of the first. It comes after the
+      # first one because that checkout cleans its own working tree.
+      - name: Check out the private holdout corpus
+        if: steps.holdout.outputs.configured == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Fendix-app/parity-holdout
+          ssh-key: ${{ secrets.PARITY_HOLDOUT_DEPLOY_KEY }}
+          path: .parity-holdout
+          persist-credentials: false
+
+      # Same toolchain as the framework-parity job in ci.yml and `release`.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.holdout.outputs.configured == 'true'
+        with:
+          go-version: "1.27.3"
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.holdout.outputs.configured == 'true'
+        with:
+          python-version: "3.11"
+
+      # The development gate's own targets: the venv from requirements.lock
+      # (--require-hashes) and bin/fendix-parity built from this tag's source.
+      - name: Build the engine and the parity venv
+        if: steps.holdout.outputs.configured == 'true'
+        run: make parity-venv parity-prereqs
+
+      # --quiet prints only `family dev=X holdout=Y drop=Z pairs=N` lines and a verdict.
+      # The exit status is the gate: 1 when a family's drop exceeds the limit
+      # or cannot be measured, 2 when the run itself failed.
+      - name: Compare holdout recall with development recall
+        if: steps.holdout.outputs.configured == 'true'
+        env:
+          HOLDOUT_RESULTS: ${{ runner.temp }}/parity-holdout-results
+        run: |
+          set -eu
+          PATH="${PWD}/.venv-parity/bin:${PATH}" FENDIX_ENGINE="${PWD}/python" \
+            python3 benchmarks/frameworks/run_parity.py \
+              --fendix "${PWD}/bin/fendix-parity" \
+              --corpus-root "${PWD}/.parity-holdout/frameworks" \
+              --isolate --no-timing --quiet \
+              --out "${HOLDOUT_RESULTS}" \
+              --compare-recall-to benchmarks/frameworks/baseline.json \
+              --max-recall-drop 0.10
+
   release:
     name: Build & Release
     runs-on: ubuntu-latest

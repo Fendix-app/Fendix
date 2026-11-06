@@ -262,14 +262,15 @@ func locationClose(a, b corrMeta) bool {
 
 // stampToolIDs fills Evidence.ToolID where empty. Imported evidence arrives
 // with it set by sarifimport; native evidence is "fendix" — except the
-// semgrep shim tier, which is "semgrep", so fendix's own semgrep pass and an
-// imported semgrep SARIF are correctly NOT independent of each other.
+// semgrep tiers (shim and taint), which are "semgrep", so fendix's own semgrep
+// pass and an imported semgrep SARIF are correctly NOT independent of each
+// other.
 func stampToolIDs(evs []evidence.Evidence) {
 	for i := range evs {
 		if evs[i].ToolID != "" {
 			continue
 		}
-		if evs[i].SourceTier == models.TierSemgrepShim {
+		if evs[i].SourceTier.IsSemgrep() {
 			evs[i].ToolID = "semgrep"
 			continue
 		}

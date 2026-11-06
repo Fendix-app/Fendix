@@ -24,9 +24,9 @@ cd python && PYTHONPATH=. python3 benchmark/run_benchmark.py
 
 | Metric | Value |
 |---|---:|
-| Precision | **1.000** |
-| Recall | **1.000** |
-| F1 | **1.000** |
+| Precision (Python taint corpus) | **1.000** |
+| Recall (Python taint corpus) | **1.000** |
+| F1 (Python taint corpus, 0 known gaps) | **1.000** |
 | Cases | 51 labeled (22 vulnerable / 29 safe), 10 categories |
 | Known gaps | 0 (HANDLED == HONEST) |
 
@@ -47,9 +47,9 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
 
 | Metric | Value |
 |---|---:|
-| Precision | **1.000** |
-| Recall | **1.000** |
-| F1 | **1.000** |
+| Precision (Python synthetic corpus, excluding documented known gaps) | **1.000** |
+| Recall (Python synthetic corpus, excluding documented known gaps) | **1.000** |
+| F1 (Python synthetic corpus, excluding documented known gaps) | **1.000** |
 | True positives | 38 / 38 expected |
 | False positives | 0 |
 | False negatives | 0 |
@@ -62,10 +62,9 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
   taint didn't propagate through the scheme-concatenation into the
   `requests.get` sink). v0.27 fixed the taint engine (a bare/unterminated
   scheme literal is no longer treated as a fixed host), so this case is now
-  detected and F1 is **1.000 — legitimately reproduced and CI-gated**, not the
-  stale v0.11.0 claim. Re-run the command above to verify.
-- **CI-gated:** on push/PR (`.github/workflows/heavy-eval.yml`), floor F1 ≥ 0.99
-  (trips on the first real regression, e.g. re-introducing the SSRF FN → 0.987).
+  detected and F1 is **1.000 on the Python synthetic corpus, excluding documented known gaps — legitimately reproduced and CI-gated**, not the stale v0.11.0 claim. Re-run the command above to verify.
+- **CI-gated:** on push/PR (`.github/workflows/heavy-eval.yml`), floor F1 ≥ 0.99 on the
+  synthetic corpus (trips on the first real regression, e.g. re-introducing the SSRF FN → 0.987).
 - **Caveat:** canonical-pattern corpus we author; it measures whether the full
   `fendix scan` binary flags these shapes, not real-world detection rate.
 - **Run it with `semgrep` installed.** Without semgrep on `$PATH` the scan emits
@@ -78,7 +77,7 @@ python3 scripts/accuracy/run.py --python-engine bin/fendix
 > and let each finding claim the nearest unclaimed case. Two engines flagging the
 > same sink therefore produced a spare emission that claimed the *next* case,
 > shifting every later emission one case along. That manufactured a false
-> positive on `cmdi.py:36` (overall F1 0.987, under the CI floor) and, in the
+> positive on `cmdi.py:36` (overall F1 0.987 on the synthetic corpus, under the CI floor) and, in the
 > other direction, credited `secrets` with 13/13 while the multi-line JWT on
 > line 24 was **never detected** — a duplicate eleven lines away was filling its
 > slot.
@@ -113,7 +112,7 @@ fendix benchmark run --target all      # requires Docker
   is not attributed to a specific release here: it happened somewhere between
   `v0.19.0-3` and `v2.0.1` and was never bisected. It went unnoticed because
   it went unrecorded for two months simply because nobody re-ran the suite.
-  `fendix benchmark compare` does gate precision — `higherIsBetter["precision"]`
+  On the Juice Shop baseline, `fendix benchmark compare` does gate precision — `higherIsBetter["precision"]`
   is true, and the same 5-FP delta in the *opposite* direction is a −29.4% move
   that trips the 10% threshold. An improvement correctly never fails a gate, so
   the only thing standing between a stale baseline and a current one is somebody
@@ -185,7 +184,7 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 | Total findings emitted | 72 |
 | SAST taint findings (the only labeled surface) | **5** (was ~90 pre-Phase-B) |
 | Labeled findings that still fire | 3 (1 tp, 2 fp) |
-| Precision over labeled | **33.3 %** (thin-denominator lower bound — see caveat) |
+| Precision over labeled (TWISCOPE Python corpus) | **33.3 %** (thin-denominator lower bound — see caveat) |
 | Confirmed TP retained | 1 (Instagram-proxy SSRF, `views.py:602`) |
 | False negatives | **0** |
 | Labeled FP classes eliminated | **8 of 11** |
@@ -242,7 +241,7 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
   June (pre-Phase-B) triage; most FP entries now describe findings the engine no
   longer emits. A suppressed FP produces **no finding**, so it drops OUT of the
   `tp+fp` denominator — which is precisely why the ratio looks low. The
-  defensible statement is not "33 % precision" but "**1 confirmed TP retained, 0
+  defensible statement for the TWISCOPE Python corpus is not "33 % precision" but "**1 confirmed TP retained, 0
   FN, 8/11 known FP classes eliminated, SAST taint noise cut ~90 → 5, 2 residual
   FPs quantified.**"
 - **Out-of-scope unknowns.** 67 of the 69 `unknown` findings are SCA dep-CVEs,
@@ -259,15 +258,79 @@ cd go && FENDIX_SCORE_JSON=/tmp/twiscope.json \
 
 | Language | How | Tier |
 |---|---|---|
-| Python | interprocedural taint engine (source→sink, sanitizer-aware) | proven taint |
-| Go / JS / TS | regex SAST (line-local) + Go dep-CVE | regex / SCA |
+| Python | taint engine (source→sink, sanitizer-aware; within a function, plus one call into a helper in the same file or another module) | proven taint |
+| Go (net/http, Gin) | Semgrep taint rules (request source to sink within a function, plus one call into a function of the same file), shape rules for exported helpers, regex SAST (line-local) and dep-CVE; a taint finding is reported as a warning and does not block (real-world precision 0.091) | Semgrep taint (warn) / regex / SCA |
+| JS / TS | regex SAST (line-local); with Semgrep installed, Semgrep taint rules for Express, NestJS and Next.js (request input to a sink within one function; reported as a warning, not blocking, real-world precision 0.077) and shape rules for a helper's parameter (warn only) | regex / semgrep taint (warn) |
+| Java (Spring) | Semgrep taint rules from Spring MVC and servlet request input to SQL, command, template, XSS, SSRF, path and redirect sinks, within a method plus one call into a method of the same class; weak password hashing, unverified JWT claims and weak random tokens; shape rules for a sink in another class; findings are warnings, not blocking (real-world precision 0.111) | Semgrep taint (warn) |
 | **Java (v0.27–v0.28)** | **regex SAST (line-local): command injection, SQLi-by-concat, weak crypto, insecure deserialization, XXE, insecure cookie, weak randomness, LDAP injection, SSRF** | **regex** |
 | any language | hardcoded-secrets scanner (15 pattern families) | regex |
 
-Java (v0.27–v0.28) is **regex pattern-matching, line-local** — the same tier as the
-Go/JS rules, NOT taint analysis. We publish **no Java recall/precision number**:
-there is no labeled Java corpus yet, so any number would be unsourced. Deep
-Java taint analysis (what OWASP Benchmark needs) is a future phase.
+The Java (v0.27–v0.28) textscan rules are **regex pattern-matching,
+line-local**, the same tier as the Go and JS/TS textscan rules, NOT taint
+analysis. The Semgrep packs added since (JavaScript/TypeScript, Spring, and
+Go net/http and Gin) are taint rules: they follow request input within one
+function, and for Java and Go also one call into a method or function of the
+same class or file, not across files. A match is reported as a warning and
+does not block: a blind evaluation on 70 fresh public production repositories
+triaged every taint-tier finding (at commit `6901cf7`, Semgrep 1.141.0) and measured precision of 0.077 (JS/TS, 1 of
+13), 0.111 (Java, 1 of 10) and 0.091 (Go, 1 of 11), against the 0.80 required
+to block, so `semgrep.ReachabilityLanguages` is empty (ADR-011; evidence in [benchmarks/frameworks/REALWORLD.md](benchmarks/frameworks/REALWORLD.md)). The JS/TS, Java and Go recall numbers are published below, in
+*Framework parity*, as blind-holdout figures and as figures scoped to the
+development corpus the rules were tuned on. Deep, interprocedural taint
+analysis (what OWASP Benchmark needs) is a future phase.
+
+---
+
+## Framework parity: per-framework support and holdout recall
+
+```
+make parity-venv parity   # the development corpus, gated in CI; see the Makefile
+```
+
+The blind holdout corpus is private, so a holdout number is checked by the
+release workflow (`run_parity.py --compare-recall-to`) and cannot be re-run
+from this repository.
+
+The framework parity corpus (`benchmarks/frameworks/`) holds one labelled
+case per vulnerability class and variant in each of 9 frameworks and 11
+classes. Its per-case outcomes are in
+[`benchmarks/frameworks/baseline.json`](benchmarks/frameworks/baseline.json)
+and the report is
+[`benchmarks/frameworks/RESULTS.md`](benchmarks/frameworks/RESULTS.md).
+
+- **Development corpus:** the rules may be tuned against it, so its figures
+  are scoped to it.
+- **Blind holdout:** labelled cases written by authors who never saw the
+  rules. Public accuracy numbers come from this set.
+
+| Language | Dev recall | Dev block recall | Blind holdout recall | Real-world blocking precision |
+|---|---|---|---|---|
+| Python (Django, Flask, FastAPI) | 1.000 | 0.944 | 0.756 | n/a |
+| JavaScript / TypeScript (Express, NestJS, Next.js) | 0.889 | 0.194 | 0.689 | 0.08 |
+| Java (Spring) | 1.000 | 0.111 | 0.812 | 0.11 |
+| Go (net/http, Gin) | 1.000 | 0.111 | 0.750 | 0.09 |
+
+- **Where each column was measured.** The dev columns are recomputed from
+  `benchmarks/frameworks/baseline.json`, which `make parity` reproduced at
+  commit `8b78364` on Semgrep 1.182.1. The blind-holdout column was measured
+  at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins). The
+  real-world precision column was measured at commit `6901cf7` on Semgrep
+  1.141.0.
+- **Caveat: holdout recall is lower than dev recall for every language, and
+  the drop exceeds the 0.10 limit in all four.** The development corpus
+  overstates recall on code the rules have not seen.
+- **Python:** taint-proven findings, and a proven flow blocks. No Semgrep
+  needed.
+- **JS/TS, Java, Go:** the Semgrep taint rules report warnings and do not
+  block CI, because real-world blocking precision is far below the 0.80 bar
+  (evidence: [`REALWORLD.md`](benchmarks/frameworks/REALWORLD.md)). These
+  rows require Semgrep. Without it (the standalone binary, or a Homebrew
+  install without Semgrep) only the regex scanner (textscan) and the secrets scanner run for these languages.
+- **Classes:** SQL injection, command injection, XSS, SSRF, path traversal,
+  open redirect, hardcoded secrets, weak password hashing, JWT without
+  verification, weak random tokens and template injection. The
+  [README](README.md#language--framework-support) lists, per framework, the
+  classes whose `direct` case is detected.
 
 ---
 

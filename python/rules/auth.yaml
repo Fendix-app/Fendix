@@ -1,30 +1,8 @@
 rules:
-  # Rule 1: Flask route missing @login_required
-  - id: flask-missing-login-required
-    patterns:
-      - pattern: |
-          @$APP.route(...)
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @login_required
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @login_required
-          def $FUNC(...):
-              ...
-    message: >
-      Flask route '$FUNC' is missing @login_required decorator.
-      Any user can access this endpoint without authentication.
-    languages: [python]
-    severity: ERROR
-    metadata:
-      category: auth
-      cwe: CWE-306
-      confidence: MEDIUM
-      fendix_severity: HIGH
+  # (Rule 1 — flask-missing-login-required — was removed after v3.6.4,
+  # ADR-012: it duplicated flask-route-no-auth-decorator on every Flask route.
+  # This directory is read by no code; the bundled pack is
+  # go/internal/scanner/semgrep/rules/.)
 
   # Rule 2: Django class-based view missing login_required mixin
   - id: django-view-missing-login-required

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
@@ -166,5 +167,137 @@ func TestClassifyErr_MinimalMapping(t *testing.T) {
 	}
 	if got := classifyErr(&neterr.StatusError{Host: "h", Code: 404}); got != reporters.ReasonExecutionError {
 		t.Errorf("404 → %s, want execution_error (never transient)", got)
+	}
+}
+
+// A Semgrep run in which a rule hit its per-rule timeout is recorded ok, as
+// v3.7.0 records it: Semgrep itself calls the run successful, and a timeout on
+// one rule and file loses only that rule's matches there (R-pf90). The detail
+// names each timed-out rule and file, so the loss is not invisible, and the
+// findings the run did produce are kept. A run that was killed, or that did
+// not load a rule, is the failed case (the tests below).
+func TestSemgrepRunWithRuleTimeoutsIsOkWithDetailAndKeepsFindings(t *testing.T) {
+	found := []evidence.Evidence{{ID: "SEC-PYTHON_EVAL_INJECTION", RuleID: "python-eval-injection"}}
+
+	var clean scannerStatusList
+	var cleanEvid []evidence.Evidence
+	recordSemgrepRun(&clean, &cleanEvid, semgrep.Run{Findings: found})
+	if len(clean) != 1 || clean[0] != (reporters.ScannerStatus{Name: AnalyzerSemgrep, State: reporters.ScannerOK}) {
+		t.Errorf("run without timeouts = %+v; want a plain ok", clean)
+	}
+	if !reflect.DeepEqual(cleanEvid, found) {
+		t.Errorf("findings = %+v; want %+v", cleanEvid, found)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		timeouts []semgrep.RuleTimeout
+		report   semgrep.Report
+		want     []string
+		notWant  []string
+	}{
+		{"two", []semgrep.RuleTimeout{
+			{RuleID: "js-sqli-taint", Path: "src/big.js"},
+			{RuleID: "python-eval-injection", Path: "app/gen.py"},
+		}, semgrep.Report{Incomplete: map[string]int{"Timeout": 2}},
+			[]string{"2 rule timeouts,", "js-sqli-taint on src/big.js", "python-eval-injection on app/gen.py", "matches missing"},
+			[]string{"non-fatal per-file"}},
+		{"one", []semgrep.RuleTimeout{{RuleID: "js-sqli-taint", Path: "src/big.js"}},
+			semgrep.Report{Incomplete: map[string]int{"Timeout": 1}},
+			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js", "matches missing"}, nil},
+		{"unnamed", []semgrep.RuleTimeout{{}}, semgrep.Report{},
+			[]string{"1 rule timeout,", "unknown rule on unknown file"}, nil},
+		// The other per-file problems of the run are still counted, once: a
+		// Timeout is already named above.
+		{"with other per-file problems", []semgrep.RuleTimeout{{RuleID: "js-sqli-taint", Path: "src/big.js"}},
+			semgrep.Report{Incomplete: map[string]int{"Timeout": 1, "PartialParsing": 2}},
+			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js", "PartialParsing 2"},
+			[]string{"Timeout 1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var status scannerStatusList
+			var evid []evidence.Evidence
+			recordSemgrepRun(&status, &evid, semgrep.Run{Findings: found, Timeouts: tc.timeouts, Report: tc.report})
+			if len(status) != 1 {
+				t.Fatalf("entries = %+v; want one", status)
+			}
+			got := status[0]
+			if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerOK || got.Reason != "" {
+				t.Errorf("entry = %+v; want semgrep, ok, no reason", got)
+			}
+			if status.hasFailure() {
+				t.Error("a rule timeout alone must not count as a scanner failure")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got.Detail, want) {
+					t.Errorf("detail %q lacks %q", got.Detail, want)
+				}
+			}
+			for _, unwanted := range tc.notWant {
+				if strings.Contains(got.Detail, unwanted) {
+					t.Errorf("detail %q has %q", got.Detail, unwanted)
+				}
+			}
+			if !reflect.DeepEqual(evid, found) {
+				t.Errorf("findings = %+v; want the run's findings kept", evid)
+			}
+		})
+	}
+}
+
+// Options dropped for an older host Semgrep are named in the detail of the
+// run, which stays ok.
+func TestSemgrepRunThatDroppedOptionsStaysOkAndNamesThem(t *testing.T) {
+	const note = "semgrep 1.45.0: dropped --project-root (needs 1.111.0)"
+	var status scannerStatusList
+	var evid []evidence.Evidence
+	recordSemgrepRun(&status, &evid, semgrep.Run{Report: semgrep.Report{Dropped: note}})
+	if len(status) != 1 {
+		t.Fatalf("entries = %+v; want one", status)
+	}
+	got := status[0]
+	if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerOK || got.Reason != "" {
+		t.Errorf("entry = %+v; want semgrep, ok, no reason", got)
+	}
+	if got.Detail != note {
+		t.Errorf("detail = %q; want %q", got.Detail, note)
+	}
+	if status.hasFailure() {
+		t.Error("dropped options alone must not count as a scanner failure")
+	}
+}
+
+// A Semgrep run that could not load a rule pack is recorded failed (reason
+// execution_error), whatever else the run produced: it did not run the pack, so
+// the checks that stand in for it (D4) must stay on, and --fail-on-scanner-error
+// must see it.
+func TestSemgrepRunWithRuleErrorsFailsAndKeepsFindings(t *testing.T) {
+	found := []evidence.Evidence{{ID: "SEC-PYTHON_EVAL_INJECTION", RuleID: "python-eval-injection"}}
+	var status scannerStatusList
+	var evid []evidence.Evidence
+	recordSemgrepRun(&status, &evid, semgrep.Run{
+		Findings: found,
+		RuleErrors: []semgrep.RuleError{
+			{Type: "InvalidRuleSchemaError", Message: "Invalid rule schema: no pattern"},
+			{Type: "SemgrepError", Message: "invalid configuration file found"},
+		},
+	})
+	if len(status) != 1 {
+		t.Fatalf("entries = %+v; want one", status)
+	}
+	got := status[0]
+	if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonExecutionError {
+		t.Errorf("entry = %+v; want semgrep, failed, execution_error", got)
+	}
+	for _, want := range []string{"2 rule errors", "InvalidRuleSchemaError", "invalid configuration file found"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("detail %q lacks %q", got.Detail, want)
+		}
+	}
+	if !status.hasFailure() {
+		t.Error("a rule error must count as a scanner failure")
+	}
+	if !reflect.DeepEqual(evid, found) {
+		t.Errorf("findings = %+v; want the run's findings kept", evid)
 	}
 }

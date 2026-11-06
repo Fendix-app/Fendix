@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+
+	"github.com/Fendix-app/Fendix/go/internal/engine"
 )
 
 func TestPublishedSecurityContractMatchesExecutableRegistries(t *testing.T) {
@@ -95,5 +97,64 @@ func compareFields(t *testing.T, kind, id string, published, executable any) {
 		if _, ok := executableFields[field]; !ok {
 			t.Errorf("%s %q has stale published field %q", kind, id, field)
 		}
+	}
+}
+
+// Python-engine checks are named by the rule_id their findings carry, like
+// every other analyzer's; finding_id is the finding's own id. Severity is the
+// declared unproven one and confidence what an unproven finding carries, so
+// the engine's confidence cap (MEDIUM caps at HIGH) is derivable: an
+// unproven PY_SQL_INJECTION reports HIGH.
+func TestCatalogIncludesPythonEngineChecks(t *testing.T) {
+	contract, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]Check{}
+	for _, check := range contract.Checks {
+		byID[check.ID] = check
+	}
+	for _, want := range []Check{
+		{
+			ID: "python.ast/PY_SQL_INJECTION", FindingID: "SEC-PY_SQL_INJECTION",
+			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "CRITICAL",
+			Confidence: "MEDIUM",
+			CWEs:       []string{"CWE-89"}, Applicability: []string{"python"},
+		},
+		{
+			ID: "SEC-JS_SQL_TEMPLATE", FindingID: "SEC-JS_SQL_TEMPLATE",
+			Analyzer: engine.AnalyzerPythonInjection, Category: "injection", DefaultSeverity: "HIGH",
+			Confidence: "HIGH",
+			CWEs:       []string{"CWE-89"}, Applicability: []string{"javascript", "typescript"},
+		},
+	} {
+		got, ok := byID[want.ID]
+		if !ok {
+			t.Errorf("catalog has no %s check", want.ID)
+			continue
+		}
+		if got.FindingID != want.FindingID || got.Analyzer != want.Analyzer || got.Category != want.Category ||
+			got.DefaultSeverity != want.DefaultSeverity || got.Confidence != want.Confidence ||
+			!reflect.DeepEqual(got.CWEs, want.CWEs) ||
+			!reflect.DeepEqual(got.Applicability, want.Applicability) {
+			t.Errorf("%s = %+v, want %+v", want.ID, got, want)
+		}
+	}
+}
+
+// Check IDs are the catalog's primary key: the stale-contract test above
+// compares by ID, and the docs site routes one page per ID. A duplicate would
+// silently hide one of the two checks.
+func TestCatalogCheckIDsAreUnique(t *testing.T) {
+	contract, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, check := range contract.Checks {
+		if analyzer, dup := seen[check.ID]; dup {
+			t.Errorf("check ID %q is used by both %s and %s", check.ID, analyzer, check.Analyzer)
+		}
+		seen[check.ID] = check.Analyzer
 	}
 }

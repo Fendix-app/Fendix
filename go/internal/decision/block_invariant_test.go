@@ -40,7 +40,7 @@ func TestNoBlockWithoutCorroboration(t *testing.T) {
 		models.ConfidenceHigh, models.ConfidenceMedium, models.ConfidenceLow,
 	}
 	tiers := []models.SourceTier{
-		"", models.TierNativeGo, models.TierTreeSitter, models.TierSemgrepShim,
+		"", models.TierNativeGo, models.TierTreeSitter, models.TierSemgrepShim, models.TierSemgrepTaint,
 	}
 	failOns := []string{"", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 	opts := Options{EnforceConfidence: true, DeescalateTests: true}

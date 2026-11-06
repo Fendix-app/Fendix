@@ -1,0 +1,1967 @@
+# JavaScript and TypeScript web rules (Task 4.3): cross-site scripting, SSRF,
+# path traversal and open redirect, for Express, NestJS and Next.js. Written
+# in-house. Every rule is a Semgrep taint rule: a match is a request source
+# reaching the sink inside one function, which counts as reachability for a
+# language enabled in semgrep.ReachabilityLanguages (ADR-011). SSRF, path
+# traversal and open redirect are category injection, like textscan's. The
+# request sources are repeated in every rule because Semgrep does not resolve
+# YAML anchors. Reachable findings are escalated one severity level, so
+# fendix_severity is the level before that.
+rules:
+  - id: js-xss-taint
+    mode: taint
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: ERROR
+    message: >-
+      Request input is written into an HTML response without escaping. Escape it
+      for HTML (escape-html, he.encode) or render it with an autoescaping
+      template.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sanitizers:
+      # HTML escapers, by name: escape-html (escapeHtml, escape), he.encode /
+      # he.escape, lodash and validator escape, entities, DOMPurify.sanitize,
+      # sanitize-html, xss / filterXSS, encodeURI, encodeURIComponent. Not a
+      # decoder (unescape, he.decode) or another language's escaper
+      # (_.escapeRegExp, a SQL or shell escape).
+      - patterns:
+          - pattern: $ESCAPE(...)
+          - metavariable-regex:
+              metavariable: $ESCAPE
+              regex: ^(?:(?:[\w$]+\.)*(?:escapeHtml|escapeHTML|htmlEscape|escapeHtmlEntities|encodeHTML|encodeHtml|htmlEncode|sanitizeHtml|sanitizeHTML|filterXSS|encodeURI|encodeURIComponent)|escape|xss|(?:_|lodash|he|validator|entities|htmlEntities)\.(?:escape|encode|encodeHTML|escapeHTML)|(?:DOMPurify|dompurify|purify)\.sanitize)$
+      # The output of an autoescaping engine rendering a fixed template (a file
+      # name or a constant), and React's server rendering. A template taken
+      # from the request is template injection (js-ssti-taint), not escaped.
+      # A template that writes a value raw is not escaped output: ejs <%-,
+      # Mustache and Handlebars {{{, nunjucks | safe, pug != and !{.
+      - patterns:
+          - pattern: $ENGINE.$RENDER("$TEXT", ...)
+          - metavariable-regex:
+              metavariable: $RENDER
+              regex: ^(render|renderFile|renderString)$
+          - metavariable-regex:
+              metavariable: $TEXT
+              regex: (?s)^(?!.*(<%-|\{\{\{|\|\s*safe\b|!=|!\{))
+      - patterns:
+          - pattern-inside: |
+              const $TPL = "$TEXT";
+              ...
+          - pattern: $ENGINE.$RENDER($TPL, ...)
+          - metavariable-regex:
+              metavariable: $RENDER
+              regex: ^(render|renderFile|renderString)$
+          - metavariable-regex:
+              metavariable: $TEXT
+              regex: (?s)^(?!.*(<%-|\{\{\{|\|\s*safe\b|!=|!\{))
+      - pattern-either:
+          - pattern: renderToString(...)
+          - pattern: renderToStaticMarkup(...)
+          - pattern: $REACT.renderToString(...)
+          - pattern: $REACT.renderToStaticMarkup(...)
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: parseInt(...)
+          - pattern: parseFloat(...)
+          - pattern: Math.floor(...)
+          - pattern: Math.round(...)
+          - pattern: Boolean(...)
+    pattern-sinks:
+      # Express: res.send / res.write / res.end of a string built with markup,
+      # or of a value named like HTML.
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($X)
+              - pattern: $RES.write($X, ...)
+              - pattern: $RES.end($X, ...)
+              - pattern: $RES.status($CODE).send($X)
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-regex:
+              metavariable: $X
+              regex: (?s)^.*<[A-Za-z!/][^<>]*>
+          - metavariable-pattern:
+              metavariable: $X
+              pattern-either:
+                - pattern: '`...`'
+                - pattern: $A + $B
+          - focus-metavariable: $X
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($X)
+              - pattern: $RES.write($X, ...)
+              - pattern: $RES.end($X, ...)
+              - pattern: $RES.status($CODE).send($X)
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-regex:
+              metavariable: $X
+              regex: (?i)^.*(html|markup)
+          - focus-metavariable: $X
+      # Express: anything sent after the response is typed as HTML.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RES.setHeader($KEY, $TYPE);
+                  ...
+              - pattern-inside: |
+                  $RES.set($KEY, $TYPE);
+                  ...
+              - pattern-inside: |
+                  $RES.type($TYPE);
+                  ...
+              - pattern-inside: |
+                  $RES.writeHead($CODE, {..., $KEY: $TYPE, ...});
+                  ...
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: (?i)^.*html
+          - pattern-either:
+              - pattern: $RES.send($X)
+              - pattern: $RES.write($X, ...)
+              - pattern: $RES.end($X, ...)
+          - focus-metavariable: $X
+      # Fetch API / Next.js: a Response or NextResponse typed text/html.
+      - patterns:
+          - pattern-either:
+              - pattern: 'new Response($X, {..., headers: {..., $KEY: $TYPE, ...}, ...})'
+              - pattern: 'new NextResponse($X, {..., headers: {..., $KEY: $TYPE, ...}, ...})'
+          - metavariable-regex:
+              metavariable: $KEY
+              regex: (?i)^['"]?content-type['"]?$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: (?i)^.*html
+          - focus-metavariable: $X
+    metadata:
+      category: xss
+      cwe: CWE-79
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Request input written into an HTML response unescaped.
+      fendix_remediation: >-
+        Request input is written into an HTML response body as-is, so a value
+        holding markup or a script runs in the visitor's browser. Escape it for HTML
+        before it is written (escape-html, he.encode, or DOMPurify.sanitize for
+        markup that must stay), or render the page with a template engine that
+        escapes by default.
+      fendix_reachability: taint
+
+  - id: js-ssrf-taint
+    mode: taint
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: ERROR
+    message: >-
+      Request input chooses the URL of an outbound request. Check its host against
+      an allowlist before the request is made.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sanitizers:
+      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw,
+      # the check alone or an operand of `||`, never under `&&`; the return or
+      # throw a direct statement of the body. The host is read off a URL
+      # object, off new URL(string), or destructured from new URL(string);
+      # afterwards the URL object and the string it parsed are both clean. A
+      # denylist (no `!`) or a check whose body does not leave cleans nothing.
+      # Inside if (ALLOWED.has(<host>)) { ... } the value is clean as well.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if ($ALLOW.$HAS($U.$PART)) $BODY
+              - pattern-inside: |
+                  if ($ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      # A URL built from a literal that already fixes the scheme and host, or
+      # a same-site path segment, wherever it is built: inline, or in a
+      # variable first. '/' + next does not ('/' + '/evil.com' leaves the site),
+      # nor does `https://host${path}` (path may be @evil.com).
+      - patterns:
+          - pattern: $URL_FIXED
+          - metavariable-regex:
+              metavariable: $URL_FIXED
+              regex: ^[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$]
+          - metavariable-pattern:
+              metavariable: $URL_FIXED
+              pattern-either:
+                - pattern: '`...`'
+                - pattern: $URL_L + $URL_R
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: 'fetch($U, ...)'
+              - pattern: 'axios($U, ...)'
+              - pattern: 'got($U, ...)'
+          - pattern-not: '$F({...}, ...)'
+          - pattern-not: '$C.$M({...}, ...)'
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: 'fetch($U, ...)'
+              - pattern: 'axios($U, ...)'
+              - pattern: 'got($U, ...)'
+          - pattern-not: '$F({...}, ...)'
+          - pattern-not: '$C.$M({...}, ...)'
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'fetch($U, ...)'
+              - pattern: 'axios($U, ...)'
+              - pattern: 'got($U, ...)'
+          - pattern-not: '$F({...}, ...)'
+          - pattern-not: '$C.$M({...}, ...)'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT.$VERB($U, ...)'
+          - pattern-not: '$F({...}, ...)'
+          - pattern-not: '$C.$M({...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-regex:
+              metavariable: $VERB
+              regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT.$VERB($U, ...)'
+          - pattern-not: '$F({...}, ...)'
+          - pattern-not: '$C.$M({...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-regex:
+              metavariable: $VERB
+              regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT.$VERB($U, ...)'
+          - pattern-not: '$F({...}, ...)'
+          - pattern-not: '$C.$M({...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-regex:
+              metavariable: $VERB
+              regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT({..., url: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT({..., url: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT({..., url: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT.$VERB({..., url: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-regex:
+              metavariable: $VERB
+              regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT.$VERB({..., url: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-regex:
+              metavariable: $VERB
+              regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$CLIENT.$VERB({..., url: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $CLIENT
+              regex: ^(axios|got|ky|superagent|needle|http|https|undici)$
+          - metavariable-regex:
+              metavariable: $VERB
+              regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+    metadata:
+      category: injection
+      cwe: CWE-918
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Outbound request to a URL taken from request input.
+      fendix_remediation: >-
+        Request input chooses the URL of a request the server makes (fetch, axios,
+        got, http.get, undici), so a caller can reach internal services or cloud
+        metadata endpoints through the server. Parse the URL and check its scheme
+        and host against an allowlist before the request; do not follow redirects to
+        other hosts.
+      fendix_reachability: taint
+
+  - id: js-path-traversal-taint
+    mode: taint
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: ERROR
+    message: >-
+      Request input reaches a file path that is read or sent. Resolve the path and
+      check that it stays under the base directory, or keep only its base name.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+      # Containment that rejects: if (!p.startsWith(BASE + path.sep)) return|
+      # throw, or the relative path from the base climbs out or is absolute
+      # (another drive on Windows). The prefix check proves containment only on
+      # a path bound from path.resolve(...) (path.join or normalize alone keep
+      # ../ out of it, and on raw input or a concatenation
+      # /srv/files/../../etc/passwd starts with the base). A bare
+      # startsWith(BASE) still admits /srv/base_evil/x (Review Focus 5), and a
+      # check whose body does not leave cleans nothing. Inside
+      # if (p.startsWith(BASE + path.sep)) { ... } the path is clean as well.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$P.startsWith($BASE + $PATH.sep)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$P.startsWith($BASE + $PATH.sep)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith($BASE + $PATH.sep) || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith($BASE + "/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$P.startsWith($BASE + "/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith($BASE + "/") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}${$PATH.sep}`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$P.startsWith(`${$BASE}${$PATH.sep}`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}${$PATH.sep}`) || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}/`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$P.startsWith(`${$BASE}/`)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$P.startsWith(`${$BASE}/`) || $GUARD_OR) $BODY
+                  ...
+          - pattern-inside: |
+              $P = path.resolve(...);
+              ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if ($P.startsWith($BASE + $PATH.sep)) $BODY
+              - pattern-inside: |
+                  if ($P.startsWith($BASE + "/")) $BODY
+          - pattern-inside: |
+              $P = path.resolve(...);
+              ...
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($REL.startsWith("..") || path.isAbsolute($REL)) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($REL.startsWith("..") || path.isAbsolute($REL) || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || $REL.startsWith("..") || path.isAbsolute($REL)) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || ($REL.startsWith("..") || path.isAbsolute($REL))) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if (path.isAbsolute($REL) || $REL.startsWith("..")) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if (path.isAbsolute($REL) || $REL.startsWith("..") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || path.isAbsolute($REL) || $REL.startsWith("..")) $BODY
+                  ...
+              - pattern-inside: |
+                  $REL = path.relative($BASE, $P);
+                  ...
+                  if ($GUARD_OR || (path.isAbsolute($REL) || $REL.startsWith(".."))) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - pattern: $P
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: parseInt(...)
+          - pattern: parseFloat(...)
+          - pattern: Math.floor(...)
+          - pattern: Math.round(...)
+          - pattern: Boolean(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FS.$READ($P, ...)
+              - pattern: $FS.promises.$READ($P, ...)
+              - pattern: $READ($P, ...)
+          - metavariable-regex:
+              metavariable: $READ
+              regex: ^(readFile|readFileSync|createReadStream)$
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.sendFile($P, ...)
+              - pattern: $RES.download($P, ...)
+          # With root, Express's send resolves the path under it and rejects
+          # one that leaves it.
+          - pattern-not: '$RES.sendFile($P, {..., root: $ROOT, ...}, ...)'
+          - pattern-not: '$RES.download($P, {..., root: $ROOT, ...}, ...)'
+          - pattern-not: '$RES.download($P, $NAME, {..., root: $ROOT, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - focus-metavariable: $P
+    metadata:
+      category: injection
+      cwe: CWE-22
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        File path built from request input.
+      fendix_remediation: >-
+        Request input reaches the path of a file the server reads or sends
+        (fs.readFile, fs.createReadStream, res.sendFile), so ../ segments or an
+        absolute path can reach any file the process can read. Resolve the path with
+        path.resolve and check that it starts with the base directory plus path.sep
+        before using it, or keep only path.basename of the input.
+      fendix_reachability: taint
+
+  - id: js-xss-sink
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: WARNING
+    message: >-
+      A function's parameter is written into HTML markup unescaped. If a caller
+      passes request input, it is cross-site scripting; escape the value for HTML.
+    patterns:
+      - pattern-either:
+          - pattern-inside: function $F(..., $P, ...) { ... }
+          - pattern-inside: (..., $P, ...) => $BODY
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $RES.send($X)
+                  - pattern: $RES.write($X, ...)
+                  - pattern: $RES.end($X, ...)
+                  - pattern: $RES.status($CODE).send($X)
+              - metavariable-regex:
+                  metavariable: $RES
+                  regex: ^(res|resp|response|reply)$
+          - patterns:
+              - pattern-either:
+                  - pattern: 'new Response($X, {..., headers: {..., $KEY: $TYPE, ...}, ...})'
+                  - pattern: 'new NextResponse($X, {..., headers: {..., $KEY: $TYPE, ...}, ...})'
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: (?i)^['"]?content-type['"]?$
+              - metavariable-regex:
+                  metavariable: $TYPE
+                  regex: (?i)^.*html
+      # Markup built around the parameter itself, not around an escaped copy.
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?s)^.*<[A-Za-z!/][^<>]*>
+      - metavariable-pattern:
+          metavariable: $X
+          pattern-either:
+            - pattern: '`...${$P}...`'
+            - pattern: $A + $P
+            - pattern: $P + $A
+      - pattern-not-inside: |
+          const $P = "...";
+          ...
+      - pattern-not: $RES.send("...")
+    metadata:
+      category: xss
+      cwe: CWE-79
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Function parameter written into an HTML response unescaped.
+      fendix_remediation: >-
+        This function writes its parameter into the markup of an HTML response as-
+        is. If any caller passes request input, markup or a script in it runs in the
+        visitor's browser. Escape the value for HTML before it is written (escape-
+        html, he.encode), or render the page with an autoescaping template.
+
+  - id: js-open-redirect-taint
+    mode: taint
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: ERROR
+    message: >-
+      Request input chooses the target of a redirect. Allow only same-site paths,
+      or check the host against an allowlist.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sanitizers:
+      # A same-site path check needs both halves: the target starts with "/"
+      # AND not with "//" (https://evil.com fails the first, //evil.com the
+      # second). As a guard whose body returns or throws, every later use is
+      # clean; bound to a name, the ternary isLocal ? target : "/" is clean.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$U.startsWith("/") || $U.startsWith("//")) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$U.startsWith("/") || $U.startsWith("//") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$U.startsWith("/") || $U.startsWith("//")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || (!$U.startsWith("/") || $U.startsWith("//"))) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($U.startsWith("//") || !$U.startsWith("/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($U.startsWith("//") || !$U.startsWith("/") || $GUARD_OR) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || $U.startsWith("//") || !$U.startsWith("/")) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || ($U.startsWith("//") || !$U.startsWith("/"))) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $OK = $U.startsWith("/") && !$U.startsWith("//");
+                  ...
+              - pattern-inside: |
+                  $OK = $U.startsWith("/") && !$U.startsWith("//") && $GUARD_AND;
+                  ...
+              - pattern-inside: |
+                  $OK = $GUARD_AND && $U.startsWith("/") && !$U.startsWith("//");
+                  ...
+              - pattern-inside: |
+                  $OK = !$U.startsWith("//") && $U.startsWith("/");
+                  ...
+              - pattern-inside: |
+                  $OK = !$U.startsWith("//") && $U.startsWith("/") && $GUARD_AND;
+                  ...
+              - pattern-inside: |
+                  $OK = $GUARD_AND && !$U.startsWith("//") && $U.startsWith("/");
+                  ...
+          - pattern: '$OK ? $U : $FALLBACK'
+      # A host allowlist that rejects: if (!ALLOWED.has(<host>)) return|throw,
+      # the check alone or an operand of `||`, never under `&&`; the return or
+      # throw a direct statement of the body. The host is read off a URL
+      # object, off new URL(string), or destructured from new URL(string);
+      # afterwards the URL object and the string it parsed are both clean. A
+      # denylist (no `!`) or a check whose body does not leave cleans nothing.
+      # Inside if (ALLOWED.has(<host>)) { ... } the value is clean as well.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS($U.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS($U.$PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.$HAS(new URL($U, ...).$PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($OBJ.$PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  $OBJ = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($OBJ.$PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if ($GUARD_OR || !$ALLOW.$HAS($PART)) $BODY
+                  ...
+              - pattern-inside: |
+                  const {..., $PART, ...} = new URL($U, ...);
+                  ...
+                  if (!$ALLOW.$HAS($PART) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if ($ALLOW.$HAS($U.$PART)) $BODY
+              - pattern-inside: |
+                  if ($ALLOW.$HAS(new URL($U, ...).$PART)) $BODY
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $PART
+              regex: ^(hostname|host|origin)$
+          - pattern: $U
+      # A URL built from a literal that already fixes the scheme and host, or
+      # a same-site path segment, wherever it is built: inline, or in a
+      # variable first. '/' + next does not ('/' + '/evil.com' leaves the site),
+      # nor does `https://host${path}` (path may be @evil.com).
+      - patterns:
+          - pattern: $URL_FIXED
+          - metavariable-regex:
+              metavariable: $URL_FIXED
+              regex: ^[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$]
+          - metavariable-pattern:
+              metavariable: $URL_FIXED
+              pattern-either:
+                - pattern: '`...`'
+                - pattern: $URL_L + $URL_R
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: parseInt(...)
+          - pattern: parseFloat(...)
+          - pattern: Math.floor(...)
+          - pattern: Math.round(...)
+          - pattern: Boolean(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: '$RES.redirect($U)'
+              - pattern: '$RES.redirect($STATUS, $U)'
+              - pattern: '$RES.location($U)'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: '$RES.redirect($U)'
+              - pattern: '$RES.redirect($STATUS, $U)'
+              - pattern: '$RES.location($U)'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$RES.redirect($U)'
+              - pattern: '$RES.redirect($STATUS, $U)'
+              - pattern: '$RES.location($U)'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$RES.setHeader($LOC, $U)'
+              - pattern: '$RES.set($LOC, $U)'
+              - pattern: '$RES.header($LOC, $U)'
+              - pattern: '$RES.writeHead($STATUS, {..., $LOC: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-regex:
+              metavariable: $LOC
+              regex: (?i)^['"]?location['"]?$
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: '$RES.setHeader($LOC, $U)'
+              - pattern: '$RES.set($LOC, $U)'
+              - pattern: '$RES.header($LOC, $U)'
+              - pattern: '$RES.writeHead($STATUS, {..., $LOC: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-regex:
+              metavariable: $LOC
+              regex: (?i)^['"]?location['"]?$
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: '$RES.setHeader($LOC, $U)'
+              - pattern: '$RES.set($LOC, $U)'
+              - pattern: '$RES.header($LOC, $U)'
+              - pattern: '$RES.writeHead($STATUS, {..., $LOC: $U, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: ^(res|resp|response|reply)$
+          - metavariable-regex:
+              metavariable: $LOC
+              regex: (?i)^['"]?location['"]?$
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'NextResponse.redirect(new URL($U, ...), ...)'
+              - pattern: 'Response.redirect(new URL($U, ...), ...)'
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: 'NextResponse.redirect(new URL($U, ...), ...)'
+              - pattern: 'Response.redirect(new URL($U, ...), ...)'
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'NextResponse.redirect(new URL($U, ...), ...)'
+              - pattern: 'Response.redirect(new URL($U, ...), ...)'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'NextResponse.redirect($U, ...)'
+              - pattern: 'Response.redirect($U, ...)'
+          - pattern-not: $X.redirect(new URL($Y, ...), ...)
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: 'NextResponse.redirect($U, ...)'
+              - pattern: 'Response.redirect($U, ...)'
+          - pattern-not: $X.redirect(new URL($Y, ...), ...)
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'NextResponse.redirect($U, ...)'
+              - pattern: 'Response.redirect($U, ...)'
+          - pattern-not: $X.redirect(new URL($Y, ...), ...)
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'redirect($U, ...)'
+          - pattern-inside: |
+              import {..., redirect, ...} from "next/navigation";
+              ...
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: 'redirect($U, ...)'
+          - pattern-inside: |
+              import {..., redirect, ...} from "next/navigation";
+              ...
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'redirect($U, ...)'
+          - pattern-inside: |
+              import {..., redirect, ...} from "next/navigation";
+              ...
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'new Response($BODY, {..., headers: {..., $LOC: $U, ...}, ...})'
+              - pattern: 'new NextResponse($BODY, {..., headers: {..., $LOC: $U, ...}, ...})'
+          - metavariable-regex:
+              metavariable: $LOC
+              regex: (?i)^['"]?location['"]?$
+          - metavariable-pattern:
+              metavariable: $U
+              pattern-either:
+                - pattern: '`${$HEAD}...`'
+                - patterns:
+                    - pattern-either:
+                        - pattern: $HEAD + $URL_A
+                        - pattern: $HEAD + $URL_A + $URL_B
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C
+                        - pattern: $HEAD + $URL_A + $URL_B + $URL_C + $URL_D
+                    - metavariable-pattern:
+                        metavariable: $HEAD
+                        patterns:
+                          - pattern-not: $URL_L + $URL_R
+                          - pattern: $HEAD
+          - focus-metavariable: $HEAD
+      - patterns:
+          - pattern-either:
+              - pattern: 'new Response($BODY, {..., headers: {..., $LOC: $U, ...}, ...})'
+              - pattern: 'new NextResponse($BODY, {..., headers: {..., $LOC: $U, ...}, ...})'
+          - metavariable-regex:
+              metavariable: $LOC
+              regex: (?i)^['"]?location['"]?$
+          - metavariable-pattern:
+              metavariable: $U
+              patterns:
+                - pattern: $URL_WHOLE
+                - pattern-not-inside: $URL_L + $URL_R
+                - pattern-not-inside: '`${$URL_H}...`'
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+      - patterns:
+          - pattern-either:
+              - pattern: 'new Response($BODY, {..., headers: {..., $LOC: $U, ...}, ...})'
+              - pattern: 'new NextResponse($BODY, {..., headers: {..., $LOC: $U, ...}, ...})'
+          - metavariable-regex:
+              metavariable: $LOC
+              regex: (?i)^['"]?location['"]?$
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^\s*['"]
+          - metavariable-pattern:
+              metavariable: $U
+              pattern: $URL_L + $URL_R
+          - metavariable-regex:
+              metavariable: $U
+              regex: ^(?!\s*[`'"]((https?:)?//[^/`'"$]+)?/[^/`'"$])
+          - focus-metavariable: $U
+    metadata:
+      category: injection
+      cwe: CWE-601
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Redirect to a URL taken from request input.
+      fendix_remediation: >-
+        Request input chooses where the response redirects, so a link to this site
+        can send a visitor on to a phishing page that inherits the site's trust.
+        Redirect only to same-site paths (the target starts with / and not with //),
+        or parse the URL and check its host against an allowlist; fall back to a
+        fixed page otherwise.
+      fendix_reachability: taint
+
+  - id: js-open-redirect-sink
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: WARNING
+    message: >-
+      A function's parameter is the target of a redirect. If a caller passes
+      request input, it is an open redirect; allow only same-site paths.
+    patterns:
+      - pattern-either:
+          - pattern-inside: function $F(..., $P, ...) { ... }
+          - pattern-inside: (..., $P, ...) => $BODY
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: $RES.redirect($P)
+                  - pattern: $RES.redirect($STATUS, $P)
+                  - pattern: $RES.location($P)
+              - metavariable-regex:
+                  metavariable: $RES
+                  regex: ^(res|resp|response|reply)$
+          - pattern: NextResponse.redirect($P, ...)
+          - pattern: NextResponse.redirect(new URL($P, ...), ...)
+          - pattern: Response.redirect($P, ...)
+          - pattern: Response.redirect(new URL($P, ...), ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: '$RES.writeHead($STATUS, {..., $LOC: $P, ...}, ...)'
+                  - pattern: $RES.setHeader($LOC, $P)
+                  - pattern: 'new Response($BODY, {..., headers: {..., $LOC: $P, ...}, ...})'
+                  - pattern: 'new NextResponse($BODY, {..., headers: {..., $LOC: $P, ...}, ...})'
+              - metavariable-regex:
+                  metavariable: $LOC
+                  regex: (?i)^['"]?location['"]?$
+      # The same-site check the taint rule accepts: both halves, and a body
+      # that returns or throws.
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$P.startsWith("/") || $P.startsWith("//")) $BODY
+                    ...
+                - pattern: |
+                    if (!$P.startsWith("/") || $P.startsWith("//") || $GUARD_OR) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || !$P.startsWith("/") || $P.startsWith("//")) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || (!$P.startsWith("/") || $P.startsWith("//"))) $BODY
+                    ...
+                - pattern: |
+                    if ($P.startsWith("//") || !$P.startsWith("/")) $BODY
+                    ...
+                - pattern: |
+                    if ($P.startsWith("//") || !$P.startsWith("/") || $GUARD_OR) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || $P.startsWith("//") || !$P.startsWith("/")) $BODY
+                    ...
+                - pattern: |
+                    if ($GUARD_OR || ($P.startsWith("//") || !$P.startsWith("/"))) $BODY
+                    ...
+            - metavariable-pattern:
+                metavariable: $BODY
+                patterns:
+                  - pattern-either:
+                      - pattern: return ...;
+                      - pattern: throw $ERR;
+                  - pattern-not-inside: function $EXIT_FN(...) { ... }
+                  - pattern-not-inside: function (...) { ... }
+                  - pattern-not-inside: (...) => $EXIT_ARROW
+                  - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                  - pattern-not-inside: for (...) $EXIT_STMT
+                  - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+      - pattern-not-inside: |
+          const $P = "...";
+          ...
+      - pattern-not: $RES.redirect("...")
+    metadata:
+      category: injection
+      cwe: CWE-601
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Redirect to a URL taken from a function parameter.
+      fendix_remediation: >-
+        This function redirects to its parameter. If any caller passes request
+        input, a link to this site can send a visitor on to a phishing page.
+        Redirect only to same-site paths (the target starts with / and not with //),
+        or check the host against an allowlist; fall back to a fixed page otherwise.

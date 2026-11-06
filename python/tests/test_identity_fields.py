@@ -178,3 +178,52 @@ def test_symbol_is_emitted_with_and_without_a_proven_chain():
     assert proven.get("symbol") == sink_only.get("symbol"), (
         f"symbol changed with the proof: {sink_only.get('symbol')!r} vs {proven.get('symbol')!r}"
     )
+
+
+# --- JavaScript/TypeScript pattern checks -----------------------------------
+#
+# The regex pass over .js/.ts files used to emit no rule_id, so identity fell
+# back to parsing the `id` field. That works only because SEC-JS_SQL_TEMPLATE
+# does not look like the orchestrator's SEC-001 counter, and it is the same
+# implicit dependency test_ast_findings_carry_an_explicit_rule_id retired for
+# Python. The rule_id is deliberately the id VERBATIM: identity already derives
+# rule=SEC-JS_SQL_TEMPLATE from it today, and any other string would move the
+# fingerprint of every JS-pattern finding in an existing baseline (the Go side
+# pins that in TestJSPatternFingerprintUnchanged).
+
+
+def _collect_src_js(src: str, name: str = "app.ts") -> list[dict]:
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / name).write_text(src)
+        findings: list[dict] = []
+        ASTAnalyzer(td).run(findings.append)
+        return findings
+
+
+def test_js_pattern_findings_carry_rule_id():
+    f = _collect_src_js("const r = await pool.query(`SELECT * FROM u WHERE n = '${name}'`);\n")
+    assert [x["rule_id"] for x in f] == ["SEC-JS_SQL_TEMPLATE"]
+
+
+JS_ALL_PATTERNS_SRC = """\
+eval(userInput);
+el.innerHTML = userInput;
+document.write(userInput);
+const r = await pool.query(`SELECT * FROM u WHERE n = '${name}'`);
+"""
+
+
+def test_every_js_pattern_rule_id_equals_its_id():
+    """All four checks, not just the SQL one, and the rule_id is the id itself
+    so the fingerprint cannot move."""
+    f = _collect_src_js(JS_ALL_PATTERNS_SRC)
+    assert sorted(x["id"] for x in f) == [
+        "SEC-JS_DOCUMENT_WRITE",
+        "SEC-JS_EVAL",
+        "SEC-JS_INNER_HTML",
+        "SEC-JS_SQL_TEMPLATE",
+    ]
+    for x in f:
+        assert x.get("rule_id") == x["id"], (
+            f"{x['id']}: rule_id {x.get('rule_id')!r} differs from id"
+        )

@@ -47,6 +47,13 @@ ignore:
     category: secrets
     reason: "Sample secrets in one fixture file"
 
+  # ── Skip the intentionally vulnerable parity corpus ─────────
+  # benchmarks/frameworks/ holds deliberately vulnerable sample apps used to
+  # measure detection across frameworks. Copy this rule if you dogfood
+  # scans of the Fendix repository and want the corpus out of the results.
+  - endpoint: "benchmarks/frameworks/**"
+    reason: "Intentionally vulnerable benchmark corpus; secrets are placeholders"
+
 # Notes:
 # - "until" uses YYYY-MM-DD format. Expired rules are automatically skipped.
 # - "endpoint" globs: "**" = zero or more directories, "*" = within one path

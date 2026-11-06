@@ -778,6 +778,25 @@
       "availability": "stable"
     },
     {
+      "id": "JAVA_WEAK_HASH_PASSWORD",
+      "finding_id": "SEC-JAVA_WEAK_HASH_PASSWORD",
+      "title": "Weak hash used for password storage",
+      "analyzer": "textscan",
+      "category": "crypto",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Use bcrypt, scrypt, argon2, or PBKDF2 for password hashing. Raw MD5/SHA-1 is unsuitable: fast hashes with no work factor and no per-record salt.",
+      "availability": "stable"
+    },
+    {
       "id": "JAVA_INSECURE_DESERIALIZATION",
       "finding_id": "SEC-JAVA_INSECURE_DESERIALIZATION",
       "title": "Insecure deserialization: Java ObjectInputStream",
@@ -1118,24 +1137,6 @@
       "availability": "stable"
     },
     {
-      "id": "flask-missing-login-required",
-      "title": "Flask route is missing @login_required decorator.",
-      "analyzer": "semgrep",
-      "category": "auth",
-      "default_severity": "HIGH",
-      "confidence": "MEDIUM",
-      "cwes": [
-        "CWE-306"
-      ],
-      "execution_mode": "passive",
-      "auth_requirement": "none",
-      "applicability": [
-        "python"
-      ],
-      "remediation": "Flask route is missing @login_required decorator. Any user can access this endpoint without authentication. Add @login_required directly below @app.route(...); route() must stay the outermost decorator.",
-      "availability": "stable"
-    },
-    {
       "id": "flask-route-no-auth-decorator",
       "title": "Flask route has no auth-style decorator (@login_required, @requires_auth, @jwt_required, or @auth.login_required) directly below the @app.route(...) line.",
       "analyzer": "semgrep",
@@ -1226,6 +1227,24 @@
       "availability": "stable"
     },
     {
+      "id": "python-random-token-assignment",
+      "title": "random module output assigned to a variable whose name suggests a security-sensitive value.",
+      "analyzer": "semgrep",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-338"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "remediation": "random module output assigned to a variable whose name suggests a security-sensitive value. The `random` module is NOT cryptographically secure. Use `secrets.token_urlsafe()`, `secrets.token_bytes()`, or `secrets.choice()` instead.",
+      "availability": "stable"
+    },
+    {
       "id": "python-sha1-used-for-password",
       "title": "hashlib.sha1() used on a password-shaped variable.",
       "analyzer": "semgrep",
@@ -1241,6 +1260,352 @@
         "python"
       ],
       "remediation": "hashlib.sha1() used on a password-shaped variable. SHA1 is unsuitable for password hashing (fast hash, no work factor). Use bcrypt, scrypt, argon2, or PBKDF2 instead.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-jwt-no-verify-sink",
+      "title": "JWT parameter decoded without verifying its signature.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A token parameter is decoded with ParseUnverified and its claims are read. If a caller passes a token from the request, its claims are whatever the caller wrote. Verify it with jwt.Parse and jwt.WithValidMethods.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-jwt-no-verify-taint",
+      "title": "JWT from the request trusted without verifying its signature.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "ParseUnverified decodes a token without checking its signature, so its claims are whatever the caller wrote. Verify it with jwt.Parse or jwt.ParseWithClaims, a key function and jwt.WithValidMethods; read only the header (for example kid) from an unverified token.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-weak-password-hash-sink",
+      "title": "Password parameter hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter named like a password is hashed with MD5 or SHA-1, fast and unsalted hashes. Hash passwords with bcrypt, argon2id or scrypt.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-weak-password-hash-taint",
+      "title": "Password from request input hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "MD5 and SHA-1 are fast, unsalted hashes: a leaked table of them is cracked in hours. Hash passwords with bcrypt (golang.org/x/crypto/bcrypt), argon2id or scrypt.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-weak-random-token",
+      "title": "Security token generated with math/rand.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-338"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "math/rand is a predictable generator: its outputs can be recovered from a few samples or its seed. Generate tokens, session ids and reset codes with crypto/rand, for example rand.Text() or rand.Read into a byte slice.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-cmdi-sink",
+      "title": "Shell command built from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A shell's command line (sh -c) is built from a parameter. If a caller passes request input, this is command injection. Run a fixed program without a shell and pass the value as its own argument.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-cmdi-taint",
+      "title": "Shell command built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input reaches a shell command line or the name of the program exec.Command runs. Run a fixed program and pass the input as its own argument, without a shell: exec.Command(\"ping\", \"-c\", \"1\", host).",
+      "availability": "stable"
+    },
+    {
+      "id": "go-sqli-sink",
+      "title": "SQL query built from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "The query string is formatted or concatenated from a parameter. If a caller passes request input, this is SQL injection. Pass the value as a query argument with a placeholder.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-sqli-taint",
+      "title": "SQL query built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input is formatted or concatenated into a SQL query. Pass it as a query argument with a placeholder instead: db.Query(\"... WHERE name = $1\", name) (or ? for MySQL and SQLite).",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssti-sink",
+      "title": "Go template parsed from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A template is parsed from a parameter. If a caller passes request input, this is template injection. Parse a fixed template and pass the value as data.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssti-taint",
+      "title": "Go template parsed from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input is parsed as a text/template or html/template template, so the caller controls its actions and the methods it calls. Parse a fixed template and pass the input as data to Execute.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-open-redirect-sink",
+      "title": "Redirect to a URL taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is used as a redirect target. If a caller passes request input, this is an open redirect. Redirect only to a local path.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-open-redirect-taint",
+      "title": "Redirect to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "The response redirects to a target the caller chose, which phishing links use to borrow the site's name. Redirect only to a local path: require a leading / and reject // and /\\, or map the input to a fixed set of destinations.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-path-traversal-sink",
+      "title": "File path joined from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is joined onto a directory and opened. If a caller passes request input, ../ sequences escape the directory. Keep only the base name, or check the resolved path stays under the directory.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-path-traversal-taint",
+      "title": "File path built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input reaches a file path, so ../ sequences can read or write outside the intended directory. Keep only the base name (filepath.Base), or resolve the joined path and check it stays under the base directory: strings.HasPrefix(target, base+string(os.PathSeparator)).",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssrf-sink",
+      "title": "Outbound HTTP request to a URL taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is used as the URL of an outbound request. If a caller passes request input, this is server-side request forgery. Allow only a fixed set of hosts before the request.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-ssrf-taint",
+      "title": "Outbound HTTP request to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "The server fetches a URL the caller chose, so it can be pointed at internal services or cloud metadata endpoints. Parse the URL and allow only a fixed set of hosts before the request: u, err := url.Parse(target); if err != nil || !allowedHosts[u.Hostname()] { return }.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-xss-sink",
+      "title": "HTML response built from a function parameter without escaping.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "A parameter is written into an HTML response unescaped. If a caller passes request input, this is cross-site scripting. Render it with html/template, or escape it with html.EscapeString.",
+      "availability": "stable"
+    },
+    {
+      "id": "go-xss-taint",
+      "title": "Request input written into an HTML response without escaping.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "go"
+      ],
+      "remediation": "Request input reaches an HTML response unescaped: a writer whose Content-Type is text/html, Gin's c.Data with an HTML type, or a template.HTML conversion that switches html/template's escaping off. Render it with html/template, or escape it with html.EscapeString.",
       "availability": "stable"
     },
     {
@@ -1388,6 +1753,603 @@
       "availability": "stable"
     },
     {
+      "id": "java-jwt_no_verify-taint",
+      "title": "Claims read from a JWT whose signature was never verified.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Verify the signature before trusting any claim: JWT.require(Algorithm.HMAC256(key)).build().verify(token) with auth0, or Jwts.parser().verifyWith(key).build().parseSignedClaims(token) with jjwt. Reading only the header's key id to choose the key is fine.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-weak_password_hash-taint",
+      "title": "Password hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Hash passwords with a slow, salted password hash: bcrypt, scrypt, Argon2 or PBKDF2, for example Spring Security's BCryptPasswordEncoder.encode(password). MD5 and SHA-1 are fine for checksums, not for passwords.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-weak_random_token-taint",
+      "title": "Security token drawn from a predictable random generator.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-330"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Draw tokens, reset codes, session ids, keys and salts from java.security.SecureRandom, for example new BigInteger(130, new SecureRandom()).toString(32), or RandomStringUtils.secure().nextAlphanumeric(32).",
+      "availability": "stable"
+    },
+    {
+      "id": "java-cmdi-taint",
+      "title": "OS command built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Start a fixed program with an argument array, for example new ProcessBuilder(\"ping\", \"-c\", \"1\", host), and never pass request input through `sh -c` or as the program. Validate the value against an allowlist where you can.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-sqli-sink",
+      "title": "SQL query built from a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep the SQL text constant: use `?` placeholders and pass the argument as a query argument, or a NamedParameterJdbcTemplate with a MapSqlParameterSource. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-sqli-taint",
+      "title": "SQL query built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep the SQL text constant: use `?` placeholders and pass the request value as a query argument (jdbcTemplate.query(sql, rowMapper, value)), or a NamedParameterJdbcTemplate with a MapSqlParameterSource. Never concatenate or String.format request input into SQL.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-ssti-taint",
+      "title": "Template compiled from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Never build a template from request input. Load templates by a fixed name from the template directory and pass request values only in the data model (template.process(model, out), Context.setVariable).",
+      "availability": "stable"
+    },
+    {
+      "id": "java-open_redirect-sink",
+      "title": "Redirect to a URL taken from a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Accept the target only when it starts with \"/\" and not with \"//\" or \"/\\\", here or in every caller, or map it to a URL from an allowlist. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-open_redirect-taint",
+      "title": "Redirect to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Redirect only to a local path: accept the value when it starts with \"/\" and not with \"//\" or \"/\\\", and fall back to \"/\" otherwise; or map the value to a URL from an allowlist.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-path_traversal-sink",
+      "title": "File path built from a base directory and a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep only the file name (FilenameUtils.getName), or resolve the path against the base directory, normalize it and reject it unless the normalized java.nio.file.Path starts with the base. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-path_traversal-taint",
+      "title": "File path built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Keep only the file name (FilenameUtils.getName), or resolve the path against the base directory, normalize it and reject it unless target.startsWith(base) holds for the normalized java.nio.file.Path. A String startsWith check is not enough: \"/srv/files_evil\" starts with \"/srv/files\".",
+      "availability": "stable"
+    },
+    {
+      "id": "java-ssrf-sink",
+      "title": "Outbound request to a URL taken from a method argument.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Check the URL's scheme and host against an allowlist before sending, here or in every caller, or build the URL from a fixed base and accept only a path segment. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-ssrf-taint",
+      "title": "Outbound request to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "Parse the URL, then check its scheme and host against an allowlist (ALLOWED_HOSTS.contains(URI.create(url).getHost())) before sending, or build the URL from a fixed base and pass request input only as a path segment or query parameter.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-xss-sink",
+      "title": "HTML built from a method argument and written to the response without encoding.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "HTML-encode the argument where it is written (HtmlUtils.htmlEscape, Encode.forHtml or StringEscapeUtils.escapeHtml4), or render the page with a template engine that escapes by default. Callers in other files may pass request input.",
+      "availability": "stable"
+    },
+    {
+      "id": "java-xss-taint",
+      "title": "Request input written into an HTML response without encoding.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "java"
+      ],
+      "remediation": "HTML-encode the value where it is written (HtmlUtils.htmlEscape, Encode.forHtml or StringEscapeUtils.escapeHtml4), or render the page with a template engine that escapes by default, such as Thymeleaf th:text.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-jwt-no-verify-sink",
+      "title": "JWT parameter decoded without signature verification.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function decodes the token it is given with jwt.decode, which does not check the signature. If any caller passes a token from the request and trusts the claims, anyone can forge them. Verify tokens with jwt.verify(token, key, { algorithms: [...] }) and trust only the claims that call returns; read the unverified header only to choose the key.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-jwt-no-verify-taint",
+      "title": "JWT from the request decoded without signature verification.",
+      "analyzer": "semgrep",
+      "category": "auth",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "A token taken from the request is decoded with jwt.decode, which does not check the signature, so anyone can forge its claims (user, role, expiry). Verify it with jwt.verify(token, key, { algorithms: [...] }) and trust only the claims that call returns; read the unverified header only to choose the key.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-weak-password-hash-sink",
+      "title": "Password-named value hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "A value named like a password is hashed with MD5 or SHA-1. Both are fast and unsalted, so a leaked table of these hashes is cracked offline in hours. Hash passwords with a slow, salted password hashing function: bcrypt, scrypt (crypto.scrypt), argon2, or PBKDF2 with a high iteration count.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-weak-password-hash-taint",
+      "title": "Password from the request hashed with MD5 or SHA-1.",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-328",
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "A password taken from the request is hashed with MD5 or SHA-1. Both are fast and unsalted, so a leaked table of these hashes is cracked offline in hours. Hash passwords with a slow, salted password hashing function: bcrypt, scrypt (crypto.scrypt), argon2, or PBKDF2 with a high iteration count.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-weak-random-token-taint",
+      "title": "Security token generated with Math.random().",
+      "analyzer": "semgrep",
+      "category": "crypto",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-338"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Math.random() output becomes a token (a reset link, session, API key or one- time code). Math.random is not cryptographically secure: its output can be predicted from a few observed values. Generate tokens with crypto.randomBytes, crypto.randomUUID or crypto.getRandomValues.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-cmdi-sink",
+      "title": "Shell command built from a non-constant value.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "child_process exec or execSync runs this command line through a shell, and the line is built from a value that is not a constant. If any caller passes request input, shell metacharacters in it run as commands. Run the program with execFile or spawn and pass the value as an element of the argument array, with no shell.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-cmdi-taint",
+      "title": "Shell command built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches a command that child_process runs through a shell (exec, execSync, their promisified forms, or spawn with shell: true), so shell metacharacters in it run as commands. Run the program with execFile or spawn and pass the input as an element of the argument array, with no shell; or check it against an allowlist first.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-sqli-sink",
+      "title": "SQL query text built from a non-constant value.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "The text of this SQL query is built by concatenation or an untagged template literal from a value that is not a constant. If any caller passes request input, it can change the query. Pass the value as a bound parameter: a placeholder with a values array, or a parameterized tagged template (sql`...`, Prisma.sql).",
+      "availability": "stable"
+    },
+    {
+      "id": "js-sqli-taint",
+      "title": "SQL query built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches the text of a SQL query, so it can change the query. Pass the value as a bound parameter: a placeholder with a values array (pool.query('... WHERE id = $1', [id])), or a parameterized tagged template (sql`...`, Prisma.sql, prisma.$queryRaw`...`). Never build the query text by concatenation or an untagged template literal.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-ssti-sink",
+      "title": "Template source taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function compiles its parameter as a template (ejs.render, pug.compile, Handlebars.compile, ...). If any caller passes request input, it runs as template code on the server. Render a fixed template from a file or a constant and pass the value only in the data object.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-ssti-taint",
+      "title": "Template source taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336",
+        "CWE-94"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches the template argument of a template engine (ejs.render, pug.compile, Handlebars.compile, nunjucks.renderString, ...), so it is compiled as template code and can run arbitrary JavaScript on the server. Render a fixed template from a file or a constant and pass the input only in the data object.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-open-redirect-sink",
+      "title": "Redirect to a URL taken from a function parameter.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function redirects to its parameter. If any caller passes request input, a link to this site can send a visitor on to a phishing page. Redirect only to same-site paths (the target starts with / and not with //), or check the host against an allowlist; fall back to a fixed page otherwise.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-open-redirect-taint",
+      "title": "Redirect to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input chooses where the response redirects, so a link to this site can send a visitor on to a phishing page that inherits the site's trust. Redirect only to same-site paths (the target starts with / and not with //), or parse the URL and check its host against an allowlist; fall back to a fixed page otherwise.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-path-traversal-taint",
+      "title": "File path built from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input reaches the path of a file the server reads or sends (fs.readFile, fs.createReadStream, res.sendFile), so ../ segments or an absolute path can reach any file the process can read. Resolve the path with path.resolve and check that it starts with the base directory plus path.sep before using it, or keep only path.basename of the input.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-ssrf-taint",
+      "title": "Outbound request to a URL taken from request input.",
+      "analyzer": "semgrep",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input chooses the URL of a request the server makes (fetch, axios, got, http.get, undici), so a caller can reach internal services or cloud metadata endpoints through the server. Parse the URL and check its scheme and host against an allowlist before the request; do not follow redirects to other hosts.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-xss-sink",
+      "title": "Function parameter written into an HTML response unescaped.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "This function writes its parameter into the markup of an HTML response as- is. If any caller passes request input, markup or a script in it runs in the visitor's browser. Escape the value for HTML before it is written (escape- html, he.encode), or render the page with an autoescaping template.",
+      "availability": "stable"
+    },
+    {
+      "id": "js-xss-taint",
+      "title": "Request input written into an HTML response unescaped.",
+      "analyzer": "semgrep",
+      "category": "xss",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "remediation": "Request input is written into an HTML response body as-is, so a value holding markup or a script runs in the visitor's browser. Escape it for HTML before it is written (escape-html, he.encode, or DOMPurify.sanitize for markup that must stay), or render the page with a template engine that escapes by default.",
+      "availability": "stable"
+    },
+    {
       "id": "python-aws-access-key-id-literal",
       "title": "AWS access-key ID literal detected in a variable assignment.",
       "analyzer": "semgrep",
@@ -1493,6 +2455,388 @@
         "python"
       ],
       "remediation": "Slack incoming-webhook URL hardcoded in a variable assignment. Anyone with this URL can post into the bound channel. Rotate the webhook in Slack's app config and store the new URL in an env var (e.g. SLACK_WEBHOOK_URL).",
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_AUTH_HEADER_TRUST",
+      "finding_id": "SEC-PY_AUTH_HEADER_TRUST",
+      "title": "Auth decision based on a client-controllable header",
+      "analyzer": "python-engine/injection",
+      "category": "auth_bypass",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-290"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_EVAL",
+      "finding_id": "SEC-PY_EVAL",
+      "title": "Unsafe eval() or exec() with a dynamic argument",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-95"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_JWT_WEAK",
+      "finding_id": "SEC-PY_JWT_WEAK",
+      "title": "Weak JWT verification — decode with verify=False or unpinned algorithm",
+      "analyzer": "python-engine/injection",
+      "category": "auth_bypass",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-347"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_LLM_PROMPT_INJECTION",
+      "finding_id": "SEC-PY_LLM_PROMPT_INJECTION",
+      "title": "Prompt injection — untrusted input flows into an LLM prompt",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-77"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_OPEN_REDIRECT",
+      "finding_id": "SEC-PY_OPEN_REDIRECT",
+      "title": "Potential open redirect — dynamic redirect target",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-601"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_OS_POPEN",
+      "finding_id": "SEC-PY_OS_POPEN",
+      "title": "Unsafe os.popen() family call — command injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_OS_SYSTEM",
+      "finding_id": "SEC-PY_OS_SYSTEM",
+      "title": "Unsafe os.system() call — command injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_PATH_TRAVERSAL",
+      "finding_id": "SEC-PY_PATH_TRAVERSAL",
+      "title": "Potential unsafe dynamic filesystem path",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-22"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_PICKLE_LOAD",
+      "finding_id": "SEC-PY_PICKLE_LOAD",
+      "title": "Unsafe pickle deserialization — RCE risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-502"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_SECRET_IN_LOG",
+      "finding_id": "SEC-PY_SECRET_IN_LOG",
+      "title": "Secret written to logs — credential exposure",
+      "analyzer": "python-engine/injection",
+      "category": "secrets",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-532"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_SQL_INJECTION",
+      "finding_id": "SEC-PY_SQL_INJECTION",
+      "title": "SQL query built via string formatting — injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "CRITICAL",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_SSRF",
+      "finding_id": "SEC-PY_SSRF",
+      "title": "Potential SSRF — dynamic URL passed to HTTP client",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-918"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_SSTI",
+      "finding_id": "SEC-PY_SSTI",
+      "title": "Template built from a non-constant value (possible server-side template injection)",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-1336"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_SUBPROCESS_SHELL",
+      "finding_id": "SEC-PY_SUBPROCESS_SHELL",
+      "title": "subprocess called with shell=True — command injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-78"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_WEAK_CRYPTO_PASSWORD",
+      "finding_id": "SEC-PY_WEAK_CRYPTO_PASSWORD",
+      "title": "Weak hash (MD5/SHA1) used for password — credential exposure risk",
+      "analyzer": "python-engine/injection",
+      "category": "secrets",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-916"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_XSS_HTML_SINK",
+      "finding_id": "SEC-PY_XSS_HTML_SINK",
+      "title": "Reflected XSS — user input passed to HTML render sink",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "python.ast/PY_YAML_UNSAFE_LOAD",
+      "finding_id": "SEC-PY_YAML_UNSAFE_LOAD",
+      "title": "Unsafe yaml.load() — RCE risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-502"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "python"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "SEC-JS_DOCUMENT_WRITE",
+      "finding_id": "SEC-JS_DOCUMENT_WRITE",
+      "title": "Unsafe use of document.write() — XSS risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "MEDIUM",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "SEC-JS_EVAL",
+      "finding_id": "SEC-JS_EVAL",
+      "title": "Unsafe use of eval() in JavaScript",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-95"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "SEC-JS_INNER_HTML",
+      "finding_id": "SEC-JS_INNER_HTML",
+      "title": "Unsafe assignment to innerHTML — XSS risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "MEDIUM",
+      "cwes": [
+        "CWE-79"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
+      "availability": "stable"
+    },
+    {
+      "id": "SEC-JS_SQL_TEMPLATE",
+      "finding_id": "SEC-JS_SQL_TEMPLATE",
+      "title": "SQL query built via template literal — injection risk",
+      "analyzer": "python-engine/injection",
+      "category": "injection",
+      "default_severity": "HIGH",
+      "confidence": "HIGH",
+      "cwes": [
+        "CWE-89"
+      ],
+      "execution_mode": "passive",
+      "auth_requirement": "none",
+      "applicability": [
+        "javascript",
+        "typescript"
+      ],
       "availability": "stable"
     }
   ],

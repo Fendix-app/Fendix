@@ -1,36 +1,9 @@
 rules:
-  # Rule 1: Flask route missing @login_required
-  - id: flask-missing-login-required
-    patterns:
-      - pattern: |
-          @$APP.route(...)
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @login_required
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @login_required
-          def $FUNC(...):
-              ...
-    message: >
-      Flask route '$FUNC' is missing @login_required decorator.
-      Any user can access this endpoint without authentication.
-    languages: [python]
-    severity: ERROR
-    metadata:
-      category: auth
-      cwe: CWE-306
-      confidence: MEDIUM
-      fendix_severity: HIGH
-      fendix_title: >-
-        Flask route is missing @login_required decorator.
-      fendix_remediation: >-
-        Flask route is missing @login_required decorator. Any user can access this
-        endpoint without authentication. Add @login_required directly below
-        @app.route(...); route() must stay the outermost decorator.
+  # (Rule 1 — flask-missing-login-required — was removed after v3.6.4,
+  # ADR-012. It matched the same routes as Rule 6, so every unprotected Flask
+  # route was reported twice. It also reported a route protected by
+  # @requires_auth, @jwt_required(...) or @auth.login_required below
+  # @app.route(...). Rule 6 is the one missing-auth rule for a Flask route.)
 
   # Rule 2: Django class-based view missing login_required mixin
   - id: django-view-missing-login-required
@@ -71,17 +44,30 @@ rules:
   # "unauthenticated FastAPI routes" (the TwiScope FP class, v0.18.x).
   #
   # A route counts as authenticated when a Depends()/Security() is wired either
-  # in the decorator (dependencies=[...]) or in a parameter — default,
-  # annotated default, or PEP-593 Annotated[...] (the modern idiom).
+  # in the decorator (dependencies=[...]) or in a parameter: a default, an
+  # annotated default, or PEP-593 Annotated[...] (the modern idiom), written
+  # inline or through a type alias. The alias is recognised when it is
+  # assigned at module level in the same file
+  # (CurrentUser = Annotated[User, Depends(...)]), or when it is imported from
+  # a module named deps or dependencies (from app.api.deps import
+  # CurrentUser), the layout of FastAPI's own docs and project template.
   #
   # Known confidence-LOW limitations (intentionally NOT handled; each needs
   # type/semantic resolution beyond single-file AST matching):
   #   * a Depends() injecting a non-auth value (DB session, pagination,
   #     settings) is treated as auth, so a route whose ONLY dependency is
-  #     non-auth is not flagged (false negative);
-  #   * an auth dependency hidden behind a type alias
-  #     (CurrentUser = Annotated[User, Depends(...)]) cannot be followed, so
-  #     such a route may be flagged (false positive);
+  #     non-auth is not flagged (false negative). The alias forms keep this:
+  #     SessionDep = Annotated[Session, Depends(get_db)] counts too;
+  #   * a name imported from a deps/dependencies module and used as a
+  #     parameter annotation is assumed to be such an alias without seeing
+  #     its definition, so a dependency-free route whose parameter is any
+  #     name imported from such a module is not flagged (false negative);
+  #   * an alias imported from any other module, or used as deps.CurrentUser,
+  #     cannot be followed, so such a route is still flagged (false
+  #     positive);
+  #   * rebinding after the alias or the deps import is not tracked: an alias
+  #     reassigned to another type, a local class of the same name, or the
+  #     same name imported again from another module still counts;
   #   * a verb-named decorator on a non-FastAPI object (e.g. a homegrown
   #     dispatcher @bus.post) in a file that also imports fastapi may be
   #     flagged (false positive).
@@ -127,7 +113,8 @@ rules:
           def $F2(...):
               ...
       # auth wired as a parameter dependency (Depends or Security; plain
-      # default, annotated default, or PEP-593 Annotated[...]). The exclusions
+      # default, annotated default, or PEP-593 Annotated[...] with the
+      # Depends/Security in any metadata position). The exclusions
       # deliberately omit the decorator line and use independent metavars — a
       # pattern-not that repeats `@$ROUTER.$METHOD(...)` with the matched rule's
       # metavars mis-evaluates and suppresses every route.
@@ -138,7 +125,7 @@ rules:
           def $F2(..., $P: $T = Depends(...), ...):
               ...
       - pattern-not: |
-          def $F2(..., $P: Annotated[$T, Depends(...)], ...):
+          def $F2(..., $P: Annotated[$T, ..., Depends(...), ...], ...):
               ...
       - pattern-not: |
           def $F2(..., $P = Security(...), ...):
@@ -147,8 +134,54 @@ rules:
           def $F2(..., $P: $T = Security(...), ...):
               ...
       - pattern-not: |
-          def $F2(..., $P: Annotated[$T, Security(...)], ...):
+          def $F2(..., $P: Annotated[$T, ..., Security(...), ...], ...):
               ...
+      # The same Annotated[...] through a module-level alias in this file:
+      # CurrentUser = Annotated[User, Depends(...)], then
+      # `current_user: CurrentUser`. The alias must come before the route, in
+      # the block that holds it; an alias assigned inside a function does not
+      # count.
+      - pattern-not:
+          patterns:
+            - pattern: |
+                def $F2(..., $P: $ALIAS, ...):
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    $ALIAS = Annotated[$T, ..., Depends(...), ...]
+                    ...
+                - pattern-inside: |
+                    $ALIAS = Annotated[$T, ..., Security(...), ...]
+                    ...
+      # An alias imported from a module named deps or dependencies (absolute
+      # or relative), whose definition this file cannot see. Only a bare
+      # annotation counts, and only for a name imported from such a module: a
+      # model from app.models or fastapi's Request is still an ordinary
+      # parameter. $ALIAS must be the name the import binds in this file.
+      # `from $MOD import $ALIAS` also matches `from M import Name as Local`
+      # with $ALIAS bound to Name, so the plain form excludes an import that
+      # renames, and the second form binds the local name. metavariable-regex
+      # is anchored at the start; it also matches fastapi.dependencies, which
+      # exports nothing used as a route parameter's type.
+      - pattern-not:
+          patterns:
+            - pattern: |
+                def $F2(..., $P: $ALIAS, ...):
+                    ...
+            - pattern-either:
+                - patterns:
+                    - pattern-inside: |
+                        from $MOD import $ALIAS
+                        ...
+                    - pattern-not-inside: |
+                        from $MOD import $ALIAS as $LOCAL
+                        ...
+                - pattern-inside: |
+                    from $MOD import $NAME as $ALIAS
+                    ...
+            - metavariable-regex:
+                metavariable: $MOD
+                regex: '^(.*\.)?(deps|dependencies)$'
     message: >
       FastAPI route '$FUNC' has no authentication dependency (Depends(...)).
       Inject a dependency such as Depends(get_current_user) to enforce auth.
@@ -192,6 +225,12 @@ rules:
       cwe: CWE-347
       confidence: HIGH
       fendix_severity: CRITICAL
+      fendix_title: >-
+        JWT decoded with signature verification disabled.
+      fendix_remediation: >-
+        JWT decoded with signature verification disabled.
+        This allows an attacker to forge tokens.
+        Remove options={"verify_signature": False} and specify a strong algorithm.
 
   # (Rule 5 — django-fbv-missing-auth-decorator — was removed in v0.13.1.
   # The original pattern attempted to match `@urls.path(...)` as a
@@ -201,43 +240,88 @@ rules:
   # that pattern-matches "view function whose first arg is `request`
   # and which has no auth-style decorator anywhere above it.")
 
-  # Rule 6 (Sprint 18): Flask route with no auth decorator above it.
+  # Rule 6 (Sprint 18): Flask route with no auth decorator below @app.route(...).
+  # The one missing-auth rule for a Flask route since Rule 1 was removed.
   # FP class: views that authenticate via Flask-Login's session loading + manual
   # `current_user.is_authenticated` check inside the handler body will be flagged.
   # FN class: a project-specific decorator whose name doesn't match the
   # pattern-not list will be flagged. Confidence: LOW for the same reasons.
   - id: flask-route-no-auth-decorator
-    patterns:
-      - pattern: |
-          @$APP.route(...)
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @login_required
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @requires_auth
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @jwt_required(...)
-          def $FUNC(...):
-              ...
-      - pattern-not: |
-          @$APP.route(...)
-          @auth.login_required
-          def $FUNC(...):
-              ...
-      # Skip the rule when login_required is the @app.route()-level decorator —
-      # rule 1 (flask-missing-login-required) already handles that shape.
-      - pattern-not: |
-          @login_required
-          def $FUNC(...):
-              ...
+    pattern-either:
+      # A route with none of the four auth decorators. Semgrep matches a
+      # function's decorators in any order, so these exclusions also drop a
+      # route whose auth decorator sits ABOVE @app.route(...); the next branch
+      # reports that shape.
+      - patterns:
+          - pattern: |
+              @$APP.route(...)
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @login_required
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @requires_auth
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @jwt_required(...)
+              def $FUNC(...):
+                  ...
+          - pattern-not: |
+              @$APP.route(...)
+              @auth.login_required
+              def $FUNC(...):
+                  ...
+      # A route whose auth decorator sits above @app.route(...), with none
+      # below it. Decorators apply bottom-up: route() registers the function
+      # beneath it, so a decorator above it wraps a copy the URL never calls.
+      #
+      # The pattern-either is the four exclusions above, as pattern-inside:
+      # this branch only reports a route the first branch dropped, so the two
+      # never both report one route, whatever the regex matches.
+      #
+      # Only the source text shows the order, hence the regex. It starts on a
+      # line that is an auth decorator, may pass other lines but never a def
+      # or class line, and \K starts the finding at the @...route( line, which
+      # keeps the route path in its identity. The run from route( to the def
+      # line fails on an auth decorator below the route, so a route protected
+      # there is not reported. In both places an auth decorator is
+      # login_required, requires_auth or jwt_required, with or without a
+      # module prefix (auth.login_required, flask_login.login_required) and
+      # with any arguments. Being lenient below the route only suppresses, and
+      # being lenient above it cannot add a route: the pattern-either still
+      # requires one of the four exact decorators on the function. The FUNC
+      # group binds $FUNC to the function that def line defines, so a route
+      # defined inside another route's body is not also reported as the outer
+      # one.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @login_required
+                  def $FUNC(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @requires_auth
+                  def $FUNC(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @jwt_required(...)
+                  def $FUNC(...):
+                      ...
+              - pattern-inside: |
+                  @$APP.route(...)
+                  @auth.login_required
+                  def $FUNC(...):
+                      ...
+          - pattern-regex: '(?m)^[ \t]*@[ \t]*(?:[\w.]*\.)?(?:login_required|requires_auth|jwt_required)\b.*\n(?:(?![ \t]*(?:async[ \t]+)?def\b|[ \t]*class\b).*\n)*?[ \t]*\K@[ \t]*[\w.]+\.route[ \t]*\((?:(?!^[ \t]*@[ \t]*(?:[\w.]*\.)?(?:login_required|requires_auth|jwt_required)\b)[\s\S])*?^[ \t]*(?:async[ \t]+)?def[ \t]+(?P<FUNC>\w+)'
     # The runtime Title is the first 120 bytes of this message, so everything up
     # to "directly " must stay byte-identical: the v3.6.3 correction (the auth
     # decorator belongs BELOW @app.route; above it, it does not protect the

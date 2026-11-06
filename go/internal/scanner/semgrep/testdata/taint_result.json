@@ -1,0 +1,229 @@
+{
+  "results": [
+    {
+      "check_id": "express-sqli-taint-spike",
+      "path": "app.js",
+      "start": {
+        "line": 9,
+        "col": 3,
+        "offset": 221
+      },
+      "end": {
+        "line": 9,
+        "col": 47,
+        "offset": 265
+      },
+      "extra": {
+        "message": "User input from req.query reaches db.query() — SQL injection.\n",
+        "metadata": {
+          "category": "injection",
+          "cwe": "CWE-89",
+          "confidence": "HIGH",
+          "fendix_severity": "HIGH",
+          "fendix_reachability": "taint"
+        },
+        "severity": "ERROR",
+        "fingerprint": "69ecc490dfcf2e758b14ca9aa370f67f9ecff1aeab338be06f74025355a3cce233f5fd34c8c5e47d48fd22913b0d5ee26135ef44f057423c118d878a76d8fffe_0",
+        "lines": "  db.query(sql, (err, rows) => res.json(rows));",
+        "metavars": {
+          "$X": {
+            "start": {
+              "line": 7,
+              "col": 26,
+              "offset": 148
+            },
+            "end": {
+              "line": 7,
+              "col": 30,
+              "offset": 152
+            },
+            "abstract_content": "name"
+          },
+          "$DB": {
+            "start": {
+              "line": 9,
+              "col": 3,
+              "offset": 221
+            },
+            "end": {
+              "line": 9,
+              "col": 5,
+              "offset": 223
+            },
+            "abstract_content": "db",
+            "propagated_value": {
+              "svalue_abstract_content": "require(\"./db\")",
+              "svalue_start": {
+                "line": 2,
+                "col": 12,
+                "offset": 47
+              },
+              "svalue_end": {
+                "line": 2,
+                "col": 27,
+                "offset": 62
+              }
+            }
+          }
+        },
+        "is_ignored": false,
+        "validation_state": "NO_VALIDATOR",
+        "dataflow_trace": {
+          "taint_source": [
+            "CliLoc",
+            [
+              {
+                "path": "app.js",
+                "start": {
+                  "line": 7,
+                  "col": 16,
+                  "offset": 138
+                },
+                "end": {
+                  "line": 7,
+                  "col": 30,
+                  "offset": 152
+                }
+              },
+              "req.query.name"
+            ]
+          ],
+          "intermediate_vars": [
+            {
+              "location": {
+                "path": "app.js",
+                "start": {
+                  "line": 7,
+                  "col": 9,
+                  "offset": 131
+                },
+                "end": {
+                  "line": 7,
+                  "col": 13,
+                  "offset": 135
+                }
+              },
+              "content": "name"
+            },
+            {
+              "location": {
+                "path": "app.js",
+                "start": {
+                  "line": 8,
+                  "col": 9,
+                  "offset": 162
+                },
+                "end": {
+                  "line": 8,
+                  "col": 12,
+                  "offset": 165
+                }
+              },
+              "content": "sql"
+            }
+          ],
+          "taint_sink": [
+            "CliLoc",
+            [
+              {
+                "path": "app.js",
+                "start": {
+                  "line": 9,
+                  "col": 3,
+                  "offset": 221
+                },
+                "end": {
+                  "line": 9,
+                  "col": 47,
+                  "offset": 265
+                }
+              },
+              "db.query(sql, (err, rows) => res.json(rows))"
+            ]
+          ]
+        },
+        "engine_kind": "OSS"
+      }
+    }
+  ],
+  "errors": [],
+  "paths": {
+    "scanned": [
+      "app.js"
+    ]
+  },
+  "version": "1.141.0",
+  "time": {
+    "rules": [],
+    "rules_parse_time": 0.0034248828887939453,
+    "profiling_times": {
+      "config_time": 0.30063891410827637,
+      "core_time": 0.3231630325317383,
+      "ignores_time": 2.002716064453125e-05,
+      "total_time": 0.6239840984344482
+    },
+    "targets": [],
+    "total_bytes": 0,
+    "parsing_time": {
+      "total_time": 0.0,
+      "per_file_time": {
+        "mean": 0.0,
+        "std_dev": 0.0
+      },
+      "very_slow_files": [],
+      "very_slow_stats": {
+        "time_ratio": 0.0,
+        "count_ratio": 0.0
+      }
+    },
+    "scanning_time": {
+      "total_time": 0.008355140686035156,
+      "per_file_time": {
+        "mean": 0.008355140686035156,
+        "std_dev": 0.0
+      },
+      "very_slow_stats": {
+        "time_ratio": 0.0,
+        "count_ratio": 0.0
+      },
+      "very_slow_files": []
+    },
+    "matching_time": {
+      "total_time": 0.0,
+      "per_file_and_rule_time": {
+        "mean": 0.0,
+        "std_dev": 0.0
+      },
+      "very_slow_stats": {
+        "time_ratio": 0.0,
+        "count_ratio": 0.0
+      },
+      "very_slow_rules_on_files": []
+    },
+    "tainting_time": {
+      "total_time": 0.0,
+      "per_def_and_rule_time": {
+        "mean": 0.0,
+        "std_dev": 0.0
+      },
+      "very_slow_stats": {
+        "time_ratio": 0.0,
+        "count_ratio": 0.0
+      },
+      "very_slow_rules_on_defs": []
+    },
+    "fixpoint_timeouts": [],
+    "prefiltering": {
+      "project_level_time": 0.0,
+      "file_level_time": 0.0,
+      "rules_with_project_prefilters_ratio": 0.0,
+      "rules_with_file_prefilters_ratio": 1.0,
+      "rules_selected_ratio": 1.0,
+      "rules_matched_ratio": 1.0
+    },
+    "max_memory_bytes": 76970432
+  },
+  "engine_requested": "OSS",
+  "interfile_languages_used": [],
+  "skipped_rules": []
+}

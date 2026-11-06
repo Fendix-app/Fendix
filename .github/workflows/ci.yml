@@ -151,6 +151,22 @@ jobs:
           python3 -c 'import json; print(json.dumps(json.load(open("smoke-container.json"))["metadata"]["scanner_status"], indent=2))'
           scripts/coverage-smoke-check.sh --deterministic smoke-container.json
 
+      # The bundled rule pack's semgrep --test cases, run with the semgrep the
+      # image ships (go/internal/scanner/semgrep/ruletests/README.md). The
+      # repository is mounted read-only at the same relative paths.
+      # semgrep --test runs one process per CPU, one rule file each, and gives
+      # every rule a fixed 5 s per file that no flag changes. On a hosted
+      # runner the parallel taint rules starved each other past that limit,
+      # and a rule that times out reports no match, so a different rule
+      # failed each run. PYTHON_CPU_COUNT=1 (Python 3.13+, the image has 3.14)
+      # tests the rule files one at a time.
+      - name: Semgrep rule tests
+        run: |
+          set -eu
+          docker run --rm --network none -e PYTHON_CPU_COUNT=1 --entrypoint semgrep \
+            -v "$PWD:/src:ro" -w /src fendix-ci \
+            --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests
+
   e2e:
     name: End-to-End (CLI flag regression)
     runs-on: ubuntu-latest
@@ -167,16 +183,87 @@ jobs:
         with:
           python-version: "3.11"
 
+      # The locked, hashed set the images and the parity gate install, not
+      # the unpinned python/requirements.txt: this job must run the Semgrep
+      # that ships.
       - name: Install Python runtime dependencies
-        run: pip install -r python/requirements.txt
+        run: pip install --require-hashes -r python/requirements.lock
 
-      # The rule-behaviour tests need semgrep and skip without it, which is
-      # every runner of the go job. This job installs it (python/requirements.txt),
-      # so run them here and fail rather than skip if it is missing.
-      - name: Semgrep rule-behaviour tests
+      # The semgrep-dependent tests skip without Semgrep, which is every
+      # runner of the go job: the rule-behaviour tests of the semgrep package
+      # and the engine package's mixed-language, JavaScript-fallback and
+      # tagged-template tests. This job installs Semgrep and the Python engine's
+      # dependencies (python/requirements.lock), so it runs them here with
+      # FENDIX_REQUIRE_SEMGREP=1, which makes each fail instead of skip when
+      # Semgrep or the Python engine did not run. Each test starts real
+      # Semgrep and Python engine processes: the engine package took 8.5 and
+      # then over 10 minutes on a hosted runner, past go test's default
+      # per-package limit, hence the explicit -timeout.
+      - name: Semgrep-dependent tests (semgrep and engine packages)
         env:
           FENDIX_REQUIRE_SEMGREP: "1"
-        run: cd go && go test -count=1 ./internal/scanner/semgrep/
+        run: cd go && go test -count=1 -timeout 25m ./internal/scanner/semgrep/ ./internal/engine/
 
       - name: Run e2e tests
         run: make e2e
+
+  # The framework parity gate (benchmarks/frameworks/SPEC.md): 522 labelled
+  # cases across nine frameworks, each scanned in its own tree. `make parity`
+  # exits 1 when any case is worse than benchmarks/frameworks/baseline.json,
+  # so a detection regression fails the PR. One job per framework: the whole
+  # corpus in one job ran past 45 minutes on a hosted runner (about ten on a
+  # developer machine), and with --frameworks the gate compares only that
+  # framework's baseline cases. The run: command is static; the framework
+  # reaches make through PARITY_ARGS in env, from the fixed matrix below.
+  framework-parity:
+    name: Framework parity gate (${{ matrix.framework }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [django, flask, fastapi, express, nestjs, nextjs, spring, nethttp, gin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same exact patch as the release build (see the go job); `make parity`
+      # builds bin/fendix-parity from source with it.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+
+      # 3.11 is the version python/requirements.lock was compiled with;
+      # `make parity-venv` installs it with --require-hashes.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+
+      - name: Run the framework parity gate
+        env:
+          PARITY_ARGS: --frameworks ${{ matrix.framework }}
+        run: make parity-venv parity
+
+      # Kept on failure too: the per-case results are what shows which cases
+      # regressed against the baseline. .parity/ is a hidden directory, which
+      # upload-artifact skips unless include-hidden-files is set.
+      - name: Upload parity results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: framework-parity-${{ matrix.framework }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .parity/results.json
+          include-hidden-files: true
+          retention-days: 30
+
+  # One result for the whole gate, to require in branch protection: it fails
+  # unless every framework's job passed.
+  framework-parity-gate:
+    name: Framework parity gate
+    runs-on: ubuntu-latest
+    needs: [framework-parity]
+    if: always()
+    steps:
+      - name: Every framework passed
+        env:
+          RESULT: ${{ needs.framework-parity.result }}
+        run: test "$RESULT" = success

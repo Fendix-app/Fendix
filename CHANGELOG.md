@@ -7,7 +7,1870 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A language and framework support matrix, and a scope rule for accuracy figures.** `README.md`, `docs/accuracy.md` and `BENCHMARKS.md` now list, for the nine parity frameworks, which vulnerability classes are covered, whether a proven flow blocks, and which rows need Semgrep (every non-Python row), with blind-holdout recall beside the development-corpus figures. `scripts/check-public-claims.sh` now fails an `F1`, precision, recall or percentage accuracy figure in `README.md` or `docs/` that names no language or corpus in its sentence; existing unscoped figures in `docs/accuracy.md`, `docs/benchmarks.md`, ADR-011 and two triage reports were scoped.
+- **The secrets scanner detects passwords embedded in JDBC URLs.**
+  `DB_CONNECTION_STRING` gains a second shape under the same rule id (no
+  existing fingerprint moves): `jdbc:postgresql://h/app?user=u&password=...`
+  and `jdbc:sqlserver://h:1433;databaseName=a;user=u;password=...`. Evidence
+  keeps the URL readable and redacts the password only. An interpolated
+  `password=${DB_PASSWORD}` does not fire, and a placeholder such as
+  `password=changeme` is reported and marked a placeholder, as for any other
+  secret. Files are scanned by the scanner's existing extension list, which
+  does not include `.properties`.
+- **Java password hashing is reported apart from general MD5 use.** A new
+  textscan rule `JAVA_WEAK_HASH_PASSWORD` (CWE-916, `crypto`, HIGH) fires when
+  a password-named value (`password`, `userPassword`, `pwd`, `passphrase`) is
+  passed to `digest()` or `update()` of a MessageDigest-style receiver (`md`,
+  `md5`, `sha1`, `digest`, `messageDigest` or a `MessageDigest.getInstance(...)`
+  chain) in a file that asks for an MD5 or SHA-1 `MessageDigest`, as `GO_WEAK_HASH_PASSWORD` does in Go. `JAVA_WEAK_CRYPTO` is
+  unchanged (MD5/SHA-1 anywhere, MEDIUM), so an MD5 ETag still gets that
+  hygiene note but is no longer counted as a weak password hash by the parity
+  harness. The catalog contract lists the new check.
+- **The security catalog now lists the Python engine's AST and JavaScript
+  pattern checks.** `docs/security-catalog-contract.json` gains the 16 Python
+  AST checks (`python.ast/PY_SQL_INJECTION`, `python.ast/PY_SSRF`,
+  `python.ast/PY_PATH_TRAVERSAL` and the rest) and the four
+  JavaScript/TypeScript pattern checks (`SEC-JS_EVAL`, `SEC-JS_INNER_HTML`,
+  `SEC-JS_DOCUMENT_WRITE`, `SEC-JS_SQL_TEMPLATE`), under the
+  `python-engine/injection` analyzer: 20 checks more than the 85 of v3.6.4.
+  The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. As
+  for every other analyzer, each check's `id` is the `rule_id` its findings
+  carry, and its `finding_id` is the finding's own id
+  (`SEC-PY_SQL_INJECTION`, `SEC-JS_SQL_TEMPLATE`).
+  - **Severity and confidence.** `default_severity` is the severity the
+    analyzer declares for an unproven finding, before any escalation on a
+    proven flow (`python.ast/PY_PATH_TRAVERSAL`: MEDIUM, HIGH when proven).
+    `confidence` is the confidence that unproven finding carries. The
+    engine's confidence cap then applies, as it does for Semgrep checks:
+    MEDIUM confidence caps severity at HIGH. So an unproven
+    `python.ast/PY_SQL_INJECTION`, listed as CRITICAL with MEDIUM confidence,
+    reports HIGH.
+  - Detection does not change.
+- **A Python route handler's parameters are now request sources.** FastAPI
+  query, path, header, cookie, form and body parameters, and Flask and Django
+  URL variables, reach a handler without any `request.` expression, so a sink
+  they reached was reported but never proven. FastAPI was hit hardest: the
+  same f-string SQL query blocked in Flask and only warned in FastAPI. The
+  engine now treats such a parameter as request input where it enters, at the
+  handler's `def` line. A finding it reaches is marked reachable and carries a
+  taint chain that starts with the parameter's name. Like any proven finding,
+  it takes the rule's proven title and severity where it has one, the engine
+  escalates it one level as reachable, and it may now block.
+  - **Only route handlers.** A parameter counts only in the def a Flask or
+    FastAPI route decorator sits on, or in the module-level view a Django
+    `path()`, `re_path()` or `url()` names.
+    - The view's module is resolved through the urlconf's imports
+      (`from app.views import a; path("x/", a.search)` is `app/views/a.py`).
+      One re-export hop is followed when that module does not define the
+      view itself: `from .items import show` (with `as`) or
+      `from .items import *` in the module, or in its `__init__.py` for a
+      package.
+    - When no scanned file is the resolved module because the scan root is
+      inside the package (scanning `app/` for `app.views`), the scanned
+      module `views` stands in for it. This needs two things: the module it
+      stands in for is a proper trailing suffix, and the prefix that suffix
+      drops (`app`) is the directories the scan root sits in. Nothing stands
+      in for a view whose head no import binds (`self.handler`, a local
+      variable), or for a module of a package outside the scan
+      (`from django.views.static import serve`). Such a route binds no
+      function, so a project function that only shares the view's name is
+      never treated as the view.
+    - A decorator route's first argument must start with `/` (or be `""`,
+      which FastAPI allows under a prefixed router), and a `unittest.mock`
+      or `mock` receiver is never a route, so `@mock.patch("os.getenv")` is
+      not a PATCH route.
+    - Parameters of any other function are not sources.
+  - **Flask, Quart, Sanic and Django pass only the URL variables their
+    pattern names.** Such a view's parameter is a source only when one of its
+    routes' patterns names it:
+    - `<x>`, or `<path:x>` (Sanic writes `<x:str>`; the word that is a
+      parameter of the handler is the name);
+    - a regex group `(?P<x>...)`;
+    - for a Django regex with no named group, the unnamed groups, in order
+      after `request`.
+
+    Values the developer sets are not sources: a plain default
+    (`def report(fmt="pdf")` on `/report`), a Flask `defaults=` value, and a
+    Django urlconf extra-kwargs value. The request object is never a source
+    either, because no URL pattern names it.
+    - FastAPI and Django Ninja read a parameter the path does not name from
+      the query string, so every parameter of theirs that the rules below
+      leave is a source.
+    - A decorator route's framework is decided in this order:
+      1. the file's imports: `fastapi`, `starlette` or `ninja` mean FastAPI,
+         and `flask`, `quart` or `sanic` mean Flask;
+      2. its pattern: `{x}` means FastAPI, `<x>` means Flask;
+      3. `.route(...)`, which is Flask's;
+      4. the framework most of the project's files import, so a blueprint
+         file that imports only its blueprint takes the project's Flask.
+
+      A route that none of these places, including one in a project whose
+      files import no framework or import two equally often, is treated as
+      FastAPI, as before.
+  - **Dependencies and injected objects are not sources:**
+    - `self`, and a first positional parameter named `request` or `req`;
+    - a parameter annotated `Request`, `Response`, `BackgroundTasks`,
+      `WebSocket`, `HTTPConnection` or `Session`;
+    - a parameter defaulted to `Depends(...)` or `Security(...)`, or
+      annotated `Annotated[..., Depends(...)]`;
+    - a parameter annotated with a module-level alias of such a dependency
+      in the same file (`CurrentUser = Annotated[User, Depends(get_current_user)]`);
+    - a parameter annotated with a type imported from a module with a `deps`
+      or `dependencies` path segment, by name
+      (`from app.api.deps import CurrentUser`, `from .deps import SessionDep as S`)
+      or through the module (`from app.api import deps`, then
+      `deps.CurrentUser`);
+    - `*args` and `**kwargs`.
+
+    Annotations are recognised bare, under `Optional[...]`/`X | None`, or as
+    the first argument of `Annotated[...]`. A type imported from any other
+    module (`from app.models import User`) stays a source.
+  - **Fixed-value types are not sources.** FastAPI and pydantic validate
+    these before the handler runs, so the value cannot carry free text:
+    - `int`, `float`, `bool`, `UUID`, `datetime`, `date`, `time`,
+      `timedelta` and `Decimal`;
+    - the pydantic constrained numbers `conint(...)`, `confloat(...)`,
+      `condecimal(...)`, `PositiveInt`, `NegativeInt`, `NonNegativeInt`,
+      `NonPositiveInt`, `PositiveFloat`, `NegativeFloat`,
+      `NonNegativeFloat`, `NonPositiveFloat`, `StrictInt`, `StrictFloat`
+      and `StrictBool`;
+    - `Literal[...]`, the safe way to accept a dynamic `ORDER BY` direction;
+    - an Enum class defined in the same file, with a base of `Enum`,
+      `IntEnum` or `StrEnum` or of another such class
+      (`class Sort(str, Enum)`);
+    - a container of these: `list[int]`, `set[UUID]`, `tuple[int, ...]`,
+      `list[Sort]`.
+
+    Each counts bare, under `Optional[...]`/`X | None`, or as the first
+    argument of `Annotated[...]`. Flask `<int:...>`, `<float:...>` and
+    `<uuid:...>` and Django `<int:...>` and `<uuid:...>` URL variables are
+    coerced the same way. A variable that another of the view's routes passes
+    as a string stays a source.
+
+    These stay sources: `str`, `list[str]`, a regex-constrained string
+    (`constr(pattern=...)`, `Path(pattern=...)`, a Django regex group), a
+    pydantic model, an Enum imported from another module, an unannotated
+    parameter, and the `path` converter.
+  - **Sanitisers apply as they do to a `request.args` value.** A membership
+    guard, a `urlparse(...).netloc` allowlist, path containment, escaping or an
+    allowlist lookup leaves the finding unreported or unproven exactly as it
+    would for a value read from the request.
+  - **Same-file helpers.** A handler that passes its parameter to a helper in
+    the same file proves the helper's sink, through the one-hop check. The
+    chain starts at the handler's `def` line, then the call. Caller-side
+    sanitisers still apply. A helper in another module is followed too, one
+    hop (see "A Python sink in a helper is now proven when a view in another
+    module passes it request input" below).
+  - **Identity.** A finding this change proves can change identity once. A
+    baseline entry or a `.fendix-ignore` `fingerprint:` rule for it stops
+    matching, and it is reported as new once.
+    - The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+      `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+      `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+      proven, so such a finding is identified by its sink instead of its
+      evidence line.
+    - A proven finding bound to a route is identified by the route's file.
+      A Flask or FastAPI route is declared in the handler's own file, so
+      nothing moves. A Django route is declared in the urlconf, so a Django
+      view's finding that this change proves through a URL variable is
+      identified by the urlconf's file instead of the view's, whatever the
+      rule.
+    - Otherwise SSRF, open-redirect, path-traversal and XSS findings keep
+      their identity.
+  - **New findings where a sink is reported only when proven.** A handler
+    parameter reaching `os.path.join(...)` (or `abspath`, `expanduser`,
+    `expandvars`) or an LLM prompt now reports it. So
+    `open(os.path.join(BASE, filename))` in a FastAPI handler reports both
+    calls, and `FileResponse(os.path.join(BASE, filename))` is now reported
+    through the join. `FileResponse(path)` itself is still not a sink.
+  - **A route binds only the function it was declared for.** The route table
+    is keyed on the bare function name, project-wide. A function that only
+    shared a handler's name, in another file or as a method, got that
+    handler's route, and Django views with one name in several modules all
+    got the first one's route. Each finding now carries its own view's route,
+    or none. A finding whose route changes is identified by its new route's
+    file, or by its own file when it has none, once.
+  - **Not covered:**
+    - routes registered without a route decorator or a urlconf entry:
+      `app.add_api_route(...)`, `app.add_url_rule(...)` and class-based
+      views;
+    - a view wrapped in the urlconf, as in
+      `path("x/", login_required(views.show))`;
+    - a re-export chain longer than one hop.
+  - **Framework parity:** FastAPI's `direct`, `indirect` and `alt_api` cases
+    for SQL injection, command injection and SSRF, its `direct` and
+    `indirect` path-traversal cases and its `alt_api` XSS case now block, and
+    its `alt_api` path-traversal case is detected and blocks. FastAPI blocks on
+    17 of 36 vulnerable cases, up from 4. No safe case is flagged or blocks.
+- **Python HTML responses are now XSS sinks.** `HttpResponse(f"<h1>{name}</h1>")`
+  writes request input into a page with no template, so nothing escapes it,
+  and it was not reported. The engine now reports request text reaching the
+  body of an HTML response constructor, under the existing
+  `python.ast/PY_XSS_HTML_SINK` rule: Django `HttpResponse`, Flask
+  `make_response` and `Response`, and Starlette and FastAPI `HTMLResponse` and
+  `Response`. As for `Markup` and `mark_safe`, a proven flow is marked
+  reachable, carries a taint chain and may block; an unproven one is reported
+  and does not block.
+  - **Only an HTML response.** A response whose content type is provably not
+    a document the browser renders is not a sink.
+    - The type can be declared with `content_type=`, `mimetype=` or
+      `media_type=`, by position (Django's `HttpResponse(body, "text/plain")`,
+      Flask's and Starlette's `Response(body, 200, None, "application/json")`),
+      or as a `Content-Type` entry in a literal headers dict or list of pairs,
+      including Flask's `make_response(body, status, headers)` and
+      `make_response((body, status, headers))`.
+    - It can also be assigned after construction, when the response is bound
+      to a name: `resp["Content-Type"] = ...` (Django),
+      `resp.headers["Content-Type"] = ...` (Flask, Starlette), or
+      `resp.mimetype`, `resp.content_type` or `resp.media_type`.
+      - Such an assignment decides by itself, whatever the constructor
+        declared, and the last one wins.
+      - Only the statements after the binding in the same block count. The
+        scan stops where the name is bound again, or at a statement that
+        returns or yields, since the response may already have left.
+      - An assignment inside a branch, loop, `with` or `try` may not run, so
+        it makes the type unknown, which counts as HTML.
+    - A type containing `html` or `xml` (`text/html; charset=utf-8`,
+      `application/xhtml+xml`, `image/svg+xml`) is HTML. So is a type held in
+      a variable, and an empty type. `None` is a type not given.
+    - With no type declared, Django and Flask send `text/html`, and a
+      Starlette `Response` sends no `Content-Type`, so the browser sniffs the
+      body. All three are sinks. `HTMLResponse` is always one.
+    - A 204 or 304 response is not a sink, because the browser renders no
+      body for it (Werkzeug drops it). Neither is a redirect (301, 302, 303,
+      307 or 308) with a `Location` entry in a literal headers dict or list
+      of pairs, because the browser follows it instead of rendering the body.
+      The redirect status must be an int or an imported status constant
+      (`HTTPStatus.FOUND`, `http.HTTPStatus.SEE_OTHER`, or `HTTP_302_FOUND`
+      from `starlette.status`, `fastapi.status` or `rest_framework.status`);
+      a local name such as `FOUND = 200` is not one. A redirect status
+      without a `Location` header, or a `Location` header without a redirect
+      status, is still a sink.
+  - **Only a framework's constructor.** An imported constructor must come
+    from its framework: `HttpResponse` from Django, `make_response` from
+    Flask, `HTMLResponse` from Starlette or FastAPI, and `Response` from
+    Flask, Werkzeug, Starlette or FastAPI.
+    - An imported alias resolves to what it imports, so
+      `from flask import make_response as mk` makes `mk(...)` a sink.
+    - A project's own function or class is not a sink, even when it shares
+      the name:
+      - one the file defines (`def make_response(message): ...`);
+      - one it imports from the project (`from .utils import make_response`);
+      - a method on `self` or `cls`.
+    - A `Response` must be imported, so Django REST framework's `Response`,
+      which renders JSON, is not a sink either.
+    - A constructor called by a bare name the file neither imports nor
+      defines still counts, and so does Flask's `app.make_response(...)`.
+  - **Not reported:**
+    - an escaped, allowlisted or membership-guarded value, as for `Markup`;
+    - Django's `render(...)` and `render_to_string(...)` and Flask's
+      `render_template(...)`, imported from their frameworks, which render
+      autoescaped templates, and Flask's `jsonify(...)`, which sends JSON.
+      - `.render(...)` on a Django template object is not reported either.
+        That covers `loader.get_template(...)`, `select_template(...)`,
+        `django.template.Template(...)`, and `engines[...]` with its
+        `from_string`/`get_template` (Django's Jinja2 backend autoescapes),
+        directly or through a variable.
+      - Flask's `render_template` of a template whose constant name does not
+        end in `.html`, `.htm`, `.xml`, `.xhtml` or `.svg` (`"mail.txt"`) is
+        not autoescaped, so it is reported.
+      - A function of the same name that the file defines is not a renderer.
+      - `.render(...)` on a raw Jinja2 or Mako template is not a renderer
+        either: neither autoescapes by default. Raw Jinja2 means
+        `jinja2.Template`, or an `Environment`'s `from_string`/`get_template`.
+        So `HttpResponse(Template(src).render(name=name))` is reported when
+        `name` is request input. A template whose own source is request
+        input is reported as template injection (`python.ast/PY_SSTI`,
+        below), not as XSS;
+    - Flask's `make_response(...)` of a dict or list, which Flask sends as
+      JSON: a literal, a comprehension, a `.split()`, `.rsplit()` or
+      `.splitlines()` list, request data read whole (`request.get_json()`,
+      `request.json`, `request.args`, `request.form`,
+      `request.args.to_dict()`, `request.form.getlist(...)`), or a name every
+      assignment of which is one of these. A name assigned text in any branch,
+      before or after its other assignments, stays text;
+    - Flask's `make_response(...)` of a response object, which Flask sends as
+      it is (`make_response(Response(...))`);
+    - a body that is, as a whole, the result of a helper function, of a
+      `self`/`cls` method, or of a method on a value that is not a string
+      method, such as `build_page(name)`, `storage.download(path)`,
+      `settings.get_sp_metadata()`, or `email_data.html_content` with
+      `email_data = generate_reset_password_email(email=email)`. The engine
+      cannot see what a function returns, and a function that returns the
+      whole page is usually a renderer that escapes.
+      - A method on the request's own data is not a helper: its receiver,
+        followed through attribute and subscript reads, method calls and the
+        names it is bound to, starts at `request`, or at a route handler's
+        request parameter. So `HttpResponse(request.FILES["f"].read())`,
+        `up = request.FILES.get("f")` then `HttpResponse(up.read())`, and
+        `make_response(request.files["f"].read())` are reported.
+      - Inside an interpolated part, a call carries its arguments' text, so
+        `f"<div>{build(name)}</div>"` is reported. An interpolated part is an
+        f-string value, a `+` or `%` operand, or a `.format` or `.join`
+        argument.
+      - A class constructor carries its arguments' text anywhere, so
+        `form = NameForm(request.POST)` then `form.cleaned_data["name"]` is
+        reported.
+      - String methods (`.format`, `.join`, `.strip`, `.replace`, `.encode`,
+        `.split`, `.rsplit`, `.splitlines`, `.partition`, `.rpartition` and
+        the rest of `str`'s that return text), a mapping's `.get`, a raw
+        template's `.render`, `str()`, `json.dumps`, `json.loads`,
+        `textwrap.dedent`, `urllib.parse.unquote` and `unquote_plus`,
+        `html.unescape` and `map` pass text through. So
+        `HttpResponse(name.split(",")[0])` is reported.
+      - These hold no text:
+        - `int()`, `float()`, `bool()`, `len()`, `round()` and `abs()`;
+        - `uuid.UUID`, `decimal.Decimal` and `fractions.Fraction`;
+        - `fromisoformat`/`strptime` on `date`, `datetime` and `time`;
+        - a comparison (`q == "x"`) or a `not`;
+        - a `str` test that returns a bool, on any value: `.isdigit()`,
+          `.isalpha()`, `.isalnum()` and the other `.is...()` tests,
+          `.startswith()` and `.endswith()`;
+        - `.count()`, `.find()`, `.rfind()`, `.index()` and `.rindex()`, but
+          only on a value known to be a `str`: a str literal, an f-string,
+          `str()`, the result of a `str` method that returns a `str`, a query
+          or form value read off the request (`request.args`, `.form`,
+          `.values`, `.GET` or `.POST`, by `.get(...)` or subscript; not files,
+          JSON or the raw body), a Flask or Django URL variable, a FastAPI
+          parameter annotated `str`, or a name every assignment of which is one
+          of these. On any other value they carry text: an XML element's or a
+          BeautifulSoup tree's `.find()` returns markup, so
+          `f"<p>{root.find('name').text}</p>"` is reported;
+        - a request value Werkzeug converts with `type=`:
+          `request.args.get("page", 1, type=int)`, and `float`, `bool` or a
+          value parser such as `uuid.UUID`. The converted value, or the
+          default when conversion fails, is what the body holds, so a text
+          default still counts.
+  - **`json.dumps` is not an escape.** `HttpResponse(json.dumps(data))` with
+    no content type is `text/html`, and `json.dumps` leaves `<` as it is, so
+    request data in it is reported. With `content_type="application/json"` it
+    is not.
+  - **One finding per flow.** `make_response(Markup(x))` is reported once, by
+    the `Markup` finding it already had, and `make_response(Response(x))` once,
+    by the `Response` finding.
+  - **Identity.** Existing `python.ast/PY_XSS_HTML_SINK` findings keep their
+    fingerprints. The new findings are new. Their sink is the constructor and
+    its body, as in `HttpResponse(f'<h1>{name}</h1>')`.
+  - **Not covered:**
+    - a helper function whose result is the whole body and that builds the
+      HTML unescaped, as in `HttpResponse(build_page(name))`;
+    - Django's other response classes, such as `HttpResponseBadRequest(...)`;
+    - a content type set after construction other than by assigning to the
+      bound name (`resp.headers.update(...)`, `resp.headers.set(...)`). Such a
+      call is ignored, so the constructor's own type decides;
+    - a media type passed to `HTMLResponse`, which is ignored.
+  - **Framework parity:** the Django, Flask and FastAPI `direct` and
+    `indirect` XSS cases are now detected and block, and their `cross_file`
+    cases are detected and warn. No safe case is flagged. The Python
+    frameworks detect 93 of 108 vulnerable cases, up from 84, and block on
+    64, up from 58.
+- **A string a Flask view returns is now an XSS sink.** Flask sends a `str` a
+  view returns as `text/html`, so `return f"<p>{request.args['q']}</p>"`
+  writes request input into a page that nothing escapes, and it was not
+  reported. The engine now judges a Flask or Quart view's return value as the
+  response Flask builds from it, `make_response(value)`, under the existing
+  `python.ast/PY_XSS_HTML_SINK` rule and with the same rules as
+  `make_response(...)`: escaping, allowlists, autoescaped templates,
+  `jsonify`, `json.dumps`, helper results and values that hold no text. A
+  FastAPI route whose response class is HTML is judged the same way (below).
+  - **Only a proven flow.** A returned string is reported only when request
+    input is proven to reach it. The finding is marked reachable, carries a
+    taint chain and may block. Every view returns something, so a string built
+    from a value the engine cannot trace to the request (a database read, an
+    exception's text, a constant) is not reported, not even as a warning.
+  - **Only a Flask route's own returns.** The function must be the handler of
+    a route whose framework is Flask, decided as for route parameters (the
+    file's imports, which count Quart and Sanic as Flask, then the pattern,
+    `.route(...)` and the project's dominant framework). These are not sinks:
+    - a return in a def, lambda or class nested in the view, or in a helper
+      that no route points at;
+    - a return in a view that yields, which streams what it yields;
+    - a Django view's (Django needs an `HttpResponse`), and a route whose
+      framework is unknown;
+    - a FastAPI or Django Ninja return under the default response class,
+      which sends it as JSON, or under `PlainTextResponse`, `JSONResponse` or
+      another class that is not HTML.
+  - **FastAPI routes that render HTML.** A FastAPI route whose response class
+    is `HTMLResponse`, or Starlette's `Response`, which sends no Content-Type
+    for the browser to sniff, sends a returned `str` as the page. Its returns
+    are sinks, judged as `HTMLResponse(value)`. Only a proven flow is
+    reported, as for Flask.
+    - The class is the route decorator's `response_class=`, else the
+      `default_response_class=` of the `FastAPI(...)` or `APIRouter(...)` the
+      decorator is called on, when this file binds it once at module level.
+      A decorator's class overrides the default.
+    - A returned response object (`JSONResponse(...)`) is sent as it is, and a
+      dict, list or tuple cannot be rendered as HTML, so none of them is a
+      sink.
+  - **Not reported:**
+    - a dict or list, which Flask sends as JSON: a literal, a comprehension,
+      a `.split()` list, request data read whole (`request.get_json()`,
+      `request.json`, `request.args`, `request.args.to_dict()`,
+      `request.form.getlist(...)`), or a name every assignment of which is
+      one of these;
+    - a response object (`Response(...)`, `make_response(...)`,
+      `redirect(...)`, `send_file(...)`, `app.send_static_file(...)`), a
+      template (`render_template("page.html", ...)`) or `jsonify(...)`;
+    - an escaped value, such as `escape(q)` or `f"<p>{escape(q)}</p>"`;
+    - a value that holds no text, such as `request.args.get("page", 1,
+      type=int)` or `f"<p>{q.isdigit()}</p>"`.
+  - **Tuples.** A returned `(body, status)`, `(body, headers)` or
+    `(body, status, headers)` is checked on its body. It is not a sink when a
+    literal headers dict or list of pairs declares a `Content-Type` that is not
+    HTML (`{"Content-Type": "application/json"}`), when the status is 204 or
+    304, or when it is a redirect with a literal `Location` header
+    (`return "Moved", 302, {"Location": "/x"}`).
+  - **One finding per flow.** `return make_response(f"...")`,
+    `return Response(f"...")` and `return Markup(...)` are reported once, by
+    the constructor's own finding.
+  - **Identity.** Existing findings keep their fingerprints. The new findings
+    are new. Their sink is `return` and the body, as in
+    `return f'<p>{q}</p>'`, so adding a status or headers to the returned
+    tuple does not re-identify one.
+  - **Not covered:**
+    - a helper that builds the HTML and returns it to the view, as in
+      `return render_page(q)`;
+    - a headers dict held in a variable (`return body, 200, headers`), which
+      counts as HTML;
+    - a content type set elsewhere, such as in an `@app.after_request` hook
+      or by a custom Flask `response_class`;
+    - a FastAPI response class set on `app.include_router(...)`, on a router
+      or app from another file, or through a subclass of `HTMLResponse`;
+    - a view registered with `app.add_url_rule(...)`, such as a class-based
+      `MethodView`, which is not read as a route.
+  - **Framework parity:** no corpus case returns a string from a view, so the
+    parity results do not change.
+- **Server-side template injection is now detected in Jinja2, Django and Mako
+  templates.** A template compiled from request input runs the attacker's
+  template code on the server: in Jinja2,
+  `{{ cycler.__init__.__globals__.os.popen("id").read() }}` runs a shell
+  command. Only Flask's `render_template_string` was reported. The engine now
+  reports a template built from a string under a new rule,
+  `python.ast/PY_SSTI` (finding id `SEC-PY_SSTI`, CWE-1336, category
+  `injection`). Its SARIF results carry a new `ruleId`,
+  `fendix.injection.python-ast-py-ssti`.
+  - **Sinks.** Each callee is resolved through the file's imports, aliases
+    included:
+    - `jinja2.Template(src)`, and Jinja2's `NativeTemplate(src)`;
+    - `from_string(src)` on a Jinja2 `Environment(...)`, called on the
+      constructor directly or on a name the function or module binds to it
+      (`env = Environment(...)`). Its subclasses count too:
+      `SandboxedEnvironment`, `ImmutableSandboxedEnvironment` and
+      `NativeEnvironment`. A sandbox limits what a template can reach, but
+      the attacker's template still runs;
+    - `django.template.Template(src)`, and `from_string(src)` on a Django
+      `engines[...]` backend;
+    - `mako.template.Template(src)` and `Template(text=src)`.
+
+    The source may also be passed by keyword (`source=`, `template_string=`,
+    `text=`, `template_code=`).
+  - **Severity and title.** A flow proven from request input is CRITICAL and
+    titled "Template built from request input (server-side template
+    injection)". It is marked reachable, carries a taint chain and may block.
+    A source the engine cannot trace to the request is reported at HIGH with
+    MEDIUM confidence, titled "Template built from a non-constant value
+    (possible server-side template injection)", and does not block: a
+    helper's parameter that no caller in the file passes request input to, a
+    database value, or a configuration value such as a Django setting. The
+    title is presentation, so a finding keeps its identity when its flow is
+    later proven.
+  - **Not reported:**
+    - a template loaded by name: `get_template(...)`, Flask's
+      `render_template(...)`, a Mako `TemplateLookup`, or
+      `Template(filename=...)`;
+    - a class that is not one of these, even one named `Template`: a class
+      the file defines, one imported from the project
+      (`from .templating import Template`), or `string.Template`;
+    - a constant source: a literal, a name bound to one, or a concatenation,
+      `format`, f-string or conditional of constants;
+    - a template picked among constant templates: `TEMPLATES[key]` or
+      `TEMPLATES.get(key, DEFAULT)` on a literal dict whose values are
+      constants and that the file never changes in place (no
+      `TEMPLATES[k] = ...`, `.update(...)` or `.setdefault(...)`), or a name
+      that a preceding `if name not in ALLOWED:` guard with an early exit
+      keeps inside a literal collection;
+    - a template read from the file system: `.read()`, `.read_text()` or
+      `.read_bytes()`, decoded or not, on a file opened with `open(...)`,
+      `io.open(...)` or `codecs.open(...)` (`with open(path) as fh` too), on
+      a pathlib path (`Path(...)`, `/`, `.parent`, `.joinpath(...)`), or on
+      an `importlib.resources.files(...)` traversable.
+      - The path given to `open(...)` or `Path(...)` is the path-traversal
+        rule's concern: a path the request chooses there is still reported,
+        and proven, as `python.ast/PY_PATH_TRAVERSAL`.
+      - `python.ast/PY_PATH_TRAVERSAL` does not model a pathlib join, so a
+        path derived with `/`, `.joinpath(...)`, `.with_name(...)` and the
+        like, or an `importlib.resources.files(...)` package, is trusted only
+        when no segment it adds is proven request input. With one,
+        `(Path("tpl") / request.args["t"]).read_text()` and
+        `files("app").joinpath(request.args["t"]).read_text()` are reported,
+        and proven, as `PY_SSTI`. A segment that is only a helper's parameter,
+        such as the full-stack-fastapi-template email renderer's
+        `template_name`, which its callers fill with constants, keeps the
+        read trusted;
+    - a package resource read by a constant name:
+      `pkgutil.get_data("app", "t.html")` or
+      `importlib.resources.read_text("app", "t.html")`. A resource name that
+      is not constant is reported, since no other rule covers it.
+
+    Any other read can return the request's text and is reported: an
+    uploaded file (`request.files["t"].read()`), `urlopen(url).read()`, a
+    `requests` response's `.raw.read()`, a zip archive's `.read(...)`, and
+    `io.StringIO(...)` or `io.BytesIO(...)` over a value.
+
+    Escaping is not a sanitiser here: `html.escape` leaves `{{ }}` intact.
+  - **`render_template_string` keeps its rule.** Flask's
+    `render_template_string(src)` is still reported as
+    `python.ast/PY_XSS_HTML_SINK`, as before, and never as `PY_SSTI`.
+  - **One finding per flow, for the new HTML-response sinks only.** A
+    template built from request input and rendered into an HTML response
+    (`HTMLResponse(Template(src).render())`, Django `HttpResponse`, Flask
+    `make_response` and `Response`), or returned from a Flask view or an
+    HTML FastAPI route, is reported once, as `PY_SSTI`. These are the HTML
+    response sinks added above in this release. Their XSS finding now
+    follows only what `.render(...)` is passed: it is reported when a render
+    argument can carry text, as in
+    `HTMLResponse(Template(src).render(name=name))`, and proven only when
+    that argument is request input. A construction with no template source
+    argument, such as `Template(*args)` or Mako's `Template(filename=...)`,
+    is neither a sink of this rule nor a template object to these XSS rules,
+    which read it as before.
+  - **Released XSS sinks are unchanged.** `Markup(...)`, `mark_safe(...)`
+    and `render_template_string(...)` keep their
+    `python.ast/PY_XSS_HTML_SINK` finding, its proof and its taint chain
+    exactly as before. When their argument renders a template built from
+    request input, as in `Markup(Template(src).render())`, `PY_SSTI` is
+    reported beside that finding.
+  - **Helper parameters after `*`.** The one-hop helper check now follows a
+    keyword-only parameter (`def render(*, template_name)`) to the callers
+    in the file that pass it by keyword, for every rule that proves through
+    that check. Before, such a parameter was never proven. A finding inside
+    such a helper whose caller passes request input is now proven: it is
+    marked reachable, carries a taint chain, takes its rule's proven title
+    and severity where it has one, and may now block.
+    - **Identity.** A finding this change proves can change identity once. A
+      baseline entry or a `.fendix-ignore` `fingerprint:` rule for it stops
+      matching, and it is reported as new once.
+      - The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+        `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+        `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+        proven, so such a finding is identified by its sink instead of its
+        evidence line. The same holds for any other rule whose sink or
+        identity depends on the proof.
+      - A proven finding bound to a route is identified by the route's file.
+        A Django route is declared in the urlconf, so a Django route-bound
+        finding this change proves is identified by the urlconf's file
+        instead of the view's.
+  - **Imports.** `import a.b` now resolves `a.b.c` to `a.b.c`, as Python
+    binds it, wherever the engine reads an import path: this rule, and the
+    HTML-response sink's constructors, renderers, value types and redirect
+    statuses. It used to read `a.b.b.c`. So
+    `django.template.loader.get_template(...).render(...)` after
+    `import django.template.loader` is now recognised as Django's
+    autoescaped render, and is no longer reported as XSS.
+  - **Identity.** Existing findings keep their fingerprints: existing
+    `python.ast/PY_XSS_HTML_SINK` findings keep theirs, and `PY_SSTI` may
+    appear alongside them. The new findings are new. Their sink names the
+    constructor and the source, as in `jinja2.Template(template_src)` or
+    `jinja2.Environment.from_string(src)`, whatever the import style.
+  - **Catalog.** The security catalog lists `python.ast/PY_SSTI`, 105 checks
+    in all.
+  - **Not covered:**
+    - Flask's `app.jinja_env.from_string(...)`, Starlette's and FastAPI's
+      `Jinja2Templates(...).env.from_string(...)`, and Django's
+      `Engine(...).from_string(...)`;
+    - an environment bound to `self` in another method, or built in another
+      file.
+  - **Framework parity:** the Django and FastAPI `direct` and `indirect` SSTI
+    cases are now detected and block. Flask's are still found by
+    `render_template_string` and block, as before. No safe case is flagged.
+    The Python frameworks detect 97 of 108 vulnerable cases, up from 93, and
+    block on 68, up from 64: Django on 24, FastAPI on 21 and Flask on 23.
+
+- **More open redirects are detected: Starlette and FastAPI
+  `RedirectResponse`, Django `HttpResponsePermanentRedirect`, and `Location`
+  headers.** Only `redirect(...)` and `HttpResponseRedirect(...)` were
+  reported. The existing rule, `python.ast/PY_OPEN_REDIRECT`, now covers
+  these sinks too:
+  - **Redirect constructors.** `RedirectResponse(url)` from Starlette or
+    FastAPI and `HttpResponsePermanentRedirect(url)` from Django, beside
+    `redirect(url)` and `HttpResponseRedirect(url)`. Each is resolved
+    through the file's imports, aliases included
+    (`from fastapi.responses import RedirectResponse as Go`), and called by
+    name or through its module (`responses.RedirectResponse(url)`). The
+    target may also be passed by keyword: `url=`, `location=`, `to=` or
+    `redirect_to=`.
+  - **`Location` headers.** A `Location` header, matched in any case, on a
+    framework response that redirects:
+    - in the constructor's headers, as a literal dict, a literal list of
+      `(name, value)` pairs, or a name bound to either:
+      `Response(status=302, headers={"Location": nxt})`, or Flask's
+      `make_response("", 302, {"Location": nxt})`;
+    - assigned after construction to a name bound to such a response:
+      `resp.headers["Location"] = nxt`, or Django's
+      `resp["Location"] = nxt`;
+    - in a `(body, status, headers)` tuple returned from a Flask view:
+      `return "", 302, {"Location": nxt}`.
+
+    The response is Django's `HttpResponse`, Flask's `make_response` or
+    `Response`, Starlette's or FastAPI's `Response` or `HTMLResponse`,
+    resolved as for the HTML-response XSS sink, or, for an assignment, a
+    redirect constructor (`resp = HttpResponseRedirect("/")`).
+    Its status must be a redirect (301, 302, 303, 307 or 308) or a value the
+    engine cannot read. A status assigned after construction
+    (`resp.status_code = 302`) decides. A response with no status is sent
+    with 200, and a `201 Created` names a new resource, so a `Location` on
+    either is not reported. A plain dict, such as `headers["Location"] = url`,
+    is not a response.
+  - **The same checks as `redirect(...)`.** A constant target, `url_for(...)`
+    or `reverse(...)`, a lookup in a literal allowlist, a dominating
+    membership guard and a dominating `urlparse(url).netloc` allowlist guard
+    keep each of these sinks quiet. A target that joins a constant prefix and
+    request input, such as `"/" + nxt`, is reported, as it is for
+    `redirect(...)`.
+  - **Severity and title.** As for `redirect(...)`: HIGH with MEDIUM
+    confidence, titled "Open redirect — user-controlled redirect target"
+    when the flow from the request is proven, and "Potential open redirect —
+    dynamic redirect target" when it is not.
+  - **Identity.** Existing `PY_OPEN_REDIRECT` findings keep their
+    fingerprints, sinks and evidence. The new constructors name their sink
+    `redirect(<target>)`, as `HttpResponseRedirect` does. A `Location`
+    header's sink is `Location: <value>` in every form.
+  - **A project's own `redirect` is no longer a sink.** A function or class
+    named `redirect`, `HttpResponseRedirect`, `HttpResponsePermanentRedirect`
+    or `RedirectResponse` that the file defines, or imports from a module
+    that is not a web framework (`from app.utils import redirect`,
+    `helpers.redirect(url)`), is no longer reported. The engine cannot see
+    what such a helper does. A `redirect` imported from Flask, Werkzeug,
+    Quart, Django, Bottle, Sanic, TurboGears (`tg`), Pylons, web.py (`web`),
+    Morepath or Emmett still counts. So does a bare `redirect` the file
+    neither imports nor defines, and a method on another value, such as
+    Tornado's `self.redirect(url)`. For example, the four call sites of
+    django-allauth's own `redirect(to)` helper in `allauth/account/views.py`
+    are no longer reported; the `shortcuts.redirect(to)` inside the helper
+    still is.
+  - **Not covered:** a `Location` header set through `headers.update(...)`,
+    `.setdefault(...)` or another method, or on FastAPI's injected
+    `response: Response` parameter; a status given by the route decorator
+    (`status_code=302`); a `(body, status, headers)` tuple a helper returns
+    for the view to pass on; and other response classes, such as
+    `JSONResponse`.
+  - **Framework parity:** FastAPI's `direct`, `indirect`, `cross_file` and
+    `alt_api` open-redirect cases and Flask's `alt_api` case are now
+    detected. All but FastAPI's `cross_file` case block. No safe case is
+    flagged. The Python frameworks detect 102 of 108 vulnerable cases, up
+    from 97, and block on 72, up from 68: Django, FastAPI and Flask each block
+    on 24.
+
+- **Starlette and FastAPI `FileResponse(path)` is now a path-traversal
+  sink.** `FileResponse` opens and sends the file at `path`, so a path the
+  request chooses reads any file the server can. The existing rule,
+  `python.ast/PY_PATH_TRAVERSAL`, now reports it beside `open(...)`,
+  `Path(...)`, `send_file(...)` and `send_from_directory(...)`.
+  - **Resolution.** `FileResponse` must resolve through the file's imports
+    to `starlette` or `fastapi` (`from fastapi.responses import
+    FileResponse`, an alias, or `responses.FileResponse(path)`). The path may
+    also be passed as `path=`. A class the file defines, one imported from
+    elsewhere, and a bare `FileResponse` the file never imports are not
+    sinks.
+  - **Django's `FileResponse` is not a sink itself.** It takes an open file,
+    not a path: given a string, it streams the string, not the file. In
+    `FileResponse(open(path, "rb"))` the `open(...)` call is the sink and is
+    reported once, as before. A Starlette `FileResponse(open(...))` is
+    likewise reported only on the `open(...)`.
+  - **The same checks as `open(path)`.** A constant path, a path built only
+    from constants or trusted sources, `os.path.basename(...)`, and a
+    dominating containment guard (`realpath` with `commonpath`, `startswith`
+    with a trailing separator, `is_relative_to`, or `relative_to` in a `try`)
+    keep it quiet; a sink inside the guard's rejecting branch is still
+    reported.
+  - **Severity and title.** As for `open(path)`: HIGH, titled "Path
+    traversal — user-controlled input reaches filesystem path", when the flow
+    from the request is proven; MEDIUM, titled "Potential unsafe dynamic
+    filesystem path", when it is not.
+  - **Identity.** Existing findings keep their fingerprints. The new
+    finding's sink is `FileResponse(<path>)`. An `os.path.join(...)` written
+    inside the call keeps its own finding, as it does inside `open(...)`.
+  - **Framework parity:** no case outcome changes. FastAPI's `alt_api`
+    path-traversal case, `FileResponse(os.path.join(REPORTS_DIR, filename))`,
+    was already detected and blocking through the inner `os.path.join`; it
+    is now also reported on the `FileResponse` call.
+
+- **A new Semgrep rule, `python-random-token-assignment`, reports the
+  `random` module's output assigned to a token-named variable.** Code like
+  `token = "".join(random.choices(ALPHABET, k=40))` inside
+  `def create(request):` was not reported, because only the enclosing
+  function's name was checked. The new rule checks the assignment target
+  instead.
+  - **What it matches.** The calls are `random.random`, `choice`, `choices`,
+    `randint`, `randrange`, `sample`, `shuffle`, `getrandbits` and
+    `randbytes`. The target can be a name, an attribute (`self.csrf_token`)
+    or a subscript (`user["token"]`), in a function or at module level. One
+    of `token`, `password`, `secret`, `nonce`, `salt`, `session`, `otp`,
+    `reset`, `csrf`, `api_key` or `access_key` must start a segment of the
+    target's name: `reset_code` and `SESSION_SECRET` match, `footprint`
+    does not.
+  - **One finding per call.** In a function whose name matches
+    `python-random-for-token-generation`, the call is that rule's finding and
+    the new rule stays silent.
+  - **Rating.** The rule is in category `secrets`, CWE-338, HIGH with MEDIUM
+    confidence, the same as `python-random-for-token-generation`. Without
+    corroboration its findings warn.
+  - **Identity.** Its findings are new, with a new SARIF `ruleId`,
+    `python-random-token-assignment`. With this rule the pack had 23 rules
+    and the security catalog 106 checks; later entries add more.
+
+- **A Python sink in a helper is now proven when a view in another module
+  passes it request input.** The one-hop helper check followed a helper's
+  parameter only to the calls in the helper's own file. A view that imports
+  its helper, as in `from app.services.user_queries import find_users` and
+  then `find_users(username)`, left the helper's SQL injection, command
+  injection, SSRF, path traversal, open redirect or XSS finding reported but
+  unproven, so it only warned. The check now also follows the parameter to
+  the calls that name the helper through an import, anywhere in the scanned
+  tree.
+  - **A proven finding.** It is marked reachable and carries a taint chain.
+    The chain's first link is in the caller's file: the call, or the request
+    expression when it is passed inline. The helper's own links follow, up
+    to the sink. Like any proven finding, it takes the rule's proven title
+    and severity where it has one, the engine escalates it one level as
+    reachable, and it may now block.
+  - **The caller is judged as a same-file caller is.**
+    - The request value is traced through the caller's own assignments. For
+      each name, the last assignment before the call decides.
+    - A route handler's parameters are sources under the same rules as
+      everywhere else, so a FastAPI `int` or `Depends(...)` parameter is not
+      one.
+    - The caller-side sanitisers of the same-file hop apply in the caller's
+      file: a membership guard, a `urlparse(...).netloc` allowlist, path
+      containment, escaping, an allowlist lookup, `url_for(...)` or
+      `reverse(...)`, or a URL with a fixed scheme and host. Any of them
+      leaves the helper's finding unproven.
+    - A template built from request input (`Template(request.GET["t"])`)
+      passed to a helper that renders it into an HTML response does not prove
+      the XSS finding, exactly as in one file: that page is reported as
+      `python.ast/PY_SSTI` where the template is built.
+    - A caller in test or fixture code (`tests/`, `test_*.py`, `conftest.py`
+      and the like) does not count.
+  - **Which calls count.** `f(x)`, `m.f(x)` and `a.b.f(x)`, where an import
+    binds `f`, `m` or `a`: `from a.b import f` (with or without `as`),
+    `import a.b as m`, `import a.b`, or a relative import, resolved against
+    the caller's package.
+    - Names resolve as Python reads them: an import inside a function binds
+      the name for that function only, and the innermost scope that binds
+      the name decides. A name that scope binds otherwise (a parameter, an
+      assignment, a def) is not the imported function.
+    - Only a module-level function is matched. A method, a nested function
+      and a class attribute (`m.Store.find(x)`) are not.
+    - Arguments are matched as the same-file hop matches them: the positional
+      argument at the parameter's index as written, else the keyword of its
+      name. A keyword-only parameter is matched by its keyword alone.
+  - **Module names.** A module's name is its path under the scan root:
+    `app/services/q.py` is `app.services.q`. When the scan root sits above
+    the package (`src/app/services/q.py`), an import of `app.services.q`
+    still names it, but only when exactly one scanned module ends with
+    `app.services.q`. A suffix shorter than two components is never tried.
+  - **One hop.** The caller's own parameters are not traced into its
+    callers. So `view -> a.helper -> b.sink` proves `a.helper`'s findings,
+    not `b.sink`'s. A caller in the helper's own file that proves the flow
+    still comes first.
+  - **Not followed:**
+    - a star import;
+    - a helper re-exported by a package's `__init__.py` and imported from
+      the package;
+    - a scan rooted inside the package, as when scanning `app/` for code that
+      imports `app.services.q`;
+    - a call inside a lambda, comprehension or class body, unless the
+      request value is passed inline;
+    - a value read from a datastore, which is a source for the LLM prompt
+      sink alone.
+  - **Identity.** A finding this change proves can change identity once. A
+    baseline entry or a `.fendix-ignore` `fingerprint:` rule for it stops
+    matching, and it is reported as new once.
+    - The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+      `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+      `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+      proven, so such a finding is identified by its sink instead of its
+      evidence line.
+    - SSRF, open-redirect, path-traversal and XSS findings in a helper that
+      is not itself a route handler keep their identity: no route binds, so
+      the finding stays in the helper's file and function.
+    - A helper that is itself a Django view (a urlconf names it too) gets
+      that view's route once newly proven, like any proven finding in a
+      view. Its identity then takes the urlconf's file instead of the
+      helper's, once, whatever the rule. A Flask or FastAPI route is
+      declared in the helper's own file, so nothing moves.
+    - Rules that pin their identity keep doing so:
+      `python.ast/PY_JWT_WEAK` and `python.ast/PY_WEAK_CRYPTO_PASSWORD` give
+      their evidence line as their sink.
+    - A newly proven helper such as `open(os.path.join(BASE, name))` also
+      reports the inner `os.path.join(...)`, which is reported only when the
+      flow is proven.
+  - **Cost.** Before analysing, the Python analyzer reads every file once
+    more and parses the files that name `request` or `req` or hold a route
+    handler, recording each call into the project in a few bytes. It keeps
+    no parsed file beyond two caches of 256 KiB of source each: parses for
+    the analysis to reuse, and the callers a proof needs, re-parsed when
+    evicted. A helper's query stops at the first caller that proves it.
+    Measured on the Python AST pass, with the same findings (on the
+    generated application the helper's is now proven too):
+    - a 217k-line library tree (Django, django-allauth, Django REST
+      framework): 3.0 s and 35 MB peak memory before, 3.6 s and 45 MB now;
+    - a generated application of 300 Flask view modules (217k lines, each
+      module passing request input to one helper): 13.7 s and 98 MB before,
+      16.7 s and 99 MB now.
+  - **Framework parity:** in Django, Flask and FastAPI, the `cross_file`
+    cases for SQL injection, command injection, SSRF, path traversal, open
+    redirect and XSS now block. They warned before. No safe case is flagged
+    or blocks. The Python frameworks block on 102 of 108 vulnerable cases,
+    up from 84.
+
+- **A Semgrep taint tier, behind a per-language gate.** A match of a Semgrep taint rule (`mode: taint`) that sets
+  `metadata.fendix_reachability: taint` becomes a finding with
+  `source_tier: "semgrep_taint"` and `reachable: true`, but only when every
+  language in the rule's `languages` is enabled in
+  `semgrep.ReachabilityLanguages`. The gate ships closed: no language is
+  enabled. JavaScript, TypeScript, Java and Go packs met the corpus gate but
+  not the real-world one, so their findings are reported as warnings (see
+  "JavaScript, TypeScript, Java and Go taint findings are reported as
+  warnings, not blocking" under Changed).
+  - **The match is the proof.** Semgrep reports a taint-mode match only when
+    a declared source reached the sink within one function. No dataflow trace
+    is needed. The engine now runs Semgrep with `--dataflow-traces`, and when
+    Semgrep sends a trace, it becomes the finding's `taint_chain`: source,
+    intermediate variables, sink. Semgrep 1.141.0 sends one only to a
+    logged-in account. A logged-out run, which is the default, gets a chain
+    that holds only the finding's own location. It is reachable all the same.
+  - **When a language is enabled.** Only when its taint pack reaches
+    precision of at least 0.90 on the framework-parity development set,
+    within the noise budget, and precision of at least 0.80 on at least 10
+    triaged findings of a blind real-world evaluation. The release gate
+    checks holdout precision. ADR-011 records the decision and the evidence
+    for each language. No language is enabled yet.
+  - **What a taint finding counts for.** Its reachability adds +10 to the
+    confidence score, counts as an independent corroborating signal, and
+    escalates the severity one level. A correlated one gets both the
+    correlation and the reachable escalation. It stays a Semgrep finding: the
+    -5 `tier_semgrep` delta, no deterministic-detection bonus, never a Proven
+    Path, `analyzer_implementation: "semgrep"` in managed-CI evidence facts,
+    and an imported Semgrep SARIF does not corroborate it. A proven finding
+    scores 50, in the MEDIUM band, so at or above `--fail-on` it blocks on its
+    reachable path and never on its own.
+  - **Two analyzers on one line.** The tier ranks with textscan's
+    (`native_go`). When both report the same category and location, the
+    proven finding has already been escalated one level, so at equal declared
+    severity it is the one kept, with its chain.
+  - **Identity.** Such a rule's finding takes its `sink` from the match's own
+    line and has no `symbol`, so it has one fingerprint whether Semgrep is
+    logged in or out, whether a trace arrives, and whether its language is
+    enabled. Existing rules do not set the key, and their findings keep their
+    identity.
+  - **Schema.** `source_tier` gains the value `semgrep_taint` in
+    `docs/schema.json` and `docs/reporting-contract.json`. The change is
+    additive: `schema_version` stays 2.
+  - **Parity and cost.** With the gate closed, the framework parity gate
+    showed no case change. Asking for traces added about 3% to Semgrep's run
+    time on the parity corpus, within run-to-run noise.
+
+- **Every bundled Semgrep rule now carries the same metadata, and rule packs
+  get `semgrep --test` tests.** This is the contract the JavaScript/TypeScript,
+  Java and Go packs are written to. On its own it changed no detection.
+  - **The contract.** `TestEveryRuleCarriesFendixMetadata` requires
+    `category` (one of `injection`, `xss`, `crypto`, `auth`, `secrets`),
+    `cwe` (`CWE-<number>`), `confidence`, `fendix_severity`, `fendix_title`
+    and `fendix_remediation` on every rule, with `languages` drawn from
+    `python`, `javascript`, `typescript`, `java` and `go`. A taint rule is
+    named `<lang>-<class>-taint`, declares `confidence: MEDIUM` and sets
+    `fendix_reachability: taint`. A shape rule named `<lang>-<class>-sink`
+    excludes a fully literal argument and a module constant
+    (`const`, `static final`, and in Go `const $X = "..."` and the
+    one-binding block `const ( $X = "..." )`; Semgrep 1.141.0 cannot parse
+    the wider `const ( ... $X = "..." ... )`), so the same sink with a
+    constant does not become a false positive.
+  - **Twelve existing rules gain `fendix_title` and
+    `fendix_remediation`:** `python-jwt-decode-no-verification`,
+    `python-md5-used-for-password`, `python-sha1-used-for-password`,
+    `python-legacy-cipher-import`, `python-sql-injection-string-format`,
+    `python-command-injection-shell-true`, `python-eval-injection`,
+    `django-orm-raw-sql`, `flask-render-template-string-injection`,
+    `python-subprocess-shell-true-with-variable`,
+    `python-pickle-loads-untrusted` and `python-yaml-load-unsafe`. The text
+    is what the security catalog already derived from each rule's message,
+    so `docs/security-catalog-contract.json` does not change. A finding's
+    title and fix text come from the message, which does not change, so no
+    finding changes either.
+  - **Rule tests.** `go/internal/scanner/semgrep/ruletests/<stem>.<ext>`
+    tests `rules/<stem>.yaml`, with `// ruleid: <id>` and `// ok: <id>`
+    annotations, and the CI job `container-smoke` runs
+    `semgrep --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests`
+    with the release image's Semgrep. Semgrep skips a test file that has no
+    rule file of its stem and still reports success, so
+    `TestRuleTestsPairWithRulePacks` fails on such a file. It also requires
+    a `ruleid:` and an `ok:` line for every rule of a pack in a language
+    other than Python. The JavaScript/TypeScript, Java and Go packs bring
+    their own test files.
+  - **Parity run time.** `make parity` records the wall time of every scan
+    in `.parity/results.json` and prints the run's total and its slowest
+    scan, to watch against the Semgrep deadline below.
+
+- **Semgrep taint rules for JavaScript and TypeScript: Express, NestJS and
+  Next.js.** 17 new bundled rules in `javascript-injection.yaml`,
+  `javascript-web.yaml` and `javascript-crypto.yaml`, written in-house, run
+  on `.js` and `.ts` files when Semgrep is installed.
+  [`docs/semgrep-rules.md`](docs/semgrep-rules.md#the-javascript-and-typescript-pack)
+  lists every source, sink and sanitiser.
+  - **Ten taint rules** (`js-<class>-taint`) report request input reaching a
+    sink within one function: SQL injection, command injection, template
+    injection, XSS, SSRF, path traversal, open redirect, a password hashed
+    with MD5 or SHA-1, and a JWT decoded without verification; and
+    `Math.random()` output that becomes a token. Request input is Express's
+    `req.query`, `req.params`, `req.body`, `req.headers`, `req.cookies` and
+    `req.get(...)`; a NestJS parameter bound by `@Query()`, `@Param()`,
+    `@Body()`, `@Headers()` or `@Req()`; and a Next.js route handler's
+    `searchParams`, `json()`, `formData()`, `headers` and context `params`.
+  - **An SQL builder's tagged template is never SQL injection.** A tag
+    named `sql` sends its interpolations as bound parameters:
+    `` sql`... ${id}` `` (postgres.js, drizzle), slonik's `sql`,
+    `sql.type(...)`, `sql.unsafe`, `sql.typeAlias(...)` and `sql.fragment`,
+    `Prisma.sql`, `` prisma.$queryRaw`...` `` and sql-template-strings'
+    `SQL`. Neither the taint rule nor the shape rule reports them. A
+    project's own tag (`buildSql`, `rawSql`, `sqlConcat`) may concatenate, so
+    it is reported, as are `String.raw`, drizzle's `sql.raw(...)` and a tag
+    imported under another name. A pg config object, inline or bound to a
+    name first, is the parameterized form too; its `text` is still checked,
+    and reported when request input reaches it.
+  - **A sanitiser has to hold.** An SSRF host allowlist counts only as
+    `if (!ALLOWED.has(<host>)) return` or `throw`, with the host read off
+    the URL object, off `new URL(url)` or destructured from it; the URL and
+    the string it parsed are clean afterwards. The check may be an operand
+    of `||` but not of `&&`, and the `return` or `throw` must be a direct
+    statement of the guard's body. A denylist, or a check that does not
+    leave, cleans nothing. An open-redirect guard needs both halves, starts
+    with `/` and not with `//`; path-traversal guards follow the same
+    rules, and a prefix check counts only on a path from `path.resolve`.
+    SQL accepts an identifier allowlist with the same rules (or a reset to a
+    literal, or a literal-picking ternary) and values made only of
+    constants: placeholders mapped from a list or built with
+    `Array(n).fill('?')`, the length of a real array (not of request data),
+    a literal-map lookup with a literal fallback, and a same-file helper
+    that is exactly that lookup. The allowlist is a constant name or an
+    array literal of string literals. These checks stay linear: the rule
+    finishes a 2,000-line route file in seconds. A URL whose literal start
+    fixes the scheme and host, or a same-site path, is clean wherever it is
+    built, inline or in a variable first. Path traversal accepts
+    `sendFile`/`download` with `root` and the `path.relative` containment
+    check. XSS accepts only named HTML escapers (not `unescape`,
+    `he.decode` or `_.escapeRegExp`) and the output of an engine rendering a
+    fixed template that writes no value raw (ejs `<%-`, `{{{`, `| safe`,
+    pug `!=`) or of React's `renderToString`. A `Math.random()` token
+    is one whose name ends in the token word (`resetToken`, `sessionId`),
+    not jitter such as `resetDelayMs`.
+  - **Seven shape rules** (`js-<class>-sink`) report the same sinks behind a
+    helper's parameter, which Semgrep CE's intraprocedural taint does not
+    follow: SQL text and shell commands built from a non-constant value,
+    and a template, HTML markup, redirect target or decoded JWT that is the
+    helper's parameter; and a password-named value hashed with MD5 or
+    SHA-1. A module constant or a literal is never reported. SSRF and path
+    traversal have no shape rule: helpers that fetch a URL or read a file
+    by a parameter are too common in clean code.
+  - **Test code is skipped.** No rule reports in test, mock or fixture
+    paths (`__tests__/`, `__mocks__/`, `__fixtures__/`, `mocks/`, `mock/`,
+    `fixtures/`, `test/`, `tests/`, `spec/`, `e2e/`, `cypress/`, and
+    `*.test.*`, `*.spec.*`, `*.e2e-spec.*`, `*.cy.*` files), matched relative
+    to the scan root.
+  - **Taint findings are warnings, not blocking.** The taint rules' findings
+    are reported as warnings: JavaScript and TypeScript precision was 0.077
+    (1 of 13 findings) on the blind real-world evaluation, so the gate is not
+    opened for them; see "JavaScript, TypeScript, Java and Go taint findings
+    are reported as warnings, not blocking" under Changed. Shape findings
+    warn too.
+  - **Framework parity (JS/TS):** recall 19.4% to 88.9% (96 of 108
+    vulnerable cases), with no new false positive: the false-positive rate
+    on safe cases stays 4.5%, the three `sqli-safe_lookalike` cases the
+    Python engine's `SEC-JS_SQL_TEMPLATE` already flagged. Block recall stays
+    at 19.4%: the taint findings warn (see the entry under Changed). Still
+    missed: SSRF and path traversal through a helper in the
+    same or another file (12 cases).
+  - **Real-world noise:** no new finding on the clean
+    `node-express-realworld` (2.4 kLOC). On the vulnerable-by-design apps,
+    5 new findings on `juice-shop` (0.05 per kLOC) and 2 on `nodegoat` (0.65
+    per kLOC); 17 of their 19 matches are true positives. The two others
+    are path-traversal matches in `juice-shop` that a key lookup in another
+    function guards. A scan of `juice-shop` (104 kLOC) takes 26 s instead
+    of 5 s, the pack's Semgrep pass.
+  - **Catalog.** `docs/security-catalog-contract.json` gains the 17
+    `js-*` checks under the `semgrep` analyzer.
+
+- **Java and Spring code now has Semgrep taint rules.** Three new rule packs
+  written in-house, `java-injection.yaml`, `java-web.yaml` and
+  `java-crypto.yaml`, add ten taint rules and five shape rules. A taint
+  rule's match is reported as a warning, not blocking, because Java is not
+  enabled in the taint gate (precision 0.111 on the real-world evaluation; see
+  "JavaScript, TypeScript, Java and Go taint findings are reported as
+  warnings, not blocking" under Changed); a shape rule's finding warns too.
+  - **What they find.**
+    - SQL injection: JdbcTemplate, NamedParameterJdbcTemplate, JDBC
+      `Statement` and `Connection`, JPA `EntityManager` and Hibernate
+      `Session` queries built from request input (`java-sqli-taint`).
+    - Command injection: `Runtime.exec`, and a `ProcessBuilder` running
+      `sh -c` or a program the request chose (`java-cmdi-taint`).
+    - Template injection: FreeMarker, Velocity and Thymeleaf templates
+      compiled from request input (`java-ssti-taint`).
+    - Reflected XSS: the return value of a `@ResponseBody` handler that
+      produces `text/html`, and the servlet response writer
+      (`java-xss-taint`).
+    - SSRF: RestTemplate, WebClient and RestClient, `java.net.http`,
+      `URL.openConnection` and `openStream`, Apache HttpClient and Jsoup
+      (`java-ssrf-taint`).
+    - Path traversal: `Files`, file streams, readers and writers, and
+      `MultipartFile.transferTo` (`java-path_traversal-taint`).
+    - Open redirect: `sendRedirect`, a `"redirect:"` view, `RedirectView`
+      and the `Location` header (`java-open_redirect-taint`).
+    - A password hashed with MD5 or SHA-1, claims read from a JWT decoded
+      without verifying it (auth0 `JWT.decode`, jjwt `parseClaimsJwt`,
+      `parseUnsecuredClaims` and an `unsecured()` parser), and a token, code
+      or key drawn from `java.util.Random`, `Math.random`,
+      `ThreadLocalRandom` or `RandomStringUtils.random*` (a variable or
+      method whose name ends in a token word, such as `resetToken` or
+      `generateOtp`; `tokenRefreshJitterMs` and `spotPrice` do not).
+  - **Sources.** A handler parameter annotated `@RequestParam`,
+    `@PathVariable`, `@RequestBody`, `@RequestHeader`, `@CookieValue`,
+    `@ModelAttribute`, `@RequestPart` or `@MatrixVariable`, or a plain
+    `String` parameter of a request-mapping method, unless it is a number, a
+    boolean, a date, a UUID or a framework object; and
+    `HttpServletRequest.getParameter`, `getHeader`, `getQueryString`,
+    `getInputStream` and `getReader`. Semgrep follows taint within one
+    method, so a method of the same class that a handler passes a request
+    value to is followed too, one call deep, and the finding is at the sink
+    inside it. The called method is matched by name and number of arguments
+    (one to three) among the class's own methods, not a nested class's, and
+    the argument at that position must be the request value itself, a getter
+    of it, or a concatenation or `String.format` of such values. A value the
+    handler sanitised in the call, such as `FilenameUtils.getName(file)`, or
+    reassigned before it, is not followed.
+  - **Not reported.**
+    - `?` placeholders, named parameters and JPA Criteria queries.
+    - HTML encoding (`HtmlUtils.htmlEscape`, `Encode.forHtml`,
+      `StringEscapeUtils.escapeHtml4`), a response declared JSON, and the
+      output of a Thymeleaf template named by a constant.
+    - A URL whose host is fixed before input is appended: a literal
+      `https://host/...`, a relative `/...` path, a base-URL field or
+      constant (an `@Value` property) followed by `/`, or a
+      `UriComponentsBuilder` started from one.
+    - `FilenameUtils.getName`, and `SecureRandom`. An argument array whose
+      program is fixed. The claims of a token that went through `verify()`,
+      and a token's time claims (`exp`, `iat`, `nbf`).
+    - In SQL, a value that cannot hold request text: a count or length
+      (`size()`, `length`), `Collections.nCopies` of a literal or a stream
+      mapped to a literal (IN-list placeholders), a `get` or a
+      `getOrDefault` with a literal default on a final `Map.of` or
+      `Map.ofEntries` of literals, and a call of a method of the same class
+      whose every `return` is a literal (or a choice between two literals),
+      or whose whole body is one `return` of a constant lookup: a final
+      `Map.of`/`Map.ofEntries` of string literals read with `getOrDefault`
+      (literal default), `get`, or `containsKey(k) ? get(k) : "lit"`, or
+      `SET.contains(k) ? k : "lit"` on a final `Set.of` or `List.of` of
+      string literals. Such a helper used to leave the call tainted, which
+      blocked a build on `ORDER BY " + col(sort)`. A helper on a `HashMap`
+      or non-final map, with a fallback that is the parameter, with another
+      statement, or with a mixed return still reports, as does the
+      `if (ALLOWED.contains(k)) return k; return "id";` form (a known
+      false positive).
+      `"... ORDER BY " + sort` and `String.join(",", ids)` stay reported.
+    - Test, fixture and mock code: every Java rule skips `src/test`,
+      `src/integrationTest`, `src/testFixtures` and `src/it`, files named
+      `*Test.java`, `*Tests.java` and `*IT.java`, and `mock`, `mocks`, `fake`
+      and `fakes` directories. The patterns are matched below the scan root,
+      so a checkout that lies under such a directory is still scanned.
+    - A value behind a guard. A guard counts only when the branch taken on a
+      failing check ends with a direct `return` or `throw` (or, for a
+      redirect or a SQL identifier, a direct assignment of a literal to the
+      value itself, followed by nothing but literal assignments, in an `if`
+      with no `else`), not one nested in an `if`, `try`, loop or lambda, and
+      the check is not under an `&&`; or when the use sits in the
+      then-branch of a passing check with no `else`. A check that only logs
+      or exits only sometimes, a denylist, and a use inside the failing
+      branch stay reported. The checks are:
+      - a host allowlist or a literal host comparison on the URL's host:
+        `getHost()` of a `URI` or `URL` parsed from it, or a variable
+        holding that host; or one exact URL (`equals`, or `matches` with
+        every dot escaped). A check on the scheme, path or port alone is
+        not a host check, though it may sit beside one in an `||`;
+      - containment: a normalized or real `Path` that `startsWith` the base,
+        or a String that is itself a canonical or normalized path
+        (`getCanonicalPath()`, `normalize().toString()`), inline or in a
+        variable, that `startsWith` the base plus a separator. A String
+        `startsWith` without a separator is not containment, and neither is
+        a canonical base joined with the input;
+      - for a redirect, both halves, each with its polarity: a failing
+        check holds `!t.startsWith("/")` and `t.startsWith("//")` as `||`
+        operands, and a passing one `t.startsWith("/")` and
+        `!t.startsWith("//")` as `&&` operands. A replacing check tests
+        `startsWith("//")` on the target only;
+      - for a SQL identifier: membership in an allowlist (`contains`,
+        `containsKey`); a condition whose every operand is a negated
+        equality of the value with a literal
+        (`!"asc".equalsIgnoreCase(dir) && !"desc".equalsIgnoreCase(dir)`);
+        the ternary `ALLOWED.contains(sort) ? sort : "id"`; and a `switch`
+        on the value whose cases only `break` and whose `default` assigns it
+        a literal or exits.
+  - **Shape rules** (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
+    `java-path_traversal-sink`, `java-open_redirect-sink`) report a sink in
+    another class: a non-private method whose own `String` parameter is
+    concatenated into SQL or HTML, is the URL of a request or a redirect, or
+    is a file name joined to a directory. They exclude module constants and
+    literal arguments, apply their taint rule's guards (for SQL, only when
+    the parameter is the one value in the SQL text), prove no flow, and
+    never count as reachable.
+  - **Rating.** SQL, command and template injection, SSRF and unverified JWT
+    claims are HIGH; XSS, path traversal, open redirect, weak password
+    hashing and weak random tokens are MEDIUM; the shape rules are MEDIUM.
+    All have MEDIUM confidence. SSRF, path traversal, open redirect and
+    template injection are category `injection`, weak hashing and random
+    tokens `crypto` and JWT `auth`, as textscan files them, so a textscan
+    finding on the same line collapses with the Semgrep one.
+  - **Identity.** The findings are new, with new rule ids.
+  - **Catalog.** `docs/security-catalog-contract.json` gains the 15 `java-*`
+    checks under the `semgrep` analyzer.
+  - **Parity.** On the Spring corpus, recall goes from 12 to 35 of 36
+    vulnerable cases (the one left is a hardcoded secret). False positives
+    stay at 2 of 22 safe cases, both textscan's.
+  - **Real code.** On `spring-petclinic`, nothing new. On WebGoat, 25 new
+    locations, all true positives (SQL injection lessons, open redirects,
+    path traversal and zip slip, predictable tokens and secrets). The scan
+    takes about one second longer.
+- **Go: Semgrep taint rules for net/http and Gin.** Three new packs,
+  `go-injection.yaml`, `go-web.yaml` and `go-crypto.yaml`, add 19 rules: a
+  taint rule (`go-<class>-taint`) and a shape rule (`go-<class>-sink`) for SQL
+  injection, command injection, template injection, XSS, SSRF, path
+  traversal, open redirect, weak password hashing and JWTs decoded with
+  `ParseUnverified`, and a pattern rule, `go-weak-random-token`, for tokens
+  drawn from `math/rand`. A taint rule's match is reported as a warning, not
+  blocking, because Go is not enabled in the taint gate (precision 0.091 on
+  the real-world evaluation; see "JavaScript, TypeScript, Java and Go taint
+  findings are reported as warnings, not blocking" under Changed); a shape
+  rule's finding and `go-weak-random-token` warn too.
+  - **Sources.** net/http's query, form and path values, request headers,
+    cookies and body (decoded JSON included), gorilla/mux and chi path
+    variables, and Gin's request accessors and bind targets.
+  - **One call into the same file.** Semgrep OSS follows taint within one
+    function. A call that passes request input to a function of the same
+    file whose string parameter reaches the sink is reported at the call.
+  - **Lookups are not request input, helpers are followed.** A
+    package-qualified or method call's result (a row, a cache entry, a stored
+    file name looked up by request input) is clean, except the calls that
+    hand their input back (`fmt.Sprintf`, the `strings`, `filepath`, `path`
+    and `url` functions, regexp replacement, decoders) and a call of a method
+    of the same file. A call of a function (or method) of the same file is
+    clean only when its body is in the file and every return is constant: a
+    string literal, a lookup in a map of string literals with a literal
+    fallback, or a `switch` or `if` over literals. Every other call keeps the
+    taint of its arguments, as Semgrep does by default: a function of another
+    file of the package, a helper that builds its result (through a variable,
+    a `strings.Builder`, a struct or a second return value), and a helper
+    that validates its parameter and returns it. `len`, `cap`, a map lookup
+    keyed by request input, and a `fmt.Sprintf` whose verbs are all numeric
+    (`"$%d"` placeholders) are clean.
+  - **Guards.** Placeholders and prepared statements for SQL, and an
+    identifier (an `ORDER BY` column, a sort direction) checked against an
+    allowlist, compared with each allowed literal, or settled by a `switch`
+    default; a host allowlist (map, `slices.Contains`, a set's `Has`) or a
+    fixed-host comparison that exits, on the parsed URL or the string it came
+    from, for SSRF; a local-path check (starts with `/`, not with `//`) that
+    exits or replaces the target for redirects; `filepath.Base`,
+    `filepath.Rel` or a separator-terminated prefix check that exits for
+    paths, a `..` check only for a name then joined onto a base, and an
+    upload's `Filename`; escaping or `html/template` for XSS; a literal
+    scheme-and-host or local-path prefix for SSRF and redirects, and a value
+    placed after a literal `?` or `#`. The comma-ok membership test
+    (`if _, ok := allowed[u.Host]; !ok { return }`, for a set or a bool map,
+    in the `if` or as two statements) is an allowlist for SSRF hosts and SQL
+    identifiers, and so is a conjunction of negated host equalities
+    (`u.Host != "a.example.com" && u.Host != "b.example.com"`). A guard
+    counts only when its `if`
+    block ends in a `return` (or, where stated, replaces the value with a
+    literal) and its check is the whole condition or one alternative of an
+    `||`. A check joined to another by `&&` or wrapped in `!(...)` guards
+    nothing, and a passing check covers only its own block, not the `else`.
+    A denylist, a `//` check alone, a prefix check without a separator, or
+    an `if` that only logs guards nothing either.
+  - **Shape rules** report an exported function whose string parameter is
+    formatted into a SQL value, a shell command line, an HTML response, an
+    outbound URL, a joined file path or a redirect target, for callers in
+    other files.
+  - **GORM.** A `Where`, `Or`, `Not`, `Order`, `Group`, `Having` or `Joins`
+    condition built with `fmt.Sprintf` or `+`, taken straight from a request
+    accessor (`Where(c.Query("filter"))`), or held in a variable assigned
+    one of those is a sink; `Where("name = ?", v)` and a map or struct
+    condition are not.
+  - **Go test code is skipped:** `*_test.go`, `mock_*.go` and `*_mock.go`,
+    and `testdata`, `testhelpers`, `testutil`, `testutils`, `testing`,
+    `test`, `tests`, `unittest`, `mock`, `mocks` and `fakes` directories.
+  - **Weak password hashing is reported twice.** `go-weak-password-hash-*`
+    uses the `crypto` category and textscan's `GO_WEAK_HASH_PASSWORD` uses
+    `secrets`, so the two findings on one `md5.Sum(password)` line do not
+    collapse (see `docs/semgrep-rules.md`).
+  - **Parity.** net/http and Gin recall rises from 36% to 100% each, with no
+    new false positive (the four left are textscan's, on the SQL and command
+    lookalikes).
+  - **Catalog.** `docs/security-catalog-contract.json` gains the 19 `go-*`
+    checks under the `semgrep` analyzer.
+
+### Changed
+
+- **JavaScript, TypeScript, Java and Go taint findings are reported as
+  warnings, not blocking.** `semgrep.ReachabilityLanguages` is empty (ADR-011,
+  ruling R-pf81), so a match of one of these packs' taint rules
+  (`js-<class>-taint`, `java-<class>-taint`, `go-<class>-taint`) is a
+  `semgrep_shim` finding: `reachable: false`, not escalated, and it never
+  fails a build. A shape rule's finding (`-sink`) and `go-weak-random-token`
+  warn as before. The packs still run and still report; only the blocking is
+  withheld.
+  - **Evidence.** The packs met ADR-011's corpus gate (precision of at least
+    0.90 on the framework-parity development set, and no new finding on a
+    clean application), but a blind evaluation on 70 fresh public production
+    repositories did not. Every taint-tier finding was triaged by reading the
+    handler. The rule fixed in advance required precision of at least 0.80 on
+    at least 10 findings.
+    - JavaScript and TypeScript: 1 true positive in 13 findings, precision
+      0.077.
+    - Java: 1 true positive in 10 findings, precision 0.111 (the one unclear
+      finding is left out; counted as true it is 0.20).
+    - Go: 1 true positive in 11 findings, precision 0.091.
+    - The three true positives are low impact: one authenticated path
+      traversal and two unvalidated open redirects.
+    - Most false positives share a few causes: `Math.random()` taken for a
+      token wherever its value flows, a redirect URL read from configuration
+      with only a selector from the request, and a validator or sanitiser the
+      rule cannot see through.
+    - The aggregate evidence is
+      `benchmarks/frameworks/REALWORLD.md`.
+  - **Framework parity (block recall, of the vulnerable cases).** The corpus
+    results are unchanged: recall is as before, and every case is still
+    detected. Only blocking falls back.
+    - JavaScript and TypeScript: block recall 19.4% (21 of 108 vulnerable
+      cases, the secrets and template-literal SQL), recall 88.9% (96 of 108).
+    - Java: block recall 8.3% (3 of 36, the secrets), recall 97.2% (35 of 36).
+    - Go: block recall 11.1% (8 of 72, the secrets), recall 100% (72 of 72).
+    - No safe case newly blocks.
+  - **Not enabled again until a pack clears the real-world gate.** A
+    language is added to the map only with precision of at least 0.80 on at
+    least 10 triaged real-world findings, and the corpus gate. The mechanism
+    and its tests stay.
+
+- **`python-random-for-token-generation` reports more token generators.**
+  - **More calls.** `random.choices`, `random.randrange` and
+    `random.randbytes` are reported beside `random.random`, `choice`,
+    `randint`, `sample`, `shuffle` and `getrandbits`.
+    `"".join(random.choices(ALPHABET, k=40))`, the most common token idiom,
+    was missed.
+  - **More function names.** The security-sensitive word may now start any
+    segment of the function's name: `issue_api_key`, `_generate_api_key` and
+    `generate_token` are reported. Semgrep anchors a `metavariable-regex` at
+    the start of the name, so until now only a name that began with the word
+    was reported (`token_for`). The rule's own documented example,
+    `generate_token`, never fired. A word inside a segment still does not
+    count: `footprint` (otp) and `preset_palette` (reset) are not reported.
+  - **Identity.** Every finding the rule reported before keeps its rule id,
+    message, title, severity and fingerprint. The change only adds findings.
+    A call inside a nested function now gets one result per enclosing
+    function whose name matches, each naming its function. Semgrep already
+    did this when both names began with the word. The results share one
+    fingerprint.
+  - **Framework parity.** The `direct` and `indirect` weak-random-token
+    cases of Django, Flask and FastAPI are detected. They were missed in all
+    three: `create_api_key` and `_generate_api_key` call `random.choices`.
+    They warn, and the safe cases stay clean. The Python frameworks detect
+    all 108 vulnerable cases, up from 102. They still block on 72.
+
+- **Python weak password hashing and unverified JWT decoding are now
+  proven when the value comes from the request, and may block.**
+  `python.ast/PY_WEAK_CRYPTO_PASSWORD` reports MD5 or SHA-1 of a
+  password-named value. `python.ast/PY_JWT_WEAK` reports `jwt.decode` with
+  signature verification off. Neither rule tried to prove a flow, so even
+  `hashlib.md5(request.form["password"].encode())` only warned. Both now
+  trace a value back to request input: the hashed data, and the decoded token
+  (the first argument, or `jwt=`).
+  - **Sources and hops.** These are the same as for the other proven Python
+    rules:
+    - a `request.*` read;
+    - a route handler's request-carrying parameter, such as a FastAPI
+      `Form()` or `Header()` parameter;
+    - a same-file helper that the value is passed to, keyword-only
+      parameters included.
+
+    A sanitiser in the caller that the helper hop honours, such as a
+    membership guard, leaves the helper's finding unproven.
+  - **A proven finding.** It is marked reachable and carries a taint chain.
+    A reachable taint path is an independent signal, so the confidence gate
+    lets the finding block at a `--fail-on HIGH` threshold. Neither rule has
+    a proven title or severity, so the title does not change. The severity
+    stays HIGH: the engine raises a reachable finding one level, and MEDIUM
+    confidence caps it at HIGH again.
+  - **An unproven finding** is reported as before and still warns. The
+    Semgrep rules `python-md5-used-for-password`,
+    `python-sha1-used-for-password` and `python-jwt-decode-no-verification`
+    do not change.
+  - **Identity.** Fingerprints do not change, whether a finding is proven or
+    not.
+    - Both rules now give the evidence line as their sink, on both paths.
+      The JSON report's new `sink` field equals the `evidence` field.
+    - `python.ast/PY_JWT_WEAK` is a code finding. Its fingerprint hashes the
+      sink, and hashed the evidence line while the rule named no sink, so
+      the operation it identifies is unchanged.
+    - `python.ast/PY_WEAK_CRYPTO_PASSWORD` is a `secrets` finding, identified
+      by its rule and file alone. A bound route, a sink or a chain never
+      moves it, so it binds a Django route like the other rules do.
+    - A proven `python.ast/PY_JWT_WEAK` finding in a Django view does not
+      bind the urlconf's route. A bound route's file would replace the view's
+      file in the fingerprint. A Flask or FastAPI route is declared in the
+      handler's own file, so it is bound.
+  - **Framework parity.** In Django, Flask and FastAPI, the `direct` and
+    `indirect` weak-password-hash and JWT-no-verify cases now block. They
+    warned before. No safe case is flagged. The Python frameworks block on
+    84 of 108 vulnerable cases, up from 72.
+
+- **A Flask route without authentication now gets one missing-auth finding
+  instead of two.** The Semgrep rules `flask-missing-login-required` and
+  `flask-route-no-auth-decorator` both reported every unprotected Flask route.
+  `flask-missing-login-required` is removed (ADR-012), and
+  `flask-route-no-auth-decorator` reports the route as before, under the same
+  identity.
+  - **Severity.** The finding that remains is MEDIUM severity with LOW
+    confidence. The removed rule's finding was HIGH with MEDIUM confidence, so
+    reports show one HIGH finding fewer per unprotected route, and at MEDIUM
+    the route's finding is below a `--fail-on HIGH` threshold. Without
+    corroboration, the confidence gate held both findings at WARN.
+  - **Protected routes.** A route protected by `@requires_auth`,
+    `@jwt_required(...)` or `@auth.login_required` below `@app.route(...)` is
+    no longer reported. The removed rule knew only `@login_required`.
+  - **Baselines.** Baselines and `.fendix-ignore` entries that pinned
+    `flask-missing-login-required` stop matching, and its GitHub Code Scanning
+    alerts close on the next upload. The route stays reported by
+    `flask-route-no-auth-decorator`.
+  - The security catalog lists one check fewer.
+
+- **Semgrep no longer scans build output or vendored code, in any
+  language.** Every Semgrep run now skips `node_modules/`, `dist/`, `build/`,
+  `.next/`, `target/` and `vendor/` at any depth, and every `*.min.js` file.
+  A finding there is in code the project does not write, or in a copy of
+  code it does.
+  - **Python too.** `dist/` and `build/` are also where Python packaging
+    writes its output, so they are skipped for Python as well. This is
+    deliberate. A Python package that is itself named `build`, `dist`,
+    `target` or `vendor` is skipped with them.
+  - **What changes.** Semgrep already skipped `node_modules/`, `build/`,
+    `dist/`, `vendor/` and `*.min.js` by default, but only in a project with
+    no `.semgrepignore` of its own. A project that has one had them scanned,
+    and `.next/` and `target/` were scanned in every project.
+  - **What does not.** The patterns match paths below the scanned
+    directory: a repository checked out under `/srv/build/` is scanned, and
+    so is a file named `build.py`. A `--diff` scan that changes only files
+    under these directories gets no Semgrep findings from them. Other
+    analyzers are unaffected.
+  - The framework parity gate shows no case change. The corpus has no such
+    directory.
+
+- **Semgrep's deadline is 300 seconds, up from 120, a rule may run for 30
+  seconds on one file, up from 5, and a rule that times out is reported.**
+  - **Per-rule timeout.** Semgrep gives up on a rule after `--timeout`
+    seconds on one file and drops that rule's matches there. The default, 5
+    seconds, can cut a taint rule off on a large file. Fendix now passes
+    `--timeout 30`. The bound stays: without one, a single pathological file
+    could use up the whole deadline, and a run past the deadline fails with
+    no Semgrep findings at all. Semgrep's `--timeout-threshold` (3) still
+    applies: after three rules time out on one file, it skips the remaining
+    rules on that file.
+  - **Timeouts are no longer silent.** Semgrep lists each timed-out rule
+    and file in its output's `errors`, which Fendix used to ignore. Each one
+    is now logged with the rule and the file. The run is still `ok`, as in
+    v3.7.0 and by Semgrep's own contract, since the rule lost its matches in
+    that file only, and the `semgrep` entry's `detail` now names the
+    timed-out rules and files (v3.7.0 gave only the count). The findings the
+    run did produce are kept. A run that is killed or does not load a rule is
+    still `failed`.
+  - **A malformed `errors` entry is skipped.** Each entry is decoded on its
+    own, and an `errors` field that is not a list is ignored, so the results
+    beside them are always kept.
+  - **Deadline.** The 300-second deadline bounds the whole run, which
+    executes every bundled pack at once.
+  - On the parity corpus `make parity` took 552 seconds, against 567
+    before this change, and no scan took longer than 1.3 seconds.
+
 ### Fixed
+
+- **A Jinja2 template rendered by an autoescaping environment is no longer
+  reported as reflected XSS.** `Environment(autoescape=True)`,
+  `Environment(autoescape=select_autoescape(...))` and Flask's
+  `app.jinja_env` (or `current_app.jinja_env`) escape what `.render(...)` is
+  passed, but `env.get_template("a.html").render(name=request.args["n"])` was
+  still reported `PY_XSS_HTML_SINK` HIGH with a proven path. `select_autoescape`
+  counts for a template whose extension it covers (`html`, `htm`, `xml` unless
+  the call lists others), and for `from_string` unless `default_for_string=False`.
+  `Environment()` with no `autoescape`, `autoescape=False`, an argument the
+  analyzer cannot read, and a file that later sets `<env>.autoescape` to
+  anything but `True` are still reported.
+
+- **A rebound import no longer proves a cross-file SQL or command injection.**
+  `from svc import find`, then `find = print` (or a later `def find`), then
+  `find(request.args["n"])` was reported against `svc.find` with a proven
+  path, though the call is not of `svc.find`. A name one scope binds both by
+  import and by assignment, `def`, `class`, loop or `with` no longer names the
+  imported function, so the helper's finding stays, unproven.
+
+- **A host Semgrep older than 1.111.0 no longer fails the whole run on an
+  unknown option.** The scanner always passed `--project-root`, which Semgrep
+  1.110.0 and older reject ("No such option"), so a host `semgrep` on PATH at
+  the 1.45.0 that v3.7.0 documents support for recorded `failed` and lost
+  every Semgrep finding. Fendix now reads `semgrep --version` once per binary
+  and leaves out an option the version predates: `--project-root` (1.111.0),
+  `--dataflow-traces` (0.107.0), `--timeout` (0.17.0), `--exclude` (0.12.0),
+  logging a warning and naming the dropped options in the Semgrep
+  `scanner_status` detail (`semgrep 1.45.0: dropped --project-root (needs
+  1.111.0)`; the status stays `ok`). An unreadable version is run with every
+  option. Documented
+  in `docs/checks/semgrep.md`; the docs also name `--project-root` in the
+  command, and `ADR-011` gives the 300 s run timeout.
+
+- **The published development-corpus figures match the committed baseline.**
+  `README.md`, `BENCHMARKS.md`, `docs/accuracy.md` and
+  `benchmarks/frameworks/RESULTS.md` quoted Java at recall 0.972 and block
+  recall 0.083, and RESULTS.md's headline, family, coverage-by-class and
+  harder-variant tables, its secrets, Java, Go and JS/TS safe-code figures
+  and its Python rows were older measurements. They are recomputed from
+  `benchmarks/frameworks/baseline.json`: Java 36/36 detected and 4 blocking
+  (recall 1.000, block recall 0.111), and no false positive in any of the nine
+  frameworks. Each place that quotes the blind holdout (commit `e03655a`) or
+  the real-world precision (commit `6901cf7`, Semgrep 1.141.0) now names the
+  commit and Semgrep version it was measured at. The holdout and real-world
+  figures are unchanged.
+
+- **The Go taint rules keep their `ok` cases clean on Semgrep 1.182.1, the
+  version Fendix ships.** The Go pack was written on Semgrep 1.141.0. Semgrep
+  1.182.1 keeps the taint of a variable assigned from a call that an exact
+  sanitizer clears (`$x := f(...)`, `x = f(...)`, `var x = f(...)`), which 1.141.0
+  cleared, so `go-sqli-taint` and `go-path-traversal-taint` reported a column
+  or a row looked up through a constant helper or a same-file method. Each Go
+  call sanitizer now also matches the assignment, in every Go taint rule. The
+  sink-in-receiver case (`exec.Command(...).Run()`) is kept: the sanitizers are
+  not made non-exact. The rule tests (51) pass on 1.182.1 and on 1.141.0.
+- **The Python engine's JavaScript SQL check no longer fires on tagged
+  templates or constant-only templates, and steps aside when Semgrep ran.**
+  `SEC-JS_SQL_TEMPLATE` flagged every template literal with a SQL keyword and
+  a `${...}`, including `sql`...${id}``, `prisma.$queryRaw`...${id}`` and
+  `Prisma.sql`...``, which bind the values as parameters, and a template that
+  interpolates only a module-level `const ROLE = 'member'`. Neither is
+  reported now; `pool.query(`... '${name}'`)` still is.
+  - **The engine's `SEC-JS_*` pattern checks (`SEC-JS_EVAL`,
+    `SEC-JS_INNER_HTML`, `SEC-JS_DOCUMENT_WRITE`, `SEC-JS_SQL_TEMPLATE`) are
+    now the fallback for a scan without Semgrep** (`--fast`, or no binary).
+    When the run-level `semgrep` scanner status is `ok` AND Semgrep's
+    JavaScript/TypeScript taint findings can block (both languages are in
+    `semgrep.ReachabilityLanguages`), they are dropped and the Semgrep pack
+    answers, so one sink is reported once. Until then (the shipped state:
+    those findings are warnings) they stay, because `SEC-JS_SQL_TEMPLATE` is
+    the only JavaScript SQL finding that blocks; dropping it blocked nothing
+    in nine express, NestJS and Next.js `sqli` corpus cases.
+  - **A Semgrep run that could not load a rule is now recorded `failed`**
+    (reason `execution_error`, detail naming the rule errors). Semgrep exits 7
+    with a parseable document and no results for a rule it rejects, which was
+    read as a clean run. It keeps the fallback checks on, and
+    `--fail-on-scanner-error` sees it.
+- **The regex scanner now detects `child_process` exec in every import form.**
+  `JS_CHILD_PROCESS_SHELL` only matched the literal `child_process.exec(`, so
+  `const { exec } = require("child_process"); exec(cmd)`,
+  `import { execSync } from "node:child_process"` and
+  `promisify(require("child_process").exec)` were missed. The rule now matches
+  `exec(`, `execSync(` and `require("child_process").exec` in a file that
+  imports `child_process`, and still ignores a RegExp `.exec(` call. A bare
+  `exec(` in a file that never imports `child_process` is not reported.
+- **The regex scanner now detects SQL concatenation through JdbcTemplate and
+  JPA.** `JAVA_SQL_INJECTION` also fires on `jdbcTemplate.queryForList("SELECT
+  ... '" + name + "'")` and `entityManager.createNativeQuery("SELECT ... " +
+  x)`, for the receivers `jdbcTemplate`, `namedParameterJdbcTemplate`,
+  `template`, `stmt`, `statement`, `em`, `entityManager` and `session` with
+  `query*`, `update`, `execute`, `batchUpdate`, `createQuery`,
+  `createNativeQuery` and `createSQLQuery`. The receiver is required, so a
+  bare `executor.execute(makeTask("update " + x))` stays clean, and a
+  parameterized `queryForList("... WHERE name = ?", name)` does not fire. A
+  query concatenated only from `static final String` constants of the file is
+  not reported (the same file-constant check as `GO_SQL_INJECTION`).
+- **The regex scanner no longer flags SQL and exec calls built only from
+  file constants.** `GO_SQL_INJECTION`, `GO_EXEC_COMMAND_INJECTION` and
+  `JAVA_EXEC_COMMAND_INJECTION` skip a call when every argument of it
+  (a literal, a `+` join, a `fmt.Sprintf` over such arguments, or a
+  `new String[]{...}` of them) is built only from string constants declared in
+  the same file: Go `const X = "..."` (alone or in
+  a `const ( ... )` block) or Java `static final String X = "...";`. A `var`, a
+  non-final field, a call, a field access or any mix with a variable, in any
+  argument of the call, still fires (`exec.Command("sh", "-c", user,
+  "x="+TABLE)`). This removes the false positives on
+  `db.Query(fmt.Sprintf("... FROM %s", usersTable))` and
+  `sh -c "df -h " + dataVolume`.
+- **The regex scanner now matches calls whose arguments contain a nested
+  call.** `GO_SQL_INJECTION`, `GO_EXEC_COMMAND_INJECTION`,
+  `JAVA_EXEC_COMMAND_INJECTION`, `JAVA_SQL_INJECTION`, `JAVA_SSRF`,
+  `JAVA_XSS_REFLECTED` and `JAVA_PATH_TRAVERSAL` stopped at the first inner
+  `)`, so `exec.CommandContext(r.Context(), "sh", "-c", "ping "+host)` and
+  `db.QueryRowContext(r.Context(), fmt.Sprintf(...))` were missed. They now
+  cross one level of parentheses. Matching stays linear-time (RE2).
+- **A Semgrep taint rule and its sink twin on one line are reported once.**
+  With the taint gate closed, `js-cmdi-taint` and `js-cmdi-sink` (and the
+  other `<base>-taint` / `<base>-sink` pairs of the JavaScript, Java and Go
+  packs) both report as `semgrep_shim` findings, so one `exec("ping " + host)`
+  showed twice. The pair now collapses into the taint finding, with the sink
+  rule's references folded in. Severity is never raised, the taint finding's
+  fingerprint is unchanged, and two different rule bases on one line stay two
+  findings.
+- **A proven taint chain survives when two analyzers report the same line.**
+  When textscan and a taint analyzer both flagged one sink, the collapse kept
+  the textscan finding on a tie and dropped the other member's taint chain,
+  `reachable` and `proven_path`, so a proven injection read as an unproven
+  pattern match. The kept finding now takes the chain of the member with the
+  longest one, with its `reachable` and `proven_path` flags. Its severity and
+  wording stay its own, and nothing is synthesized when no member proved a
+  flow.
+
+- **Semgrep now scans a target inside a git work tree as its own project.**
+  Semgrep matches a rule's `paths.exclude` patterns, and its default ignore
+  list, relative to its project root, which inside a git work tree is the git
+  root and not the scanned directory. Scanning `<repo>/fixtures/repo`,
+  `<repo>/mock/repo` or `<repo>/spec/repo` therefore had the JavaScript, Java
+  and Go packs' test-code exclusions (`fixtures/`, `mock/`, `spec/`, `tests/`)
+  applied to every file of the target, so nothing was scanned: no error, and
+  an empty `paths.scanned`. Fendix now passes `--project-root <scan target>`,
+  so the exclusions are relative to the directory it was asked to scan.
+
+- **`flask-route-no-auth-decorator` now reports an auth decorator placed
+  above `@app.route(...)`.** Such a decorator does not protect the route:
+  `route()` registers the function below it, so a decorator above it wraps a
+  copy the URL never calls. Semgrep matches a function's decorators in any
+  order, so the rule treated `@login_required` above the route like
+  `@login_required` below it, and neither Flask rule reported it.
+  `@requires_auth`, `@jwt_required(...)` and `@auth.login_required` above the
+  route were reported only by the removed `flask-missing-login-required`.
+  - **Now reported:** a route with one of the rule's four decorators above
+    `@app.route(...)` and no auth decorator below it. The four are
+    `@login_required`, `@requires_auth` and `@auth.login_required`, bare or
+    with empty parentheses, and `@jwt_required` with or without arguments.
+    Other decorators may sit between the two, and the route call may span
+    several lines. The finding is on the `@app.route(...)` line, once per
+    route.
+  - **What counts as an auth decorator below the route** when one of the four
+    sits above it: a decorator line between `@app.route(...)` and the `def`
+    that names `login_required`, `requires_auth` or `jwt_required`, with or
+    without a module prefix and with any arguments. So `@login_required`
+    above with `@requires_auth("admin")` or `@flask_login.login_required`
+    below is not reported. A commented-out decorator does not count.
+  - **Unchanged:** a route with none of the four decorators is reported as
+    before, including one whose only auth decorator is
+    `@requires_auth("admin")` or `@flask_login.login_required` below the
+    route, because the rule's list of decorators is unchanged. The rule's
+    existing findings keep their identity.
+- **`fastapi-route-missing-auth-dependency` now recognises a dependency
+  declared through an `Annotated` alias.** The rule already treated
+  `user = Depends(...)`, `user: User = Depends(...)` and
+  `user: Annotated[User, Depends(...)]` (and the same with `Security(...)`) as
+  a route's authentication, but it reported a route whose parameter used an
+  alias, the idiom of FastAPI's own docs and project template:
+  `CurrentUser = Annotated[User, Depends(get_current_user)]`, then
+  `current_user: CurrentUser`. On `full-stack-fastapi-template` it reported 16
+  routes. 15 of them take `CurrentUser` or `SessionDep` imported from
+  `app.api.deps`: 11 are authenticated, and 4 public routes have only the
+  database session. It now reports only the `health-check` route, which has
+  no dependency at all.
+  What counts as a dependency is unchanged: any `Depends(...)` or
+  `Security(...)` counts, as before, so a database-session alias such as
+  `SessionDep = Annotated[Session, Depends(get_db)]` counts too.
+  - **Now recognised:**
+    - an alias assigned at module level in the same file, before the route;
+    - an alias imported from a module named `deps` or `dependencies`
+      (`from app.api.deps import CurrentUser`,
+      `from ..dependencies import CurrentUser`), under the name the import
+      binds in the file (`from app.api.deps import CurrentUser as CU`, then
+      `c: CU`). The rule cannot see that alias's definition, so a
+      dependency-free route whose parameter is any name imported from such a
+      module is not reported (a false negative);
+    - `Depends(...)` or `Security(...)` in any position of `Annotated[...]`,
+      inline or in an alias (`Annotated[User, "doc", Depends(...)]`).
+  - **Still reported:**
+    - a route that does not use the alias, even in the same file;
+    - a parameter typed with a model or `Request` imported from anywhere
+      else, with an inline `Annotated[str, Query()]`, or with an
+      `Annotated[..., Query(...)]` alias;
+    - the original name of a renamed deps import:
+      `from app.dependencies import Settings as SettingsDep` does not make
+      `s: Settings` a dependency;
+    - a name imported from a module whose name only contains `deps`
+      (`app.mydeps`, `app.api.depsutil`, `app.deps.models`);
+    - an alias assigned inside a function;
+    - `Alias | None`;
+    - an alias imported from a module with another name, or used as
+      `deps.CurrentUser`;
+    - a dependency set only on `APIRouter(dependencies=[...])`.
+  - **Not tracked:** rebinding after the alias or the deps import. An alias
+    reassigned to another type, a local class of the same name, or the same
+    name imported again from another module still counts as a dependency.
+  - The rule's existing findings keep their identity.
+- **The Python engine's JavaScript/TypeScript pattern findings now carry a
+  `rule_id`.** `JS_EVAL`, `JS_INNER_HTML`, `JS_DOCUMENT_WRITE` and
+  `JS_SQL_TEMPLATE` reached the report with `rule_id` empty, unlike the Python
+  engine's Python-source findings. The `rule_id` is each finding's own id
+  (`SEC-JS_EVAL`, `SEC-JS_INNER_HTML`, `SEC-JS_DOCUMENT_WRITE`,
+  `SEC-JS_SQL_TEMPLATE`), which is exactly the rule that fingerprint identity
+  already derived from the id. Fingerprints, `.fendix-ignore` matching,
+  baseline matching and grouping do not change.
+
+  **GitHub alerts for these four checks will be re-partitioned once.** SARIF
+  rule ids key on the `rule_id` where there is one and fall back to the title
+  slug where there is not, so their SARIF `ruleId` changes from the title slug
+  to the rule slug:
+
+  | Check | Before | After |
+  |---|---|---|
+  | `JS_SQL_TEMPLATE` | `fendix.injection.sql-query-built-via-template-literal-injection-risk` | `fendix.injection.sec-js-sql-template` |
+  | `JS_INNER_HTML` | `fendix.injection.unsafe-assignment-to-innerhtml-xss-risk` | `fendix.injection.sec-js-inner-html` |
+  | `JS_DOCUMENT_WRITE` | `fendix.injection.unsafe-use-of-document-write-xss-risk` | `fendix.injection.sec-js-document-write` |
+  | `JS_EVAL` | `fendix.injection.unsafe-use-of-eval-in-javascript` | `fendix.injection.sec-js-eval` |
+
+  Existing Code Scanning alerts under the old rule ids close and reopen under
+  the new ones on the first upload after upgrading, and an alert you had
+  dismissed reappears and must be dismissed again. This is a one-time cost.
+  The JSON report's `rule_id` field, and the `rule_id` of a managed-CI evidence
+  submission (which fell back to the category, `injection`), now carry the id
+  too.
+- **A `urlparse(...).netloc` allowlist now counts as an SSRF and
+  open-redirect guard in Python.** `python.ast/PY_SSRF` and
+  `python.ast/PY_OPEN_REDIRECT` no longer report a request or redirect that
+  follows an early exit on the URL's parsed authority, such as
+  `if urlparse(url).netloc not in ALLOWED_HOSTS: return ...`. The parse may be
+  `urlparse` or `urlsplit`, inline or through a local (`p = urlparse(url)`),
+  and the check may be joined to others with `or`
+  (`if p.scheme != "https" or p.netloc not in ALLOWED_HOSTS:`). The guard
+  counts only when it is a top-level `if` of the function that ends before
+  the sink, its body returns, raises or aborts, and it checks a literal set,
+  list, tuple or dict. It covers the guarded URL passed as it is, or followed
+  by more text (`requests.get(url + "/v1")`). These are still reported:
+  - a `.hostname` allowlist, because a backslash in the authority makes
+    urllib3/requests and browsers connect to a different host than the one
+    `urlparse` reports (`https://169.254.169.254\@api.example.com/` has
+    hostname `api.example.com`, but requests connects to `169.254.169.254`);
+  - an allowlist that contains `""`, because `/\evil.com` and `https:evil.com`
+    have an empty netloc and browsers send both to `evil.com`;
+  - a URL built around the guarded one, as in `"https://" + url` or
+    `"https://%s" % url`: `evil.com://api.example.com/x` passes the guard,
+    and `https://` in front of it sends the request to `evil.com`;
+  - a check joined with `and`, which can skip the host test;
+  - an allowlist read from the environment or built by a call;
+  - a guard that only logs, a sink inside the branch that rejects the host,
+    and a guard that comes after the sink;
+  - the same value passed to an XSS or path sink, because the guard bounds
+    the host only.
+- **A resolved path checked against its base directory now counts as a
+  path-traversal guard in Python.** `python.ast/PY_PATH_TRAVERSAL` no longer
+  reports a file opened or sent after the code resolves the path and leaves
+  when it is outside a fixed base directory. Two forms count:
+  - `full = os.path.realpath(...)`, then
+    `if os.path.commonpath([base, full]) != base:` or
+    `if not full.startswith(base + os.sep):` (`base + "/"` and
+    `os.path.join(base, "")` work too);
+  - `full = <pathlib path>.resolve()`, then
+    `if not full.is_relative_to(base):`, or `full.relative_to(base)` in a
+    `try` with an `except ValueError` (or `Exception`, `BaseException`, or a
+    bare `except`).
+
+  The base must be a string constant, `os.path.realpath` of one, or
+  `Path(...)` or `Path(...).resolve()` of one, inline or through a name. It
+  must not be the filesystem root. A module-level name must be assigned once
+  in the module and declared `global` by no function. Inside a method the
+  name is the module's, never a class attribute of the same name, so the
+  module's value is the one checked. The resolved path must be assigned once, in
+  a top-level statement of the function. The check must be a top-level
+  statement between that assignment and the sink, and it must return, raise or
+  abort; in the `try` form, every `except` clause must. These are still
+  reported:
+  - `full.startswith(base)` without a separator, which also lets through
+    `/srv/reports_evil/x`, and `full.startswith(base + "\\")`, because on POSIX
+    a backslash is an ordinary filename character;
+  - a path that is only joined, or normalised with `os.path.abspath` or
+    `os.path.normpath`. A joined path keeps its `..`, and `commonpath`,
+    `startswith` and `is_relative_to` compare text, so
+    `/srv/reports/../../etc/passwd` passes all three. `abspath` and `normpath`
+    remove `..` but follow no symlink, so a link under the base that points
+    outside it passes;
+  - a resolved path that is never checked;
+  - a base read from the request, the environment, a function parameter or
+    any other call, and a base of `/`;
+  - a module-level base that is assigned again anywhere in the module, or
+    that a function declares `global`;
+  - a path assigned more than once in the function, or on a branch, and the
+    same for a name it is copied to (`p = full`);
+  - a lambda or nested function with a parameter of the same name
+    (`lambda full: open(full)`), which opens its own argument, not the checked
+    path;
+  - `startswith` with a start offset and `relative_to(base, walk_up=True)`;
+  - a check that only logs, a `try` with an `except` clause that falls
+    through, a sink inside the branch that rejects the path, and a check that
+    comes after the sink.
+
+  **The join line is no longer reported when the check covers it.** An
+  `os.path.join(...)` written directly inside `os.path.realpath(...)` was
+  reported on its own line, above any check, so a correctly checked handler
+  was still reported there. That join is now skipped only when all of these
+  hold:
+  - the `realpath(...)` or `Path(...).resolve()` around it is assigned once,
+    to a name, in a top-level statement;
+  - an accepted check on that name follows;
+  - every other use of the name comes after the check.
+
+  Otherwise the join is reported on its own line as before. That includes:
+  - a join under `os.path.abspath(...)`;
+  - a resolved path passed straight to a call, as in
+    `os.remove(os.path.realpath(os.path.join(...)))`;
+  - a resolved path that reaches a file operation the engine does not model
+    as a sink (`os.remove`, `shutil.copy`, Starlette's `FileResponse`) before
+    or without a check;
+  - a resolved path returned to the caller;
+  - a resolved path used in the branch that rejects it.
+
+  In a checked handler, a baseline entry for that `os.path.join(...)` finding
+  no longer matches anything, and no new finding replaces it.
+- **The Semgrep rule `python-sql-injection-string-format` no longer reports
+  an f-string query that interpolates only string constants.**
+  `cursor.execute(f"SELECT id FROM {USERS_TABLE}")`, with
+  `USERS_TABLE = "users"` at module level, builds no injectable query. The
+  rule now skips an interpolation that Semgrep's constant propagation
+  resolves to a string literal: a module-level name assigned once, to a
+  literal, and a local that holds a literal on every path to the call
+  (`table = "users"`, or `"users"` and then `"admins"` on a branch). Each
+  interpolation is checked on its own. These are still reported:
+  - an f-string with any interpolation that is not such a constant, as in
+    `f"SELECT {COLS} FROM users WHERE n = '{name}'"`;
+  - a name rebound from input before the call in the same function,
+    including a function-local rebinding of a module constant and
+    `where = ""` followed by `if name: where = f"... {name} ..."`;
+  - a module constant assigned more than once in the module, or assigned in
+    any function that declares it `global`;
+  - a name that a nested function declares `nonlocal`, as in
+    `def add(cond): nonlocal where; where += cond`. Constant propagation
+    works one function at a time and does not see that rebinding;
+  - every f-string query inside a lambda, constant or not, for the same
+    reason: the lambda can run after the name it reads is rebound;
+  - a parameter that shadows a module constant, even with a literal default;
+  - a class attribute (`self.TABLE`), a name that is only imported, an
+    annotated assignment (`TABLE: Final = "users"`), a subscript
+    (`TABLES[key]`), an inline expression (`{PREFIX + "users"}`) and a
+    non-string constant (`LIMIT = 10`);
+  - queries built with `%`, `+` or `.format(...)`, which are unchanged.
+
+  One shape is no longer reported although the value comes from elsewhere: a
+  module literal replaced by an import of the same name, at module level
+  (`TABLE = "users"`, then `from settings import TABLE`) or inside the
+  function (`from userinput import TABLE`). Constant propagation keeps the
+  literal's value there.
+
+  Where the rule reported such a query, a baseline entry for that finding no
+  longer matches anything, and no new finding replaces it.
+- **A Python sink in a helper function is now proven reachable when the caller
+  assigns the request value before passing it.** The engine follows a helper's
+  parameter back to the calls of that helper in the same file. It proved the
+  flow only when the request expression was the argument itself, as in
+  `_ping(request.GET.get("host"))`. The common form,
+  `host = request.GET.get("host")` and then `_ping(host)`, was reported but not
+  proven. The argument is now traced through the caller's own assignments.
+  Such findings are marked reachable and carry a taint chain: the caller's
+  request expression first, then the caller's assignments, then the call, then
+  the sink. Like any proven finding, they take the rule's proven title and
+  severity where it has one (`python.ast/PY_PATH_TRAVERSAL` rises from MEDIUM
+  to HIGH), the engine escalates them one level as reachable, and they may now
+  block.
+  - **Identity.** SSRF, open-redirect, path-traversal and XSS findings keep
+    their identity. The command-injection rules (`python.ast/PY_OS_SYSTEM`,
+    `python.ast/PY_OS_POPEN`, `python.ast/PY_SUBPROCESS_SHELL`) and
+    `python.ast/PY_SQL_INJECTION` name their sink only when the flow is
+    proven, so a finding of theirs that this change proves is identified by
+    its sink instead of its evidence line. A baseline entry or a
+    `.fendix-ignore` `fingerprint:` rule for it stops matching, and it is
+    reported as new once.
+  - **One more finding for a path built with `os.path.join`.** A newly proven
+    helper such as `open(os.path.join(BASE, name))` also reports the inner
+    `os.path.join(...)`, which is reported only when the flow is proven. The
+    same code written in the handler already reports both.
+  - **Which assignment counts:** for each name, the last one that comes before
+    the call in source order. So `host = request.GET["h"]; host = "localhost";
+    _ping(host)` is not proven, and a constant assigned after the call does not
+    hide the request value assigned before it. A loop or branch is not
+    modelled: only source order decides.
+  - **Followed in the caller:** plain, tuple, annotated and augmented (`+=`)
+    assignments, `for` targets and `with ... as` targets, made in the calling
+    function itself, or at module level for a call made there. An assignment
+    in a nested function, lambda or class does not count for the function
+    around it.
+  - **Caller-side sanitisers still count.** A caller that passes the value
+    through a guard or sanitiser that a sink in the same function would honour
+    does not prove the helper's finding, whichever sink the helper holds:
+    - an `if value not in ALLOWED: return` membership guard;
+    - a `urlparse(value).netloc` allowlist guard;
+    - a resolved path checked against its base directory, or `basename`;
+    - escaping, including an f-string whose every value is escaped;
+    - an allowlist lookup (`HOSTS.get(value)`);
+    - `url_for(...)` or `reverse(...)`;
+    - a URL with a fixed scheme and host (`"https://api.example.com/" + value`).
+
+    The guard must come before the call, as it must come before a sink. This
+    applies to a request expression passed inline too, which proved before:
+    `_render(escape(request.args["n"]))` no longer proves.
+  - **Not followed:** a call inside a lambda, comprehension or class body,
+    which still proves only with the request expression passed inline; a
+    method call (`self._ping(host)`); and the caller's own parameters, which
+    are not traced into its callers (one hop only). A helper whose callers
+    all pass constants is not proven. A caller in another module is now
+    followed as well (see "A Python sink in a helper is now proven when a
+    view in another module passes it request input").
+  - **A bare-name call no longer proves a method's parameter.** `handle(h, p)`
+    calls the function `handle`, never a method of that name, but it was
+    matched against a method's parameters too, `self` included. With `p` from
+    the request, a `Pinger.handle(self, host)` sink was proven reachable.
+  - **Framework parity:** the Django and Flask `indirect` cases for SQL
+    injection, command injection, SSRF, path traversal and open redirect, and
+    Flask's `ssti` `indirect` case, now block. No safe case blocks.
+- **A Python file is no longer skipped when a variable is rebound from
+  itself.** `url += "/x"` on a parameter binds `url` to `url + "/x"`,
+  `desc = "<p>" + desc + "</p>"` binds `desc` to an expression that reads
+  `desc`, and `html = html` binds `html` to itself. The sanitiser and escape
+  checks that the SSRF, open-redirect, path-traversal and XSS sinks run
+  followed such a binding back into itself until it hit Python's recursion
+  limit. The engine then skipped the rest of the file, with every finding after
+  that point. Such a value is now not sanitised or escaped, so its sink is
+  reported and the file is analysed to the end. Findings this restores are
+  new.
+- **A value repeated by a number is no longer treated as escaped.**
+  `"&nbsp;" * depth` is inert, because it can only hold the constant's own
+  characters. But any expression multiplied by a constant counted as escaped
+  too, so `mark_safe(name * 2)` and `Markup(f"<b>{name * 2}</b>")` were not
+  reported. Now only a constant string repeated is inert. These findings are
+  new.
+
+### Fixed
+
+- **`fendix verify` keeps findings from the JavaScript/TypeScript, Java and Go
+  Semgrep rules.** A finding of a `-taint` or `-sink` rule in those packs (tier
+  `semgrep_shim` today, `semgrep_taint` once a language gate opens) is reported
+  `unknown` with the rule id and a "re-run `fendix scan`" instruction, rather
+  than as an unsupported shape, and is never reported `resolved`. A finding in
+  an `.mjs`, `.cjs`, `.mts` or `.cts` file is recognised as a file finding.
+- **`fendix verify` no longer calls a finding resolved when its scanner cannot
+  read the file.** A `secrets` finding in an `.mjs`, `.cjs`, `.mts` or `.cts`
+  file (textscan reads them, the secrets scanner does not) was reported
+  `resolved` because the re-test could never re-emit it. It is now `unknown`,
+  with the extension named. A Semgrep-tier finding is kept before any other
+  scanner re-tests it.
+- **`fendix verify` no longer resolves a secret the scanner skips by path or
+  size.** A `secrets` finding in a file over 1 MiB was reported `resolved`, and
+  one under `node_modules/`, `vendor/`, `dist/` or `build/` was judged by a
+  re-scan rooted at its own directory instead of the scan root. Both are now
+  `unknown`, with the skip named.
 
 - **The Action says enforcement was off in every outcome.** With
   `require-analyzers: none`, the gate warned "Fendix coverage not enforced"
@@ -25,6 +1888,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gap and is not changed by `--require-analyzers`, and a test pins it. The
   gate now words it "complete for the analyzers configured to run, but
   required not delivered (semgrep)", in its message and its job summary.
+
 
 ## [3.7.0] - 2026-10-25
 

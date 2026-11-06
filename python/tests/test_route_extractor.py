@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from analyzers.route_extractor import extract_routes
 
 
@@ -107,5 +109,98 @@ def test_syntax_error_returns_empty():
 def test_as_dict_shape():
     src = '@app.get("/x")\ndef h(): pass\n'
     d = extract_routes(src, "a.py").routes[0].as_dict()
-    assert set(d) == {"method", "pattern", "handler", "file", "line"}
+    assert set(d) == {"method", "pattern", "handler", "file", "line", "framework"}
     assert d["file"] == "a.py" and d["pattern"] == "/x"
+
+
+@pytest.mark.parametrize(
+    "rel, src, framework",
+    [
+        (
+            "app.py",
+            'from flask import Flask\napp = Flask(__name__)\n@app.route("/x")\ndef h():\n    return ""\n',
+            "flask",
+        ),
+        (
+            "app.py",
+            'from fastapi import FastAPI\napp = FastAPI()\n@app.get("/x")\ndef h():\n    return ""\n',
+            "fastapi",
+        ),
+        (
+            "app/urls.py",
+            'from django.urls import path\nfrom app import views\nurlpatterns = [path("x/", views.h)]\n',
+            "django",
+        ),
+    ],
+    ids=["flask", "fastapi", "django"],
+)
+def test_route_framework_is_recorded(rel, src, framework):
+    # Task 3.3: the framework that declared a route decides how a handler's
+    # returned value is sent (Flask: a str is text/html; FastAPI: JSON), and
+    # it is reported with the route.
+    [route] = extract_routes(src, rel).routes
+    assert route.framework == framework
+    assert route.as_dict()["framework"] == framework
+
+
+def test_decorator_route_has_no_handler_modules():
+    # A decorator route's handler is the decorated def in its own file.
+    r = extract_routes('@app.get("/x")\ndef h(): pass\n', "a.py").routes[0]
+    assert r.handler_modules == ()
+
+
+@pytest.mark.parametrize(
+    "rel, imports, view, func, modules",
+    [
+        ("config/urls.py", "from app.views import a\n", "a.search", "search", ("app.views.a",)),
+        ("config/urls.py", "from app import views\n", "views.search", "search", ("app.views",)),
+        ("config/urls.py", "import app.views\n", "app.views.search", "search", ("app.views",)),
+        ("config/urls.py", "import app.views as v\n", "v.search", "search", ("app.views",)),
+        ("config/urls.py", "from app.views import search as s\n", "s", "search", ("app.views",)),
+        ("app/urls.py", "from . import views\n", "views.search", "search", ("app.views",)),
+        ("app/urls.py", "from .views import search\n", "search", "search", ("app.views",)),
+        ("app/sub/urls.py", "from ..views import search\n", "search", "search", ("app.views",)),
+        ("urls.py", "from . import views\n", "views.search", "search", ("views",)),
+        ("app/__init__.py", "from .views import search\n", "search", "search", ("app.views",)),
+        # Not imported: defined in the urlconf itself, or from a star import.
+        ("app/urls.py", "from app.views import *\n", "search", "search", ("app.urls", "app.views")),
+        # A head nothing imports is taken as written.
+        ("app/urls.py", "", "views.search", "search", ("views",)),
+        # A relative import above the scan root resolves to nothing.
+        ("urls.py", "from .. import views\n", "views.search", "search", ("views",)),
+    ],
+)
+def test_django_view_module_resolves_through_imports(rel, imports, view, func, modules):
+    src = f'from django.urls import path\n{imports}urlpatterns = [path("s/", {view})]\n'
+    [r] = extract_routes(src, rel).routes
+    assert r.handler == view  # reported as written
+    assert r.handler_func == func
+    assert r.handler_modules == modules
+
+
+def test_routes_for_function_keeps_every_same_named_route():
+    src = '''
+from django.urls import path
+from app.views import a, b
+urlpatterns = [path("a/", a.search), path("b/", b.search)]
+'''
+    table = extract_routes(src, "config/urls.py")
+    assert [r.pattern for r in table.routes_for_function("search")] == ["a/", "b/"]
+    # for_function keeps its first-wins answer.
+    assert table.for_function("search").pattern == "a/"
+    assert table.routes_for_function("missing") == []
+
+
+@pytest.mark.parametrize(
+    "imports, view, resolved",
+    [
+        ("from app import views\n", "views.show", True),
+        ("", "show", True),  # bare: defined in the urlconf, or star imported
+        ("", "self.show", False),  # nothing binds `self`
+        ("", "views.show", False),
+    ],
+)
+def test_django_view_head_resolution_is_recorded(imports, view, resolved):
+    src = f'from django.urls import path\n{imports}urlpatterns = [path("s/", {view})]\n'
+    [r] = extract_routes(src, "app/urls.py").routes
+    assert r.handler_resolved is resolved

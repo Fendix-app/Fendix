@@ -1,0 +1,477 @@
+package semgrep
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+)
+
+// The JavaScript/TypeScript taint pack (Task 4.3) and the per-language gate.
+
+// jsTaintRuleID is one taint rule of the JavaScript/TypeScript pack.
+const jsTaintRuleID = "js-sqli-taint"
+
+// bundledMetadata is a bundled rule's metadata as semgrep sends it back in
+// extra.metadata: the rule's own YAML block, not a stand-in.
+func bundledMetadata(t *testing.T, ruleID string) map[string]interface{} {
+	t.Helper()
+	r, ok := loadAllRules(t)[ruleID]
+	if !ok {
+		t.Fatalf("rule %s is not in the bundled pack", ruleID)
+	}
+	meta, ok := r.Raw["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("rule %s has no metadata block", ruleID)
+	}
+	out := make(map[string]interface{}, len(meta))
+	for k, v := range meta {
+		out[k] = v
+	}
+	return out
+}
+
+// The gate looks a rule up by the id the scanner derives from semgrep's
+// check_id, and semgrep namespaces that id by the temporary directory the
+// rules were extracted to. The ids below are the shapes semgrep 1.141.0 really
+// prints: the macOS one was captured from `semgrep --config
+// $TMPDIR/fendix-semgrep-rules-XXXX --json` and the Linux one is /tmp. If
+// normalizeCheckID left any of that prefix on, the bundled-spec lookup would
+// miss and every JavaScript finding would stay a shim finding however the gate
+// is set. The lookup here is the real one, over the embedded pack.
+func TestProductionCheckIDOfAJavaScriptTaintRuleReachesTheGate(t *testing.T) {
+	meta := bundledMetadata(t, jsTaintRuleID)
+	spec, ok := ruleSpecs(jsTaintRuleID)
+	if !ok || spec.Mode != "taint" || !reflect.DeepEqual(spec.Languages, []string{"javascript", "typescript"}) {
+		t.Fatalf("bundled spec of %s = %+v (found %v); want mode taint, languages [javascript typescript]",
+			jsTaintRuleID, spec, ok)
+	}
+
+	for _, checkID := range []string{
+		"var.folders.7m.08880d351wv3hcmbjbvq856r0000gn.T.fendix-semgrep-rules-B2HsHziK." + jsTaintRuleID,
+		"private.var.folders.7m.08880d351wv3hcmbjbvq856r0000gn.T.fendix-semgrep-rules-1072928901." + jsTaintRuleID,
+		"tmp.fendix-semgrep-rules-2173727481." + jsTaintRuleID,
+	} {
+		t.Run(checkID, func(t *testing.T) {
+			if got := normalizeCheckID(checkID); got != jsTaintRuleID {
+				t.Fatalf("normalizeCheckID(%q) = %q, want %q", checkID, got, jsTaintRuleID)
+			}
+			r := semgrepResult{
+				CheckID: checkID,
+				Path:    "routes/users.js",
+				Start:   semgrepLineCol{Line: 9, Col: 3},
+				Extra: semgrepExtra{
+					Message:  "SQL query built from request input.",
+					Severity: "ERROR",
+					Lines:    semgrepRedactedLines,
+					Metadata: meta,
+				},
+			}
+			mapped := func() evidence.Evidence {
+				t.Helper()
+				ev, ok := mapResult(&r, "/code")
+				if !ok {
+					t.Fatal("mapResult dropped the result")
+				}
+				if ev.RuleID != jsTaintRuleID {
+					t.Errorf("RuleID = %q, want %q", ev.RuleID, jsTaintRuleID)
+				}
+				return ev
+			}
+
+			enableReachability(t, "javascript", "typescript")
+			requireTaint(t, mapped())
+
+			// The rule also runs on TypeScript files, so JavaScript alone has
+			// not met its gate.
+			enableReachability(t, "javascript")
+			requireShim(t, mapped())
+
+			enableReachability(t)
+			requireShim(t, mapped())
+		})
+	}
+}
+
+// The same path end to end: the real scanner extracts the embedded pack to its
+// temporary directory, real semgrep runs it over an Express route, and the
+// finding that comes back opens the gate once JavaScript and TypeScript are
+// enabled.
+func TestScanReportsAJavaScriptTaintFindingAsReachable(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte(spikeApp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	find := func() evidence.Evidence {
+		t.Helper()
+		got, err := Scan(context.Background(), dir)
+		if err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		for _, f := range got {
+			if f.RuleID == jsTaintRuleID {
+				if f.Endpoint != "app.js:9" {
+					t.Errorf("Endpoint = %q, want app.js:9", f.Endpoint)
+				}
+				return f
+			}
+		}
+		t.Fatalf("no %s finding in %d findings", jsTaintRuleID, len(got))
+		return evidence.Evidence{}
+	}
+
+	// As the binary ships: no language clears the real-world gate (R-pf81).
+	requireShim(t, find())
+
+	enableReachability(t)
+	requireShim(t, find())
+
+	enableReachability(t, "javascript", "typescript")
+	requireTaint(t, find())
+}
+
+// javascriptRules returns the bundled rules that target JavaScript, split into
+// the taint rules that ask for reachability (mode: taint and
+// fendix_reachability: taint) and the rest, each sorted by id. Read from the
+// embedded pack, so a rule added later is covered without editing a test.
+func javascriptRules(t *testing.T) (taint, other []packRule) {
+	t.Helper()
+	all := loadAllRules(t)
+	ids := make([]string, 0, len(all))
+	for id := range all {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		r := all[id]
+		if !slices.Contains(r.Languages, "javascript") {
+			continue
+		}
+		mode, _ := r.Raw["mode"].(string)
+		meta, _ := r.Raw["metadata"].(map[string]any)
+		if mode == "taint" && meta[reachabilityMetadataKey] == reachabilityTaint {
+			taint = append(taint, r)
+		} else {
+			other = append(other, r)
+		}
+	}
+	return taint, other
+}
+
+// The shipped gate, with no test override: no language is enabled (ruling
+// R-pf81, ADR-011), so a match of any JavaScript rule, taint or not, and even
+// one whose metadata claims reachability, is a semgrep_shim finding, reported
+// as a warning. The blind real-world evaluation found JS/TS precision 0.077
+// (1 of 13), below the 0.80 gate.
+func TestShippedGateIsClosedForTheJavaScriptTaintRules(t *testing.T) {
+	taint, other := javascriptRules(t)
+	if len(taint) == 0 || len(other) == 0 {
+		t.Fatalf("got %d taint and %d other JavaScript rules; want both kinds", len(taint), len(other))
+	}
+	mapped := func(r packRule, claimReachability bool) evidence.Evidence {
+		t.Helper()
+		meta := bundledMetadata(t, r.ID)
+		if claimReachability {
+			meta[reachabilityMetadataKey] = reachabilityTaint
+		}
+		res := semgrepResult{
+			CheckID: "tmp.fendix-semgrep-rules-1072928901." + r.ID,
+			Path:    "routes/users.js",
+			Start:   semgrepLineCol{Line: 9, Col: 3},
+			Extra: semgrepExtra{
+				Message:  "finding",
+				Severity: "ERROR",
+				Lines:    semgrepRedactedLines,
+				Metadata: meta,
+			},
+		}
+		ev, ok := mapResult(&res, "/code")
+		if !ok {
+			t.Fatalf("%s: mapResult dropped the result", r.ID)
+		}
+		return ev
+	}
+	for _, r := range taint {
+		t.Run(r.ID, func(t *testing.T) { requireShim(t, mapped(r, false)) })
+	}
+	for _, r := range other {
+		t.Run(r.ID, func(t *testing.T) { requireShim(t, mapped(r, true)) })
+	}
+}
+
+// requestSources is a taint rule's request-source block: its pattern-sources
+// without the sources of another label, and without the label key itself (a
+// rule that also has labelled sources, such as js-weak-password-hash-taint,
+// labels the shared ones INPUT).
+func requestSources(r packRule) ([]any, error) {
+	sources, ok := r.Raw["pattern-sources"].([]any)
+	if !ok || len(sources) == 0 {
+		return nil, fmt.Errorf("%s: no pattern-sources", r.ID)
+	}
+	var out []any
+	for _, s := range sources {
+		m, ok := s.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: a source is not a mapping: %v", r.ID, s)
+		}
+		label, _ := m["label"].(string)
+		if label != "" && label != "INPUT" {
+			continue
+		}
+		c := make(map[string]any, len(m))
+		for k, v := range m {
+			if k != "label" {
+				c[k] = v
+			}
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// requestSourceDrift returns every way the taint rules' request-source blocks
+// differ from the first rule's; notRequest names the rules whose source is
+// not request input, and each must be one of the rules.
+func requestSourceDrift(taint []packRule, notRequest map[string]string) []string {
+	var out []string
+	var want []any
+	var wantFrom string
+	compared := 0
+	for _, r := range taint {
+		if _, skip := notRequest[r.ID]; skip {
+			continue
+		}
+		got, err := requestSources(r)
+		if err != nil {
+			out = append(out, err.Error())
+			continue
+		}
+		compared++
+		if want == nil {
+			want, wantFrom = got, r.ID
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			out = append(out, fmt.Sprintf("%s: request sources differ from %s's; keep the block identical in every rule", r.ID, wantFrom))
+		}
+	}
+	for id := range notRequest {
+		if !slices.ContainsFunc(taint, func(r packRule) bool { return r.ID == id }) {
+			out = append(out, fmt.Sprintf("exempted rule %s is not a taint rule of the pack; drop the exemption", id))
+		}
+	}
+	if compared < 2 {
+		out = append(out, fmt.Sprintf("compared %d rules; want the shared block in at least two", compared))
+	}
+	return out
+}
+
+// Semgrep does not resolve YAML anchors, so the request sources are a copy in
+// every JavaScript taint rule that follows request input. The copies must not
+// drift: a source added to one rule and not another is a gap in that class.
+func TestJavaScriptTaintRulesShareOneRequestSourceBlock(t *testing.T) {
+	taint, _ := javascriptRules(t)
+	notRequest := map[string]string{"js-weak-random-token-taint": "its source is Math.random()"}
+	for _, problem := range requestSourceDrift(taint, notRequest) {
+		t.Error(problem)
+	}
+}
+
+func TestRequestSourceDriftIsCaught(t *testing.T) {
+	rule := func(id string, sources ...any) packRule {
+		return packRule{ID: id, Raw: map[string]any{"pattern-sources": sources}}
+	}
+	src := func(p string) map[string]any { return map[string]any{"pattern": p} }
+	labelled := func(label, p string) map[string]any { return map[string]any{"label": label, "pattern": p} }
+	cases := []struct {
+		name  string
+		rules []packRule
+		want  string
+	}{
+		{"identical", []packRule{rule("a", src("$R.query")), rule("b", src("$R.query"))}, ""},
+		{"INPUT label and an extra label", []packRule{
+			rule("a", src("$R.query")),
+			rule("b", labelled("INPUT", "$R.query"), labelled("PASSWORD", "$R.body.password")),
+		}, ""},
+		{"a source missing", []packRule{rule("a", src("$R.query"), src("$R.body")), rule("b", src("$R.query"))}, "b: request sources differ"},
+		{"a source changed", []packRule{rule("a", src("$R.query")), rule("b", src("$R.params"))}, "b: request sources differ"},
+		{"a stale exemption", []packRule{rule("a", src("$R.query")), rule("b", src("$R.query"))}, "exempted rule gone"},
+		{"one rule only", []packRule{rule("a", src("$R.query"))}, "compared 1 rules"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			notRequest := map[string]string{}
+			if tc.name == "a stale exemption" {
+				notRequest["gone"] = "removed"
+			}
+			got := strings.Join(requestSourceDrift(tc.rules, notRequest), "\n")
+			switch {
+			case tc.want == "" && got != "":
+				t.Errorf("unexpected problems:\n%s", got)
+			case tc.want != "" && !strings.Contains(got, tc.want):
+				t.Errorf("problems = %q; want one containing %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// javascriptTestCodePaths is the paths.exclude list every rule of the
+// JavaScript/TypeScript pack carries: test, mock and fixture code.
+var javascriptTestCodePaths = []any{
+	"**/__tests__/**",
+	"**/__mocks__/**",
+	"**/__fixtures__/**",
+	"**/mocks/**",
+	"**/mock/**",
+	"**/fixtures/**",
+	"**/test/**",
+	"**/tests/**",
+	"**/spec/**",
+	"**/e2e/**",
+	"**/cypress/**",
+	"*.test.*",
+	"*.spec.*",
+	"*.e2e-spec.*",
+	"*.cy.*",
+}
+
+// Every JavaScript rule, taint or shape, skips test, mock and fixture code
+// with one identical list, so a rule added or edited later cannot drift from
+// it. A finding there would block a build on code that never ships.
+func TestJavaScriptRulesShareOneTestCodeExclude(t *testing.T) {
+	taint, other := javascriptRules(t)
+	for _, r := range append(taint, other...) {
+		paths, _ := r.Raw["paths"].(map[string]any)
+		got, _ := paths["exclude"].([]any)
+		if !reflect.DeepEqual(got, javascriptTestCodePaths) {
+			t.Errorf("%s: paths.exclude = %v, want %v", r.ID, got, javascriptTestCodePaths)
+		}
+	}
+}
+
+// Real Semgrep, real pack: the same vulnerable route at a normal path and at
+// test, mock and fixture paths is reported only at the normal one. Semgrep
+// matches a rule's paths against paths relative to the scan root, so a
+// repository checked out under a directory named test or __tests__ is still
+// scanned; the roots below pin that.
+func TestJavaScriptPackSkipsTestCode(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+
+	skipped := []string{
+		"__tests__/app.js", "__mocks__/app.js", "__fixtures__/app.js", "src/__fixtures__/app.js",
+		"mocks/app.js", "mock/app.js", "fixtures/app.js", "test/app.js", "tests/app.js",
+		"spec/app.js", "e2e/app.js", "cypress/e2e/app.js", "packages/api/test/app.js",
+		"src/app.test.js", "src/app.spec.ts", "src/app.e2e-spec.ts", "src/app.cy.js",
+	}
+	for _, rootName := range []string{"repo", filepath.Join("test", "repo"), filepath.Join("__tests__", "repo")} {
+		t.Run(rootName, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), rootName)
+			files := map[string]string{"src/app.js": spikeApp, "src/testing/app.js": spikeApp}
+			for _, rel := range skipped {
+				files[rel] = spikeApp
+			}
+			writeTree(t, root, files)
+			got, err := Scan(context.Background(), root)
+			if err != nil {
+				t.Fatalf("Scan: %v", err)
+			}
+			assertEndpoints(t, got, map[string]bool{"src/app.js:9": true, "src/testing/app.js:9": true})
+		})
+	}
+}
+
+// largeExpressRoutes writes an Express route file of about 2,500 lines: one
+// route that builds SQL from req.query.name (line 8), then 120 ORDER BY routes
+// that sort through a SORT_MAP lookup helper, then 120 handlers, each
+// with a helper function, a guard, a parameterized query and a mapped
+// response. That is the shape of a real route file, and the size at which the
+// round-3 helper sanitisers of js-sqli-taint went superlinear and timed out.
+func largeExpressRoutes() string {
+	var b strings.Builder
+	b.WriteString("const express = require('express');\nconst { Pool } = require('pg');\n\n")
+	b.WriteString("const db = new Pool();\nconst router = express.Router();\n\n")
+	b.WriteString("router.get('/search', async (req, res) => {\n")
+	b.WriteString("  const r = await db.query(\"SELECT * FROM t WHERE name = '\" + req.query.name + \"'\");\n")
+	b.WriteString("  res.json(r.rows);\n});\n\n")
+	// The shape js-sqli-taint's constant-helper sanitiser accepts: a module
+	// constant map of literals and 120 helpers that look a value up in it with
+	// a literal fallback, each used in an ORDER BY route. That sanitiser is
+	// what went superlinear and timed out in round 3.
+	b.WriteString("const SORT_MAP = { name: 'name', date: 'created_at', rank: 'rank', owner: 'owner_id' };\n\n")
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&b, "function col%d(s) { return SORT_MAP[s] ?? 'id' }\n\n", i)
+		fmt.Fprintf(&b, "router.get('/sorted%d', async (req, res) => {\n", i)
+		fmt.Fprintf(&b, "  const rows = await db.query('SELECT * FROM items ORDER BY ' + col%d(req.query.sort));\n", i)
+		b.WriteString("  res.json(rows.rows);\n});\n\n")
+	}
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&b, "function format%d(row) {\n  return { id: row.id, name: row.name, rank: %d };\n}\n\n", i, i)
+		fmt.Fprintf(&b, "router.get('/items%d/:id', async (req, res) => {\n", i)
+		b.WriteString("  const id = req.params.id;\n")
+		b.WriteString("  const limit = Number(req.query.limit) || 10;\n")
+		b.WriteString("  if (!id) {\n    return res.status(400).json({ error: 'missing id' });\n  }\n")
+		b.WriteString("  const rows = await db.query('SELECT * FROM items WHERE id = $1 LIMIT $2', [id, limit]);\n")
+		b.WriteString("  if (rows.rows.length === 0) {\n    return res.status(404).end();\n  }\n")
+		fmt.Fprintf(&b, "  res.json(rows.rows.map((r) => format%d(r)));\n});\n\n", i)
+	}
+	b.WriteString("module.exports = router;\n")
+	return b.String()
+}
+
+// The JavaScript packs stay linear on a large route file: with the shipped
+// arguments (--timeout 30 per rule and file), the real SQL injection in a
+// 2,500-line, 361-function file is reported, no rule times out, and the whole
+// bundled pack finishes in under 20 s. Before round 4, js-sqli-taint alone
+// needed more than 200 s here, hit the 30 s bound, and lost the finding. The
+// pack takes about 3 s on a development laptop, so 20 s leaves room for a
+// slower CI runner while staying below the 30 s per-rule bound a
+// superlinear rule would hit.
+func TestJavaScriptPackStaysLinearOnALargeRouteFile(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+
+	src := largeExpressRoutes()
+	if lines := strings.Count(src, "\n"); lines < 2000 {
+		t.Fatalf("generated %d lines, want about 2,500", lines)
+	}
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"routes/items.js": src})
+
+	started := time.Now()
+	run, err := ScanRun(context.Background(), dir, nil)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("ScanRun: %v", err)
+	}
+	if len(run.Timeouts) != 0 {
+		t.Errorf("rules timed out: %+v", run.Timeouts)
+	}
+	found := false
+	for _, f := range run.Findings {
+		found = found || (f.RuleID == jsTaintRuleID && f.Endpoint == "routes/items.js:8")
+	}
+	if !found {
+		t.Errorf("no %s finding at routes/items.js:8 among %d findings", jsTaintRuleID, len(run.Findings))
+	}
+	const bound = 20 * time.Second
+	byRule := map[string]int{}
+	for _, f := range run.Findings {
+		byRule[f.RuleID]++
+	}
+	t.Logf("express: %d lines, %d findings %v, %s", strings.Count(src, "\n"), len(run.Findings), byRule, elapsed.Round(time.Millisecond))
+	if elapsed > bound {
+		t.Errorf("the bundled pack took %s on a 2,500-line route file; want under %s", elapsed.Round(time.Millisecond), bound)
+	}
+}

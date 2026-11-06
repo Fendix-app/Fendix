@@ -284,7 +284,7 @@ on the Python AST taint engine, so "is it more accurate?" stops being an opinion
 | **HANDLED** (regression gate, in-scope) | **1.000** | **1.000** | **1.000** |
 | **HONEST** (incl. known gaps) | **1.000** | **1.000** | **1.000** |  ← all original roadmap gaps closed
 
-Per-category F1 is 1.000 for every implemented detector (cmdi, sqli, ssrf, path,
+On the Python benchmark corpus, excluding documented known gaps, per-category F1 is 1.000 for every implemented detector (cmdi, sqli, ssrf, path,
 deser, xss, llm). All original roadmap gaps are now **closed** — each was implemented and its
 benchmark case flipped to detected (with a safe counterpart added for precision):
 
@@ -299,8 +299,8 @@ New roadmap candidates (not yet in the corpus as gaps): full 2+-hop
 interprocedural taint, real JS/TS AST, cross-file taint.
 
 
-**Interpretation:** the engine is precision-perfect and recall-perfect *within
-its modeled source/sink set* (handled F1 = 1.0), with an honest F1 of 0.889 once
+**Interpretation:** on the Python benchmark corpus the engine is precision-perfect and recall-perfect *within
+its modeled source/sink set* (handled F1 = 1.0, which excludes the documented known gaps), with an honest F1 of 0.889 once
 the known out-of-scope categories are counted. Each roadmap item, when built,
 flips its case to "NOW DETECTED ✓" and raises the honest F1 — the gap between the
 two numbers IS the roadmap, made measurable.

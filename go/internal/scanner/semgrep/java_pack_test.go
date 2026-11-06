@@ -1,0 +1,546 @@
+package semgrep
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
+	"github.com/Fendix-app/Fendix/go/internal/models"
+)
+
+// javaGateRule is the Java taint rule the gate tests below go through.
+const javaGateRule = "java-sqli-taint"
+
+// productionCheckID is the check id semgrep reports for rule when it loads the
+// pack from dir: semgrep namespaces a rule by the path it was read from, the
+// path's separators becoming dots ("/tmp/fendix-semgrep-rules-1/x.yaml" gives
+// "tmp.fendix-semgrep-rules-1.<rule>"). ensureRules writes the pack to
+// os.MkdirTemp("", rulesDirPrefix), so this is the id the scanner really sees.
+func productionCheckID(dir, rule string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(filepath.ToSlash(dir), "/"), "/", ".") + "." + rule
+}
+
+// javaTaintMatch is a match of javaGateRule as semgrep reports it, logged out:
+// no trace and no lines.
+func javaTaintMatch(checkID string) semgrepResult {
+	return semgrepResult{
+		CheckID: checkID,
+		Path:    "/code/src/main/java/com/example/UserController.java",
+		Start:   semgrepLineCol{Line: 21, Col: 37},
+		Extra: semgrepExtra{
+			Message:  "SQL query built from request input.",
+			Severity: "ERROR",
+			Lines:    semgrepRedactedLines,
+			Metadata: map[string]interface{}{
+				"category":            "injection",
+				"cwe":                 "CWE-89",
+				"confidence":          "MEDIUM",
+				"fendix_severity":     "HIGH",
+				"fendix_reachability": "taint",
+			},
+		},
+	}
+}
+
+// The scanner never sees a bare rule id: every Java taint match arrives
+// namespaced by the temporary directory the pack was extracted to, which
+// normalizeCheckID strips before the gate looks the rule up in the embedded
+// pack. If the strip or the lookup missed, every Java finding would stay a shim
+// finding with Java enabled, and nothing else would fail. This walks the
+// production-shaped ids (Linux and macOS temp roots, and the directory
+// ensureRules really made on this machine) through mapResult with the gate
+// closed and open.
+func TestJavaTaintRuleFromAProductionCheckIDOpensTheGate(t *testing.T) {
+	spec, ok := bundledRuleSpec(javaGateRule)
+	if !ok || spec.Mode != "taint" || !reflect.DeepEqual(spec.Languages, []string{"java"}) {
+		t.Fatalf("embedded pack: %s = %+v (found %v), want mode taint and languages [java]", javaGateRule, spec, ok)
+	}
+
+	resetRulesCacheForTesting()
+	t.Cleanup(resetRulesCacheForTesting)
+	dir, err := ensureRules()
+	if err != nil {
+		t.Fatalf("ensureRules: %v", err)
+	}
+	if !strings.HasPrefix(filepath.Base(dir), rulesDirPrefix) {
+		t.Fatalf("rules dir %q does not start with %q", dir, rulesDirPrefix)
+	}
+
+	for name, checkID := range map[string]string{
+		"linux temp root":          "tmp." + rulesDirPrefix + "1072928901." + javaGateRule,
+		"macOS temp root":          "var.folders.7m.08880d351wv3hcmbjbvq856r0000gn.T." + rulesDirPrefix + "2865129937." + javaGateRule,
+		"this machine's rules dir": productionCheckID(dir, javaGateRule),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := normalizeCheckID(checkID); got != javaGateRule {
+				t.Fatalf("normalizeCheckID(%q) = %q, want %q", checkID, got, javaGateRule)
+			}
+			r := javaTaintMatch(checkID)
+
+			enableReachability(t)
+			closed, ok := mapResult(&r, "/code")
+			if !ok {
+				t.Fatal("mapResult rejected the match")
+			}
+			requireShim(t, closed)
+
+			enableReachability(t, "java")
+			open, _ := mapResult(&r, "/code")
+			requireTaint(t, open)
+			if open.RuleID != javaGateRule || open.ID != "SEC-JAVA_SQLI_TAINT" {
+				t.Errorf("RuleID = %q, ID = %q; want %q and SEC-JAVA_SQLI_TAINT", open.RuleID, open.ID, javaGateRule)
+			}
+			if models.Fingerprint(open.ToFinding()) != models.Fingerprint(closed.ToFinding()) {
+				t.Error("opening the gate moved the finding's fingerprint")
+			}
+		})
+	}
+}
+
+// javaGateApp is a Spring controller whose request parameter reaches a
+// JdbcTemplate query in the same method.
+const javaGateApp = `package com.example;
+
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class UserController {
+
+    private final JdbcTemplate jdbcTemplate;
+
+    public UserController(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    @GetMapping("/users")
+    public List<Map<String, Object>> search(@RequestParam String name) {
+        return jdbcTemplate.queryForList("SELECT * FROM users WHERE name = '" + name + "'");
+    }
+}
+`
+
+// The same gate end to end: real semgrep over the bundled pack, through Scan,
+// so the check id is whatever semgrep makes of the real temporary directory.
+func TestJavaTaintMatchFromRealSemgrepIsReachableOnlyWithJavaEnabled(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+	t.Cleanup(resetRulesCacheForTesting)
+
+	root := t.TempDir()
+	src := filepath.Join(root, "src", "main", "java", "com", "example", "UserController.java")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte(javaGateApp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const endpoint = "src/main/java/com/example/UserController.java:22"
+
+	scanFor := func(t *testing.T) evidence.Evidence {
+		t.Helper()
+		evs, err := Scan(context.Background(), root)
+		if err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		var got []evidence.Evidence
+		for _, ev := range evs {
+			if ev.RuleID == javaGateRule {
+				got = append(got, ev)
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("got %d %s findings, want 1 (all findings: %+v)", len(got), javaGateRule, evs)
+		}
+		if got[0].Endpoint != endpoint {
+			t.Errorf("Endpoint = %q, want %q", got[0].Endpoint, endpoint)
+		}
+		return got[0]
+	}
+
+	t.Run("java disabled", func(t *testing.T) {
+		enableReachability(t)
+		requireShim(t, scanFor(t))
+	})
+	t.Run("java enabled", func(t *testing.T) {
+		enableReachability(t, "java")
+		requireTaint(t, scanFor(t))
+	})
+	// As the binary ships: Java did not clear the real-world gate (precision
+	// 0.111, 1 of 10; ruling R-pf81, ADR-011), so the finding is a warning.
+	t.Run("as shipped", func(t *testing.T) {
+		requireShim(t, scanFor(t))
+	})
+}
+
+// The Java request-input packs repeat two blocks in every taint rule, because
+// a Semgrep rule cannot reference another's: the request sources and the
+// number sanitizers (see the header of rules/java-injection.yaml). An edit to
+// one copy only would leave one class with different sources from the rest,
+// which nothing else would catch.
+func TestJavaTaintRulesShareTheirBlocks(t *testing.T) {
+	var sources, numbers, names []string
+	for _, pack := range []string{"rules/java-injection.yaml", "rules/java-web.yaml"} {
+		data, err := embeddedRules.ReadFile(pack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rules, err := decodePack(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rules {
+			if r.Raw["mode"] != "taint" {
+				continue
+			}
+			names = append(names, r.ID)
+			sources = append(sources, canonicalYAML(t, r.Raw["pattern-sources"]))
+			sanitizers, _ := r.Raw["pattern-sanitizers"].([]any)
+			if len(sanitizers) == 0 {
+				t.Fatalf("%s: no pattern-sanitizers", r.ID)
+			}
+			numbers = append(numbers, canonicalYAML(t, sanitizers[0]))
+		}
+	}
+	if len(names) != 7 {
+		t.Fatalf("taint rules in the Java request-input packs = %v, want 7", names)
+	}
+	for name, copies := range map[string][]string{"pattern-sources": sources, "number sanitizers": numbers} {
+		for i := range copies {
+			if copies[i] != copies[0] {
+				t.Errorf("%s of %s differ from %s's", name, names[i], names[0])
+			}
+		}
+	}
+}
+
+// javaPacks are the Java rule files.
+var javaPacks = []string{"rules/java-injection.yaml", "rules/java-web.yaml", "rules/java-crypto.yaml"}
+
+// javaTestPathExcludes is the paths.exclude list every Java rule carries:
+// test, fixture and mock code, which no user runs.
+var javaTestPathExcludes = []any{
+	"**/src/test/**",
+	"**/src/integrationTest/**",
+	"**/src/testFixtures/**",
+	"**/src/it/**",
+	"*Test.java",
+	"*Tests.java",
+	"*IT.java",
+	"**/mock/**",
+	"**/mocks/**",
+	"**/fake/**",
+	"**/fakes/**",
+}
+
+// Every rule of the Java packs, taint and shape alike, carries the same
+// paths block: exactly the exclude list, nothing included. A rule added
+// without it, or a copy edited alone, would report test code again.
+func TestJavaRulesShareTheTestPathExcludes(t *testing.T) {
+	want := canonicalYAML(t, map[string]any{"exclude": javaTestPathExcludes})
+	count := 0
+	for _, pack := range javaPacks {
+		data, err := embeddedRules.ReadFile(pack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rules, err := decodePack(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rules {
+			count++
+			if got := canonicalYAML(t, r.Raw["paths"]); got != want {
+				t.Errorf("%s: paths =\n%s\nwant\n%s", r.ID, got, want)
+			}
+		}
+	}
+	if count != 15 {
+		t.Fatalf("rules in the Java packs = %d, want 15", count)
+	}
+}
+
+// Real semgrep, through Scan: the same vulnerable controller is reported in
+// main code (and under names that only look like a test or mock location),
+// and not under any excluded path. Semgrep skips test/ and tests/ by itself,
+// but only for a project without a .semgrepignore of its own, so the tree is
+// scanned both ways.
+func TestJavaTestAndMockCodeIsNotScanned(t *testing.T) {
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+	t.Cleanup(resetRulesCacheForTesting)
+
+	// javaGateApp's query is on line 22.
+	reported := []string{
+		"src/main/java/com/example/UserController.java",
+		"src/main/java/com/example/Contest.java",
+		"src/main/java/com/example/TestData.java",
+		"src/main/java/com/example/ITer.java",
+		"src/main/java/com/example/it/UserController.java",
+		"src/main/java/com/example/testing/UserController.java",
+		"src/main/java/com/example/mockito/UserController.java",
+		"src/main/java/com/example/fakery/UserController.java",
+	}
+	excluded := []string{
+		"src/test/java/com/example/UserController.java",
+		"src/integrationTest/java/com/example/UserController.java",
+		"src/testFixtures/java/com/example/UserController.java",
+		"src/it/java/com/example/UserController.java",
+		"services/api/src/test/java/com/example/UserController.java",
+		"src/main/java/com/example/UserControllerTest.java",
+		"src/main/java/com/example/UserControllerTests.java",
+		"src/main/java/com/example/UserControllerIT.java",
+		"src/main/java/com/example/mock/UserController.java",
+		"src/main/java/com/example/mocks/UserController.java",
+		"src/main/java/com/example/fake/UserController.java",
+		"src/main/java/com/example/fakes/UserController.java",
+	}
+	files := map[string]string{}
+	want := map[string]bool{}
+	for _, rel := range reported {
+		files[rel] = javaGateApp
+		want[rel+":22"] = true
+	}
+	for _, rel := range excluded {
+		files[rel] = javaGateApp
+	}
+
+	for _, project := range []struct{ name, semgrepignore string }{
+		{"without a project .semgrepignore", ""},
+		{"with a project .semgrepignore", "# project ignores\nlegacy/\n"},
+	} {
+		t.Run(project.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTree(t, root, files)
+			if project.semgrepignore != "" {
+				writeTree(t, root, map[string]string{".semgrepignore": project.semgrepignore})
+			}
+			got, err := Scan(context.Background(), root)
+			if err != nil {
+				t.Fatalf("Scan: %v", err)
+			}
+			assertEndpoints(t, got, want)
+		})
+	}
+
+	// The patterns match paths below the scan root, so a checkout that lies
+	// under a directory of an excluded name is scanned.
+	t.Run("root under an excluded directory", func(t *testing.T) {
+		base := t.TempDir()
+		for _, root := range []string{
+			filepath.Join(base, "src", "test", "repo"),
+			filepath.Join(base, "mocks", "repo"),
+			filepath.Join(base, "checkout", "fakes"),
+		} {
+			writeTree(t, root, map[string]string{
+				".semgrepignore": "# project ignores\n",
+				"src/main/java/com/example/UserController.java": javaGateApp,
+			})
+			got, err := Scan(context.Background(), root)
+			if err != nil {
+				t.Fatalf("Scan(%s): %v", root, err)
+			}
+			assertEndpoints(t, got, map[string]bool{"src/main/java/com/example/UserController.java:22": true})
+		}
+	})
+}
+
+// The -sink rules repeat blocks of their taint rule: java-sqli-sink the SQL
+// call list and the Criteria exclusions of java-sqli-taint's sink, and
+// java-sqli-sink, java-ssrf-sink and java-open_redirect-sink the guards of
+// their taint rule's sanitizers (as negations, on the method's parameter $Q). A fix that lands
+// in one copy only would make the two rules disagree on what is safe.
+func TestJavaSinkRulesShareTheirTaintRulesBlocks(t *testing.T) {
+	rules := map[string]map[string]any{}
+	for _, pack := range []string{"rules/java-injection.yaml", "rules/java-web.yaml"} {
+		data, err := embeddedRules.ReadFile(pack)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := decodePack(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range decoded {
+			rules[r.ID] = r.Raw
+		}
+	}
+
+	// SQL: the sink's call list and exclusions, in both rules.
+	sinks, _ := rules["java-sqli-taint"]["pattern-sinks"].([]any)
+	if len(sinks) == 0 {
+		t.Fatal("java-sqli-taint has no sinks")
+	}
+	taintSQL := sqlBlocks(t, sinks[0].(map[string]any)["patterns"].([]any))
+	shapeSQL := sqlBlocks(t, rules["java-sqli-sink"]["patterns"].([]any))
+	if taintSQL == "" || taintSQL != shapeSQL {
+		t.Errorf("java-sqli-sink's SQL calls and exclusions differ from java-sqli-taint's:\n%s\nvs\n%s", shapeSQL, taintSQL)
+	}
+
+	// Guards: each guard of the taint rule is a negation of the -sink rule.
+	for taint, shape := range map[string]string{
+		"java-sqli-taint":          "java-sqli-sink",
+		"java-ssrf-taint":          "java-ssrf-sink",
+		"java-open_redirect-taint": "java-open_redirect-sink",
+	} {
+		var sanitizerGuards []string
+		sanitizers, _ := rules[taint]["pattern-sanitizers"].([]any)
+		for _, s := range sanitizers {
+			if g := guard(t, s, "patterns"); g != "" {
+				sanitizerGuards = append(sanitizerGuards, g)
+			}
+		}
+		var negationGuards []string
+		for _, p := range rules[shape]["patterns"].([]any) {
+			if not, ok := p.(map[string]any)["pattern-not"].(map[string]any); ok {
+				if g := guard(t, not, "patterns"); g != "" {
+					negationGuards = append(negationGuards, strings.ReplaceAll(g, "$Q", "$GV"))
+				}
+			}
+		}
+		if len(sanitizerGuards) == 0 || !reflect.DeepEqual(sanitizerGuards, negationGuards) {
+			t.Errorf("%s's guards differ from %s's (%d vs %d):\n%s\nvs\n%s", shape, taint,
+				len(negationGuards), len(sanitizerGuards), strings.Join(negationGuards, "---\n"), strings.Join(sanitizerGuards, "---\n"))
+		}
+	}
+
+	// Path: java-path_traversal-sink matches the join in the declaration of
+	// the path that is then checked, so its guards have their own prefixes;
+	// their checks (on $GCOND) and the exit they require (on $GBODY) must be
+	// ones java-path_traversal-taint's sanitizers use.
+	taintChecks := map[string]bool{}
+	for _, s := range rules["java-path_traversal-taint"]["pattern-sanitizers"].([]any) {
+		for _, c := range guardChecks(t, s, "patterns") {
+			taintChecks[c] = true
+		}
+	}
+	var sinkChecks []string
+	for _, p := range rules["java-path_traversal-sink"]["patterns"].([]any) {
+		if not, ok := p.(map[string]any)["pattern-not"].(map[string]any); ok {
+			sinkChecks = append(sinkChecks, guardChecks(t, not, "patterns")...)
+		}
+	}
+	if len(sinkChecks) == 0 {
+		t.Error("java-path_traversal-sink has no guard negations")
+	}
+	for _, c := range sinkChecks {
+		if !taintChecks[c] {
+			t.Errorf("java-path_traversal-sink check is not one of java-path_traversal-taint's:\n%s", c)
+		}
+	}
+
+	// XSS: the JSON-response exclusions of the writer sink, in both rules.
+	var taintJSON, shapeJSON []string
+	for _, sink := range rules["java-xss-taint"]["pattern-sinks"].([]any) {
+		taintJSON = append(taintJSON, jsonExclusions(sink.(map[string]any)["patterns"])...)
+	}
+	shapeJSON = jsonExclusions(rules["java-xss-sink"]["patterns"])
+	if len(taintJSON) == 0 || !reflect.DeepEqual(taintJSON, shapeJSON) {
+		t.Errorf("java-xss-sink's JSON-response exclusions differ from java-xss-taint's:\n%v\nvs\n%v", shapeJSON, taintJSON)
+	}
+}
+
+// guardChecks returns a guard's $GCOND checks and $GBODY exit, each rendered.
+func guardChecks(t *testing.T, node any, key string) []string {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return nil
+	}
+	patterns, _ := m[key].([]any)
+	var out []string
+	for _, p := range patterns {
+		pm := p.(map[string]any)
+		for _, k := range []string{"metavariable-pattern", "metavariable-regex"} {
+			if mv, ok := pm[k].(map[string]any); ok && (mv["metavariable"] == "$GCOND" || mv["metavariable"] == "$GBODY") {
+				out = append(out, canonicalYAML(t, pm))
+			}
+		}
+	}
+	return out
+}
+
+// jsonExclusions returns the pattern-not-inside clauses of a patterns list
+// that name a JSON content type.
+func jsonExclusions(patterns any) []string {
+	list, _ := patterns.([]any)
+	var out []string
+	for _, p := range list {
+		if s, ok := p.(map[string]any)["pattern-not-inside"].(string); ok && strings.Contains(strings.ToLower(s), "json") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// sqlBlocks renders the SQL call list (the pattern-either naming JdbcTemplate)
+// and the Criteria exclusions of a patterns list.
+func sqlBlocks(t *testing.T, patterns []any) string {
+	var out []string
+	for _, p := range patterns {
+		m := p.(map[string]any)
+		if either, ok := m["pattern-either"]; ok && strings.Contains(canonicalYAML(t, either), "JdbcTemplate $DB") {
+			out = append(out, canonicalYAML(t, either))
+		}
+		if not, ok := m["pattern-not"].(string); ok && strings.Contains(not, "createQuery") {
+			out = append(out, not)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// guard renders a guard (a patterns list checking metavariable $GCOND, or
+// the switch $GSW) without its occurrence: the sanitizer's `pattern: $GV` and
+// its identifier regex, or the negation's sink shapes (the pattern-either
+// that holds no pattern-inside, and the checks on the SQL text $GSQL).
+func guard(t *testing.T, node any, key string) string {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return ""
+	}
+	patterns, ok := m[key].([]any)
+	if !ok {
+		return ""
+	}
+	if text := canonicalYAML(t, patterns); !strings.Contains(text, "metavariable: $GCOND") &&
+		!strings.Contains(text, "metavariable: $GSW") {
+		return ""
+	}
+	var kept []any
+	for _, p := range patterns {
+		pm := p.(map[string]any)
+		if pm["pattern"] == "$GV" {
+			continue
+		}
+		if mr, ok := pm["metavariable-regex"].(map[string]any); ok && (mr["metavariable"] == "$GV" || mr["metavariable"] == "$GSQL") {
+			continue
+		}
+		if mp, ok := pm["metavariable-pattern"].(map[string]any); ok && mp["metavariable"] == "$GSQL" {
+			continue
+		}
+		if either, ok := pm["pattern-either"]; ok && !strings.Contains(canonicalYAML(t, either), "pattern-inside") {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return canonicalYAML(t, kept)
+}
+
+func canonicalYAML(t *testing.T, v any) string {
+	t.Helper()
+	out, err := yaml.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}

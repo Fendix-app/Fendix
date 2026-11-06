@@ -10,7 +10,7 @@ Target: TwiScope-backend (Django 5.2 + DRF, multi-service monorepo). Scan scope:
 | Confirmed True Positives | **1** |
 | Needs Review | 1 |
 | False Positives | 128 |
-| **Precision (TP / (TP+FP))** | **1 / 129 ≈ 0.8%** |
+| **Precision on this Django target (TP / (TP+FP))** | **1 / 129 ≈ 0.8%** |
 
 Raw breakdown: SSRF 88, Path-Traversal 29, Open-Redirect 7, SQL-Injection 5 (all CRITICAL), XSS 1. Engine self-demoted 13 to `in_test` (LOW). Of the 117 "production" findings, exactly one is a real, exploitable vulnerability.
 
@@ -54,7 +54,7 @@ Raw breakdown: SSRF 88, Path-Traversal 29, Open-Redirect 7, SQL-Injection 5 (all
 
 ## 5. Engine Precision Assessment on This Real App
 
-**Overall verdict.** On a real 600+ file Django microservices backend, fendix found the one SSRF that matters but buried it under 128 false positives — **~0.8% precision**. A scan a human must hand-triage at this ratio erodes trust fast; the single real bug (commented-out allow-list in the Instagram proxy) is indistinguishable from the noise without reading every hit. The engine's *recall* looks fine (it caught the genuine SSRF and even correctly source-classified the webhook dispatcher), but precision is the blocker, and notably the **5 highest-severity findings (all CRITICAL SQLi) are all false positives** — severity-weighted precision is effectively 0% at the top of the report.
+**Overall verdict.** On a real 600+ file Django microservices backend, fendix found the one SSRF that matters but buried it under 128 false positives — **~0.8% precision**. A scan a human must hand-triage at this ratio erodes trust fast; the single real bug (commented-out allow-list in the Instagram proxy) is indistinguishable from the noise without reading every hit. The engine's *recall* on this Django backend looks fine (it caught the genuine SSRF and even correctly source-classified the webhook dispatcher), but precision is the blocker, and notably the **5 highest-severity findings (all CRITICAL SQLi) are all false positives** — severity-weighted precision is effectively 0% at the top of the report.
 
 **Test-file demotion effect — working, but under-reached.** The engine demoted 13 findings to `in_test`/LOW (all of `Alert_System/tests/test_views.py`, `test_insights_views.py`, `test_graphs_endpoint.py`, `test_jwt_keys.py`). That demotion is correct and valuable — those are test fixtures hitting localhost test servers, exactly what should be downranked. The gap: demotion keys on path/filename test markers but does **not** catch non-test infrastructure that is equally non-exploitable (management commands, `__file__`-relative settings, dead files like `forward_feed_tasks-notWorks.py`). The demotion concept is sound; its source-trust taxonomy is too narrow.
 

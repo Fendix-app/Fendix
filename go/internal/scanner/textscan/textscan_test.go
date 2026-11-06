@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/models"
@@ -515,5 +516,563 @@ public class Ok29 {
 }`)
 	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
 		t.Errorf("expected no findings on safe Java, got %d: %+v", len(got), got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Calls whose arguments hold one level of nested parentheses: a context
+// accessor (`r.Context()`, `c.Request.Context()`) before the argument that
+// makes the call unsafe. `[^)]*` stopped at the accessor's own `)`.
+// ---------------------------------------------------------------------------
+
+func TestGoRules_ExecCommandContextWithNestedCall(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(c *gin.Context, host string) {
+	exec.CommandContext(c.Request.Context(), "sh", "-c", "ping -c 1 "+host).Output()
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_EXEC_COMMAND_INJECTION"]) != 1 {
+		t.Errorf("GO_EXEC_COMMAND_INJECTION = %d; want 1", len(by["GO_EXEC_COMMAND_INJECTION"]))
+	}
+}
+
+func TestGoRules_QueryRowContextWithNestedCall(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(db *sql.DB, r *http.Request, n string) {
+	db.QueryRowContext(r.Context(), fmt.Sprintf("SELECT id FROM u WHERE name = '%s'", n))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_SQL_INJECTION"]) != 1 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 1", len(by["GO_SQL_INJECTION"]))
+	}
+}
+
+func TestJavaRules_NestedParenthesesInArguments(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "N.java", `public class N {
+  void a(String in) throws Exception {
+    Runtime.getRuntime().exec(wrap(in) + " --flag");
+    st.executeQuery(db.table("u") + "SELECT * FROM u WHERE id = " + in);
+  }
+  void b(HttpServletRequest request) throws Exception {
+    new java.net.URL(base(), request.getParameter("u"));
+    new java.io.File(dir(), request.getParameter("p"));
+    response.getWriter().println(esc(1) + request.getParameter("q"));
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_EXEC_COMMAND_INJECTION"]) != 1 {
+		t.Errorf("JAVA_EXEC_COMMAND_INJECTION = %d; want 1", len(by["JAVA_EXEC_COMMAND_INJECTION"]))
+	}
+	for _, id := range []string{"JAVA_SQL_INJECTION", "JAVA_SSRF", "JAVA_PATH_TRAVERSAL", "JAVA_XSS_REFLECTED"} {
+		if len(by[id]) != 1 {
+			t.Errorf("%s = %d; want 1", id, len(by[id]))
+		}
+	}
+}
+
+// TestGoRules_NestedPatternStaysLinear documents that the nested-parenthesis
+// alternation cannot backtrack catastrophically: RE2 matches in linear time.
+func TestGoRules_NestedPatternStaysLinear(t *testing.T) {
+	line := "exec.Command(" + strings.Repeat("(a)", 130) + ` "x"`
+	if len(line) < 400 {
+		t.Fatalf("line is %d chars; want at least 400", len(line))
+	}
+	for _, r := range append(GoRules(), JavaRules()...) {
+		start := time.Now()
+		r.Pattern.MatchString(line)
+		if d := time.Since(start); d > 10*time.Millisecond {
+			t.Errorf("%s took %v on a 400-character line of nested parentheses; want < 10ms", r.ID, d)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// File-level constants. A query or command built only from values that are
+// declared as constant strings in the same file cannot carry user input, so it
+// is not reported. (corpus v2 safe_lookalike cases)
+// ---------------------------------------------------------------------------
+
+func TestGoRules_ConstantTableNameIsNotSQLInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "ok.go", `package main
+
+const activeUsersTable = "users"
+
+func h() {
+	rows, err := db.Query(fmt.Sprintf("SELECT id FROM %s WHERE active = true", activeUsersTable))
+}`)
+	if got := mustScan(t, dir, GoRules()); len(got) != 0 {
+		t.Errorf("a Sprintf over a file constant must stay clean, got %+v", got)
+	}
+}
+
+func TestGoRules_ConstantInConstBlockIsNotFlagged(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "ok.go", `package main
+
+const (
+	other      = 3
+	dataVolume string = "/data" // mount point
+)
+
+func h() {
+	out, err := exec.Command("sh", "-c", "df -h "+dataVolume).CombinedOutput()
+}`)
+	if got := mustScan(t, dir, GoRules()); len(got) != 0 {
+		t.Errorf("a const-block constant must stay clean, got %+v", got)
+	}
+}
+
+func TestGoRules_ShellWithConstantOperandIsNotCommandInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "ok.go", `package main
+
+const dataVolume = "/data"
+
+func h() {
+	out, err := exec.Command("sh", "-c", "df -h "+dataVolume).CombinedOutput()
+}`)
+	if got := mustScan(t, dir, GoRules()); len(got) != 0 {
+		t.Errorf("sh -c over a file constant must stay clean, got %+v", got)
+	}
+}
+
+func TestJavaRules_StaticFinalOperandIsNotCommandInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Ok.java", `public class Ok {
+  private static final String DATA_DIR = "/data";
+  void run() throws Exception {
+    Runtime.getRuntime().exec(new String[]{"sh","-c","du -sh " + DATA_DIR});
+  }
+}`)
+	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
+		t.Errorf("a static final String operand must stay clean, got %+v", got)
+	}
+}
+
+func TestGoRules_ConstantMixedWithVariableStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", `package main
+
+const prefix = "df -h "
+
+func h(vol string) {
+	out, err := exec.Command("sh", "-c", prefix+vol).CombinedOutput()
+	rows, err := db.Query(fmt.Sprintf("SELECT id FROM %s WHERE n = '%s'", prefix, vol))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_EXEC_COMMAND_INJECTION"]) != 1 || len(by["GO_SQL_INJECTION"]) != 1 {
+		t.Errorf("a constant mixed with a variable must still fire: exec=%d sql=%d", len(by["GO_EXEC_COMMAND_INJECTION"]), len(by["GO_SQL_INJECTION"]))
+	}
+}
+
+func TestGoRules_VarDeclarationStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", `package main
+
+var activeUsersTable = "users"
+
+func h() {
+	rows, err := db.Query(fmt.Sprintf("SELECT id FROM %s", activeUsersTable))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if len(by["GO_SQL_INJECTION"]) != 1 {
+		t.Errorf("a var (not const) must still fire, got %d", len(by["GO_SQL_INJECTION"]))
+	}
+}
+
+func TestJavaRules_NonFinalFieldOperandStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Bad.java", `public class Bad {
+  private static String DATA_DIR = "/data";
+  void run() throws Exception {
+    Runtime.getRuntime().exec(new String[]{"sh","-c","du -sh " + DATA_DIR});
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_EXEC_COMMAND_INJECTION"]) != 1 {
+		t.Errorf("a non-final field must still fire, got %d", len(by["JAVA_EXEC_COMMAND_INJECTION"]))
+	}
+}
+
+func TestInterpolatedIdentsAreFileConstants(t *testing.T) {
+	goSrc := []byte("package x\n\nconst a = \"x\"\nconst (\n\tb = \"y\"\n)\nvar c = \"z\"\nconst n = 3\n")
+	javaSrc := []byte("class X {\n  static final String A = \"x\";\n  final static String B = \"y\";\n  static String C = \"z\";\n}\n")
+	cases := []struct {
+		name string
+		line string
+		src  []byte
+		lang string
+		want bool
+	}{
+		{"go sprintf const", `db.Query(fmt.Sprintf("S %s", a))`, goSrc, "go", true},
+		{"go concat consts", `exec.Command("sh", "-c", "x "+a+" "+b)`, goSrc, "go", true},
+		{"go sprintf var", `db.Query(fmt.Sprintf("S %s", c))`, goSrc, "go", false},
+		{"go sprintf param", `db.Query(fmt.Sprintf("S %s", id))`, goSrc, "go", false},
+		{"go sprintf call arg", `db.Query(fmt.Sprintf("S %s", r.URL.Query().Get("x")))`, goSrc, "go", false},
+		{"go numeric const is not a string const", `db.Query("S " + n)`, goSrc, "go", false},
+		{"go no operands", `exec.Command("sh", "-c", cmd)`, goSrc, "go", false},
+		{"go literal operand only", `exec.Command("sh", "-c", "a"+"b")`, goSrc, "go", true},
+		{"java concat final", `exec("x " + A)`, javaSrc, "java", true},
+		{"java final static order", `exec("x " + B)`, javaSrc, "java", true},
+		{"java non-final", `exec("x " + C)`, javaSrc, "java", false},
+		{"java mixed", `exec("x " + A + host)`, javaSrc, "java", false},
+		{"java qualified name", `exec("x " + Other.A)`, javaSrc, "java", false},
+		{"plus inside a string is not an operator", `exec("a + b", host)`, javaSrc, "java", false},
+	}
+	for _, c := range cases {
+		if got := interpolatedIdentsAreFileConstants(c.line, c.src, c.lang); got != c.want {
+			t.Errorf("%s: interpolatedIdentsAreFileConstants(%q) = %v; want %v", c.name, c.line, got, c.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// JdbcTemplate and JPA. These APIs take the SQL as `query`/`update`/
+// `createNativeQuery(...)`, names too generic to match without a receiver.
+// ---------------------------------------------------------------------------
+
+func TestJavaRules_JdbcTemplateAndJPAConcatenationFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  java.util.List<?> a(String name) {
+    return jdbcTemplate.queryForList("SELECT * FROM users WHERE name = '" + name + "'");
+  }
+  Object b(String x) {
+    return entityManager.createNativeQuery("SELECT * FROM users WHERE id = " + x).getResultList();
+  }
+  void c(String x) {
+    this.namedParameterJdbcTemplate.update("DELETE FROM users WHERE id = " + x, java.util.Map.of());
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_SQL_INJECTION"]) != 3 {
+		t.Errorf("JAVA_SQL_INJECTION = %d; want 3: %+v", len(by["JAVA_SQL_INJECTION"]), by["JAVA_SQL_INJECTION"])
+	}
+}
+
+func TestJavaRules_JdbcTemplateParameterizedStaysClean(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  java.util.List<?> a(String name) {
+    return jdbcTemplate.queryForList("SELECT * FROM users WHERE name = ?", name);
+  }
+  Object b(String x) {
+    return entityManager.createNativeQuery("SELECT * FROM users WHERE id = ?1").setParameter(1, x).getResultList();
+  }
+}`)
+	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
+		t.Errorf("parameterized JdbcTemplate/JPA must stay clean, got %+v", got)
+	}
+}
+
+// TestJavaRules_ExecutorExecuteWithUpdateStringStaysClean guards the bare
+// `execute`/`update` names: an Executor's execute(Runnable) with a SQL-looking
+// word and a concat must stay clean, including through one level of nested
+// call, now that the argument pattern crosses inner parentheses.
+func TestJavaRules_ExecutorExecuteWithUpdateStringStaysClean(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Exec.java", `public class Exec {
+  void a(java.util.concurrent.Executor executor, String x) {
+    executor.execute(makeTask("update " + x));
+    executor.execute(wrap(task("delete from cache " + x)));
+    pool.submit(() -> run("update view " + x));
+    queue.update("select " + x);
+  }
+}`)
+	if got := mustScan(t, dir, JavaRules()); len(got) != 0 {
+		t.Errorf("Executor.execute with an update string must stay clean, got %+v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// child_process exec in every import form. The rule applies only to a file
+// that imports child_process, so `.exec(` on a RegExp stays clean.
+// ---------------------------------------------------------------------------
+
+func jsCmdiFindings(t *testing.T, name, src string) int {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, dir, name, src)
+	return len(findingsByID(mustScan(t, dir, JSRules()))["JS_CHILD_PROCESS_SHELL"])
+}
+
+func TestJSRules_ChildProcessDestructuredRequire(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const { exec } = require("child_process");
+exec(cmd);
+`); n != 1 {
+		t.Errorf("destructured require: JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+}
+
+func TestJSRules_ChildProcessNodeImportExecSync(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.ts", `import { execSync } from "node:child_process";
+execSync(cmd);
+`); n != 1 {
+		t.Errorf("node: import + execSync: JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+}
+
+func TestJSRules_ChildProcessPromisified(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const { promisify } = require("util");
+const exec = promisify(require("child_process").exec);
+`); n != 1 {
+		t.Errorf("promisify(require(...).exec): JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+	if n := jsCmdiFindings(t, "b.js", `const { exec } = require("child_process");
+const { promisify } = require("util");
+async function f(host) { return promisify(exec)(host); }
+async function g(host) { return exec(host); }
+`); n != 1 {
+		t.Errorf("promisified wrapper, direct call: JS_CHILD_PROCESS_SHELL = %d; want 1", n)
+	}
+}
+
+func TestJSRules_ChildProcessQualifiedStillFires(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const child_process = require("child_process");
+child_process.exec(cmd);
+child_process.execSync(cmd);
+`); n != 2 {
+		t.Errorf("child_process.exec/execSync: JS_CHILD_PROCESS_SHELL = %d; want 2", n)
+	}
+}
+
+func TestJSRules_ExecWithoutChildProcessImportStaysClean(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const re = /a(b)/g;
+const m = re.exec(text);
+function exec(x) { return x; }
+exec(thing);
+`); n != 0 {
+		t.Errorf("exec( in a file with no child_process import: JS_CHILD_PROCESS_SHELL = %d; want 0", n)
+	}
+}
+
+func TestJSRules_RegExpExecInChildProcessFileStaysClean(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `const { execFile } = require("child_process");
+const m = /a(b)/.exec(text);
+const n = pattern.exec(line);
+`); n != 0 {
+		t.Errorf("RegExp.exec in a file that imports child_process: JS_CHILD_PROCESS_SHELL = %d; want 0", n)
+	}
+}
+
+func TestJavaRules_JdbcTemplateConstantTableIsNotSQLInjection(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  private static final String USERS_TABLE = "users";
+  java.util.List<?> a() {
+    return jdbcTemplate.queryForList("SELECT id FROM " + USERS_TABLE + " WHERE active = true");
+  }
+  java.util.List<?> b(String name) {
+    return jdbcTemplate.queryForList("SELECT id FROM " + USERS_TABLE + " WHERE n = '" + name + "'");
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_SQL_INJECTION"]) != 1 || by["JAVA_SQL_INJECTION"][0].Line == nil || !strings.HasSuffix(*by["JAVA_SQL_INJECTION"][0].Line, ":7") {
+		t.Errorf("want one JAVA_SQL_INJECTION, on line 7 (the variable one): %+v", by["JAVA_SQL_INJECTION"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Java password hashing is a different finding from MD5 hygiene. An MD5 ETag
+// is JAVA_WEAK_CRYPTO's hygiene note, not a weak password hash.
+// ---------------------------------------------------------------------------
+
+func TestJavaRules_WeakHashPasswordFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Hash.java", `public class Hash {
+  String a(String password) throws Exception {
+    MessageDigest md = MessageDigest.getInstance("MD5");
+    return hex(md.digest(password.getBytes()));
+  }
+  String b(String userPassword) throws Exception {
+    return hex(MessageDigest.getInstance("SHA-1").digest(userPassword.getBytes(UTF_8)));
+  }
+  void c(java.security.MessageDigest md, char[] pwd) {
+    md.update(pwd);
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_WEAK_HASH_PASSWORD"]) != 3 {
+		t.Errorf("JAVA_WEAK_HASH_PASSWORD = %d; want 3: %+v", len(by["JAVA_WEAK_HASH_PASSWORD"]), by["JAVA_WEAK_HASH_PASSWORD"])
+	}
+	if f := by["JAVA_WEAK_HASH_PASSWORD"]; len(f) > 0 {
+		if f[0].Category != "crypto" || f[0].References[0] != "CWE-916" {
+			t.Errorf("category/CWE = %q/%v; want crypto/CWE-916", f[0].Category, f[0].References)
+		}
+	}
+}
+
+func TestJavaRules_Md5EtagIsHygieneNotPasswordHash(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Etag.java", `public class Etag {
+  String etag(byte[] data) throws Exception {
+    return "\"" + hex(MessageDigest.getInstance("MD5").digest(data)) + "\"";
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_WEAK_HASH_PASSWORD"]) != 0 {
+		t.Errorf("an MD5 ETag fired JAVA_WEAK_HASH_PASSWORD: %+v", by["JAVA_WEAK_HASH_PASSWORD"])
+	}
+	if len(by["JAVA_WEAK_CRYPTO"]) != 1 {
+		t.Errorf("JAVA_WEAK_CRYPTO = %d; want 1 (unchanged)", len(by["JAVA_WEAK_CRYPTO"]))
+	}
+}
+
+func TestJavaRules_StrongDigestOfPasswordIsNotWeakHash(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Strong.java", `public class Strong {
+  byte[] a(String password) throws Exception {
+    return MessageDigest.getInstance("SHA-256").digest(password.getBytes());
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if len(by["JAVA_WEAK_HASH_PASSWORD"]) != 0 {
+		t.Errorf("a SHA-256 digest fired JAVA_WEAK_HASH_PASSWORD (the rule is MD5/SHA-1 only): %+v", by["JAVA_WEAK_HASH_PASSWORD"])
+	}
+}
+
+// A lone `(` inside a string literal is not a call: the argument pattern must
+// still reach the `+` or the request source after it (matched before callArgs
+// crossed one level of nested calls).
+func TestRules_LoneParenInStringLiteralStillMatches(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(db *sql.DB, user, ids string) {
+	db.Query("INSERT INTO t VALUES ('" + user + "')")
+	db.Query("SELECT * FROM t WHERE id IN (" + ids + ")")
+}`)
+	writeFile(t, dir, "B.java", `public class B {
+  void a(String x) throws Exception {
+    Runtime.getRuntime().exec("echo (" + x);
+    st.executeQuery("SELECT * FROM t WHERE id IN (" + x + ")");
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, append(GoRules(), JavaRules()...)))
+	if n := len(by["GO_SQL_INJECTION"]); n != 2 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 2", n)
+	}
+	if n := len(by["JAVA_EXEC_COMMAND_INJECTION"]); n != 1 {
+		t.Errorf("JAVA_EXEC_COMMAND_INJECTION = %d; want 1", n)
+	}
+	if n := len(by["JAVA_SQL_INJECTION"]); n != 1 {
+		t.Errorf("JAVA_SQL_INJECTION = %d; want 1", n)
+	}
+}
+
+func TestRules_CountStarAndContextStillMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", `package x
+func a(db *sql.DB, r *http.Request, n string) {
+	db.QueryRowContext(r.Context(), "SELECT count(*) FROM t WHERE n = '" + n + "'")
+}`)
+	if n := len(findingsByID(mustScan(t, dir, GoRules()))["GO_SQL_INJECTION"]); n != 1 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 1", n)
+	}
+}
+
+func TestJSRules_ChildProcessRequireThenExecFires(t *testing.T) {
+	if n := jsCmdiFindings(t, "a.js", `require("child_process").exec(cmd);
+require('node:child_process').execSync(cmd);
+const cp = require("child_process"); cp.exec(cmd);
+`); n != 2 {
+		t.Errorf("require(...).exec(cmd): JS_CHILD_PROCESS_SHELL = %d; want 2 (cp.exec through an alias is the documented FN)", n)
+	}
+}
+
+// A constant operand must not hide a tainted ARGUMENT: the check covers every
+// argument of the matched call, not the `+` operands of the whole line.
+func TestGoRules_TaintedArgumentBesideAConstantStillFires(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.go", `package main
+
+const TABLE = "users"
+
+func h(user string) {
+	out, err := exec.Command("sh", "-c", user, "x="+TABLE).CombinedOutput()
+	rows, err := db.Query(buildQuery(user), "a"+TABLE)
+	rows2, err := db.Query(user, fmt.Sprintf("%s", TABLE))
+}`)
+	by := findingsByID(mustScan(t, dir, GoRules()))
+	if n := len(by["GO_EXEC_COMMAND_INJECTION"]); n != 1 {
+		t.Errorf("GO_EXEC_COMMAND_INJECTION = %d; want 1 (a bare variable argument beside a constant)", n)
+	}
+	if n := len(by["GO_SQL_INJECTION"]); n != 2 {
+		t.Errorf("GO_SQL_INJECTION = %d; want 2 (a call or a variable argument beside a constant)", n)
+	}
+}
+
+func TestInterpolatedIdentsAreFileConstants_EveryArgument(t *testing.T) {
+	goSrc := []byte("package x\n\nconst a = \"x\"\nconst b = \"y\"\n")
+	javaSrc := []byte("class X {\n  static final String A = \"x\";\n}\n")
+	cases := []struct {
+		name string
+		line string
+		src  []byte
+		lang string
+		want bool
+	}{
+		{"variable argument beside a constant", `exec.Command("sh", "-c", user, "x="+a)`, goSrc, "go", false},
+		{"call argument beside a constant", `db.Query(build(user), "q "+a)`, goSrc, "go", false},
+		{"all arguments constant", `exec.Command("sh", "-c", "x="+a, b)`, goSrc, "go", true},
+		{"statement prefix is not part of the call", `rows, err := db.Query(fmt.Sprintf("S %s", a))`, goSrc, "go", true},
+		{"java array of constants", `Runtime.getRuntime().exec(new String[]{"sh","-c","du " + A})`, javaSrc, "java", true},
+		{"java array with a variable", `Runtime.getRuntime().exec(new String[]{"sh","-c","du " + A, host})`, javaSrc, "java", false},
+		{"unclosed call fails closed", `db.Query("S "+a,`, goSrc, "go", false},
+		{"a trailing variable after the call is not an argument", `db.Query("S "+a).Scan(&user)`, goSrc, "go", true},
+	}
+	for _, c := range cases {
+		if got := interpolatedIdentsAreFileConstants(c.line, c.src, c.lang); got != c.want {
+			t.Errorf("%s: %q = %v; want %v", c.name, c.line, got, c.want)
+		}
+	}
+}
+
+// digest()/update() are common names: only a MessageDigest-style receiver, and
+// only a password-named argument that ends at a word boundary, counts.
+func TestJavaRules_WeakHashPasswordIgnoresRepositoryUpdates(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Repo.java", `public class Repo {
+  String etag(byte[] data) throws Exception {
+    return hex(MessageDigest.getInstance("MD5").digest(data));
+  }
+  void a(String id) {
+    jdbcTemplate.update(updatePasswordSql, id);
+    repo.update(passwordForm);
+    session.update(passwordResetToken);
+    this.users.update(userPassword, id);
+  }
+}`)
+	by := findingsByID(mustScan(t, dir, JavaRules()))
+	if n := len(by["JAVA_WEAK_HASH_PASSWORD"]); n != 0 {
+		var lines []string
+		for _, f := range by["JAVA_WEAK_HASH_PASSWORD"] {
+			lines = append(lines, f.Endpoint+" "+f.Evidence)
+		}
+		t.Errorf("JAVA_WEAK_HASH_PASSWORD = %d; want 0 (a repository update and a word that only starts with password are not a password hash): %v", n, lines)
+	}
+}
+
+func TestJavaRules_WeakHashPasswordReceiverForms(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Hash.java", `public class Hash {
+  byte[] a(String password) throws Exception {
+    return MessageDigest.getInstance("MD5").digest(password.getBytes());
+  }
+  byte[] b(java.security.MessageDigest md5, String password) {
+    return md5.digest(password.getBytes());
+  }
+  void c(java.security.MessageDigest messageDigest, char[] passphrase) {
+    this.messageDigest.update(passphrase);
+  }
+  byte[] d(java.security.MessageDigest md, String req) {
+    return md.digest(req.getPassword());
+  }
+}`)
+	if n := len(findingsByID(mustScan(t, dir, JavaRules()))["JAVA_WEAK_HASH_PASSWORD"]); n != 4 {
+		t.Errorf("JAVA_WEAK_HASH_PASSWORD = %d; want 4", n)
 	}
 }

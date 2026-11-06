@@ -1,0 +1,986 @@
+# JavaScript and TypeScript injection rules (Task 4.3): SQL injection, command
+# injection and server-side template injection, for Express, NestJS and
+# Next.js. Written in-house. The -taint rules are Semgrep taint rules; a match
+# is a request source reaching the sink inside one function, which counts as
+# reachability for a language enabled in semgrep.ReachabilityLanguages
+# (ADR-011). The -sink rules are shape rules for the same sinks reached through
+# a call, where taint (intra-procedural in Semgrep CE) does not reach; they
+# never count as reachability. The request sources are repeated in every taint
+# rule because Semgrep does not resolve YAML anchors. Reachable findings are
+# escalated one severity level, so fendix_severity is the level before that.
+rules:
+  - id: js-sqli-taint
+    mode: taint
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: ERROR
+    message: >-
+      Request input reaches a SQL query string. Pass it as a bound parameter
+      instead (a placeholder and a values array, or a tagged template such as
+      sql`...`).
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sanitizers:
+      # Review Focus 1: an SQL builder's tagged template sends its
+      # interpolations as bound parameters. The tag is named exactly sql (any
+      # case, on any object): postgres.js and drizzle sql, slonik sql and its
+      # sql.type(...), sql.typeAlias(...), sql.unsafe and sql.fragment,
+      # Prisma.sql, sql-template-strings SQL. A project's own tag (buildSql,
+      # rawSql, sqlConcat, toSqlString) may concatenate, and String.raw does,
+      # so they stay sinks; so does an aliased import (import { sql as q }).
+      - patterns:
+          - pattern: $TAG`...`
+          - metavariable-regex:
+              metavariable: $TAG
+              regex: (?i)^(?:[\w$]+\.)*sql(?:\.(?:type|typeAlias|unsafe|fragment)(?:\(.*\))?)?$
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: parseInt(...)
+          - pattern: parseFloat(...)
+          - pattern: Math.floor(...)
+          - pattern: Math.round(...)
+          - pattern: Boolean(...)
+      # Values made only of constants carry no input into the query text: a
+      # repeated literal, a list mapped to literals or to its index, and the
+      # placeholder builders (IN-list placeholders: ids.map(() => '?').join(','),
+      # '?,'.repeat(ids.length), ids.map((_, i) => '$' + (i + 1)),
+      # Array(ids.length).fill('?'), Array.from({ length: n }, () => '?')).
+      - pattern: '"...".repeat(...)'
+      - pattern-either:
+          - pattern: 'Array($N).fill("...")'
+          - pattern: 'new Array($N).fill("...")'
+          - pattern: 'Array.from({length: $N}).fill("...")'
+          - pattern: 'Array.from({length: $N}, (...) => "...")'
+      # The length of a real array: of map / filter / split output, of an
+      # array literal, or of a name bound from one. The length of request data
+      # is not one: {"length": "1 OR 1=1"} in JSON, or ?ids[length]=... through
+      # qs, makes it a string the caller chose.
+      - patterns:
+          - pattern-either:
+              - pattern: $X.$ARRAY(...).length
+              - patterns:
+                  - pattern-inside: |
+                      $LIST = $X.$ARRAY(...);
+                      ...
+                  - pattern: $LIST.length
+          - metavariable-regex:
+              metavariable: $ARRAY
+              regex: ^(map|filter|split)$
+      - pattern: '[...].length'
+      - pattern-either:
+          - pattern: '$LIST.map(() => "...")'
+          - pattern: '$LIST.map(($ELEM) => "...")'
+          - pattern: '$LIST.map(($ELEM, $IDX) => "...")'
+          - pattern: '$LIST.map(($ELEM, $IDX) => "..." + $IDX)'
+          - pattern: '$LIST.map(($ELEM, $IDX) => `...${$IDX}...`)'
+      - patterns:
+          - pattern-either:
+              - pattern: '$LIST.map(($ELEM, $IDX) => "..." + ($IDX + $NUM))'
+              - pattern: '$LIST.map(($ELEM, $IDX) => `...${$IDX + $NUM}...`)'
+          - metavariable-regex:
+              metavariable: $NUM
+              regex: ^\d+$
+      # A lookup in a const object of literals, with a literal fallback.
+      - patterns:
+          - pattern-inside: |
+              const $MAP = $OBJ;
+              ...
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: (?s)^(?:Object\.freeze\()?\{\s*(?:(?:[\w$]+|'[^'\\]*'|"[^"\\]*")\s*:\s*(?:'[^'\\]*'|"[^"\\]*"|-?\d+(?:\.\d+)?|true|false|null)\s*,?\s*)*\}\)?(?:\s+as\s+const)?$
+          - pattern-either:
+              - pattern: '$MAP[$KEY] ?? "..."'
+              - pattern: '$MAP[$KEY] || "..."'
+      # A call to a helper of this file, declared before the call, that is one
+      # literal-map lookup with a literal fallback:
+      #   function sortColumn(s) { return SORT_MAP[s] ?? 'id'; }
+      # Only that one-statement shape: a file-wide search of every function's
+      # returns made the rule superlinear on large route files (a 2k-line file
+      # timed out at 30 s), so a helper with any other body is not cleaned.
+      - patterns:
+          - pattern-inside: |
+              const $MAP = $OBJ;
+              ...
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: (?s)^(?:Object\.freeze\()?\{\s*(?:(?:[\w$]+|'[^'\\]*'|"[^"\\]*")\s*:\s*(?:'[^'\\]*'|"[^"\\]*"|-?\d+(?:\.\d+)?|true|false|null)\s*,?\s*)*\}\)?(?:\s+as\s+const)?$
+          - pattern-either:
+              - pattern-inside: |
+                  function $HELPER($ARG) {
+                    return $MAP[$ARG] ?? "...";
+                  }
+                  ...
+              - pattern-inside: |
+                  function $HELPER($ARG) {
+                    return $MAP[$ARG] || "...";
+                  }
+                  ...
+          - pattern: $HELPER(...)
+      # An identifier allowlist (a constant name, or an array literal of string
+      # literals): the value is rejected (return or throw, the check alone or an operand of `||`, never
+      # under `&&`), or reset to a literal, or a ternary picks a literal.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($V)) $BODY
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$SET.$HAS($V)) $BODY
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V) || $GUARD_OR) $BODY
+                  ...
+          - metavariable-pattern:
+              metavariable: $BODY
+              patterns:
+                - pattern-either:
+                    - pattern: return ...;
+                    - pattern: throw $ERR;
+                - pattern-not-inside: function $EXIT_FN(...) { ... }
+                - pattern-not-inside: function (...) { ... }
+                - pattern-not-inside: (...) => $EXIT_ARROW
+                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                - pattern-not-inside: for (...) $EXIT_STMT
+                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
+          - pattern: $V
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if (!$SET.$HAS($V)) $V = "...";
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$SET.$HAS($V)) $V = "...";
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V) || $GUARD_OR) $V = "...";
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V)) {
+                    $V = "...";
+                  }
+                  ...
+              - pattern-inside: |
+                  if ($GUARD_OR || !$SET.$HAS($V)) {
+                    $V = "...";
+                  }
+                  ...
+              - pattern-inside: |
+                  if (!$SET.$HAS($V) || $GUARD_OR) {
+                    $V = "...";
+                  }
+                  ...
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
+          - pattern: $V
+      - patterns:
+          - pattern: '$SET.$HAS($V) ? $V : "..."'
+          - metavariable-regex:
+              metavariable: $HAS
+              regex: ^(has|includes)$
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
+    pattern-sinks:
+      - patterns:
+          - pattern: $DB.$METHOD($Q, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
+          # A config object carries its values apart from the text (pg's
+          # { text, values }, a GraphQL client's options), inline or bound to
+          # a name first. Its text field is a sink of its own, below.
+          - pattern-not: '$DB.$METHOD({...}, ...)'
+          - pattern-not-inside: |
+              $Q = {...};
+              ...
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: '$DB.$METHOD({..., text: $Q, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|execute|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
+          - focus-metavariable: $Q
+      # The same text field when the config object is bound to a name first
+      # and then passed to the query: the finding is on the text.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $OBJ = {..., text: $Q, ...};
+                  ...
+                  <... $DB.$METHOD($OBJ, ...) ...>;
+              - pattern-inside: |
+                  $OBJ = {..., text: $Q, ...};
+                  ...
+                  $RESULT = <... $DB.$METHOD($OBJ, ...) ...>;
+              - pattern-inside: |
+                  $OBJ = {..., text: $Q, ...};
+                  ...
+                  return <... $DB.$METHOD($OBJ, ...) ...>;
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|execute|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
+          - pattern: $Q
+      # .execute is a common method name: only SQL text counts there, or a
+      # receiver named like a database connection.
+      - patterns:
+          - pattern: $DB.execute($Q, ...)
+          - pattern-not: '$DB.execute({...}, ...)'
+          - pattern-not-inside: |
+              $Q = {...};
+              ...
+          - pattern-either:
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $Q
+                      regex: (?is)^[\s(]*[`'"][\s(]*(select|insert|update|delete|with|merge|replace|create|alter|drop|truncate|call|exec)\b
+                  - pattern: $DB.execute($Q, ...)
+              - patterns:
+                  - metavariable-regex:
+                      metavariable: $DB
+                      regex: (?i)^(.*\.)?\w*(db|database|pool|conn|connection|client|mysql|pg|sql|knex|sequelize|tx|trx|transaction)$
+                  - pattern: $DB.execute($Q, ...)
+          - focus-metavariable: $Q
+    metadata:
+      category: injection
+      cwe: CWE-89
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        SQL query built from request input.
+      fendix_remediation: >-
+        Request input reaches the text of a SQL query, so it can change the query.
+        Pass the value as a bound parameter: a placeholder with a values array
+        (pool.query('... WHERE id = $1', [id])), or a parameterized tagged template
+        (sql`...`, Prisma.sql, prisma.$queryRaw`...`). Never build the query text by
+        concatenation or an untagged template literal.
+      fendix_reachability: taint
+
+  - id: js-sqli-sink
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: WARNING
+    message: >-
+      SQL query text built by concatenation or an untagged template literal from a
+      non-constant value. Pass the value as a bound parameter instead.
+    patterns:
+      - pattern: $DB.$METHOD($Q, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(query|execute|raw|whereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|\$queryRawUnsafe|\$executeRawUnsafe|unsafe)$
+      - metavariable-regex:
+          metavariable: $Q
+          regex: (?is)^[\s(]*[`'"][\s(]*(select|insert|update|delete|with|merge|replace|create|alter|drop|truncate|call|exec)\b
+      # Built by concatenation or an untagged template literal.
+      - metavariable-pattern:
+          metavariable: $Q
+          pattern-either:
+            - pattern: '`...${$I}...`'
+            - pattern: $A + $B
+      # From something that is not a constant: Semgrep's constant propagation
+      # folds a template or a concatenation of const strings to "...".
+      - metavariable-pattern:
+          metavariable: $Q
+          patterns:
+            - pattern-not: '"..."'
+            - pattern: $Q
+      - pattern-not-inside: |
+          const $Q = "...";
+          ...
+      - pattern-not: $DB.$METHOD("...", ...)
+    metadata:
+      category: injection
+      cwe: CWE-89
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        SQL query text built from a non-constant value.
+      fendix_remediation: >-
+        The text of this SQL query is built by concatenation or an untagged template
+        literal from a value that is not a constant. If any caller passes request
+        input, it can change the query. Pass the value as a bound parameter: a
+        placeholder with a values array, or a parameterized tagged template
+        (sql`...`, Prisma.sql).
+
+  - id: js-cmdi-taint
+    mode: taint
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: ERROR
+    message: >-
+      Request input reaches a shell command. Run the program with execFile or
+      spawn and an argument array, without a shell.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: Number(...)
+          - pattern: parseInt(...)
+          - pattern: parseFloat(...)
+          - pattern: Math.floor(...)
+          - pattern: Math.round(...)
+          - pattern: Boolean(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $CP = require("$MOD");
+                          ...
+                      - pattern-inside: |
+                          import * as $CP from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          import $CP from "$MOD";
+                          ...
+                  - pattern-either:
+                      - pattern: $CP.exec($C, ...)
+                      - pattern: $CP.execSync($C, ...)
+              - pattern: require("$MOD").exec($C, ...)
+              - pattern: require("$MOD").execSync($C, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          const {..., $FN, ...} = require("$MOD");
+                          ...
+                      - pattern-inside: |
+                          import {..., $FN, ...} from "$MOD";
+                          ...
+                  - metavariable-regex:
+                      metavariable: $FN
+                      regex: ^(exec|execSync)$
+                  - pattern: $FN($C, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          const {..., $FN, ...} = require("$MOD");
+                          ...
+                      - pattern-inside: |
+                          import {..., $FN, ...} from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          $FN = require("$MOD").exec;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $FN
+                      regex: ^(exec|execSync)$
+                  - pattern-either:
+                      - pattern-inside: |
+                          $RUN = promisify($FN);
+                          ...
+                      - pattern-inside: |
+                          $RUN = $UTIL.promisify($FN);
+                          ...
+                  - pattern: $RUN($C, ...)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $CP = require("$MOD");
+                          ...
+                      - pattern-inside: |
+                          import * as $CP from "$MOD";
+                          ...
+                      - pattern-inside: |
+                          import $CP from "$MOD";
+                          ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $RUN = promisify($CP.exec);
+                          ...
+                      - pattern-inside: |
+                          $RUN = $UTIL.promisify($CP.exec);
+                          ...
+                  - pattern: $RUN($C, ...)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(node:)?child_process$
+          - focus-metavariable: $C
+      # spawn, spawnSync, execFile or execFileSync with shell: true runs its
+      # command line through a shell.
+      - patterns:
+          - pattern-either:
+              - pattern: '$SPAWN($C, {..., shell: true, ...})'
+              - pattern: '$SPAWN($C, $ARGS, {..., shell: true, ...})'
+              - pattern: '$CP.$SPAWN($C, {..., shell: true, ...})'
+              - pattern: '$CP.$SPAWN($C, $ARGS, {..., shell: true, ...})'
+          - metavariable-regex:
+              metavariable: $SPAWN
+              regex: ^(spawn|spawnSync|execFile|execFileSync)$
+          - focus-metavariable: $C
+      # A shell given the command line: spawn("sh", ["-c", cmd]).
+      - patterns:
+          - pattern-either:
+              - pattern: '$SPAWN("$SH", [$FLAG, $C, ...], ...)'
+              - pattern: '$CP.$SPAWN("$SH", [$FLAG, $C, ...], ...)'
+          - metavariable-regex:
+              metavariable: $SPAWN
+              regex: ^(spawn|spawnSync|execFile|execFileSync)$
+          - metavariable-regex:
+              metavariable: $SH
+              regex: ^(/bin/|/usr/bin/)?(sh|bash|zsh|dash|ksh)$
+          - metavariable-regex:
+              metavariable: $FLAG
+              regex: ^['"]-c['"]$
+          - focus-metavariable: $C
+    metadata:
+      category: injection
+      cwe: CWE-78
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        Shell command built from request input.
+      fendix_remediation: >-
+        Request input reaches a command that child_process runs through a shell
+        (exec, execSync, their promisified forms, or spawn with shell: true), so
+        shell metacharacters in it run as commands. Run the program with execFile or
+        spawn and pass the input as an element of the argument array, with no shell;
+        or check it against an allowlist first.
+      fendix_reachability: taint
+
+  - id: js-cmdi-sink
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: WARNING
+    message: >-
+      A shell command built from a non-constant value is passed to child_process
+      exec or execSync. Use execFile or spawn with an argument array instead.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $CP = require("$MOD");
+                      ...
+                  - pattern-inside: |
+                      import * as $CP from "$MOD";
+                      ...
+                  - pattern-inside: |
+                      import $CP from "$MOD";
+                      ...
+              - pattern-either:
+                  - pattern: $CP.exec($C, ...)
+                  - pattern: $CP.execSync($C, ...)
+          - pattern: require("$MOD").exec($C, ...)
+          - pattern: require("$MOD").execSync($C, ...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const {..., $FN, ...} = require("$MOD");
+                      ...
+                  - pattern-inside: |
+                      import {..., $FN, ...} from "$MOD";
+                      ...
+              - metavariable-regex:
+                  metavariable: $FN
+                  regex: ^(exec|execSync)$
+              - pattern: $FN($C, ...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const {..., $FN, ...} = require("$MOD");
+                      ...
+                  - pattern-inside: |
+                      import {..., $FN, ...} from "$MOD";
+                      ...
+                  - pattern-inside: |
+                      $FN = require("$MOD").exec;
+                      ...
+              - metavariable-regex:
+                  metavariable: $FN
+                  regex: ^(exec|execSync)$
+              - pattern-either:
+                  - pattern-inside: |
+                      $RUN = promisify($FN);
+                      ...
+                  - pattern-inside: |
+                      $RUN = $UTIL.promisify($FN);
+                      ...
+              - pattern: $RUN($C, ...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $CP = require("$MOD");
+                      ...
+                  - pattern-inside: |
+                      import * as $CP from "$MOD";
+                      ...
+                  - pattern-inside: |
+                      import $CP from "$MOD";
+                      ...
+              - pattern-either:
+                  - pattern-inside: |
+                      $RUN = promisify($CP.exec);
+                      ...
+                  - pattern-inside: |
+                      $RUN = $UTIL.promisify($CP.exec);
+                      ...
+              - pattern: $RUN($C, ...)
+      - metavariable-regex:
+          metavariable: $MOD
+          regex: ^(node:)?child_process$
+      - pattern-not-inside: |
+          const $C = "...";
+          ...
+      - pattern-not: $RUN("...", ...)
+      - pattern-not: $CP.exec("...", ...)
+      - pattern-not: $CP.execSync("...", ...)
+      # Some part of the command line is not a constant: Semgrep's constant
+      # propagation folds a template or a concatenation of const strings to "...".
+      - metavariable-pattern:
+          metavariable: $C
+          patterns:
+            - pattern-not: '"..."'
+            - pattern: $C
+    metadata:
+      category: injection
+      cwe: CWE-78
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Shell command built from a non-constant value.
+      fendix_remediation: >-
+        child_process exec or execSync runs this command line through a shell, and
+        the line is built from a value that is not a constant. If any caller passes
+        request input, shell metacharacters in it run as commands. Run the program
+        with execFile or spawn and pass the value as an element of the argument
+        array, with no shell.
+
+  - id: js-ssti-taint
+    mode: taint
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: ERROR
+    message: >-
+      Request input is used as a template, not as data for one. Render a fixed
+      template and pass the input only as a variable.
+    pattern-sources:
+      # Express: req.query, req.params, req.body, req.headers, req.cookies,
+      # req.get(...); Next.js: request.nextUrl.searchParams, request.json(),
+      # request.formData(), request.headers. A request named req or request.
+      - patterns:
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+          - metavariable-regex:
+              metavariable: $R
+              regex: ^(req|request)$
+      # NestJS: a parameter bound by @Query(), @Param(), @Body() or @Headers().
+      - patterns:
+          - pattern-either:
+              - pattern-inside: function $F(..., @Query(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Param(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Body(...) $P, ...) { ... }
+              - pattern-inside: function $F(..., @Headers(...) $P, ...) { ... }
+          - pattern: $P
+      # NestJS: the request bound by @Req(), under any name.
+      - patterns:
+          - pattern-inside: function $F(..., @Req(...) $R, ...) { ... }
+          - pattern-either:
+              - pattern: $R.query
+              - pattern: $R.params
+              - pattern: $R.body
+              - pattern: $R.headers
+              - pattern: $R.cookies
+              - pattern: $R.get(...)
+              - pattern: $R.header(...)
+      # Next.js App Router: the request of a route handler, under any name,
+      # and the params of its context argument.
+      - patterns:
+          - pattern-inside: function $M($R, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $R.nextUrl.searchParams
+              - pattern: $R.json()
+              - pattern: $R.formData()
+              - pattern: $R.text()
+              - pattern: $R.headers
+      - patterns:
+          - pattern-inside: function $M($R, $CTX, ...) { ... }
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$
+          - pattern-either:
+              - pattern: $CTX.params
+              - pattern: params
+      # `const { a, b } = (await request.json()) as T`: Semgrep 1.141.0 loses
+      # the binding of a name destructured from a type-asserted value when the
+      # type literal declares the same name, so the names are matched by text.
+      - patterns:
+          - pattern-inside: |
+              const {..., $V, ...} = $E as $T;
+              ...
+          - metavariable-pattern:
+              metavariable: $E
+              patterns:
+                - pattern-either:
+                    - pattern: $R.query
+                    - pattern: $R.params
+                    - pattern: $R.body
+                    - pattern: $R.headers
+                    - pattern: $R.cookies
+                    - pattern: $R.get(...)
+                    - pattern: $R.header(...)
+                    - pattern: $R.nextUrl.searchParams
+                    - pattern: $R.json()
+                    - pattern: $R.formData()
+                    - pattern: $R.text()
+                - metavariable-regex:
+                    metavariable: $R
+                    regex: ^(req|request)$
+          - pattern: $W
+          - metavariable-comparison:
+              comparison: str($V) == str($W)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $ENGINE.render($T, ...)
+              - pattern: $ENGINE.compile($T, ...)
+              - pattern: $ENGINE.renderString($T, ...)
+              - pattern: $ENGINE.template($T, ...)
+              - pattern: new $ENGINE.Template($T, ...)
+          - metavariable-regex:
+              metavariable: $ENGINE
+              regex: ^(ejs|pug|jade|Handlebars|handlebars|hbs|nunjucks|Mustache|mustache|_|lodash|dot|doT|eta|Eta|Sqrl|squirrelly|Twig|twig|liquid)$
+          - focus-metavariable: $T
+    metadata:
+      category: injection
+      cwe: [CWE-1336, CWE-94]
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        Template source taken from request input.
+      fendix_remediation: >-
+        Request input reaches the template argument of a template engine
+        (ejs.render, pug.compile, Handlebars.compile, nunjucks.renderString, ...),
+        so it is compiled as template code and can run arbitrary JavaScript on the
+        server. Render a fixed template from a file or a constant and pass the input
+        only in the data object.
+      fendix_reachability: taint
+
+  - id: js-ssti-sink
+    languages: [javascript, typescript]
+    paths:
+      exclude:
+        - "**/__tests__/**"
+        - "**/__mocks__/**"
+        - "**/__fixtures__/**"
+        - "**/mocks/**"
+        - "**/mock/**"
+        - "**/fixtures/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/spec/**"
+        - "**/e2e/**"
+        - "**/cypress/**"
+        - "*.test.*"
+        - "*.spec.*"
+        - "*.e2e-spec.*"
+        - "*.cy.*"
+    severity: WARNING
+    message: >-
+      A function's parameter is compiled as a template. If a caller passes request
+      input, it runs as template code; render a fixed template and pass the value
+      as data.
+    patterns:
+      - pattern-either:
+          - pattern-inside: function $F(..., $P, ...) { ... }
+          - pattern-inside: (..., $P, ...) => $BODY
+      - pattern-either:
+          - pattern: $ENGINE.render($P, ...)
+          - pattern: $ENGINE.compile($P, ...)
+          - pattern: $ENGINE.renderString($P, ...)
+          - pattern: $ENGINE.template($P, ...)
+          - pattern: new $ENGINE.Template($P, ...)
+      - metavariable-regex:
+          metavariable: $ENGINE
+          regex: ^(ejs|pug|jade|Handlebars|handlebars|hbs|nunjucks|Mustache|mustache|_|lodash|dot|doT|eta|Eta|Sqrl|squirrelly|Twig|twig|liquid)$
+      - pattern-not-inside: |
+          const $P = "...";
+          ...
+      - pattern-not: $ENGINE.render("...", ...)
+      - pattern-not: $ENGINE.compile("...", ...)
+    metadata:
+      category: injection
+      cwe: [CWE-1336, CWE-94]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Template source taken from a function parameter.
+      fendix_remediation: >-
+        This function compiles its parameter as a template (ejs.render, pug.compile,
+        Handlebars.compile, ...). If any caller passes request input, it runs as
+        template code on the server. Render a fixed template from a file or a
+        constant and pass the value only in the data object.

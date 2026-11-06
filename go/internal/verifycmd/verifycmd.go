@@ -434,7 +434,7 @@ func isFileFinding(f *models.Finding) bool {
 		base = ep[:i]
 	}
 	// Recognise common SAST-relevant extensions.
-	for _, ext := range []string{".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rb", ".java", ".php", ".env", ".yaml", ".yml", ".json"} {
+	for _, ext := range []string{".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".go", ".rb", ".java", ".php", ".env", ".yaml", ".yml", ".json"} {
 		if strings.HasSuffix(base, ext) {
 			return true
 		}
@@ -444,6 +444,33 @@ func isFileFinding(f *models.Finding) bool {
 		return true
 	}
 	return false
+}
+
+// isSemgrepRuleFinding reports whether f came from a bundled Semgrep rule: its
+// tier says so (semgrep_shim, or semgrep_taint once a language gate opens), or
+// its rule id is a -taint / -sink rule of the JS/TS, Java or Go packs, which
+// covers a baseline whose tier was not recorded.
+func isSemgrepRuleFinding(f *models.Finding) bool {
+	if f.SourceTier.IsSemgrep() {
+		return true
+	}
+	id := f.RuleID
+	packed := strings.HasPrefix(id, "js-") || strings.HasPrefix(id, "java-") || strings.HasPrefix(id, "go-")
+	return packed && (strings.HasSuffix(id, "-taint") || strings.HasSuffix(id, "-sink"))
+}
+
+func semgrepRuleLabel(f *models.Finding) string {
+	if f.RuleID != "" {
+		return f.RuleID
+	}
+	return f.ID
+}
+
+func semgrepTierLabel(f *models.Finding) string {
+	if f.SourceTier != "" {
+		return "tier " + string(f.SourceTier)
+	}
+	return "tier not recorded"
 }
 
 // ─── per-category verifiers ─────────────────────────────────────────
@@ -629,7 +656,36 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 		return
 	}
 
+	// A Semgrep rule's finding (the JS/TS, Java and Go packs, taint and sink
+	// rules alike) is kept, with its own reason, rather than falling through
+	// to the generic deferral below. It comes first: another scanner (the
+	// secrets re-test below) never re-tests a Semgrep-tier finding.
+	if isSemgrepRuleFinding(f) {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"%s is a Semgrep rule (%s); verify cannot re-run Semgrep against a single file, so this "+
+				"finding is kept as unconfirmed rather than resolved. Re-run `fendix scan --code <path>` "+
+				"and diff against the baseline for a verdict.",
+			semgrepRuleLabel(f), semgrepTierLabel(f))
+		return
+	}
+
 	if f.Category == "secrets" {
+		// textscan reads more than the secrets scanner does: more extensions
+		// (.mjs, .cjs, ...), and files under node_modules/ or over 1 MiB.
+		// A finding in a file the scanner skips can never be re-emitted, so
+		// its absence says nothing about the file: not resolved. (A skipped
+		// directory counts relative to the scan root, which the re-scan below
+		// does not, because it starts at the file's own directory.)
+		if why := secrets.SkipReason(opts.CodePath, absFile); why != "" {
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf(
+				"the secrets scanner skips %s (%s), so verify cannot re-test this finding and will "+
+					"not call it resolved. Re-run `fendix scan --code <path>` and diff against the "+
+					"baseline for a verdict.",
+				relPath, why)
+			return
+		}
 		// Re-run the native secrets scanner against the file's dir.
 		// (The scanner itself walks; pointing it at the immediate
 		// parent gives a fast, focused re-test.)

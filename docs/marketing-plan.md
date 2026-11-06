@@ -1,11 +1,11 @@
 # Fendix — 90-Day Marketing Plan
 
 > ⚠️ Accuracy figures below are superseded by **[BENCHMARKS.md](../BENCHMARKS.md)**
-> (the reproducible source of truth). Current synthetic corpus: **F1 1.000**
+> (the reproducible source of truth). Current F1 on the Python synthetic corpus, excluding documented known gaps: **1.000**
 > (38/38, reproduced + CI-gated) — v0.26 disclosed one multi-hop SSRF false
 > negative (then 0.987); v0.27 fixed the taint engine, so 1.000 is now
 > legitimate, not the stale v0.11.0 claim. "1.000 recall" elsewhere also refers
-> to the real-world expectation-recall track (44/44 CVE-anchored repos).
+> to the expectation-recall track on the CVE-anchored Python, Node and Go repos (44/44).
 
 > Status: **draft v1**, 2026-05-25
 > Stage assumed: pre-launch (repo private), zero budget, solo operator
@@ -20,7 +20,7 @@
 |---|---|---|
 | Organic OSS launch on HN / Reddit / Lobste.rs | Cold outbound sales | Zero budget, no case studies, security buyers don't take cold |
 | Email capture from day 1 | Closed beta waitlists | Friction kills early adoption; capture interest without gating product |
-| Honest accuracy numbers (0.987 F1 / 1.000 recall / 44/44 real-world) | Cherry-picked 1.000 F1 from v0.11 era | Honesty is the brand; "0 false negatives" is a stronger story than "0 false positives" anyway |
+| Honest accuracy numbers (0.987 F1 on the Juliet-style Python corpus / 1.000 recall on the CVE-anchored Python, Node and Go repos / 44/44) | Cherry-picked 1.000 F1 from the v0.11 era (a Python-only figure that left out the known gaps) | Honesty is the brand; "0 false negatives" is a stronger story than "0 false positives" anyway |
 | GitHub Marketplace listing | Product Hunt | Security tools die on PH; HN is where the target audience reads |
 | Long-form "what we found" content | Generic "5 reasons to use a scanner" blogspam | Differentiation = depth |
 | GitHub Discussions, OWASP local chapters | LinkedIn thought-leadership posting | LinkedIn ≠ DevTool top-of-funnel |
@@ -82,8 +82,8 @@ WEEK   1   2   3   4   5   6   7   8   9   10  11  12  13
 
 You have a real choice here that will shape the launch:
 
-- **Option A — "F1 = 1.000 on labeled corpus" (the v0.11 claim)**. Defensible only if you tune the harness to handle compound multi-endpoint findings (the line 36 issue from today's E2E run). Effort: ~2 hr of work in `scripts/accuracy/run.py`.
-- **Option B — "1.000 synthetic F1 (38/38, reproduced + CI-gated; the v0.26 SSRF FN was fixed in v0.27), 44/44 expectations met on 13 real-world CVE-anchored repos"**. This is what current `main` actually produces (see BENCHMARKS.md) — and unlike the v0.11-era 1.000, it now reproduces and is CI-gated.
+- **Option A — "F1 = 1.000 on labeled corpus" (the v0.11 claim: a Python-only figure that left out the known gaps)**. Defensible only if you tune the harness to handle compound multi-endpoint findings (the line 36 issue from today's E2E run). Effort: ~2 hr of work in `scripts/accuracy/run.py`.
+- **Option B — "1.000 F1 on the Python synthetic corpus, excluding documented known gaps (38/38, reproduced + CI-gated; the v0.26 SSRF FN was fixed in v0.27), 44/44 expectations met on 13 real-world CVE-anchored repos"**. This is what current `main` actually produces (see BENCHMARKS.md) — and unlike the v0.11-era 1.000, it now reproduces and is CI-gated.
 
 **My recommendation: Option B.** Real-world numbers are a stronger story than synthetic corpus perfection. "0 false negatives across 13 CVE-anchored real repos" is what an AppSec engineer actually wants to hear. Update [launch-post.md](launch-post.md) accordingly.
 
@@ -170,7 +170,7 @@ Launch attention dies in 72 hours. Weeks 4–12 are where you either build a fly
 | **Bi-weekly** | Long-form post (architecture / accuracy / "Fendix vs X") | fendix.dev/blog → newsletter → HN/Lobste.rs | 4–6 hr |
 | **Monthly** | Newsletter to email list — release notes + best wild finding of the month + roadmap | Buttondown / ConvertKit | 2 hr |
 | **Monthly** | Public scan of a different top-100 OSS project; write up findings | fendix.dev/blog | 4 hr (incl. responsible disclosure if needed) |
-| **Quarterly** | Accuracy report — re-run the full `scripts/accuracy/run.py` + `scripts/heavy-eval/run.py` on the new release, publish numbers | fendix.dev/accuracy | 1 day |
+| **Quarterly** | Accuracy report — re-run the full `scripts/accuracy/run.py` + `scripts/heavy-eval/run.py` on the new release, publish the Python synthetic corpus and CVE-anchored repo numbers | fendix.dev/accuracy | 1 day |
 
 ### 6.2 Comparison content (the SEO play)
 
@@ -291,7 +291,7 @@ Budget creep red flag: if you find yourself needing >$200/month for tools by Day
 
 | # | Decision | Default if you don't decide | Deadline |
 |---|---|---|---|
-| 1 | Confirm "Option B" headline numbers (0.987 F1 / 1.000 recall / 44/44 real-world) — or have me tune the harness for 1.000 | Option B (honest, defensible) | End of Week 1 |
+| 1 | Confirm "Option B" headline numbers (0.987 F1 on the Juliet-style Python corpus / 1.000 recall on the CVE-anchored Python, Node and Go repos / 44/44) — or have me tune the harness for 1.000 | Option B (honest, defensible) | End of Week 1 |
 | 2 | Launch week (which Tuesday)? | Tuesday of Week 3 of this plan | Week 1 |
 | 3 | Email tool: Buttondown vs ConvertKit | Buttondown (simpler, OSS-friendly) | Week 1 |
 | 4 | Public fendix.dev landing page design — minimalist HTML, or use a template (e.g. [tabler.io free](https://tabler.io))? | Minimalist hand-rolled HTML (you control it; matches the brand) | Week 1 |

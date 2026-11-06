@@ -1,0 +1,3558 @@
+# Java / Spring web pack: reflected XSS, SSRF, path traversal and open
+# redirect as taint rules from Spring MVC and servlet request input, plus a
+# shape rule per class for a sink fed by a method's own argument.
+#
+# Written in-house for Fendix; see docs/semgrep-rules.md. The request sources
+# and the number sanitizers are the blocks described at the top of
+# java-injection.yaml, repeated word for word (Semgrep cannot share a block
+# between rules); TestJavaTaintRulesShareTheirBlocks keeps the copies equal.
+#
+# A guard (a host check, a containment check, a local-path check) counts only
+# when the branch taken on a failing check ends with a direct return or
+# throw (for a redirect, also a direct assignment of a literal to the target,
+# followed by nothing but literal assignments, in an if with no else whose
+# every startsWith("//") tests the target), not under an &&; or when the use
+# sits inside the then-branch of a passing check with no else. A String path
+# is contained only when it is itself the canonical or normalized path.
+# java-ssrf-sink and java-open_redirect-sink carry the same guards as
+# negations on their parameter; TestJavaSinkRulesShareTheirTaintRulesBlocks
+# keeps those copies equal.
+#
+# Every rule skips test, fixture and mock code (the paths block at the top of
+# each rule; TestJavaRulesShareTheTestPathExcludes keeps the copies equal).
+#
+# SSRF, path traversal and open redirect are category injection, as the
+# textscan Java rules already file them, so a finding of both collapses into
+# one.
+rules:
+  - id: java-xss-taint
+    mode: taint
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: WARNING
+    message: >-
+      Request input written into an HTML response without encoding (reflected
+      XSS). A request value reaches the body of a text/html response: the
+      return value of a @ResponseBody handler that produces text/html, or the
+      servlet response writer (directly, or through a method of this class that
+      writes it). Encode it with HtmlUtils.htmlEscape or Encode.forHtml, or
+      render it through a template engine that escapes by default.
+    metadata:
+      category: xss
+      cwe: CWE-79
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_reachability: taint
+      fendix_title: Request input written into an HTML response without encoding.
+      fendix_remediation: >-
+        HTML-encode the value where it is written (HtmlUtils.htmlEscape,
+        Encode.forHtml or StringEscapeUtils.escapeHtml4), or render the page
+        with a template engine that escapes by default, such as Thymeleaf
+        th:text.
+    pattern-sources:
+      # A request-bound parameter of a handler: annotated, or a plain String
+      # parameter of a request-mapping method, which Spring binds as a request
+      # parameter. Not a number, boolean, date or UUID, nor a framework object.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $SRT $SM(..., @$SANN(...) $ST $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      @$SMAP(...)
+                      $SRT $SM(..., String $SP, ...) { ... }
+                  # Annotated otherwise (@SessionAttribute, @AuthenticationPrincipal):
+                  # not a request parameter.
+                  - pattern-not-inside: |
+                      $SRT $SM(..., @$SOTHER(...) String $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          - pattern: $SP
+      # One call deep: the parameter of a method of the same class (a direct
+      # member, not a nested class's) that a handler calls with such a value at
+      # that position, matched by name and by the number of arguments (1 to 3).
+      # Open-source Semgrep follows taint within one method; from this source it
+      # follows the called method's own body, to the sink inside it. The argument
+      # must be the value itself or a concatenation or format of it (see
+      # $SARG below), and the handler must not reassign the parameter.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          # The handler reassigns the value before passing it (file = getName(file)).
+          - pattern-not-inside: |
+              class $SC {
+                ...
+                $SRT $SM(...) {
+                  ...
+                  $SP = $SREASSIGNED;
+                  ...
+                }
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SARG
+              regex: ^(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*")(\s*\+\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*$|^String\.format\(\s*"[^"]*"(\s*,\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*\s*\)$
+          - metavariable-pattern:
+              metavariable: $SARG
+              pattern: $SP
+          - metavariable-regex:
+              metavariable: $SHT
+              regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+          - pattern: $SQ
+      # The servlet request.
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (ServletRequest $SREQ).$SGET(...)
+              - patterns:
+                  - pattern: $SREQ.$SGET(...)
+                  - metavariable-regex:
+                      metavariable: $SREQ
+                      regex: ^(request|req|httpRequest|servletRequest|httpServletRequest)$
+          - metavariable-regex:
+              metavariable: $SGET
+              regex: ^(getParameter|getParameterValues|getHeader|getQueryString|getInputStream|getReader)$
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: Integer.parseInt(...)
+          - pattern: Integer.valueOf(...)
+          - pattern: Long.parseLong(...)
+          - pattern: Long.valueOf(...)
+          - pattern: UUID.fromString(...)
+      - pattern-either:
+          - pattern: HtmlUtils.htmlEscape(...)
+          - pattern: HtmlUtils.htmlEscapeDecimal(...)
+          - pattern: HtmlUtils.htmlEscapeHex(...)
+          - pattern: StringEscapeUtils.escapeHtml4(...)
+          - pattern: StringEscapeUtils.escapeHtml3(...)
+          - pattern: StringEscapeUtils.escapeXml10(...)
+          - pattern: StringEscapeUtils.escapeXml11(...)
+          - pattern: Encode.forHtml(...)
+          - pattern: Encode.forHtmlContent(...)
+          - pattern: Encode.forHtmlAttribute(...)
+          - pattern: Encode.forXml(...)
+          - pattern: ESAPI.encoder().encodeForHTML(...)
+          - pattern: ESAPI.encoder().encodeForHTMLAttribute(...)
+          - pattern: HtmlEscapers.htmlEscaper().escape(...)
+          - pattern: Jsoup.clean(...)
+      # A Thymeleaf template named by a constant escapes what it renders
+      # (th:text), so its output is not the request value.
+      - patterns:
+          - pattern-either:
+              - pattern: (TemplateEngine $TE).process("...", ...)
+              - pattern: (SpringTemplateEngine $TE).process("...", ...)
+              - pattern: (ITemplateEngine $TE).process("...", ...)
+              - patterns:
+                  - pattern: $TE.process("...", ...)
+                  - metavariable-regex:
+                      metavariable: $TE
+                      regex: (?i)^\w*templateEngine$
+    pattern-sinks:
+      # The return value of a handler whose response body is text/html.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$MAP(..., produces = MediaType.TEXT_HTML_VALUE, ...)
+                  $RT $M(...) { ... }
+              - pattern-inside: |
+                  @$MAP(..., produces = "=~/^text\/html/", ...)
+                  $RT $M(...) { ... }
+              - pattern-inside: |
+                  @$MAP(..., produces = {..., MediaType.TEXT_HTML_VALUE, ...}, ...)
+                  $RT $M(...) { ... }
+              - pattern-inside: |
+                  @$MAP(..., produces = {..., "=~/^text\/html/", ...}, ...)
+                  $RT $M(...) { ... }
+          - pattern-either:
+              - pattern-inside: |
+                  @RestController
+                  class $C { ... }
+              - pattern-inside: |
+                  @ResponseBody
+                  class $C { ... }
+              - pattern-inside: |
+                  @ResponseBody
+                  $RT $M(...) { ... }
+          - pattern: return $X;
+          - focus-metavariable: $X
+      # ResponseEntity.ok().contentType(MediaType.TEXT_HTML).body(value)
+      - patterns:
+          - pattern: $BUILDER.contentType(MediaType.TEXT_HTML).body($X)
+          - focus-metavariable: $X
+      # The servlet response writer, also through a variable.
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletResponse $RESP).getWriter().$W($X, ...)
+              - pattern: (ServletResponse $RESP).getWriter().$W($X, ...)
+              - patterns:
+                  - pattern: $RESP.getWriter().$W($X, ...)
+                  - metavariable-regex:
+                      metavariable: $RESP
+                      regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $WT $OUT = $RESP.getWriter();
+                          ...
+                      - pattern-inside: |
+                          $OUT = $RESP.getWriter();
+                          ...
+                  - pattern: $OUT.$W($X, ...)
+          - metavariable-regex:
+              metavariable: $W
+              regex: ^(write|print|println|printf|format|append)$
+          # A response declared JSON is not rendered as HTML.
+          - pattern-not-inside: |
+              $JRESP.setContentType("=~/json/");
+              ...
+          - pattern-not-inside: |
+              $JRESP.setContentType(MediaType.APPLICATION_JSON_VALUE);
+              ...
+          - pattern-not-inside: |
+              $JRESP.setHeader("Content-Type", "=~/json/");
+              ...
+          - pattern-not-inside: |
+              @$JMAP(..., produces = MediaType.APPLICATION_JSON_VALUE, ...)
+              $JRT $JM(...) { ... }
+          - pattern-not-inside: |
+              @$JMAP(..., produces = "=~/json/", ...)
+              $JRT $JM(...) { ... }
+          - focus-metavariable: $X
+
+  - id: java-xss-sink
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: WARNING
+    message: >-
+      HTML built from a method argument and written to the servlet response
+      without encoding. This method writes markup containing its own parameter
+      to HttpServletResponse.getWriter(), so whatever its callers pass is
+      rendered as HTML. Encode the value with HtmlUtils.htmlEscape or
+      Encode.forHtml.
+    metadata:
+      category: xss
+      cwe: CWE-79
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: HTML built from a method argument and written to the response without encoding.
+      fendix_remediation: >-
+        HTML-encode the argument where it is written (HtmlUtils.htmlEscape,
+        Encode.forHtml or StringEscapeUtils.escapeHtml4), or render the page
+        with a template engine that escapes by default. Callers in other files
+        may pass request input.
+    patterns:
+      # A non-private method, so another class can call it, and its parameter $Q,
+      # a string that carries no request annotation (the -taint rule covers those).
+      - pattern-inside: |
+          $RT $M(..., $PT $Q, ...) { ... }
+      - pattern-not-inside: |
+          private $RT $M(...) { ... }
+      - pattern-not-inside: |
+          $RT $M(..., @$ANN(...) $PT $Q, ...) { ... }
+      - metavariable-regex:
+          metavariable: $PT
+          regex: ^(String|CharSequence|Object)$
+      - pattern-either:
+          - pattern: (HttpServletResponse $RESP).getWriter().$W($HTML, ...)
+          - pattern: (ServletResponse $RESP).getWriter().$W($HTML, ...)
+          - patterns:
+              - pattern: $RESP.getWriter().$W($HTML, ...)
+              - metavariable-regex:
+                  metavariable: $RESP
+                  regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+      - metavariable-regex:
+          metavariable: $W
+          regex: ^(write|print|println|append)$
+      # Markup concatenated with the parameter itself, not with an encoding of it.
+      - metavariable-pattern:
+          metavariable: $HTML
+          patterns:
+            - pattern-either:
+                - pattern: '"$TAG" + $Q'
+                - pattern: '"$TAG" + $Q + $REST'
+            - metavariable-regex:
+                metavariable: $TAG
+                regex: (?s).*<[A-Za-z!/]
+      # A module constant of that name is not a caller's argument.
+      - pattern-not-inside: |
+          class $CLS {
+            ...
+            static final String $Q = "...";
+            ...
+          }
+      - pattern-not: $RESP.getWriter().$W("...", ...)
+      # A response declared JSON is not rendered as HTML.
+      - pattern-not-inside: |
+          $JRESP.setContentType("=~/json/");
+          ...
+      - pattern-not-inside: |
+          $JRESP.setContentType(MediaType.APPLICATION_JSON_VALUE);
+          ...
+      - pattern-not-inside: |
+          $JRESP.setHeader("Content-Type", "=~/json/");
+          ...
+      - pattern-not-inside: |
+          @$JMAP(..., produces = MediaType.APPLICATION_JSON_VALUE, ...)
+          $JRT $JM(...) { ... }
+      - pattern-not-inside: |
+          @$JMAP(..., produces = "=~/json/", ...)
+          $JRT $JM(...) { ... }
+
+  - id: java-ssrf-taint
+    mode: taint
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: ERROR
+    message: >-
+      Outbound request to a URL taken from request input (SSRF). A request
+      value chooses the URL a RestTemplate, WebClient, HttpClient,
+      URLConnection or Apache HttpClient request goes to (directly, or through
+      a method of this class that sends it), so the caller can reach internal
+      services. Check the host against an allowlist before sending.
+    metadata:
+      category: injection
+      cwe: CWE-918
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_reachability: taint
+      fendix_title: Outbound request to a URL taken from request input.
+      fendix_remediation: >-
+        Parse the URL, then check its scheme and host against an allowlist
+        (ALLOWED_HOSTS.contains(URI.create(url).getHost())) before sending, or
+        build the URL from a fixed base and pass request input only as a path
+        segment or query parameter.
+    pattern-sources:
+      # A request-bound parameter of a handler: annotated, or a plain String
+      # parameter of a request-mapping method, which Spring binds as a request
+      # parameter. Not a number, boolean, date or UUID, nor a framework object.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $SRT $SM(..., @$SANN(...) $ST $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      @$SMAP(...)
+                      $SRT $SM(..., String $SP, ...) { ... }
+                  # Annotated otherwise (@SessionAttribute, @AuthenticationPrincipal):
+                  # not a request parameter.
+                  - pattern-not-inside: |
+                      $SRT $SM(..., @$SOTHER(...) String $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          - pattern: $SP
+      # One call deep: the parameter of a method of the same class (a direct
+      # member, not a nested class's) that a handler calls with such a value at
+      # that position, matched by name and by the number of arguments (1 to 3).
+      # Open-source Semgrep follows taint within one method; from this source it
+      # follows the called method's own body, to the sink inside it. The argument
+      # must be the value itself or a concatenation or format of it (see
+      # $SARG below), and the handler must not reassign the parameter.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          # The handler reassigns the value before passing it (file = getName(file)).
+          - pattern-not-inside: |
+              class $SC {
+                ...
+                $SRT $SM(...) {
+                  ...
+                  $SP = $SREASSIGNED;
+                  ...
+                }
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SARG
+              regex: ^(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*")(\s*\+\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*$|^String\.format\(\s*"[^"]*"(\s*,\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*\s*\)$
+          - metavariable-pattern:
+              metavariable: $SARG
+              pattern: $SP
+          - metavariable-regex:
+              metavariable: $SHT
+              regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+          - pattern: $SQ
+      # The servlet request.
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (ServletRequest $SREQ).$SGET(...)
+              - patterns:
+                  - pattern: $SREQ.$SGET(...)
+                  - metavariable-regex:
+                      metavariable: $SREQ
+                      regex: ^(request|req|httpRequest|servletRequest|httpServletRequest)$
+          - metavariable-regex:
+              metavariable: $SGET
+              regex: ^(getParameter|getParameterValues|getHeader|getQueryString|getInputStream|getReader)$
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: Integer.parseInt(...)
+          - pattern: Integer.valueOf(...)
+          - pattern: Long.parseLong(...)
+          - pattern: Long.valueOf(...)
+          - pattern: UUID.fromString(...)
+      # A URL whose scheme and host are fixed before input is appended: a literal
+      # "https://host/...", a relative "/..." (resolved against the client's base
+      # URL), or a field or constant named like a base URL (an @Value property)
+      # followed by a "/", "?" or "#" literal. Input then chooses only the path or
+      # the query.
+      - patterns:
+          - pattern-either:
+              - pattern: $GBASE + $GR1
+              - pattern: $GBASE + $GR1 + $GR2
+              - pattern: $GBASE + $GR1 + $GR2 + $GR3
+              - pattern: String.format($GBASE, ...)
+          - metavariable-regex:
+              metavariable: $GBASE
+              regex: ^"(https?://[^/"%{]+/|/[^/"\\])
+      - patterns:
+          - pattern-either:
+              - pattern: $GBASE + "$GSEP" + $GR1
+              - pattern: $GBASE + "$GSEP" + $GR1 + $GR2
+              - pattern: $GBASE + "$GSEP" + $GR1 + $GR2 + $GR3
+          - metavariable-regex:
+              metavariable: $GSEP
+              regex: ^[/?#]
+          - metavariable-regex:
+              metavariable: $GBASE
+              regex: (?i)^(this\.)?\w*(url|uri|base|root|endpoint)\w*$
+          # A field or constant, not the method's parameter or a local variable.
+          - pattern-not-inside: |
+              $GMRT $GM(..., $GPT $GBASE, ...) { ... }
+          - pattern-not-inside: |
+              $GLT $GBASE = $GINIT;
+              ...
+      # UriComponentsBuilder started from a literal URL with a host, or from a field
+      # or constant: path segments and query parameters do not change the host.
+      - patterns:
+          - pattern: UriComponentsBuilder.$GFROM($GBASE). ... .$GUCALL(...)
+          - metavariable-regex:
+              metavariable: $GFROM
+              regex: ^from(HttpUrl|UriString)$
+          - metavariable-regex:
+              metavariable: $GBASE
+              regex: ^("https?://[^/"]+[^"]*"|(this\.)?[A-Za-z_]\w*)$
+          - pattern-not-inside: |
+              $GMRT $GM(..., $GPT $GBASE, ...) { ... }
+          - pattern-not-inside: |
+              $GLT $GBASE = $GINIT;
+              ...
+      # A host check that exits when it fails, on the URL, on a URI or host
+      # parsed from it, or an exact URL; or a passing check around the use.
+      # The occurrences of the URL after it (or inside it) are clean.
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GV.getHost() ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... URI.create($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... new URI($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... new URL($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GFA.equals($GV) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GV.equals(...) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GV.matches(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GALLOW.contains($GV.getHost())'
+                    - pattern: '!$GALLOW.contains(URI.create($GV).getHost())'
+                    - pattern: '!$GALLOW.contains(new URI($GV).getHost())'
+                    - pattern: '!$GALLOW.contains(new URL($GV).getHost())'
+                    - pattern: '!"...".equals($GV.getHost())'
+                    - pattern: '!"...".equals(URI.create($GV).getHost())'
+                    - pattern: '!"...".equals(new URI($GV).getHost())'
+                    - pattern: '!"...".equals(new URL($GV).getHost())'
+                    - pattern: '!$GV.getHost().equals("...")'
+                    - pattern: '!URI.create($GV).getHost().equals("...")'
+                    - pattern: '!new URI($GV).getHost().equals("...")'
+                    - pattern: '!new URL($GV).getHost().equals("...")'
+                    - pattern: '!"=~/^https?:\/\/[^\/]+/".equals($GV)'
+                    - pattern: '!$GV.equals("=~/^https?:\/\/[^\/]+/")'
+                    - pattern: '!$GV.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GX = URI.create($GV);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = URI.create($GV);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GX = new URI($GV);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = new URI($GV);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GX = new URL($GV);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = new URL($GV);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.contains(...) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GFA.equals(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = URI.create($GV);
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = URI.create($GV);
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = new URI($GV);
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = new URI($GV);
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = new URL($GV);
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = new URL($GV);
+              ...
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GALLOW.contains($GX.getHost())'
+                    - pattern: '!"...".equals($GX.getHost())'
+                    - pattern: '!$GX.getHost().equals("...")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GX = URI.create($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = URI.create($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GX = new URI($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = new URI($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GX = new URL($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = new URL($GV).getHost();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.contains(...) ...>) { ... }
+                  ...
+              - pattern-inside: |
+                  if (<... $GFA.equals(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = URI.create($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = URI.create($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = new URI($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = new URI($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = new URL($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = new URL($GV).getHost();
+              ...
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GALLOW.contains($GX)'
+                    - pattern: '!"...".equals($GX)'
+                    - pattern: '!$GX.equals("...")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) { ... }
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GV.getHost() ...>) { ... }
+              - pattern-inside: |
+                  if (<... URI.create($GV) ...>) { ... }
+              - pattern-inside: |
+                  if (<... new URI($GV) ...>) { ... }
+              - pattern-inside: |
+                  if (<... new URL($GV) ...>) { ... }
+              - pattern-inside: |
+                  if (<... $GFA.equals($GV) ...>) { ... }
+              - pattern-inside: |
+                  if (<... $GV.equals(...) ...>) { ... }
+              - pattern-inside: |
+                  if (<... $GV.matches(...) ...>) { ... }
+          - pattern-not-inside: |
+              if ($GCOND) { ... } else { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GALLOW.contains($GV.getHost())'
+                    - pattern: '$GALLOW.contains(URI.create($GV).getHost())'
+                    - pattern: '$GALLOW.contains(new URI($GV).getHost())'
+                    - pattern: '$GALLOW.contains(new URL($GV).getHost())'
+                    - pattern: '"...".equals($GV.getHost())'
+                    - pattern: '"...".equals(URI.create($GV).getHost())'
+                    - pattern: '"...".equals(new URI($GV).getHost())'
+                    - pattern: '"...".equals(new URL($GV).getHost())'
+                    - pattern: '$GV.getHost().equals("...")'
+                    - pattern: 'URI.create($GV).getHost().equals("...")'
+                    - pattern: 'new URI($GV).getHost().equals("...")'
+                    - pattern: 'new URL($GV).getHost().equals("...")'
+                    - pattern: '"=~/^https?:\/\/[^\/]+/".equals($GV)'
+                    - pattern: '$GV.equals("=~/^https?:\/\/[^\/]+/")'
+                    - pattern: '$GV.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
+                - pattern-not-inside: '$GA || $GB'
+                - pattern-not-inside: '!$GALLOW.contains($GV.getHost())'
+                - pattern-not-inside: '!$GALLOW.contains(URI.create($GV).getHost())'
+                - pattern-not-inside: '!$GALLOW.contains(new URI($GV).getHost())'
+                - pattern-not-inside: '!$GALLOW.contains(new URL($GV).getHost())'
+                - pattern-not-inside: '!"...".equals($GV.getHost())'
+                - pattern-not-inside: '!"...".equals(URI.create($GV).getHost())'
+                - pattern-not-inside: '!"...".equals(new URI($GV).getHost())'
+                - pattern-not-inside: '!"...".equals(new URL($GV).getHost())'
+                - pattern-not-inside: '!$GV.getHost().equals("...")'
+                - pattern-not-inside: '!URI.create($GV).getHost().equals("...")'
+                - pattern-not-inside: '!new URI($GV).getHost().equals("...")'
+                - pattern-not-inside: '!new URL($GV).getHost().equals("...")'
+                - pattern-not-inside: '!"=~/^https?:\/\/[^\/]+/".equals($GV)'
+                - pattern-not-inside: '!$GV.equals("=~/^https?:\/\/[^\/]+/")'
+                - pattern-not-inside: '!$GV.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: (RestTemplate $CLIENT).$CALL($U, ...)
+                      - pattern: (RestOperations $CLIENT).$CALL($U, ...)
+                      - patterns:
+                          - pattern: $CLIENT.$CALL($U, ...)
+                          - metavariable-regex:
+                              metavariable: $CLIENT
+                              regex: (?i)^\w*rest(template|operations)$
+                  - metavariable-regex:
+                      metavariable: $CALL
+                      regex: ^(getForObject|getForEntity|postForObject|postForEntity|postForLocation|put|patchForObject|delete|exchange|execute|headForHeaders|optionsForAllow)$
+              - patterns:
+                  - pattern: $CLIENT.$VERB().uri($U, ...)
+                  - metavariable-regex:
+                      metavariable: $VERB
+                      regex: ^(get|post|put|patch|delete|head|options)$
+              - pattern: $CLIENT.method($HTTPMETHOD).uri($U, ...)
+              # A URL string wrapped in place is the sink itself, so that a
+              # check on the string applies to it.
+              - pattern: HttpRequest.newBuilder(URI.create($U))
+              - pattern: HttpRequest.newBuilder().uri(URI.create($U))
+              - pattern: new URL($U).openConnection(...)
+              - pattern: new URL($U).openStream()
+              - patterns:
+                  - pattern-either:
+                      - pattern: HttpRequest.newBuilder($U)
+                      - pattern: HttpRequest.newBuilder().uri($U)
+                  - pattern-not: HttpRequest.newBuilder(URI.create(...))
+                  - pattern-not: HttpRequest.newBuilder().uri(URI.create(...))
+              - patterns:
+                  - pattern-either:
+                      - pattern: $U.openConnection(...)
+                      - pattern: $U.openStream()
+                  - pattern-not: new URL(...).openConnection(...)
+                  - pattern-not: new URL(...).openStream()
+              - pattern: new HttpGet($U)
+              - pattern: new HttpPost($U)
+              - pattern: new HttpPut($U)
+              - pattern: new HttpDelete($U)
+              - pattern: new HttpHead($U)
+              - pattern: new HttpPatch($U)
+              - pattern: Jsoup.connect($U)
+          - focus-metavariable: $U
+
+  - id: java-ssrf-sink
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: WARNING
+    message: >-
+      Outbound request to a URL taken from a method argument. This method sends
+      a RestTemplate, WebClient or HttpClient request to whatever URL its
+      callers pass, so a caller that passes request input makes it SSRF. Check
+      the host against an allowlist before sending.
+    metadata:
+      category: injection
+      cwe: CWE-918
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: Outbound request to a URL taken from a method argument.
+      fendix_remediation: >-
+        Check the URL's scheme and host against an allowlist before sending,
+        here or in every caller, or build the URL from a fixed base and accept
+        only a path segment. Callers in other files may pass request input.
+    patterns:
+      # A non-private method, so another class can call it, and its parameter $Q,
+      # a string that carries no request annotation (the -taint rule covers those).
+      - pattern-inside: |
+          $RT $M(..., $PT $Q, ...) { ... }
+      - pattern-not-inside: |
+          private $RT $M(...) { ... }
+      - pattern-not-inside: |
+          $RT $M(..., @$ANN(...) $PT $Q, ...) { ... }
+      - metavariable-regex:
+          metavariable: $PT
+          regex: ^(String|CharSequence|Object)$
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: (RestTemplate $CLIENT).$CALL($Q, ...)
+                  - pattern: (RestOperations $CLIENT).$CALL($Q, ...)
+                  - patterns:
+                      - pattern: $CLIENT.$CALL($Q, ...)
+                      - metavariable-regex:
+                          metavariable: $CLIENT
+                          regex: (?i)^\w*rest(template|operations)$
+              - metavariable-regex:
+                  metavariable: $CALL
+                  regex: ^(getForObject|getForEntity|postForObject|postForEntity|postForLocation|put|patchForObject|delete|exchange|execute|headForHeaders|optionsForAllow)$
+          - patterns:
+              - pattern: $CLIENT.$VERB().uri($Q, ...)
+              - metavariable-regex:
+                  metavariable: $VERB
+                  regex: ^(get|post|put|patch|delete|head|options)$
+          - pattern: $CLIENT.method($HTTPMETHOD).uri($Q, ...)
+          - pattern: HttpRequest.newBuilder(URI.create($Q))
+          - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
+          - pattern: new URL($Q).openConnection(...)
+          - pattern: new URL($Q).openStream()
+      # A module constant of that name is not a caller's argument.
+      - pattern-not-inside: |
+          class $CLS {
+            ...
+            static final String $Q = "...";
+            ...
+          }
+      - pattern-not: $CLIENT.$CALL("...", ...)
+      # The same host checks as java-ssrf-taint's, on the parameter.
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $Q.getHost() ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... URI.create($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... new URI($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... new URL($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $GFA.equals($Q) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $Q.equals(...) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $Q.matches(...) ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - patterns:
+                    - pattern-either:
+                        - pattern: (RestTemplate $CLIENT).$CALL($Q, ...)
+                        - pattern: (RestOperations $CLIENT).$CALL($Q, ...)
+                        - patterns:
+                            - pattern: $CLIENT.$CALL($Q, ...)
+                            - metavariable-regex:
+                                metavariable: $CLIENT
+                                regex: (?i)^\w*rest(template|operations)$
+                    - metavariable-regex:
+                        metavariable: $CALL
+                        regex: ^(getForObject|getForEntity|postForObject|postForEntity|postForLocation|put|patchForObject|delete|exchange|execute|headForHeaders|optionsForAllow)$
+                - patterns:
+                    - pattern: $CLIENT.$VERB().uri($Q, ...)
+                    - metavariable-regex:
+                        metavariable: $VERB
+                        regex: ^(get|post|put|patch|delete|head|options)$
+                - pattern: $CLIENT.method($HTTPMETHOD).uri($Q, ...)
+                - pattern: HttpRequest.newBuilder(URI.create($Q))
+                - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
+                - pattern: new URL($Q).openConnection(...)
+                - pattern: new URL($Q).openStream()
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GALLOW.contains($Q.getHost())'
+                      - pattern: '!$GALLOW.contains(URI.create($Q).getHost())'
+                      - pattern: '!$GALLOW.contains(new URI($Q).getHost())'
+                      - pattern: '!$GALLOW.contains(new URL($Q).getHost())'
+                      - pattern: '!"...".equals($Q.getHost())'
+                      - pattern: '!"...".equals(URI.create($Q).getHost())'
+                      - pattern: '!"...".equals(new URI($Q).getHost())'
+                      - pattern: '!"...".equals(new URL($Q).getHost())'
+                      - pattern: '!$Q.getHost().equals("...")'
+                      - pattern: '!URI.create($Q).getHost().equals("...")'
+                      - pattern: '!new URI($Q).getHost().equals("...")'
+                      - pattern: '!new URL($Q).getHost().equals("...")'
+                      - pattern: '!"=~/^https?:\/\/[^\/]+/".equals($Q)'
+                      - pattern: '!$Q.equals("=~/^https?:\/\/[^\/]+/")'
+                      - pattern: '!$Q.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    $GT $GX = URI.create($Q);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = URI.create($Q);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GX = new URI($Q);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = new URI($Q);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GX = new URL($Q);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = new URL($Q);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $GFA.contains(...) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $GFA.equals(...) ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = URI.create($Q);
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = URI.create($Q);
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = new URI($Q);
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = new URI($Q);
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = new URL($Q);
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = new URL($Q);
+                ...
+                if ($GCOND) { ... }
+            - pattern-either:
+                - patterns:
+                    - pattern-either:
+                        - pattern: (RestTemplate $CLIENT).$CALL($Q, ...)
+                        - pattern: (RestOperations $CLIENT).$CALL($Q, ...)
+                        - patterns:
+                            - pattern: $CLIENT.$CALL($Q, ...)
+                            - metavariable-regex:
+                                metavariable: $CLIENT
+                                regex: (?i)^\w*rest(template|operations)$
+                    - metavariable-regex:
+                        metavariable: $CALL
+                        regex: ^(getForObject|getForEntity|postForObject|postForEntity|postForLocation|put|patchForObject|delete|exchange|execute|headForHeaders|optionsForAllow)$
+                - patterns:
+                    - pattern: $CLIENT.$VERB().uri($Q, ...)
+                    - metavariable-regex:
+                        metavariable: $VERB
+                        regex: ^(get|post|put|patch|delete|head|options)$
+                - pattern: $CLIENT.method($HTTPMETHOD).uri($Q, ...)
+                - pattern: HttpRequest.newBuilder(URI.create($Q))
+                - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
+                - pattern: new URL($Q).openConnection(...)
+                - pattern: new URL($Q).openStream()
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GALLOW.contains($GX.getHost())'
+                      - pattern: '!"...".equals($GX.getHost())'
+                      - pattern: '!$GX.getHost().equals("...")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    $GT $GX = URI.create($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = URI.create($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GX = new URI($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = new URI($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GX = new URL($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GX = new URL($Q).getHost();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $GFA.contains(...) ...>) { ... }
+                    ...
+                - pattern-inside: |
+                    if (<... $GFA.equals(...) ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = URI.create($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = URI.create($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = new URI($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = new URI($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GT $GX = new URL($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-not-inside: |
+                $GX = new URL($Q).getHost();
+                ...
+                if ($GCOND) { ... }
+            - pattern-either:
+                - patterns:
+                    - pattern-either:
+                        - pattern: (RestTemplate $CLIENT).$CALL($Q, ...)
+                        - pattern: (RestOperations $CLIENT).$CALL($Q, ...)
+                        - patterns:
+                            - pattern: $CLIENT.$CALL($Q, ...)
+                            - metavariable-regex:
+                                metavariable: $CLIENT
+                                regex: (?i)^\w*rest(template|operations)$
+                    - metavariable-regex:
+                        metavariable: $CALL
+                        regex: ^(getForObject|getForEntity|postForObject|postForEntity|postForLocation|put|patchForObject|delete|exchange|execute|headForHeaders|optionsForAllow)$
+                - patterns:
+                    - pattern: $CLIENT.$VERB().uri($Q, ...)
+                    - metavariable-regex:
+                        metavariable: $VERB
+                        regex: ^(get|post|put|patch|delete|head|options)$
+                - pattern: $CLIENT.method($HTTPMETHOD).uri($Q, ...)
+                - pattern: HttpRequest.newBuilder(URI.create($Q))
+                - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
+                - pattern: new URL($Q).openConnection(...)
+                - pattern: new URL($Q).openStream()
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GALLOW.contains($GX)'
+                      - pattern: '!"...".equals($GX)'
+                      - pattern: '!$GX.equals("...")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $Q.getHost() ...>) { ... }
+                - pattern-inside: |
+                    if (<... URI.create($Q) ...>) { ... }
+                - pattern-inside: |
+                    if (<... new URI($Q) ...>) { ... }
+                - pattern-inside: |
+                    if (<... new URL($Q) ...>) { ... }
+                - pattern-inside: |
+                    if (<... $GFA.equals($Q) ...>) { ... }
+                - pattern-inside: |
+                    if (<... $Q.equals(...) ...>) { ... }
+                - pattern-inside: |
+                    if (<... $Q.matches(...) ...>) { ... }
+            - pattern-not-inside: |
+                if ($GCOND) { ... } else { ... }
+            - pattern-either:
+                - patterns:
+                    - pattern-either:
+                        - pattern: (RestTemplate $CLIENT).$CALL($Q, ...)
+                        - pattern: (RestOperations $CLIENT).$CALL($Q, ...)
+                        - patterns:
+                            - pattern: $CLIENT.$CALL($Q, ...)
+                            - metavariable-regex:
+                                metavariable: $CLIENT
+                                regex: (?i)^\w*rest(template|operations)$
+                    - metavariable-regex:
+                        metavariable: $CALL
+                        regex: ^(getForObject|getForEntity|postForObject|postForEntity|postForLocation|put|patchForObject|delete|exchange|execute|headForHeaders|optionsForAllow)$
+                - patterns:
+                    - pattern: $CLIENT.$VERB().uri($Q, ...)
+                    - metavariable-regex:
+                        metavariable: $VERB
+                        regex: ^(get|post|put|patch|delete|head|options)$
+                - pattern: $CLIENT.method($HTTPMETHOD).uri($Q, ...)
+                - pattern: HttpRequest.newBuilder(URI.create($Q))
+                - pattern: HttpRequest.newBuilder().uri(URI.create($Q))
+                - pattern: new URL($Q).openConnection(...)
+                - pattern: new URL($Q).openStream()
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '$GALLOW.contains($Q.getHost())'
+                      - pattern: '$GALLOW.contains(URI.create($Q).getHost())'
+                      - pattern: '$GALLOW.contains(new URI($Q).getHost())'
+                      - pattern: '$GALLOW.contains(new URL($Q).getHost())'
+                      - pattern: '"...".equals($Q.getHost())'
+                      - pattern: '"...".equals(URI.create($Q).getHost())'
+                      - pattern: '"...".equals(new URI($Q).getHost())'
+                      - pattern: '"...".equals(new URL($Q).getHost())'
+                      - pattern: '$Q.getHost().equals("...")'
+                      - pattern: 'URI.create($Q).getHost().equals("...")'
+                      - pattern: 'new URI($Q).getHost().equals("...")'
+                      - pattern: 'new URL($Q).getHost().equals("...")'
+                      - pattern: '"=~/^https?:\/\/[^\/]+/".equals($Q)'
+                      - pattern: '$Q.equals("=~/^https?:\/\/[^\/]+/")'
+                      - pattern: '$Q.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
+                  - pattern-not-inside: '$GA || $GB'
+                  - pattern-not-inside: '!$GALLOW.contains($Q.getHost())'
+                  - pattern-not-inside: '!$GALLOW.contains(URI.create($Q).getHost())'
+                  - pattern-not-inside: '!$GALLOW.contains(new URI($Q).getHost())'
+                  - pattern-not-inside: '!$GALLOW.contains(new URL($Q).getHost())'
+                  - pattern-not-inside: '!"...".equals($Q.getHost())'
+                  - pattern-not-inside: '!"...".equals(URI.create($Q).getHost())'
+                  - pattern-not-inside: '!"...".equals(new URI($Q).getHost())'
+                  - pattern-not-inside: '!"...".equals(new URL($Q).getHost())'
+                  - pattern-not-inside: '!$Q.getHost().equals("...")'
+                  - pattern-not-inside: '!URI.create($Q).getHost().equals("...")'
+                  - pattern-not-inside: '!new URI($Q).getHost().equals("...")'
+                  - pattern-not-inside: '!new URL($Q).getHost().equals("...")'
+                  - pattern-not-inside: '!"=~/^https?:\/\/[^\/]+/".equals($Q)'
+                  - pattern-not-inside: '!$Q.equals("=~/^https?:\/\/[^\/]+/")'
+                  - pattern-not-inside: '!$Q.matches("=~/^\^?(?:[A-Za-z0-9:/_-]|\\{1,2}\.)*\$?$/")'
+
+  - id: java-path_traversal-taint
+    mode: taint
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: WARNING
+    message: >-
+      File path built from request input (path traversal). A request value
+      reaches the path of a file the code reads, writes or serves (directly,
+      or through a method of this class that does), so `../` in it can reach
+      files outside the intended directory. Keep only the file name, or
+      resolve and normalize the path and check that it stays inside the base
+      directory.
+    metadata:
+      category: injection
+      cwe: CWE-22
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_reachability: taint
+      fendix_title: File path built from request input.
+      fendix_remediation: >-
+        Keep only the file name (FilenameUtils.getName), or resolve the path
+        against the base directory, normalize it and reject it unless
+        target.startsWith(base) holds for the normalized java.nio.file.Path.
+        A String startsWith check is not enough: "/srv/files_evil" starts with
+        "/srv/files".
+    pattern-sources:
+      # A request-bound parameter of a handler: annotated, or a plain String
+      # parameter of a request-mapping method, which Spring binds as a request
+      # parameter. Not a number, boolean, date or UUID, nor a framework object.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $SRT $SM(..., @$SANN(...) $ST $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      @$SMAP(...)
+                      $SRT $SM(..., String $SP, ...) { ... }
+                  # Annotated otherwise (@SessionAttribute, @AuthenticationPrincipal):
+                  # not a request parameter.
+                  - pattern-not-inside: |
+                      $SRT $SM(..., @$SOTHER(...) String $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          - pattern: $SP
+      # One call deep: the parameter of a method of the same class (a direct
+      # member, not a nested class's) that a handler calls with such a value at
+      # that position, matched by name and by the number of arguments (1 to 3).
+      # Open-source Semgrep follows taint within one method; from this source it
+      # follows the called method's own body, to the sink inside it. The argument
+      # must be the value itself or a concatenation or format of it (see
+      # $SARG below), and the handler must not reassign the parameter.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          # The handler reassigns the value before passing it (file = getName(file)).
+          - pattern-not-inside: |
+              class $SC {
+                ...
+                $SRT $SM(...) {
+                  ...
+                  $SP = $SREASSIGNED;
+                  ...
+                }
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SARG
+              regex: ^(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*")(\s*\+\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*$|^String\.format\(\s*"[^"]*"(\s*,\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*\s*\)$
+          - metavariable-pattern:
+              metavariable: $SARG
+              pattern: $SP
+          - metavariable-regex:
+              metavariable: $SHT
+              regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+          - pattern: $SQ
+      # The servlet request.
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (ServletRequest $SREQ).$SGET(...)
+              - patterns:
+                  - pattern: $SREQ.$SGET(...)
+                  - metavariable-regex:
+                      metavariable: $SREQ
+                      regex: ^(request|req|httpRequest|servletRequest|httpServletRequest)$
+          - metavariable-regex:
+              metavariable: $SGET
+              regex: ^(getParameter|getParameterValues|getHeader|getQueryString|getInputStream|getReader)$
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: Integer.parseInt(...)
+          - pattern: Integer.valueOf(...)
+          - pattern: Long.parseLong(...)
+          - pattern: Long.valueOf(...)
+          - pattern: UUID.fromString(...)
+      - pattern-either:
+          - pattern: FilenameUtils.getName(...)
+          - pattern: FilenameUtils.getBaseName(...)
+          - pattern: $PATH.getFileName()
+          - pattern: new File(...).getName()
+      # Containment, checked and exiting when it fails, or around the use: a
+      # normalized or real java.nio.file.Path that startsWith the base
+      # (Path.startsWith compares whole name elements), or a canonical or
+      # normalized String that startsWith the base plus a separator. A String
+      # startsWith without one is not containment: "/srv/files_evil" starts
+      # with "/srv/files".
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GV = $GN.normalize();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GV = $GN.normalize();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GV = $GN.toRealPath(...);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GV = $GN.toRealPath(...);
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.startsWith(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GV = $GN.normalize();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GV = $GN.normalize();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GV = $GN.toRealPath(...);
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GV = $GN.toRealPath(...);
+              ...
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.startsWith($GBASE)'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GV = $GN.normalize();
+                  ...
+                  if ($GCOND) { ... }
+              - pattern-inside: |
+                  $GV = $GN.normalize();
+                  ...
+                  if ($GCOND) { ... }
+              - pattern-inside: |
+                  $GT $GV = $GN.toRealPath(...);
+                  ...
+                  if ($GCOND) { ... }
+              - pattern-inside: |
+                  $GV = $GN.toRealPath(...);
+                  ...
+                  if ($GCOND) { ... }
+          - pattern-inside: |
+              if ($GCOND) { ... }
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.startsWith(...) ...>) { ... }
+          - pattern-not-inside: |
+              if ($GCOND) { ... } else { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GV.startsWith($GBASE)'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
+                - pattern-not-inside: '!$GV.startsWith($GBASE)'
+                - pattern-not-inside: '$GA || $GB'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GV = $GN.getCanonicalPath();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GV = $GN.getCanonicalPath();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GT $GV = $GN.normalize().toString();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GV = $GN.normalize().toString();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.startsWith(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GV = $GN.getCanonicalPath();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GV = $GN.getCanonicalPath();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GV = $GN.normalize().toString();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GV = $GN.normalize().toString();
+              ...
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.startsWith($GBASE + File.separator)'
+                    - pattern: '!$GV.startsWith($GBASE + "/")'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GV = $GN.getCanonicalPath();
+                  ...
+                  if ($GCOND) { ... }
+              - pattern-inside: |
+                  $GV = $GN.getCanonicalPath();
+                  ...
+                  if ($GCOND) { ... }
+              - pattern-inside: |
+                  $GT $GV = $GN.normalize().toString();
+                  ...
+                  if ($GCOND) { ... }
+              - pattern-inside: |
+                  $GV = $GN.normalize().toString();
+                  ...
+                  if ($GCOND) { ... }
+          - pattern-inside: |
+              if ($GCOND) { ... }
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.startsWith(...) ...>) { ... }
+          - pattern-not-inside: |
+              if ($GCOND) { ... } else { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GV.startsWith($GBASE + File.separator)'
+                    - pattern: '$GV.startsWith($GBASE + "/")'
+                - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                - pattern-not: '$GV.startsWith(<... $GV ...>)'
+                - pattern-not-inside: '!$GV.startsWith($GBASE + File.separator)'
+                - pattern-not-inside: '!$GV.startsWith($GBASE + "/")'
+                - pattern-not-inside: '$GA || $GB'
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $GT $GX = $GV.getCanonicalPath();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+              - pattern-inside: |
+                  $GX = $GV.getCanonicalPath();
+                  ...
+                  if ($GCOND) $GBODY;
+                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.startsWith(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GT $GX = $GV.getCanonicalPath();
+              ...
+              if ($GCOND) { ... }
+          - pattern-not-inside: |
+              $GX = $GV.getCanonicalPath();
+              ...
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GX.startsWith($GBASE + File.separator)'
+                    - pattern: '!$GX.startsWith($GBASE + "/")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GFA.startsWith(...) ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.getCanonicalPath().startsWith($GBASE + File.separator)'
+                    - pattern: '!$GV.getCanonicalPath().startsWith($GBASE + "/")'
+                - pattern-not-inside: '$GA && $GB'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: Files.$FOP($P, ...)
+                  - metavariable-regex:
+                      metavariable: $FOP
+                      regex: ^(readAllBytes|readAllLines|readString|lines|newInputStream|newBufferedReader|newOutputStream|newBufferedWriter|newByteChannel|write|writeString|delete|deleteIfExists|createFile|list|walk|size|move)$
+              - pattern: Files.copy($SRC, $P, ...)
+              - pattern: new FileInputStream($P)
+              - pattern: new FileReader($P, ...)
+              - pattern: new FileOutputStream($P, ...)
+              - pattern: new FileWriter($P, ...)
+              - pattern: new RandomAccessFile($P, ...)
+              - pattern: new FileSystemResource($P)
+              - pattern: new PathResource($P)
+              - pattern: (MultipartFile $UPLOAD).transferTo($P)
+          - focus-metavariable: $P
+
+  - id: java-path_traversal-sink
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: WARNING
+    message: >-
+      File path built from a base directory and a method argument. This method
+      joins its own parameter to a directory and reads or writes that file, so
+      a caller that passes request input lets `../` reach files outside the
+      directory. Keep only the file name, or normalize the path and check that
+      it stays inside the directory.
+    metadata:
+      category: injection
+      cwe: CWE-22
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: File path built from a base directory and a method argument.
+      fendix_remediation: >-
+        Keep only the file name (FilenameUtils.getName), or resolve the path
+        against the base directory, normalize it and reject it unless the
+        normalized java.nio.file.Path starts with the base. Callers in other
+        files may pass request input.
+    patterns:
+      # A non-private method, so another class can call it, and its parameter $Q,
+      # a string that carries no request annotation (the -taint rule covers those).
+      - pattern-inside: |
+          $RT $M(..., $PT $Q, ...) { ... }
+      - pattern-not-inside: |
+          private $RT $M(...) { ... }
+      - pattern-not-inside: |
+          $RT $M(..., @$ANN(...) $PT $Q, ...) { ... }
+      - metavariable-regex:
+          metavariable: $PT
+          regex: ^(String|CharSequence|Object)$
+      - pattern-either:
+          - pattern: Paths.get($DIR, ..., $Q, ...)
+          - pattern: Path.of($DIR, ..., $Q, ...)
+          - pattern: new File($DIR, $Q)
+          - pattern: $DIRPATH.resolve($Q)
+          - pattern: Paths.get($DIR + $Q)
+          - pattern: new File($DIR + $Q)
+      - pattern-either:
+          - pattern-inside: Files.$FOP(...)
+          - pattern-inside: new FileInputStream(...)
+          - pattern-inside: new FileReader(...)
+          - pattern-inside: new FileOutputStream(...)
+          - pattern-inside: new FileWriter(...)
+          - pattern-inside: new FileSystemResource(...)
+          - pattern-inside: |
+              $PATHT $PV = $JOIN;
+              ...
+              Files.$FOP(..., $PV, ...);
+      # A module constant of that name is not a caller's argument.
+      - pattern-not-inside: |
+          class $CLS {
+            ...
+            static final String $Q = "...";
+            ...
+          }
+      - pattern-not: Paths.get("...", "...")
+      # The joined path is checked for containment, exiting when it fails.
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    $GT $GV = <... $Q ...>.normalize();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GV = <... $Q ...>.normalize();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GV = <... $Q ...>.toRealPath(...);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GV = <... $Q ...>.toRealPath(...);
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    $GPRT $GPM(...) {
+                      ...
+                      if (<... $GFA.startsWith(...) ...>) { ... }
+                      ...
+                    }
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: Paths.get($DIR, ..., $Q, ...)
+                - pattern: Path.of($DIR, ..., $Q, ...)
+                - pattern: new File($DIR, $Q)
+                - pattern: $DIRPATH.resolve($Q)
+                - pattern: Paths.get($DIR + $Q)
+                - pattern: new File($DIR + $Q)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GV.startsWith($GBASE)'
+                  - pattern-not: '!$GV.startsWith(<... $GV ...>)'
+                  - pattern-not: '$GV.startsWith(<... $GV ...>)'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    $GT $GV = <... $Q ...>;
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GV = <... $Q ...>;
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    $GPRT $GPM(...) {
+                      ...
+                      if (<... $GFA.startsWith(...) ...>) { ... }
+                      ...
+                    }
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: Paths.get($DIR, ..., $Q, ...)
+                - pattern: Path.of($DIR, ..., $Q, ...)
+                - pattern: new File($DIR, $Q)
+                - pattern: $DIRPATH.resolve($Q)
+                - pattern: Paths.get($DIR + $Q)
+                - pattern: new File($DIR + $Q)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GV.getCanonicalPath().startsWith($GBASE + File.separator)'
+                      - pattern: '!$GV.getCanonicalPath().startsWith($GBASE + "/")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    $GT $GV = <... $Q ...>;
+                    ...
+                    $GT2 $GX = $GV.getCanonicalPath();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+                - pattern-inside: |
+                    $GT $GV = <... $Q ...>;
+                    ...
+                    $GX = $GV.getCanonicalPath();
+                    ...
+                    if ($GCOND) $GBODY;
+                    ...
+            - pattern-either:
+                - pattern-inside: |
+                    $GPRT $GPM(...) {
+                      ...
+                      if (<... $GFA.startsWith(...) ...>) { ... }
+                      ...
+                    }
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: Paths.get($DIR, ..., $Q, ...)
+                - pattern: Path.of($DIR, ..., $Q, ...)
+                - pattern: new File($DIR, $Q)
+                - pattern: $DIRPATH.resolve($Q)
+                - pattern: Paths.get($DIR + $Q)
+                - pattern: new File($DIR + $Q)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$GX.startsWith($GBASE + File.separator)'
+                      - pattern: '!$GX.startsWith($GBASE + "/")'
+                  - pattern-not-inside: '$GA && $GB'
+
+  - id: java-open_redirect-taint
+    mode: taint
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: WARNING
+    message: >-
+      Redirect to a URL taken from request input (open redirect). A request
+      value chooses where the response redirects to: sendRedirect, a
+      "redirect:" view, a RedirectView or a Location header (directly, or
+      through a method of this class that sets it). Redirect only to a path on
+      this site, or to a URL from an allowlist.
+    metadata:
+      category: injection
+      cwe: CWE-601
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_reachability: taint
+      fendix_title: Redirect to a URL taken from request input.
+      fendix_remediation: >-
+        Redirect only to a local path: accept the value when it starts with "/"
+        and not with "//" or "/\", and fall back to "/" otherwise; or map the
+        value to a URL from an allowlist.
+    pattern-sources:
+      # A request-bound parameter of a handler: annotated, or a plain String
+      # parameter of a request-mapping method, which Spring binds as a request
+      # parameter. Not a number, boolean, date or UUID, nor a framework object.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $SRT $SM(..., @$SANN(...) $ST $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      @$SMAP(...)
+                      $SRT $SM(..., String $SP, ...) { ... }
+                  # Annotated otherwise (@SessionAttribute, @AuthenticationPrincipal):
+                  # not a request parameter.
+                  - pattern-not-inside: |
+                      $SRT $SM(..., @$SOTHER(...) String $SP, ...) { ... }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          - pattern: $SP
+      # One call deep: the parameter of a method of the same class (a direct
+      # member, not a nested class's) that a handler calls with such a value at
+      # that position, matched by name and by the number of arguments (1 to 3).
+      # Open-source Semgrep follows taint within one method; from this source it
+      # follows the called method's own body, to the sink inside it. The argument
+      # must be the value itself or a concatenation or format of it (see
+      # $SARG below), and the handler must not reassign the parameter.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SARG, $SA2, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SARG, $SA3) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SANN(...) $ST $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SANN
+                      regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
+                  - metavariable-regex:
+                      metavariable: $ST
+                      regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+              - patterns:
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        @$SMAP(...)
+                        $SRT $SM(..., String $SP, ...) {
+                          ...
+                          <... $SH($SA1, $SA2, $SARG) ...>;
+                          ...
+                        }
+                        ...
+                      }
+                  - pattern-inside: |
+                      class $SC {
+                        ...
+                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
+                        ...
+                      }
+                  - pattern-not-inside: |
+                      class $SC {
+                        ...
+                        $SRT $SM(..., @$SOTHER(...) String $SP, ...) {
+                          ...
+                        }
+                        ...
+                      }
+                  - metavariable-regex:
+                      metavariable: $SMAP
+                      regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
+          # The handler reassigns the value before passing it (file = getName(file)).
+          - pattern-not-inside: |
+              class $SC {
+                ...
+                $SRT $SM(...) {
+                  ...
+                  $SP = $SREASSIGNED;
+                  ...
+                }
+                ...
+              }
+          - metavariable-regex:
+              metavariable: $SARG
+              regex: ^(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*")(\s*\+\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*$|^String\.format\(\s*"[^"]*"(\s*,\s*(\w+(\.(get\w*|trim|strip|toLowerCase|toUpperCase)\(\))*|"[^"]*"))*\s*\)$
+          - metavariable-pattern:
+              metavariable: $SARG
+              pattern: $SP
+          - metavariable-regex:
+              metavariable: $SHT
+              regex: ^(?!(int|long|short|byte|double|float|boolean|char|Integer|Long|Short|Byte|Double|Float|Boolean|Number|BigInteger|BigDecimal|UUID|LocalDate|LocalDateTime|LocalTime|OffsetDateTime|ZonedDateTime|Instant|Date|HttpServletRequest|HttpServletResponse|ServletRequest|ServletResponse|HttpSession|Model|ModelMap|Principal|Authentication|BindingResult|Errors|Locale|RedirectAttributes)$)
+          - pattern: $SQ
+      # The servlet request.
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (javax.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (jakarta.servlet.http.HttpServletRequest $SREQ).$SGET(...)
+              - pattern: (ServletRequest $SREQ).$SGET(...)
+              - patterns:
+                  - pattern: $SREQ.$SGET(...)
+                  - metavariable-regex:
+                      metavariable: $SREQ
+                      regex: ^(request|req|httpRequest|servletRequest|httpServletRequest)$
+          - metavariable-regex:
+              metavariable: $SGET
+              regex: ^(getParameter|getParameterValues|getHeader|getQueryString|getInputStream|getReader)$
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: Integer.parseInt(...)
+          - pattern: Integer.valueOf(...)
+          - pattern: Long.parseLong(...)
+          - pattern: Long.valueOf(...)
+          - pattern: UUID.fromString(...)
+      # A target whose start is fixed by a literal path or URL on this site.
+      - patterns:
+          - pattern: '"$PREFIX" + $REST'
+          - metavariable-regex:
+              metavariable: $PREFIX
+              regex: ^(redirect:|forward:)?(/[^/\\]|https?://[^/]+/)
+      # The local-path check, both halves: the target starts with "/" and not
+      # with "//". It exits or replaces the target with a literal when it
+      # fails, or surrounds the use.
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GV.startsWith("//") ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-regex:
+              metavariable: $GBODY
+              regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GV.startsWith("//")'
+                - pattern-not-inside: '!$GV.startsWith("//")'
+                - pattern-not-inside: '$GA && $GB'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.startsWith("/")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) $GBODY;
+              ...
+          - pattern-inside: |
+              $GIF;
+              ...
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GV.startsWith("//") ...>) { ... }
+                  ...
+          - pattern-not-inside: |
+              if ($GCOND) { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GIF
+              pattern: if ($GCOND) $GBODY;
+          - metavariable-regex:
+              metavariable: $GIF
+              regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*(?<![\w.])(\w+)\.startsWith\("//"\)(?:(?!(?<![\w.])(?!\1\.)\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+          - metavariable-pattern:
+              metavariable: $GBODY
+              pattern: '$GV = "...";'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GV.startsWith("//")'
+                - pattern-not-inside: '!$GV.startsWith("//")'
+                - pattern-not-inside: '$GA && $GB'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.startsWith("/")'
+                - pattern-not-inside: '$GA && $GB'
+      - patterns:
+          - pattern-inside: |
+              if ($GCOND) { ... }
+          - pattern-either:
+              - pattern-inside: |
+                  if (<... $GV.startsWith("//") ...>) { ... }
+          - pattern-not-inside: |
+              if ($GCOND) { ... } else { ... }
+          - pattern: $GV
+          - metavariable-regex:
+              metavariable: $GV
+              regex: ^\w+$
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '!$GV.startsWith("//")'
+                - pattern-not-inside: '$GA || $GB'
+          - metavariable-pattern:
+              metavariable: $GCOND
+              patterns:
+                - pattern-either:
+                    - pattern: '$GV.startsWith("/")'
+                - pattern-not-inside: '!$GV.startsWith("/")'
+                - pattern-not-inside: '$GA || $GB'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (HttpServletResponse $RESP).sendRedirect($U)
+              - patterns:
+                  - pattern: $RESP.sendRedirect($U)
+                  - metavariable-regex:
+                      metavariable: $RESP
+                      regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+              - pattern: '"redirect:" + $U'
+              - pattern: new RedirectView($U, ...)
+              - pattern: ResponseEntity.$STATUS(...).location($U)
+              - pattern: ResponseEntity.$STATUS(...).$HEADERS(...).location($U)
+              - pattern: (HttpHeaders $HEADERS).setLocation($U)
+              - pattern: (HttpServletResponse $RESP).setHeader("Location", $U)
+              - pattern: (HttpServletResponse $RESP).addHeader("Location", $U)
+              - pattern: (HttpServletResponse $RESP).setHeader(HttpHeaders.LOCATION, $U)
+              - pattern: (HttpHeaders $HEADERS).set(HttpHeaders.LOCATION, $U)
+              - pattern: (HttpHeaders $HEADERS).add(HttpHeaders.LOCATION, $U)
+          - focus-metavariable: $U
+
+  - id: java-open_redirect-sink
+    languages: [java]
+    # Test, fixture and mock code is not shipped: a finding there would block a
+    # build for code no user runs. Every rule of the Java packs carries this same
+    # list (TestJavaRulesShareTheTestPathExcludes); the patterns are matched
+    # relative to the scan root, so a project checked out under a directory of
+    # one of these names is still scanned.
+    paths:
+      exclude:
+        - "**/src/test/**"
+        - "**/src/integrationTest/**"
+        - "**/src/testFixtures/**"
+        - "**/src/it/**"
+        - "*Test.java"
+        - "*Tests.java"
+        - "*IT.java"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fake/**"
+        - "**/fakes/**"
+    severity: WARNING
+    message: >-
+      Redirect to a URL taken from a method argument. This method redirects to
+      whatever its callers pass, so a caller that passes request input makes it
+      an open redirect. Redirect only to a path on this site, or to a URL from
+      an allowlist.
+    metadata:
+      category: injection
+      cwe: CWE-601
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: Redirect to a URL taken from a method argument.
+      fendix_remediation: >-
+        Accept the target only when it starts with "/" and not with "//" or
+        "/\", here or in every caller, or map it to a URL from an allowlist.
+        Callers in other files may pass request input.
+    patterns:
+      # A non-private method, so another class can call it, and its parameter $Q,
+      # a string that carries no request annotation (the -taint rule covers those).
+      - pattern-inside: |
+          $RT $M(..., $PT $Q, ...) { ... }
+      - pattern-not-inside: |
+          private $RT $M(...) { ... }
+      - pattern-not-inside: |
+          $RT $M(..., @$ANN(...) $PT $Q, ...) { ... }
+      - metavariable-regex:
+          metavariable: $PT
+          regex: ^(String|CharSequence|Object)$
+      - pattern-either:
+          - pattern: (HttpServletResponse $RESP).sendRedirect($Q)
+          - patterns:
+              - pattern: $RESP.sendRedirect($Q)
+              - metavariable-regex:
+                  metavariable: $RESP
+                  regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+          - pattern: '"redirect:" + $Q'
+          - pattern: new RedirectView($Q, ...)
+      # A module constant of that name is not a caller's argument.
+      - pattern-not-inside: |
+          class $CLS {
+            ...
+            static final String $Q = "...";
+            ...
+          }
+      - pattern-not: $RESP.sendRedirect("...")
+      # The same local-path check as java-open_redirect-taint's.
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $Q.startsWith("//") ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: (HttpServletResponse $RESP).sendRedirect($Q)
+                - patterns:
+                    - pattern: $RESP.sendRedirect($Q)
+                    - metavariable-regex:
+                        metavariable: $RESP
+                        regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+                - pattern: '"redirect:" + $Q'
+                - pattern: new RedirectView($Q, ...)
+            - metavariable-regex:
+                metavariable: $GBODY
+                regex: (?s)^(?:\{(?:.*[;{}])?\s*)?(?:throw|return)\b[^;{}]*;?\s*(?://[^\n]*\s*)*\}?\s*$
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '$Q.startsWith("//")'
+                  - pattern-not-inside: '!$Q.startsWith("//")'
+                  - pattern-not-inside: '$GA && $GB'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$Q.startsWith("/")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) $GBODY;
+                ...
+            - pattern-inside: |
+                $GIF;
+                ...
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $Q.startsWith("//") ...>) { ... }
+                    ...
+            - pattern-not-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern: (HttpServletResponse $RESP).sendRedirect($Q)
+                - patterns:
+                    - pattern: $RESP.sendRedirect($Q)
+                    - metavariable-regex:
+                        metavariable: $RESP
+                        regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+                - pattern: '"redirect:" + $Q'
+                - pattern: new RedirectView($Q, ...)
+            - metavariable-pattern:
+                metavariable: $GIF
+                pattern: if ($GCOND) $GBODY;
+            - metavariable-regex:
+                metavariable: $GIF
+                regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*(?<![\w.])(\w+)\.startsWith\("//"\)(?:(?!(?<![\w.])(?!\1\.)\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+            - metavariable-pattern:
+                metavariable: $GBODY
+                pattern: '$Q = "...";'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '$Q.startsWith("//")'
+                  - pattern-not-inside: '!$Q.startsWith("//")'
+                  - pattern-not-inside: '$GA && $GB'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$Q.startsWith("/")'
+                  - pattern-not-inside: '$GA && $GB'
+      - pattern-not:
+          patterns:
+            - pattern-inside: |
+                if ($GCOND) { ... }
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $Q.startsWith("//") ...>) { ... }
+            - pattern-not-inside: |
+                if ($GCOND) { ... } else { ... }
+            - pattern-either:
+                - pattern: (HttpServletResponse $RESP).sendRedirect($Q)
+                - patterns:
+                    - pattern: $RESP.sendRedirect($Q)
+                    - metavariable-regex:
+                        metavariable: $RESP
+                        regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
+                - pattern: '"redirect:" + $Q'
+                - pattern: new RedirectView($Q, ...)
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '!$Q.startsWith("//")'
+                  - pattern-not-inside: '$GA || $GB'
+            - metavariable-pattern:
+                metavariable: $GCOND
+                patterns:
+                  - pattern-either:
+                      - pattern: '$Q.startsWith("/")'
+                  - pattern-not-inside: '!$Q.startsWith("/")'
+                  - pattern-not-inside: '$GA || $GB'

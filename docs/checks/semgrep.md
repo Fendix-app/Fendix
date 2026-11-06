@@ -1,7 +1,7 @@
 # Semgrep Rules Check
 
 **Engine:** Go (white-box) — `go/internal/scanner/semgrep/`, native since TASK-116
-**Category:** `semgrep` (rules carry `metadata.category`: `auth`, `injection`, `secrets`)
+**Category:** `semgrep` (rules carry `metadata.category`: `auth`, `injection`, `secrets`, `xss`, `crypto`)
 **Default severity:** Varies by rule (`metadata.fendix_severity`)
 **Active probing:** No (static analysis)
 
@@ -11,29 +11,37 @@ Security-relevant code patterns using custom Semgrep rules. Semgrep performs pat
 
 ## Built-in Rules
 
-**23 rules across four files**, embedded into the Go binary from
+**74 rules across thirteen files**: the 23 Python rules in the four files
+below, and the JavaScript/TypeScript (17), Java (15) and Go (19) taint packs in
+nine more, which [`docs/semgrep-rules.md`](../semgrep-rules.md) documents. They
+are embedded into the Go binary from
 `go/internal/scanner/semgrep/rules/` via `//go:embed rules/*.yaml`. The count is
 pinned by `rulepackTotalCount` in `scanner_rulepack_test.go` — that test is the
 authority if this page and the pack ever disagree.
 
-### auth.yaml — Missing Authentication (5 rules)
+The JavaScript/TypeScript, Java and Go taint findings are reported as
+warnings, not blocking: a blind evaluation on 70 production repositories
+measured their precision at 0.077, 0.111 and 0.091 (at commit `6901cf7`, Semgrep 1.141.0), below the 0.80 the
+taint gate requires (`semgrep.ReachabilityLanguages` is empty, ADR-011).
+
+### auth.yaml — Missing Authentication (4 rules)
 
 | Rule ID | Pattern | Languages |
 |---|---|---|
-| `flask-missing-login-required` | Flask routes without `@login_required` | Python |
 | `django-view-missing-login-required` | Django views without `LoginRequiredMixin` | Python |
-| `fastapi-route-missing-auth-dependency` | FastAPI routes without `Depends()` auth | Python |
+| `fastapi-route-missing-auth-dependency` | FastAPI routes without a `Depends()`/`Security()` parameter or `dependencies=[...]`, written as a default, inline `Annotated[...]`, a same-file `Annotated` alias, or an alias imported from a `deps`/`dependencies` module. A dependency-free route whose parameter is any name imported from such a module is not reported (false negative) | Python |
 | `python-jwt-decode-no-verification` | `jwt.decode()` with verification disabled / `alg:none` | Python |
-| `flask-route-no-auth-decorator` | Flask route with no auth-style decorator at all | Python |
+| `flask-route-no-auth-decorator` | Flask route with no auth-style decorator below `@app.route(...)`; one placed above it does not protect the route | Python |
 
-### crypto.yaml — Weak Cryptography (4 rules)
+### crypto.yaml — Weak Cryptography (5 rules)
 
 | Rule ID | Pattern | Languages |
 |---|---|---|
 | `python-md5-used-for-password` | `hashlib.md5()` on a password-shaped variable | Python |
 | `python-sha1-used-for-password` | `hashlib.sha1()` on a password-shaped variable | Python |
 | `python-legacy-cipher-import` | DES / 3DES / RC4 / ARC2 / Blowfish imported | Python |
-| `python-random-for-token-generation` | `random` used in a security-sensitive function | Python |
+| `python-random-for-token-generation` | `random` (`random()`, `choice`, `choices`, `randint`, `randrange`, `sample`, `shuffle`, `getrandbits`, `randbytes`) used in a function whose name has a security-sensitive word (`token`, `password`, `secret`, `nonce`, `salt`, `session`, `otp`, `reset`, `csrf`, `api_key`, `access_key`) at the start of a name segment: `issue_api_key`, not `footprint` | Python |
+| `python-random-token-assignment` | The same `random` calls assigned to a variable or attribute whose name has such a word (`token = "".join(random.choices(...))`), in a function the rule above does not match or at module level, so one call is one finding | Python |
 
 ### injection.yaml — Injection Patterns (8 rules)
 
@@ -62,7 +70,8 @@ authority if this page and the pack ever disagree.
 ## How It Works
 
 1. On the first scan of a process, `ensureRules()` extracts the embedded pack to a temp dir (cached in a `sync.Once` for the process lifetime)
-2. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet --disable-version-check <code_path>`, with a 120 s default deadline layered onto the caller's context
+2. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet --disable-version-check --dataflow-traces --timeout 30 --project-root <code_path> --exclude node_modules --exclude dist --exclude build --exclude .next --exclude target --exclude vendor --exclude '*.min.js' <code_path>`, with a 300 s default deadline layered onto the caller's context. `--timeout 30` bounds one rule on one file; a rule that hits it loses only its matches in that file, and Semgrep's `--timeout-threshold` (3) skips the remaining rules on a file after three such timeouts. Each timeout is logged; the findings of the run are kept, and the `semgrep` entry in `scanner_status` stays `ok`, as Semgrep itself calls the run successful, with a detail naming each rule and file whose matches are missing. The excludes skip build output, installed dependencies and vendored code at any depth below `<code_path>`, for every language, Python's `dist/` and `build/` included. `--project-root <code_path>` makes the scan target the project root, so a target inside a git work tree (`<gitroot>/fixtures/repo`) is not filtered by the git root's `fixtures/` exclusion.
+   A host Semgrep older than the release that added an option is run without it, a warning is logged, and the Semgrep `scanner_status` stays `ok` with a detail such as `semgrep 1.45.0: dropped --project-root (needs 1.111.0)`: Fendix reads `semgrep --version` once per binary (a read that failed is retried on the next scan) and drops `--project-root` before 1.111.0, `--dataflow-traces` before 0.107.0, `--timeout` before 0.17.0 and `--exclude` before 0.12.0. The matches are the same, less what the option adds (a taint trace, a per-rule time bound, the build-output excludes, the git-root guard). An unreadable version is taken to be a current one. Fendix checks a host Semgrep as far back as 1.45.0, and ships 1.182.1.
 3. Classifies the run (below), then maps the JSON results to Fendix Finding format (`SEC-<RULE_ID>`)
 4. Severity resolution prefers `metadata.fendix_severity`; falls back to Semgrep's own `ERROR`→`HIGH` / `WARNING`→`MEDIUM` / `INFO`→`LOW`; ultimate default `MEDIUM`
 5. If `semgrep` is not on `$PATH`, returns `ErrSemgrepUnavailable` — the orchestrator logs an install hint at INFO, records `scanner_status: {"name":"semgrep","state":"skipped","reason":"dependency_missing"}`, and continues
@@ -77,7 +86,8 @@ binary, kept as fixtures in `go/internal/scanner/semgrep/testdata/runs`:
 | Run | Recorded |
 |---|---|
 | Exit 0, JSON envelope, no error of level `error` | `ok` |
-| Per-file problems of level `warn`: a file that does not fully parse (`PartialParsing`, syntax or lexical error), a per-file or per-rule `Timeout`, a per-file `OutOfMemory` | `ok`, with the count by type in `detail` (never the message, which can quote source) |
+| Per-file problems of level `warn`: a file that does not fully parse (`PartialParsing`, syntax or lexical error), a per-file `OutOfMemory` | `ok`, with the count by type in `detail` (never the message, which can quote source) |
+| A rule `Timeout` (a rule Semgrep stopped on a file after `--timeout 30`), also level `warn` | `ok`, with `detail` naming each rule and file: the rule's matches in that file are missing, and the detail says so. The 300 s deadline of the whole run is different: it is `failed` / `timeout` |
 | A non-zero exit other than 1, or death by a signal: an invalid or missing config (exit 7), a rule that does not parse (exit 2), the engine killed or crashed mid-run, out of memory included (exit 2, "the engine was killed") | `failed` / `execution_error`, `detail` naming the first error |
 | Exit 0 with any entry of level `error`: Semgrep sets its exit code from its last error only, so a rule parse error followed by per-file warnings exits 0 | `failed` / `execution_error` |
 | Exit 0 with no JSON results envelope | `failed` / `malformed_output` |

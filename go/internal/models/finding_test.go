@@ -114,3 +114,20 @@ func TestFindingJSONFieldNames(t *testing.T) {
 		}
 	}
 }
+
+// ADR-011: the Semgrep taint tier ranks with native_go, and both Semgrep tiers
+// are Semgrep-sourced — the predicate every "never for a Semgrep finding" rule
+// (deterministic detection, tool identity, Proven Path) reads.
+func TestSemgrepTaintTier(t *testing.T) {
+	if got := TierSemgrepTaint.TrustRank(); got != 2 || got != TierNativeGo.TrustRank() {
+		t.Errorf("semgrep_taint TrustRank = %d, want 2 (native_go's)", got)
+	}
+	for tier, want := range map[SourceTier]bool{
+		TierSemgrepShim: true, TierSemgrepTaint: true,
+		TierNativeGo: false, TierTreeSitter: false, "": false,
+	} {
+		if got := tier.IsSemgrep(); got != want {
+			t.Errorf("%q.IsSemgrep() = %v, want %v", tier, got, want)
+		}
+	}
+}

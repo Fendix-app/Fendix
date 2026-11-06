@@ -294,7 +294,19 @@ var patterns = []pattern{
 		// blanks just the credential. Adding a group cannot change RE2 match
 		// extents, so detection behaviour is byte-identical to the ungrouped
 		// form this replaced.
-		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+`),
+		//
+		// Two shapes, one rule id (so no existing identity moves):
+		//   1. URL userinfo: scheme://user:PASSWORD@host
+		//   2. JDBC properties, which carry the password as a pair rather than
+		//      as userinfo: jdbc:postgresql://h/app?user=u&password=PASSWORD,
+		//      jdbc:sqlserver://h:1433;databaseName=a;password=PASSWORD
+		// The value group of each is the password; the credential is the LAST
+		// participating group, so redaction treats both the same. A value
+		// STARTING with `$` is an interpolation (${DB_PASSWORD}) and does not
+		// match; a `$` later in the value is part of the password, and the
+		// whole value is the capture (a value class that excluded `$` anywhere
+		// stopped at it and published the rest of the password).
+		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+|jdbc:[a-z0-9]+:(?://)?[^\s"'?;]+[?;][^\s"']*?\bpassword=([^&;\s"'$][^&;\s"']*)`),
 		severity: models.SeverityHigh,
 		cwe:      "CWE-214",
 	},
@@ -535,34 +547,79 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 // parity with the walk, which prunes skipDirs subtrees (e.g. a committed
 // vendor/ file the walk never reaches).
 func underSkipDir(root, abs string) bool {
+	return skippedDir(root, abs) != ""
+}
+
+// skippedDir returns the name of the first pruned directory between root and
+// abs (the file's own name excluded), or "" when there is none.
+func skippedDir(root, abs string) string {
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
-		return false
+		return ""
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	for _, part := range parts[:len(parts)-1] { // dir components only, not the file
 		if _, skip := skipDirs[part]; skip {
-			return true
+			return part
 		}
 	}
-	return false
+	return ""
 }
+
+// ReadsFile reports whether Scan reads a file of this base name: its extension
+// is in scanExtensions, or it is an .env-style file. scanFile uses it, so the
+// two cannot drift.
+func ReadsFile(name string) bool {
+	if isEnvFile(name) {
+		return true
+	}
+	_, ok := scanExtensions[strings.ToLower(filepath.Ext(name))]
+	return ok
+}
+
+// SkipReason says why a full Scan of root would not read the file at path, or
+// returns "" when it would. It applies the checks Scan applies: a pruned
+// directory (skipDirs) between root and the file, an extension Scan does not
+// read, and a file over maxFileBytes. A caller that re-tests a finding with
+// Scan uses it to tell "no longer flagged" from "never looked at". An
+// unreadable file returns "", so the caller's own inspection reports it.
+func SkipReason(root, path string) string {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if dir := skippedDir(absRoot, absPath); dir != "" {
+		return fmt.Sprintf("it is under the skipped directory %q", dir)
+	}
+	name := filepath.Base(absPath)
+	if !ReadsFile(name) {
+		return fmt.Sprintf("files with the extension %q are not read", strings.ToLower(filepath.Ext(name)))
+	}
+	if info, err := os.Stat(absPath); err == nil && exceedsFileLimit(info.Size()) {
+		return fmt.Sprintf("it is larger than %d bytes", maxFileBytes)
+	}
+	return ""
+}
+
+// exceedsFileLimit reports whether a file of this size is skipped.
+func exceedsFileLimit(size int64) bool { return size > maxFileBytes }
 
 func scanFile(path, root string, d fs.DirEntry) ([]evidence.Evidence, error) {
 	name := d.Name()
 	envFile := isEnvFile(name)
-	if !envFile {
-		ext := strings.ToLower(filepath.Ext(name))
-		if _, ok := scanExtensions[ext]; !ok {
-			return nil, nil
-		}
+	if !ReadsFile(name) {
+		return nil, nil
 	}
 
 	info, err := d.Info()
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > maxFileBytes {
+	if exceedsFileLimit(info.Size()) {
 		return nil, nil
 	}
 

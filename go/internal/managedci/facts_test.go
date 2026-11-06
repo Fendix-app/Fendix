@@ -322,3 +322,27 @@ func TestSerializationIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// A Semgrep taint finding (ADR-011) is exported as what it is: a Semgrep
+// analyzer that proved a reachable taint path. "unspecified" would hand the
+// backend's policy a finding that escapes the tier_semgrep delta and may earn
+// deterministic detection — a classification the engine itself never makes.
+func TestSemgrepTaintTierExportsAsSemgrep(t *testing.T) {
+	got, err := FactsFrom(evidence.Evidence{
+		Severity:   models.SeverityHigh,
+		Source:     models.SourceWhitebox,
+		SourceTier: models.TierSemgrepTaint,
+		Confidence: models.ConfidenceHigh,
+		Reachable:  true,
+	})
+	if err != nil {
+		t.Fatalf("FactsFrom: %v", err)
+	}
+	if got.AnalyzerImplementation != implSemgrep || !got.ReachableTaintPath {
+		t.Errorf("analyzer_implementation=%q reachable_taint_path=%v; want %q, true",
+			got.AnalyzerImplementation, got.ReachableTaintPath, implSemgrep)
+	}
+	if err := got.Consistent(models.SeverityHigh); err != nil {
+		t.Errorf("exported facts are not self-consistent: %v", err)
+	}
+}

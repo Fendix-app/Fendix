@@ -1,0 +1,3181 @@
+# Go (net/http, Gin) crypto and token rules: weak password hashing, JWTs
+# trusted without verification and math/rand tokens.
+#
+# Written in-house for Fendix. Taint rules (<lang>-<class>-taint) count as
+# reachability once Go clears its gate (ADR-011); shape rules
+# (<lang>-<class>-sink) report a function parameter reaching the same sink.
+# Tests: ../ruletests/go-crypto.go and go-crypto.cryptorand.go (semgrep
+# --test, see its README.md).
+#
+# The taint rules follow request input as the injection and web packs do:
+# see go-injection.yaml's header for the helper sinks and the call
+# sanitizer.
+rules:
+  # Weak password hashing (Go). Taint mode: a request value named like a
+  # password hashed with MD5 or SHA-1. Hashing other values (an ETag, a
+  # cache key, a Gravatar) is not a password-storage weakness.
+  - id: go-weak-password-hash-taint
+    mode: taint
+    languages: [go]
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
+    severity: ERROR
+    message: >-
+      Password from request input hashed with MD5 or SHA-1: use bcrypt, argon2id or scrypt.
+    metadata:
+      category: crypto
+      cwe: [CWE-916, CWE-328]
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        Password from request input hashed with MD5 or SHA-1.
+      fendix_remediation: >-
+        MD5 and SHA-1 are fast, unsalted hashes: a leaked table of them is cracked in hours. Hash passwords with bcrypt (golang.org/x/crypto/bcrypt), argon2id or scrypt.
+      fendix_reachability: taint
+    options:
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+      # m[key] is a lookup: an element found by request input is not request input.
+      taint_assume_safe_indexes: true
+    pattern-sources:
+      # net/http: the request's query string, form values, path values,
+      # headers, cookies and body. Header, Cookie and Body are typed so that an
+      # *http.Response's headers and body are not taken for request input.
+      - pattern: $R.URL.Query()
+      - pattern: $R.URL.RawQuery
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.PathValue(...)
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).FormFile(...)'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: $C.Request.Header
+      - pattern: $C.Request.Body
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      # A JSON request body decoded into a variable.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: 'json.NewDecoder(($R : *http.Request).Body).Decode(&$X)'
+              - pattern: json.NewDecoder($C.Request.Body).Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $DEC := json.NewDecoder(($R : *http.Request).Body)
+                      ...
+                  - pattern: $DEC.Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $BODY, $ERR := io.ReadAll(($R : *http.Request).Body)
+                      ...
+                  - pattern: json.Unmarshal($BODY, &$X)
+          - focus-metavariable: $X
+      # Gin: the context's request accessors, and the target of a bind.
+      - patterns:
+          - pattern: '($C : *gin.Context).$ACCESSOR(...)'
+          - metavariable-regex:
+              metavariable: $ACCESSOR
+              regex: ^(Query|DefaultQuery|GetQuery|QueryArray|GetQueryArray|QueryMap|GetQueryMap|Param|PostForm|DefaultPostForm|GetPostForm|PostFormArray|GetPostFormArray|PostFormMap|GetPostFormMap|GetHeader|Cookie|GetRawData|FormFile)$
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: '($C : *gin.Context).$BIND(&$X, ...)'
+              - pattern: '($C : *gin.Context).$BIND($X, ...)'
+          - metavariable-regex:
+              metavariable: $BIND
+              regex: ^(Should|Must)?Bind[A-Za-z]*$
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      # A call's result is clean only when it is a constant: len and cap, and a
+      # call to a function or method of this file whose body can be seen here and whose
+      # every return is a string literal, or a lookup in a map of string
+      # literals with a literal fallback (the shapes below). Any other call of
+      # a package-level function keeps the taint of its arguments, as Semgrep
+      # does by default: a function of another file of the package, a
+      # signature that is not a single string, or a body that builds its result
+      # from its parameters. make is not listed: Semgrep's make(...) pattern
+      # also matches every map, slice and struct literal, which would hide a
+      # value put into one, and make takes only sizes.
+      - exact: true
+        pattern-either:
+          - pattern: len(...)
+          - pattern: cap(...)
+          - pattern: $ASSIGNED := len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := len(...)
+          - pattern: $ASSIGNED = len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED = len(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = len(...)
+          - pattern: $ASSIGNED := cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := cap(...)
+          - pattern: $ASSIGNED = cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED = cap(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = cap(...)
+      # A function or method of this file whose every return is a string literal
+      # (a switch or an if over literals). The pattern ends at the helper, or at
+      # a later function that calls it, and the regex on the body is part of
+      # the pattern that ends there: see the cost note in the header of
+      # go-injection.yaml.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $FUNC(...)
+              - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - pattern-either:
+              - pattern-inside:
+                  patterns:
+                    - pattern: |
+                        package $PKG
+                        ...
+                        func $FUNC(...) string {
+                          $...BODY
+                        }
+                    - metavariable-regex:
+                        metavariable: $...BODY
+                        regex: '(?s)^(?=(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*?\breturn\b)(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*$'
+              - pattern-inside:
+                  patterns:
+                    - pattern: |
+                        package $PKG
+                        ...
+                        func $FUNC(...) string {
+                          $...BODY
+                        }
+                        ...
+                        func $CALLER(...) {
+                          ...
+                          $FUNC(...)
+                          ...
+                        }
+                    - metavariable-regex:
+                        metavariable: $...BODY
+                        regex: '(?s)^(?=(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*?\breturn\b)(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*$'
+              - pattern-inside:
+                  patterns:
+                    - pattern: |
+                        package $PKG
+                        ...
+                        func $FUNC(...) string {
+                          $...BODY
+                        }
+                        ...
+                        func $CALLER(...) {
+                          ...
+                          $RECEIVER.$FUNC(...)
+                          ...
+                        }
+                    - metavariable-regex:
+                        metavariable: $...BODY
+                        regex: '(?s)^(?=(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*?\breturn\b)(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*$'
+      # A function or method of this file that looks its result up in a map of
+      # string literals declared above it at package level, and falls back to a literal.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $FUNC(...)
+              - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: '(?s)^map\[string\]string\{\s*(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*(?:,\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*)*,?\s*)?\}$'
+      # The same, with the map of string literals declared in the function.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $FUNC(...)
+              - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: '(?s)^map\[string\]string\{\s*(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*(?:,\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*)*,?\s*)?\}$'
+      # A qualified or method call's result is not request input (a row, a cache
+      # entry, a stored file name looked up by request input: see the pack
+      # header), unless the call is a source, one of this rule's sinks, a call
+      # that hands its input back, a call that takes a function literal, or a
+      # call of a method of this file that takes a string and returns a string
+      # (its body can be seen, and the rules above clear it only when every
+      # return is constant).
+      - exact: true
+        patterns:
+          - pattern: $RECEIVER.$FUNC(...)
+          # Sources.
+          - pattern-not: $R.URL.Query()
+          - pattern-not: $R.URL.Query().$GET(...)
+          - pattern-not: $R.FormValue(...)
+          - pattern-not: $R.PostFormValue(...)
+          - pattern-not: $R.PathValue(...)
+          - pattern-not: $R.Header.Get(...)
+          - pattern-not: $R.Header.Values(...)
+          - pattern-not: $R.Form.Get(...)
+          - pattern-not: $R.PostForm.Get(...)
+          - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: '($R : *http.Request).FormFile(...)'
+          - pattern-not: mux.Vars(...)
+          - pattern-not: chi.URLParam(...)
+          - pattern-not: '($C : *gin.Context).$GIN(...)'
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
+          # Calls that hand their input back.
+          - pattern-not: fmt.Sprintf(...)
+          - pattern-not: fmt.Sprint(...)
+          - pattern-not: fmt.Sprintln(...)
+          - pattern-not: strings.$STRINGS(...)
+          - pattern-not: bytes.$BYTES(...)
+          - pattern-not: filepath.$FILEPATH(...)
+          - pattern-not: path.$PATH(...)
+          - pattern-not: url.$URL(...)
+          - pattern-not: html.UnescapeString(...)
+          - pattern-not: strconv.Unquote(...)
+          - pattern-not: string(...)
+          - pattern-not: '[]byte(...)'
+          - pattern-not: '[]rune(...)'
+          - pattern-not: append(...)
+          - pattern-not: $VALUE.String()
+          - pattern-not: $VALUE.Bytes()
+          - pattern-not: $VALUE.Query()
+          - pattern-not: $VALUE.Hostname()
+          - pattern-not: $RE.ReplaceAllString(...)
+          - pattern-not: $RE.ReplaceAllLiteralString(...)
+          - pattern-not: $RE.ReplaceAllStringFunc(...)
+          - pattern-not: $REPLACER.Replace(...)
+          - pattern-not: $CODEC.DecodeString(...)
+          - pattern-not: $CODEC.Unescape(...)
+          - pattern-not: $CODEC.UnescapeString(...)
+          - pattern-not: $CODEC.QueryUnescape(...)
+          - pattern-not: $CODEC.PathUnescape(...)
+          - pattern-not: $CODEC.Unquote(...)
+          - pattern-not: io.ReadAll(...)
+          - pattern-not: ioutil.ReadAll(...)
+          - pattern-not: json.NewDecoder(...)
+          - pattern-not: $DECODER.Decode(...)
+          - pattern-not: json.Unmarshal(...)
+          # A call that takes a function literal (router.GET(path, func(c
+          # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+          # does not judge the calls inside a sanitized range one by one.
+          - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+          # This rule's sinks.
+          - pattern-not: md5.Sum(...)
+          - pattern-not: sha1.Sum(...)
+          - pattern-not: md5.New()
+          - pattern-not: sha1.New()
+          - pattern-not: $HASH.Write(...)
+          - pattern-not: io.WriteString(...)
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+
+      # The same sanitizer for a call assigned to a variable ($x := f(...),
+      # var x = f(...), x = f(...)): Semgrep 1.182 keeps the taint of a variable
+      # assigned from an exact-sanitized call, so the assignment is a sanitizer too.
+      # The assignment forms are listed twice: with the call as $CALLEXPR, which
+      # the call conditions are matched against, and with the call written out,
+      # which binds its receiver and function for them and for the file conditions
+      # (a condition is only judged for the outermost call).
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $ASSIGNED := $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $CALLEXPR
+              - pattern: $ASSIGNED = $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED = $CALLEXPR
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $CALLEXPR
+          - pattern-either:
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - metavariable-pattern:
+              metavariable: $CALLEXPR
+              patterns:
+                - pattern: $RECEIVER.$FUNC(...)
+                # Sources.
+                - pattern-not: $R.URL.Query()
+                - pattern-not: $R.URL.Query().$GET(...)
+                - pattern-not: $R.FormValue(...)
+                - pattern-not: $R.PostFormValue(...)
+                - pattern-not: $R.PathValue(...)
+                - pattern-not: $R.Header.Get(...)
+                - pattern-not: $R.Header.Values(...)
+                - pattern-not: $R.Form.Get(...)
+                - pattern-not: $R.PostForm.Get(...)
+                - pattern-not: '($R : *http.Request).Cookie(...)'
+                - pattern-not: '($R : *http.Request).FormFile(...)'
+                - pattern-not: mux.Vars(...)
+                - pattern-not: chi.URLParam(...)
+                - pattern-not: '($C : *gin.Context).$GIN(...)'
+                # Calls that hand their input back.
+                - pattern-not: fmt.Sprintf(...)
+                - pattern-not: fmt.Sprint(...)
+                - pattern-not: fmt.Sprintln(...)
+                - pattern-not: strings.$STRINGS(...)
+                - pattern-not: bytes.$BYTES(...)
+                - pattern-not: filepath.$FILEPATH(...)
+                - pattern-not: path.$PATH(...)
+                - pattern-not: url.$URL(...)
+                - pattern-not: html.UnescapeString(...)
+                - pattern-not: strconv.Unquote(...)
+                - pattern-not: string(...)
+                - pattern-not: '[]byte(...)'
+                - pattern-not: '[]rune(...)'
+                - pattern-not: append(...)
+                - pattern-not: $VALUE.String()
+                - pattern-not: $VALUE.Bytes()
+                - pattern-not: $VALUE.Query()
+                - pattern-not: $VALUE.Hostname()
+                - pattern-not: $RE.ReplaceAllString(...)
+                - pattern-not: $RE.ReplaceAllLiteralString(...)
+                - pattern-not: $RE.ReplaceAllStringFunc(...)
+                - pattern-not: $REPLACER.Replace(...)
+                - pattern-not: $CODEC.DecodeString(...)
+                - pattern-not: $CODEC.Unescape(...)
+                - pattern-not: $CODEC.UnescapeString(...)
+                - pattern-not: $CODEC.QueryUnescape(...)
+                - pattern-not: $CODEC.PathUnescape(...)
+                - pattern-not: $CODEC.Unquote(...)
+                - pattern-not: io.ReadAll(...)
+                - pattern-not: ioutil.ReadAll(...)
+                - pattern-not: json.NewDecoder(...)
+                - pattern-not: $DECODER.Decode(...)
+                - pattern-not: json.Unmarshal(...)
+                # A call that takes a function literal (router.GET(path, func(c
+                # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+                # does not judge the calls inside a sanitized range one by one.
+                - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+                # This rule's sinks.
+                - pattern-not: md5.Sum(...)
+                - pattern-not: sha1.Sum(...)
+                - pattern-not: md5.New()
+                - pattern-not: sha1.New()
+                - pattern-not: $HASH.Write(...)
+                - pattern-not: io.WriteString(...)
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: md5.Sum($DATA)
+              - pattern: sha1.Sum($DATA)
+              - pattern: md5.New().Write($DATA)
+              - pattern: sha1.New().Write($DATA)
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          $HASH := md5.New()
+                          ...
+                      - pattern-inside: |
+                          $HASH := sha1.New()
+                          ...
+                  - pattern-either:
+                      - pattern: $HASH.Write($DATA)
+                      - pattern: io.WriteString($HASH, $DATA)
+          # The hashed value is named like a password.
+          - metavariable-regex:
+              metavariable: $DATA
+              regex: (?i).*(passw|pwd|passphrase)
+          - focus-metavariable: $DATA
+      # Request input passed as the first argument of a function of this
+      # file whose parameter reaches an MD5 or SHA-1 hash of a password; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    md5.Sum(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    sha1.Sum(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $HASH := md5.New()
+                    ...
+                    $HASH.Write(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $HASH := sha1.New()
+                    ...
+                    $HASH.Write(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?i).*(passw|pwd|passphrase)
+          - pattern: $HELPER($ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the second argument of a function of this
+      # file whose parameter reaches an MD5 or SHA-1 hash of a password; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    md5.Sum(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    sha1.Sum(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $HASH := md5.New()
+                    ...
+                    $HASH.Write(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $HASH := sha1.New()
+                    ...
+                    $HASH.Write(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?i).*(passw|pwd|passphrase)
+          - pattern: $HELPER($X1, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the third argument of a function of this
+      # file whose parameter reaches an MD5 or SHA-1 hash of a password; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    md5.Sum(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    sha1.Sum(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $HASH := md5.New()
+                    ...
+                    $HASH.Write(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $HASH := sha1.New()
+                    ...
+                    $HASH.Write(<... $PARAM ...>)
+                    ...
+                  }
+                  ...
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: (?i).*(passw|pwd|passphrase)
+          - pattern: $HELPER($X1, $X2, $ARG, ...)
+          - focus-metavariable: $ARG
+  # A string parameter named like a password hashed with MD5 or SHA-1.
+  - id: go-weak-password-hash-sink
+    languages: [go]
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
+    severity: WARNING
+    message: >-
+      Password parameter hashed with MD5 or SHA-1: use bcrypt, argon2id or scrypt.
+    metadata:
+      category: crypto
+      cwe: [CWE-916, CWE-328]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        Password parameter hashed with MD5 or SHA-1.
+      fendix_remediation: >-
+        A parameter named like a password is hashed with MD5 or SHA-1, fast and unsalted hashes. Hash passwords with bcrypt, argon2id or scrypt.
+    patterns:
+      - pattern-inside: |
+          func $FN(..., $PARAM string, ...) {
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $PARAM
+          regex: (?i).*(passw|pwd|passphrase)
+      - pattern-either:
+          - pattern: md5.Sum(<... $PARAM ...>)
+          - pattern: sha1.Sum(<... $PARAM ...>)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $HASH := md5.New()
+                      ...
+                  - pattern-inside: |
+                      $HASH := sha1.New()
+                      ...
+              - pattern-either:
+                  - pattern: $HASH.Write(<... $PARAM ...>)
+                  - pattern: io.WriteString($HASH, <... $PARAM ...>)
+      - pattern-not: md5.Sum([]byte("..."))
+      # Exported functions only: the entry points another file (or package) calls,
+      # which the taint rule cannot follow. A call into an unexported helper of
+      # the same file is the taint rule's to judge.
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^[A-Z]
+      # A parameter cannot also be a constant in its own scope; these keep the
+      # pack's -sink contract (a module constant is never reported) explicit.
+      - pattern-not-inside: |
+          const $PARAM = "..."
+          ...
+      - pattern-not-inside: |
+          const (
+            $PARAM = "..."
+          )
+          ...
+  # JWT trusted without verification (Go). Taint mode: a token from the
+  # request decoded with golang-jwt's ParseUnverified and its claims read.
+  # Reading only the header (to pick a key by kid), or verifying the same
+  # token afterwards with Parse or ParseWithClaims, is not a sink.
+  - id: go-jwt-no-verify-taint
+    mode: taint
+    languages: [go]
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
+    severity: ERROR
+    message: >-
+      JWT from the request trusted without verifying its signature: verify it with jwt.Parse and jwt.WithValidMethods.
+    metadata:
+      category: auth
+      cwe: [CWE-347]
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        JWT from the request trusted without verifying its signature.
+      fendix_remediation: >-
+        ParseUnverified decodes a token without checking its signature, so its claims are whatever the caller wrote. Verify it with jwt.Parse or jwt.ParseWithClaims, a key function and jwt.WithValidMethods; read only the header (for example kid) from an unverified token.
+      fendix_reachability: taint
+    options:
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+      # m[key] is a lookup: an element found by request input is not request input.
+      taint_assume_safe_indexes: true
+    pattern-sources:
+      # net/http: the request's query string, form values, path values,
+      # headers, cookies and body. Header, Cookie and Body are typed so that an
+      # *http.Response's headers and body are not taken for request input.
+      - pattern: $R.URL.Query()
+      - pattern: $R.URL.RawQuery
+      - pattern: $R.FormValue(...)
+      - pattern: $R.PostFormValue(...)
+      - pattern: $R.PathValue(...)
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).FormFile(...)'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: $C.Request.Header
+      - pattern: $C.Request.Body
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      # A JSON request body decoded into a variable.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: 'json.NewDecoder(($R : *http.Request).Body).Decode(&$X)'
+              - pattern: json.NewDecoder($C.Request.Body).Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $DEC := json.NewDecoder(($R : *http.Request).Body)
+                      ...
+                  - pattern: $DEC.Decode(&$X)
+              - patterns:
+                  - pattern-inside: |
+                      $BODY, $ERR := io.ReadAll(($R : *http.Request).Body)
+                      ...
+                  - pattern: json.Unmarshal($BODY, &$X)
+          - focus-metavariable: $X
+      # Gin: the context's request accessors, and the target of a bind.
+      - patterns:
+          - pattern: '($C : *gin.Context).$ACCESSOR(...)'
+          - metavariable-regex:
+              metavariable: $ACCESSOR
+              regex: ^(Query|DefaultQuery|GetQuery|QueryArray|GetQueryArray|QueryMap|GetQueryMap|Param|PostForm|DefaultPostForm|GetPostForm|PostFormArray|GetPostFormArray|PostFormMap|GetPostFormMap|GetHeader|Cookie|GetRawData|FormFile)$
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: '($C : *gin.Context).$BIND(&$X, ...)'
+              - pattern: '($C : *gin.Context).$BIND($X, ...)'
+          - metavariable-regex:
+              metavariable: $BIND
+              regex: ^(Should|Must)?Bind[A-Za-z]*$
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      # A call's result is clean only when it is a constant: len and cap, and a
+      # call to a function or method of this file whose body can be seen here and whose
+      # every return is a string literal, or a lookup in a map of string
+      # literals with a literal fallback (the shapes below). Any other call of
+      # a package-level function keeps the taint of its arguments, as Semgrep
+      # does by default: a function of another file of the package, a
+      # signature that is not a single string, or a body that builds its result
+      # from its parameters. make is not listed: Semgrep's make(...) pattern
+      # also matches every map, slice and struct literal, which would hide a
+      # value put into one, and make takes only sizes.
+      - exact: true
+        pattern-either:
+          - pattern: len(...)
+          - pattern: cap(...)
+          - pattern: $ASSIGNED := len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := len(...)
+          - pattern: $ASSIGNED = len(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED = len(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = len(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = len(...)
+          - pattern: $ASSIGNED := cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR := cap(...)
+          - pattern: $ASSIGNED = cap(...)
+          - pattern: $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED = cap(...)
+          - pattern: var $ASSIGNED $ASSIGNED_TYPE = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR = cap(...)
+          - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = cap(...)
+      # A function or method of this file whose every return is a string literal
+      # (a switch or an if over literals). The pattern ends at the helper, or at
+      # a later function that calls it, and the regex on the body is part of
+      # the pattern that ends there: see the cost note in the header of
+      # go-injection.yaml.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $FUNC(...)
+              - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - pattern-either:
+              - pattern-inside:
+                  patterns:
+                    - pattern: |
+                        package $PKG
+                        ...
+                        func $FUNC(...) string {
+                          $...BODY
+                        }
+                    - metavariable-regex:
+                        metavariable: $...BODY
+                        regex: '(?s)^(?=(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*?\breturn\b)(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*$'
+              - pattern-inside:
+                  patterns:
+                    - pattern: |
+                        package $PKG
+                        ...
+                        func $FUNC(...) string {
+                          $...BODY
+                        }
+                        ...
+                        func $CALLER(...) {
+                          ...
+                          $FUNC(...)
+                          ...
+                        }
+                    - metavariable-regex:
+                        metavariable: $...BODY
+                        regex: '(?s)^(?=(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*?\breturn\b)(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*$'
+              - pattern-inside:
+                  patterns:
+                    - pattern: |
+                        package $PKG
+                        ...
+                        func $FUNC(...) string {
+                          $...BODY
+                        }
+                        ...
+                        func $CALLER(...) {
+                          ...
+                          $RECEIVER.$FUNC(...)
+                          ...
+                        }
+                    - metavariable-regex:
+                        metavariable: $...BODY
+                        regex: '(?s)^(?=(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*?\breturn\b)(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`|''(?:[^''\\]|\\.)+''|//[^\n]*|/\*.*?\*/|\breturn\s+(?:"(?:[^"\\]|\\.)*"|`[^`]*`)(?=[ \t]*(?:\n|;|\}|//|/\*|$))|[^"`\''/r]|r(?!eturn\b)|/(?![/*])))*$'
+      # A function or method of this file that looks its result up in a map of
+      # string literals declared above it at package level, and falls back to a literal.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $FUNC(...)
+              - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  var $MAP = $OBJ
+                  ...
+                  func $FUNC(...) string {
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: '(?s)^map\[string\]string\{\s*(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*(?:,\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*)*,?\s*)?\}$'
+      # The same, with the map of string literals declared in the function.
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $FUNC(...)
+              - pattern: $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED := $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $FUNC(...)
+              - pattern: $ASSIGNED = $FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED = $FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $FUNC(...)
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V, $OK := $MAP[$KEY]; $OK {
+                      return $V
+                    } else {
+                      return "..."
+                    }
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if !$OK {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V, $OK := $MAP[$KEY]
+                    if $OK {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if $V := $MAP[$KEY]; $V != "" {
+                      return $V
+                    }
+                    return "..."
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    $V := $MAP[$KEY]
+                    if $V == "" {
+                      return "..."
+                    }
+                    return $V
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    if _, $OK := $MAP[$KEY]; !$OK {
+                      return "..."
+                    }
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    return $MAP[$KEY]
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $FUNC(...)
+                    ...
+                  }
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $FUNC(...) string {
+                    $MAP := $OBJ
+                    return $MAP[$KEY]
+                  }
+                  ...
+                  func $CALLER(...) {
+                    ...
+                    $RECEIVER.$FUNC(...)
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $OBJ
+              regex: '(?s)^map\[string\]string\{\s*(?:(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*(?:,\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*:\s*(?:"(?:[^"\\]|\\.)*"|`[^`]*`)\s*)*,?\s*)?\}$'
+      # A qualified or method call's result is not request input (a row, a cache
+      # entry, a stored file name looked up by request input: see the pack
+      # header), unless the call is a source, one of this rule's sinks, a call
+      # that hands its input back, a call that takes a function literal, or a
+      # call of a method of this file that takes a string and returns a string
+      # (its body can be seen, and the rules above clear it only when every
+      # return is constant).
+      - exact: true
+        patterns:
+          - pattern: $RECEIVER.$FUNC(...)
+          # Sources.
+          - pattern-not: $R.URL.Query()
+          - pattern-not: $R.URL.Query().$GET(...)
+          - pattern-not: $R.FormValue(...)
+          - pattern-not: $R.PostFormValue(...)
+          - pattern-not: $R.PathValue(...)
+          - pattern-not: $R.Header.Get(...)
+          - pattern-not: $R.Header.Values(...)
+          - pattern-not: $R.Form.Get(...)
+          - pattern-not: $R.PostForm.Get(...)
+          - pattern-not: '($R : *http.Request).Cookie(...)'
+          - pattern-not: '($R : *http.Request).FormFile(...)'
+          - pattern-not: mux.Vars(...)
+          - pattern-not: chi.URLParam(...)
+          - pattern-not: '($C : *gin.Context).$GIN(...)'
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
+          # Calls that hand their input back.
+          - pattern-not: fmt.Sprintf(...)
+          - pattern-not: fmt.Sprint(...)
+          - pattern-not: fmt.Sprintln(...)
+          - pattern-not: strings.$STRINGS(...)
+          - pattern-not: bytes.$BYTES(...)
+          - pattern-not: filepath.$FILEPATH(...)
+          - pattern-not: path.$PATH(...)
+          - pattern-not: url.$URL(...)
+          - pattern-not: html.UnescapeString(...)
+          - pattern-not: strconv.Unquote(...)
+          - pattern-not: string(...)
+          - pattern-not: '[]byte(...)'
+          - pattern-not: '[]rune(...)'
+          - pattern-not: append(...)
+          - pattern-not: $VALUE.String()
+          - pattern-not: $VALUE.Bytes()
+          - pattern-not: $VALUE.Query()
+          - pattern-not: $VALUE.Hostname()
+          - pattern-not: $RE.ReplaceAllString(...)
+          - pattern-not: $RE.ReplaceAllLiteralString(...)
+          - pattern-not: $RE.ReplaceAllStringFunc(...)
+          - pattern-not: $REPLACER.Replace(...)
+          - pattern-not: $CODEC.DecodeString(...)
+          - pattern-not: $CODEC.Unescape(...)
+          - pattern-not: $CODEC.UnescapeString(...)
+          - pattern-not: $CODEC.QueryUnescape(...)
+          - pattern-not: $CODEC.PathUnescape(...)
+          - pattern-not: $CODEC.Unquote(...)
+          - pattern-not: io.ReadAll(...)
+          - pattern-not: ioutil.ReadAll(...)
+          - pattern-not: json.NewDecoder(...)
+          - pattern-not: $DECODER.Decode(...)
+          - pattern-not: json.Unmarshal(...)
+          # A call that takes a function literal (router.GET(path, func(c
+          # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+          # does not judge the calls inside a sanitized range one by one.
+          - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+          # This rule's sinks.
+          - pattern-not: $PARSER.ParseUnverified(...)
+          - pattern-not: jwt.NewParser(...)
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+
+      # The same sanitizer for a call assigned to a variable ($x := f(...),
+      # var x = f(...), x = f(...)): Semgrep 1.182 keeps the taint of a variable
+      # assigned from an exact-sanitized call, so the assignment is a sanitizer too.
+      # The assignment forms are listed twice: with the call as $CALLEXPR, which
+      # the call conditions are matched against, and with the call written out,
+      # which binds its receiver and function for them and for the file conditions
+      # (a condition is only judged for the outermost call).
+      - exact: true
+        patterns:
+          - pattern-either:
+              - pattern: $ASSIGNED := $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $CALLEXPR
+              - pattern: $ASSIGNED = $CALLEXPR
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED = $CALLEXPR
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $CALLEXPR
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $CALLEXPR
+          - pattern-either:
+              - pattern: $ASSIGNED := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR := $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR = $RECEIVER.$FUNC(...)
+              - pattern: var $ASSIGNED, $ASSIGNED_ERR $ASSIGNED_TYPE = $RECEIVER.$FUNC(...)
+          - metavariable-pattern:
+              metavariable: $CALLEXPR
+              patterns:
+                - pattern: $RECEIVER.$FUNC(...)
+                # Sources.
+                - pattern-not: $R.URL.Query()
+                - pattern-not: $R.URL.Query().$GET(...)
+                - pattern-not: $R.FormValue(...)
+                - pattern-not: $R.PostFormValue(...)
+                - pattern-not: $R.PathValue(...)
+                - pattern-not: $R.Header.Get(...)
+                - pattern-not: $R.Header.Values(...)
+                - pattern-not: $R.Form.Get(...)
+                - pattern-not: $R.PostForm.Get(...)
+                - pattern-not: '($R : *http.Request).Cookie(...)'
+                - pattern-not: '($R : *http.Request).FormFile(...)'
+                - pattern-not: mux.Vars(...)
+                - pattern-not: chi.URLParam(...)
+                - pattern-not: '($C : *gin.Context).$GIN(...)'
+                # Calls that hand their input back.
+                - pattern-not: fmt.Sprintf(...)
+                - pattern-not: fmt.Sprint(...)
+                - pattern-not: fmt.Sprintln(...)
+                - pattern-not: strings.$STRINGS(...)
+                - pattern-not: bytes.$BYTES(...)
+                - pattern-not: filepath.$FILEPATH(...)
+                - pattern-not: path.$PATH(...)
+                - pattern-not: url.$URL(...)
+                - pattern-not: html.UnescapeString(...)
+                - pattern-not: strconv.Unquote(...)
+                - pattern-not: string(...)
+                - pattern-not: '[]byte(...)'
+                - pattern-not: '[]rune(...)'
+                - pattern-not: append(...)
+                - pattern-not: $VALUE.String()
+                - pattern-not: $VALUE.Bytes()
+                - pattern-not: $VALUE.Query()
+                - pattern-not: $VALUE.Hostname()
+                - pattern-not: $RE.ReplaceAllString(...)
+                - pattern-not: $RE.ReplaceAllLiteralString(...)
+                - pattern-not: $RE.ReplaceAllStringFunc(...)
+                - pattern-not: $REPLACER.Replace(...)
+                - pattern-not: $CODEC.DecodeString(...)
+                - pattern-not: $CODEC.Unescape(...)
+                - pattern-not: $CODEC.UnescapeString(...)
+                - pattern-not: $CODEC.QueryUnescape(...)
+                - pattern-not: $CODEC.PathUnescape(...)
+                - pattern-not: $CODEC.Unquote(...)
+                - pattern-not: io.ReadAll(...)
+                - pattern-not: ioutil.ReadAll(...)
+                - pattern-not: json.NewDecoder(...)
+                - pattern-not: $DECODER.Decode(...)
+                - pattern-not: json.Unmarshal(...)
+                # A call that takes a function literal (router.GET(path, func(c
+                # *gin.Context) { ... })): its range holds the literal's body, and Semgrep
+                # does not judge the calls inside a sanitized range one by one.
+                - pattern-not: $OUTER(..., <... func(...) { ... } ...>, ...)
+                # This rule's sinks.
+                - pattern-not: $PARSER.ParseUnverified(...)
+                - pattern-not: jwt.NewParser(...)
+          - pattern-not-inside: |
+              $VALUES := $R.URL.Query()
+              ...
+              $VALUES.Get(...)
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RCV $RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) string {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func ($RTYPE) $FUNC(..., $PARAM string, ...) (string, $SECOND) {
+                ...
+              }
+              ...
+              func $CALLER(...) {
+                ...
+                $CALLEE.$FUNC(...)
+                ...
+              }
+
+    pattern-sinks:
+      - patterns:
+          # The claims are read: the token's Claims field, or the claims value
+          # ParseUnverified filled in.
+          - pattern-either:
+              - pattern-inside: |
+                  $TOKEN, $PARTS, $ERR := $PARSER.ParseUnverified($T, ...)
+                  ...
+                  <... $TOKEN.Claims ...>
+              - pattern-inside: |
+                  $TOKEN, $PARTS, $ERR = $PARSER.ParseUnverified($T, ...)
+                  ...
+                  <... $TOKEN.Claims ...>
+              - pattern-inside: |
+                  $CLAIMS := $INIT
+                  ...
+                  $PARSER.ParseUnverified($T, $CLAIMS)
+                  ...
+                  <... $CLAIMS ...>
+              - pattern-inside: |
+                  $CLAIMS := $INIT
+                  ...
+                  $PARSER.ParseUnverified($T, &$CLAIMS)
+                  ...
+                  <... $CLAIMS ...>
+              - pattern-inside: |
+                  var $CLAIMS $TYPE
+                  ...
+                  $PARSER.ParseUnverified($T, &$CLAIMS)
+                  ...
+                  <... $CLAIMS ...>
+          # The same token is verified afterwards.
+          - pattern-not-inside: |
+              $PARSER.ParseUnverified($T, ...)
+              ...
+              $VERIFIER.Parse($T, ...)
+          - pattern-not-inside: |
+              $PARSER.ParseUnverified($T, ...)
+              ...
+              $VERIFIER.ParseWithClaims($T, ...)
+          - pattern: $PARSER.ParseUnverified($T, ...)
+          - focus-metavariable: $T
+      # Request input passed as the first argument of a function of this
+      # file whose parameter reaches ParseUnverified with its claims read; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $TOKEN, $PARTS, $ERR := $PARSER.ParseUnverified($PARAM, ...)
+                    ...
+                    <... $TOKEN.Claims ...>;
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $CLAIMS := $INIT
+                    ...
+                    $PARSER.ParseUnverified($PARAM, $CLAIMS)
+                    ...
+                    <... $CLAIMS ...>;
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($PARAM string, ...) {
+                    ...
+                    $CLAIMS := $INIT
+                    ...
+                    $PARSER.ParseUnverified($PARAM, &$CLAIMS)
+                    ...
+                    <... $CLAIMS ...>;
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                $VERIFIER.Parse($PARAM, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($PARAM string, ...) {
+                ...
+                $VERIFIER.ParseWithClaims($PARAM, ...)
+                ...
+              }
+              ...
+          - pattern: $HELPER($ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the second argument of a function of this
+      # file whose parameter reaches ParseUnverified with its claims read; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $TOKEN, $PARTS, $ERR := $PARSER.ParseUnverified($PARAM, ...)
+                    ...
+                    <... $TOKEN.Claims ...>;
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $CLAIMS := $INIT
+                    ...
+                    $PARSER.ParseUnverified($PARAM, $CLAIMS)
+                    ...
+                    <... $CLAIMS ...>;
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $PARAM string, ...) {
+                    ...
+                    $CLAIMS := $INIT
+                    ...
+                    $PARSER.ParseUnverified($PARAM, &$CLAIMS)
+                    ...
+                    <... $CLAIMS ...>;
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                $VERIFIER.Parse($PARAM, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $PARAM string, ...) {
+                ...
+                $VERIFIER.ParseWithClaims($PARAM, ...)
+                ...
+              }
+              ...
+          - pattern: $HELPER($X1, $ARG, ...)
+          - focus-metavariable: $ARG
+      # Request input passed as the third argument of a function of this
+      # file whose parameter reaches ParseUnverified with its claims read; the call is reported.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $TOKEN, $PARTS, $ERR := $PARSER.ParseUnverified($PARAM, ...)
+                    ...
+                    <... $TOKEN.Claims ...>;
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $CLAIMS := $INIT
+                    ...
+                    $PARSER.ParseUnverified($PARAM, $CLAIMS)
+                    ...
+                    <... $CLAIMS ...>;
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  package $PKG
+                  ...
+                  func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                    ...
+                    $CLAIMS := $INIT
+                    ...
+                    $PARSER.ParseUnverified($PARAM, &$CLAIMS)
+                    ...
+                    <... $CLAIMS ...>;
+                    ...
+                  }
+                  ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                $VERIFIER.Parse($PARAM, ...)
+                ...
+              }
+              ...
+          - pattern-not-inside: |
+              package $PKG
+              ...
+              func $HELPER($A1 $T1, $A2 $T2, $PARAM string, ...) {
+                ...
+                $VERIFIER.ParseWithClaims($PARAM, ...)
+                ...
+              }
+              ...
+          - pattern: $HELPER($X1, $X2, $ARG, ...)
+          - focus-metavariable: $ARG
+  # A string parameter of the enclosing function decoded with ParseUnverified
+  # and its claims read.
+  - id: go-jwt-no-verify-sink
+    languages: [go]
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
+    severity: WARNING
+    message: >-
+      JWT parameter decoded without verifying its signature and its claims read: verify it with jwt.Parse.
+    metadata:
+      category: auth
+      cwe: [CWE-347]
+      confidence: MEDIUM
+      fendix_severity: MEDIUM
+      fendix_title: >-
+        JWT parameter decoded without verifying its signature.
+      fendix_remediation: >-
+        A token parameter is decoded with ParseUnverified and its claims are read. If a caller passes a token from the request, its claims are whatever the caller wrote. Verify it with jwt.Parse and jwt.WithValidMethods.
+    patterns:
+      - pattern-inside: |
+          func $FN(..., $PARAM string, ...) {
+            ...
+          }
+      - pattern-either:
+          - pattern-inside: |
+              $TOKEN, $PARTS, $ERR := $PARSER.ParseUnverified($PARAM, ...)
+              ...
+              <... $TOKEN.Claims ...>
+          - pattern-inside: |
+              $CLAIMS := $INIT
+              ...
+              $PARSER.ParseUnverified($PARAM, $CLAIMS)
+              ...
+              <... $CLAIMS ...>
+          - pattern-inside: |
+              $CLAIMS := $INIT
+              ...
+              $PARSER.ParseUnverified($PARAM, &$CLAIMS)
+              ...
+              <... $CLAIMS ...>
+      - pattern-not-inside: |
+          $PARSER.ParseUnverified($PARAM, ...)
+          ...
+          $VERIFIER.Parse($PARAM, ...)
+      - pattern-not-inside: |
+          $PARSER.ParseUnverified($PARAM, ...)
+          ...
+          $VERIFIER.ParseWithClaims($PARAM, ...)
+      - pattern: $PARSER.ParseUnverified($PARAM, ...)
+      - pattern-not: $PARSER.ParseUnverified("...", ...)
+      # Exported functions only: the entry points another file (or package) calls,
+      # which the taint rule cannot follow. A call into an unexported helper of
+      # the same file is the taint rule's to judge.
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^[A-Z]
+      # A parameter cannot also be a constant in its own scope; these keep the
+      # pack's -sink contract (a module constant is never reported) explicit.
+      - pattern-not-inside: |
+          const $PARAM = "..."
+          ...
+      - pattern-not-inside: |
+          const (
+            $PARAM = "..."
+          )
+          ...
+  # Security token from math/rand (Go). A pattern rule: math/rand output
+  # assigned to a variable named like a secret, or returned or written byte by
+  # byte in a function named like one. There is no request source, so it
+  # never claims reachability.
+  - id: go-weak-random-token
+    languages: [go]
+    # Go test code: *_test.go, mocks and the conventional helper directories. Matched
+    # against paths below the scan root, so a checkout that itself lies under a
+    # directory named test is still scanned.
+    paths:
+      exclude:
+        - "*_test.go"
+        - "**/testdata/**"
+        - "**/testhelpers/**"
+        - "**/testutil/**"
+        - "**/testutils/**"
+        - "**/testing/**"
+        - "**/test/**"
+        - "**/tests/**"
+        - "**/unittest/**"
+        - "**/mock/**"
+        - "**/mocks/**"
+        - "**/fakes/**"
+        - "mock_*.go"
+        - "*_mock.go"
+    severity: ERROR
+    message: >-
+      Security token generated with math/rand: use crypto/rand.
+    metadata:
+      category: crypto
+      cwe: [CWE-338]
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        Security token generated with math/rand.
+      fendix_remediation: >-
+        math/rand is a predictable generator: its outputs can be recovered from a few samples or its seed. Generate tokens, session ids and reset codes with crypto/rand, for example rand.Text() or rand.Read into a byte slice.
+    patterns:
+      # The file uses math/rand (under any name: Semgrep resolves the alias, so
+      # mrand.Intn matches rand.Intn). crypto/rand shares only Read and the
+      # two-argument Int with it; those are left out in a file that also imports
+      # crypto/rand, and the two-argument Int everywhere.
+      - pattern-either:
+          - pattern-inside: |
+              import "math/rand"
+              ...
+          - pattern-inside: |
+              import "math/rand/v2"
+              ...
+      - pattern-not: $NAME := <... rand.Int($READER, $MAX) ...>
+      - pattern-not: $NAME = <... rand.Int($READER, $MAX) ...>
+      - pattern-not: return <... rand.Int($READER, $MAX) ...>
+      - pattern-either:
+          # Assigned to a variable or field named like a secret.
+          - patterns:
+              - pattern-either:
+                  - pattern: $NAME := <... rand.$FN(...) ...>
+                  - pattern: $NAME = <... rand.$FN(...) ...>
+                  - pattern: var $NAME = <... rand.$FN(...) ...>
+                  - pattern: var $NAME $TYPE = <... rand.$FN(...) ...>
+                  - pattern: $OBJ.$NAME = <... rand.$FN(...) ...>
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: ^(?:(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*_(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*[A-Za-z0-9](?:Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY))(?:ID|Id|Key|Code|Hash|Value|String|Str|Bytes)?s?$
+              - metavariable-regex:
+                  metavariable: $FN
+                  regex: ^(Int|Intn|IntN|Int31|Int31n|Int32|Int32N|Int63|Int63n|Int64|Int64N|Uint|UintN|Uint32|Uint32N|Uint64|Uint64N|Float32|Float64|N|Perm)$
+          # Inside a function named like a secret: the value it returns, the
+          # bytes it fills one by one, or a buffer filled with math/rand's Read.
+          - patterns:
+              - pattern-inside: |
+                  func $FUNC(...) {
+                    ...
+                  }
+              - metavariable-regex:
+                  metavariable: $FUNC
+                  regex: ^(?:(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*_(?:token|secret|nonce|salt|otp|csrf|xsrf|apiKey|password|passwd|passcode|session|Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY)|.*[A-Za-z0-9](?:Token|Secret|Nonce|Salt|Otp|Csrf|Xsrf|ApiKey|Password|Passwd|Passcode|Session|APIKey|TOKEN|SECRET|NONCE|SALT|OTP|CSRF|XSRF|APIKEY|PASSWORD|PASSWD|PASSCODE|SESSION|API_KEY))(?:ID|Id|Key|Code|Hash|Value|String|Str|Bytes)?s?$
+              - pattern-either:
+                  - patterns:
+                      - pattern-either:
+                          - pattern: return <... rand.$FN(...) ...>
+                          - pattern: $BUF[$I] = <... rand.$FN(...) ...>
+                      - metavariable-regex:
+                          metavariable: $FN
+                          regex: ^(Int|Intn|IntN|Int31|Int31n|Int32|Int32N|Int63|Int63n|Int64|Int64N|Uint|UintN|Uint32|Uint32N|Uint64|Uint64N|Float32|Float64|N|Perm)$
+                  - patterns:
+                      - pattern: rand.Read($BUF)
+                      - pattern-not-inside: |
+                          import "crypto/rand"
+                          ...
