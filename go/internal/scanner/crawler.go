@@ -127,11 +127,11 @@ func NewCrawler(cfg *models.ScanConfig) *Crawler {
 	return &Crawler{
 		client: &http.Client{
 			Timeout: time.Duration(cfg.Timeout) * time.Second,
-			Transport: budget.WrapTransportGuarded(&http.Transport{
+			Transport: ObserveTransport(budget.WrapTransportGuarded(&http.Transport{
 				MaxIdleConns:        32,
 				MaxIdleConnsPerHost: 32,
 				IdleConnTimeout:     90 * time.Second,
-			}, ap),
+			}, ap)),
 			CheckRedirect: netguard.Config{AllowPrivate: ap}.CheckRedirect(),
 		},
 		cfg:  cfg,

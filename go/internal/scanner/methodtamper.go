@@ -334,6 +334,7 @@ func methodTamperProbe(ctx context.Context, cc *CheckContext, ep Endpoint, verb 
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, verb, ep.FullURL, body)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeMethodTamper, verb, verb, verb)
 		logagg.Warn("method-tamper", "failed to create probe request", "verb", verb, "error", err)
 		return methodTamperResult{}
 	}
@@ -342,7 +343,7 @@ func methodTamperProbe(ctx context.Context, cc *CheckContext, ep Endpoint, verb 
 		cc.Cfg.Auth.ApplyToRequest(req)
 	}
 
-	resp, err := cc.NoFollow.Do(req)
+	resp, pi, err := probeDo(ctx, cc.NoFollow, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 	authNote := "no-auth"
 	if withAuth {
@@ -357,6 +358,7 @@ func methodTamperProbe(ctx context.Context, cc *CheckContext, ep Endpoint, verb 
 		Method:    verb,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("method-tamper", "probe request failed", "endpoint", ep.FullURL, "verb", verb, "error", err)
 		record.Status = 0

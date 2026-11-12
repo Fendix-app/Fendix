@@ -244,12 +244,13 @@ func hostHeaderEstablishBaseline(ctx context.Context, cc *CheckContext, ep Endpo
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, ep.Method, ep.FullURL, nil)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeHostHeader, "(baseline)", "", ep.Method)
 		logagg.Warn("host-header", "failed to create baseline request", "error", err)
 		return hostHeaderBaseline{}, false
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.NoFollow.Do(req)
+	resp, pi, err := probeDo(ctx, cc.NoFollow, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 	record := ProbeRecord{
 		Timestamp: start,
@@ -259,6 +260,7 @@ func hostHeaderEstablishBaseline(ctx context.Context, cc *CheckContext, ep Endpo
 		Method:    ep.Method,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("host-header", "baseline request failed", "endpoint", ep.FullURL, "error", err)
 		record.Status = 0
@@ -294,6 +296,7 @@ func hostHeaderProbe(ctx context.Context, cc *CheckContext, ep Endpoint, v hostH
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, ep.Method, ep.FullURL, nil)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeHostHeader, v.Value, v.Name, ep.Method)
 		logagg.Warn("host-header", "failed to create probe request", "error", err)
 		return 0, "", "", false
 	}
@@ -308,7 +311,7 @@ func hostHeaderProbe(ctx context.Context, cc *CheckContext, ep Endpoint, v hostH
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.NoFollow.Do(req)
+	resp, pi, err := probeDo(ctx, cc.NoFollow, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 	record := ProbeRecord{
 		Timestamp: start,
@@ -319,6 +322,7 @@ func hostHeaderProbe(ctx context.Context, cc *CheckContext, ep Endpoint, v hostH
 		Method:    ep.Method,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("host-header", "probe request failed", "endpoint", ep.FullURL, "header", v.Name, "error", err)
 		record.Status = 0

@@ -83,6 +83,16 @@ type ProbeRecord struct {
 	Status    int       `json:"status_code"`
 	Duration  string    `json:"duration"`
 	Finding   bool      `json:"finding_generated"`
+	// Check is the rule-id family of the findings the probe could produce,
+	// set only by records that do not come from a typed probe (a check that
+	// panicked); otherwise it is derived from ProbeType.
+	Check string `json:"check,omitempty"`
+	// Retries is how many times the probe was re-sent after a retryable
+	// non-answer (429/502/503/504, a reset, a timeout on an accepted connection).
+	Retries int `json:"retries,omitempty"`
+	// Failure is why the probe has no usable response, and who is at fault.
+	// Nil when Status is a real HTTP status.
+	Failure *ProbeFailure `json:"failure,omitempty"`
 }
 
 // ProbeAuditLog records every active probe for accountability and debugging.
@@ -90,6 +100,7 @@ type ProbeAuditLog struct {
 	mu      sync.Mutex
 	records []ProbeRecord
 	writer  io.Writer
+	state   probeState
 }
 
 // NewProbeAuditLog creates a new audit log that writes to stderr.
@@ -124,8 +135,20 @@ func (a *ProbeAuditLog) Records() []ProbeRecord {
 	return out
 }
 
-// Count returns the number of probes recorded for a given endpoint.
+// Count returns the number of requests spent on a given endpoint: the probes
+// recorded for it plus the retries sent for it. Retries share the per-endpoint
+// budget (--max-probes-per-endpoint) so a retry never sends a request the cap
+// would have refused.
 func (a *ProbeAuditLog) Count(endpoint string) int {
+	n := a.countRecords(endpoint)
+	a.state.mu.Lock()
+	n += a.state.retries[endpoint]
+	a.state.mu.Unlock()
+	return n
+}
+
+// countRecords returns the number of probes recorded for a given endpoint.
+func (a *ProbeAuditLog) countRecords(endpoint string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	n := 0
@@ -143,11 +166,21 @@ func PrintDisclaimer() {
 }
 
 // measureBaseline sends 3 requests and returns the median response time.
-func measureBaseline(ctx context.Context, client *http.Client, cfg *models.ScanConfig, method, url string) (time.Duration, error) {
+//
+// A baseline request that fails is recorded as a failed probe (with its origin)
+// rather than dropped: the timing probes that depend on it were never
+// evaluated, and the coverage account must say so.
+func measureBaseline(ctx context.Context, client *http.Client, cfg *models.ScanConfig, method, url string, auditLog *ProbeAuditLog, pt ProbeType) (time.Duration, error) {
 	var durations []time.Duration
 	for i := 0; i < 3; i++ {
+		// Soft-stop: a baseline never started because the context had already
+		// ended is not a probe; the pass-level status carries the deadline.
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		req, err := http.NewRequestWithContext(ctx, method, url, nil)
 		if err != nil {
+			recordBuildFailure(auditLog, url, pt, "(timing baseline)", "", method)
 			return 0, fmt.Errorf("creating baseline request: %w", err)
 		}
 		// F-I (C1 baseline-auth): the baseline must traverse the SAME auth
@@ -157,9 +190,13 @@ func measureBaseline(ctx context.Context, client *http.Client, cfg *models.ScanC
 			cfg.Auth.ApplyToRequest(req)
 		}
 		start := time.Now()
-		resp, err := client.Do(req)
+		resp, pi, err := probeDo(ctx, client, req, auditLog, url, cfg)
 		elapsed := time.Since(start)
 		if err != nil {
+			record := ProbeRecord{Timestamp: start, Endpoint: url, ProbeType: pt, Payload: "(timing baseline)", Method: method,
+				Duration: elapsed.Round(time.Millisecond).String()}
+			pi.apply(&record)
+			auditLog.Record(record)
 			return 0, fmt.Errorf("baseline request %d failed: %w", i+1, err)
 		}
 		resp.Body.Close()
@@ -452,7 +489,7 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 	var findings []ev.Evidence
 	maxProbes := effectiveMaxProbes(cfg)
 
-	baseline, err := measureBaseline(ctx, client, cfg, endpoint.Method, endpoint.FullURL)
+	baseline, err := measureBaseline(ctx, client, cfg, endpoint.Method, endpoint.FullURL, auditLog, ProbeSQLi)
 	if err != nil {
 		logagg.Warn("injection", "failed to measure baseline for sqli", "endpoint", endpoint.FullURL, "error", err)
 		return nil
@@ -474,12 +511,13 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 		start := time.Now()
 		req, err := buildProbeRequest(ctx, endpoint, param, p.Payload, loc)
 		if err != nil {
+			recordBuildFailure(auditLog, endpoint.FullURL, ProbeSQLi, p.Payload, param, endpoint.Method)
 			logagg.Warn("injection", "failed to create sqli probe request", "error", err)
 			continue
 		}
 		cfg.Auth.ApplyToRequest(req)
 
-		resp, err := client.Do(req)
+		resp, pi, err := probeDo(ctx, client, req, auditLog, endpoint.FullURL, cfg)
 		elapsed := time.Since(start)
 
 		record := ProbeRecord{
@@ -492,6 +530,7 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 			Duration:  elapsed.Round(time.Millisecond).String(),
 		}
 
+		pi.apply(&record)
 		if err != nil {
 			logagg.Warn("injection", "sqli probe request failed", "endpoint", endpoint.FullURL, "db", p.DB, "error", err)
 			record.Status = 0
@@ -606,12 +645,13 @@ func probeSQLiErrorBased(ctx context.Context, client *http.Client, cfg *models.S
 	start := time.Now()
 	req, err := buildProbeRequest(ctx, endpoint, param, sqliErrorPayload, loc)
 	if err != nil {
+		recordBuildFailure(auditLog, endpoint.FullURL, ProbeSQLi, sqliErrorPayload, param, endpoint.Method)
 		logagg.Warn("injection", "failed to create error-based sqli probe request", "error", err)
 		return nil
 	}
 	cfg.Auth.ApplyToRequest(req)
 
-	resp, err := client.Do(req)
+	resp, pi, err := probeDo(ctx, client, req, auditLog, endpoint.FullURL, cfg)
 	elapsed := time.Since(start)
 
 	record := ProbeRecord{
@@ -624,6 +664,7 @@ func probeSQLiErrorBased(ctx context.Context, client *http.Client, cfg *models.S
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
 
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("injection", "error-based sqli probe failed", "endpoint", endpoint.FullURL, "error", err)
 		record.Status = 0
@@ -782,12 +823,13 @@ func sendBoolProbe(ctx context.Context, client *http.Client, cfg *models.ScanCon
 	start := time.Now()
 	req, err := buildProbeRequest(ctx, endpoint, param, payload, loc)
 	if err != nil {
+		recordBuildFailure(auditLog, endpoint.FullURL, ProbeSQLi, payload, param, endpoint.Method)
 		logagg.Warn("injection", "failed to create boolean sqli probe request", "error", err)
 		return 0, 0, false
 	}
 	cfg.Auth.ApplyToRequest(req)
 
-	resp, err := client.Do(req)
+	resp, pi, err := probeDo(ctx, client, req, auditLog, endpoint.FullURL, cfg)
 	elapsed := time.Since(start)
 
 	record := ProbeRecord{
@@ -800,6 +842,7 @@ func sendBoolProbe(ctx context.Context, client *http.Client, cfg *models.ScanCon
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
 
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("injection", "boolean sqli probe failed", "endpoint", endpoint.FullURL, "error", err)
 		auditLog.Record(record)
@@ -834,12 +877,13 @@ func probeCMDi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 	start := time.Now()
 	req, err := buildProbeRequest(ctx, endpoint, param, cmdiPayload, loc)
 	if err != nil {
+		recordBuildFailure(auditLog, endpoint.FullURL, ProbeCMDi, cmdiPayload, param, endpoint.Method)
 		logagg.Warn("injection", "failed to create cmdi probe request", "error", err)
 		return nil
 	}
 	cfg.Auth.ApplyToRequest(req)
 
-	resp, err := client.Do(req)
+	resp, pi, err := probeDo(ctx, client, req, auditLog, endpoint.FullURL, cfg)
 	elapsed := time.Since(start)
 
 	record := ProbeRecord{
@@ -852,6 +896,7 @@ func probeCMDi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
 
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("injection", "cmdi probe request failed", "endpoint", endpoint.FullURL, "error", err)
 		record.Status = 0
@@ -925,12 +970,13 @@ func probeCRLF(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, endpoint.Method, probeURL, nil)
 	if err != nil {
+		recordBuildFailure(auditLog, endpoint.FullURL, ProbeCRLF, crlfPayload, param, endpoint.Method)
 		logagg.Warn("injection", "failed to create crlf probe request", "error", err)
 		return nil
 	}
 	cfg.Auth.ApplyToRequest(req)
 
-	resp, err := client.Do(req)
+	resp, pi, err := probeDo(ctx, client, req, auditLog, endpoint.FullURL, cfg)
 	elapsed := time.Since(start)
 
 	record := ProbeRecord{
@@ -943,6 +989,7 @@ func probeCRLF(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
 
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("injection", "crlf probe request failed", "endpoint", endpoint.FullURL, "error", err)
 		record.Status = 0

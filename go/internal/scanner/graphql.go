@@ -247,13 +247,14 @@ func graphqlIntrospectionProbe(ctx context.Context, cc *CheckContext, url string
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBufferString(graphqlIntrospectionBody))
 	if err != nil {
+		recordBuildFailure(cc.Audit, url, ProbeGraphQL, graphqlIntrospectionQuery, "", http.MethodPost)
 		logagg.Warn("graphql", "failed to create introspection request", "url", url, "error", err)
 		return graphqlIntrospectionResult{}, false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.Client.Do(req)
+	resp, pi, err := probeDo(ctx, cc.Client, req, cc.Audit, url, cc.Cfg)
 	elapsed := time.Since(start)
 	record := ProbeRecord{
 		Timestamp: start,
@@ -263,6 +264,7 @@ func graphqlIntrospectionProbe(ctx context.Context, cc *CheckContext, url string
 		Method:    http.MethodPost,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("graphql", "introspection probe failed", "url", url, "error", err)
 		record.Status = 0
@@ -346,12 +348,13 @@ func graphqlGETExecutionProbe(ctx context.Context, cc *CheckContext, baseURL str
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, getURL, nil)
 	if err != nil {
+		recordBuildFailure(cc.Audit, baseURL, ProbeGraphQL, "GET ?query="+graphqlIntrospectionQuery, "", http.MethodGet)
 		logagg.Warn("graphql", "failed to create GET-execution request", "url", baseURL, "error", err)
 		return false
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.Client.Do(req)
+	resp, pi, err := probeDo(ctx, cc.Client, req, cc.Audit, baseURL, cc.Cfg)
 	elapsed := time.Since(start)
 	record := ProbeRecord{
 		Timestamp: start,
@@ -361,6 +364,7 @@ func graphqlGETExecutionProbe(ctx context.Context, cc *CheckContext, baseURL str
 		Method:    http.MethodGet,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("graphql", "GET-execution probe failed", "url", baseURL, "error", err)
 		record.Status = 0

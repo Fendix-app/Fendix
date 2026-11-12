@@ -258,11 +258,12 @@ func ssrfBaselineServiceable(ctx context.Context, cc *CheckContext, ep Endpoint)
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, ep.Method, ep.FullURL, nil)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeSSRF, "(baseline)", "", ep.Method)
 		return false
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.NoFollow.Do(req)
+	resp, pi, err := probeDo(ctx, cc.NoFollow, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 	record := ProbeRecord{
 		Timestamp: start,
@@ -272,6 +273,7 @@ func ssrfBaselineServiceable(ctx context.Context, cc *CheckContext, ep Endpoint)
 		Method:    ep.Method,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		record.Status = 0
 		cc.Audit.Record(record)
@@ -411,12 +413,13 @@ func ssrfRedirectProbe(ctx context.Context, cc *CheckContext, ep Endpoint, param
 	start := time.Now()
 	req, err := buildProbeRequest(ctx, ep, param, injectURL, loc)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeSSRF, injectURL, param, ep.Method)
 		logagg.Warn("ssrf", "failed to create redirect-echo probe request", "error", err)
 		return ev.Evidence{}, false
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.NoFollow.Do(req)
+	resp, pi, err := probeDo(ctx, cc.NoFollow, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 	record := ProbeRecord{
 		Timestamp: start,
@@ -427,6 +430,7 @@ func ssrfRedirectProbe(ctx context.Context, cc *CheckContext, ep Endpoint, param
 		Method:    ep.Method,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("ssrf", "redirect-echo probe request failed", "endpoint", ep.FullURL, "error", err)
 		record.Status = 0
@@ -508,7 +512,7 @@ func ssrfTimingProbe(ctx context.Context, cc *CheckContext, ep Endpoint, param s
 	default:
 	}
 
-	baseline, err := measureBaseline(ctx, cc.Client, cc.Cfg, ep.Method, ep.FullURL)
+	baseline, err := measureBaseline(ctx, cc.Client, cc.Cfg, ep.Method, ep.FullURL, cc.Audit, ProbeSSRF)
 	if err != nil {
 		logagg.Warn("ssrf", "failed to measure baseline for timing", "endpoint", ep.FullURL, "error", err)
 		return ev.Evidence{}, false
@@ -528,10 +532,11 @@ func ssrfTimingProbe(ctx context.Context, cc *CheckContext, ep Endpoint, param s
 		start := time.Now()
 		req, err := buildProbeRequest(ctx, ep, param, hangURL, loc)
 		if err != nil {
+			recordBuildFailure(cc.Audit, ep.FullURL, ProbeSSRF, hangURL, param, ep.Method)
 			return ev.Evidence{}, false
 		}
 		cc.Cfg.Auth.ApplyToRequest(req)
-		resp, err := cc.Client.Do(req)
+		resp, pi, err := probeDo(ctx, cc.Client, req, cc.Audit, ep.FullURL, cc.Cfg)
 		elapsed := time.Since(start)
 		record := ProbeRecord{
 			Timestamp: start,
@@ -542,6 +547,7 @@ func ssrfTimingProbe(ctx context.Context, cc *CheckContext, ep Endpoint, param s
 			Method:    ep.Method,
 			Duration:  elapsed.Round(time.Millisecond).String(),
 		}
+		pi.apply(&record)
 		if err != nil {
 			record.Status = 0
 			cc.Audit.Record(record)
@@ -602,12 +608,13 @@ func ssrfSendBody(ctx context.Context, cc *CheckContext, ep Endpoint, param stri
 	start := time.Now()
 	req, err := buildProbeRequest(ctx, ep, param, injectURL, loc)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeSSRF, injectURL, param, ep.Method)
 		logagg.Warn("ssrf", "failed to create ssrf probe request", "error", err)
 		return "", 0, false
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.Client.Do(req)
+	resp, pi, err := probeDo(ctx, cc.Client, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 	record := ProbeRecord{
 		Timestamp: start,
@@ -618,6 +625,7 @@ func ssrfSendBody(ctx context.Context, cc *CheckContext, ep Endpoint, param stri
 		Method:    ep.Method,
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("ssrf", "ssrf probe request failed", "endpoint", ep.FullURL, "error", err)
 		record.Status = 0

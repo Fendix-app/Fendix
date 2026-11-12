@@ -136,12 +136,13 @@ func probeOpenRedirect(ctx context.Context, cc *CheckContext, ep Endpoint, param
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, ep.Method, probeURL, nil)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeRedirect, p.Value, param, ep.Method)
 		logagg.Warn("open-redirect", "failed to create probe request", "error", err)
 		return ev.Evidence{}, false
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.NoFollow.Do(req)
+	resp, pi, err := probeDo(ctx, cc.NoFollow, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 
 	record := ProbeRecord{
@@ -154,6 +155,7 @@ func probeOpenRedirect(ctx context.Context, cc *CheckContext, ep Endpoint, param
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
 
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("open-redirect", "probe request failed", "endpoint", ep.FullURL, "error", err)
 		record.Status = 0
