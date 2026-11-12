@@ -10,8 +10,15 @@
 //   - 17 general patterns + ENV_SECRET (.env-only).
 //   - Same SEC-<PATTERN_ID> finding IDs so dedup collapses any overlap
 //     when --checks secrets is passed explicitly.
-//   - Same skip-dirs / file-extension gate / .env name match.
-//   - Same 1MB file-size cap and >500-char minified-JS-line skip.
+//   - Same .env name match for ENV_SECRET.
+//
+// What it reads and how differs from the removed Python analyzer on purpose
+// (R-010, D6'): every file that is text, not only those with a listed
+// extension (textfiles.go); every line, however long, in overlapping windows,
+// not skipping a .js/.ts line over 500 characters (stream.go); files up to
+// streamMaxFileBytes in bounded memory, not 1 MB; and no directory pruned by
+// its name alone (PrunedDir). What it still cannot read is recorded as lost
+// evaluation (scope.Coverage), never skipped silently.
 //
 // Evidence redaction DIVERGES from the removed Python analyzer on purpose:
 // credential material is replaced at CAPTURE time with
@@ -40,6 +47,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -49,6 +57,7 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // ErrCodePathMissing signals the codePath argument is empty or points
@@ -57,32 +66,21 @@ import (
 var ErrCodePathMissing = errors.New("secrets: code path does not exist")
 
 const (
-	// maxFileBytes mirrors python secrets.py _MAX_FILE_BYTES (1 MB).
-	maxFileBytes = 1 << 20
+	// defaultMaxFileBytes is the size above which a file is not read: 128 MiB.
+	// A file is streamed in bounded memory, so the cap bounds time, not memory;
+	// it is far above any source file and a generated data file in a repository
+	// (GitHub refuses a push of one over 100 MiB). A file over it is lost
+	// evaluation, named in the scan's detail.
+	defaultMaxFileBytes = 128 << 20
 	// evidenceMaxLen mirrors python _EVIDENCE_MAX_LEN.
 	evidenceMaxLen = 120
-	// minifiedLineLen mirrors python _is_minified (>500 chars in .js/.ts).
-	minifiedLineLen = 500
 	// fixText mirrors python finding `fix` field.
 	fixText = "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately."
 )
 
-// skipDirs mirrors python _SKIP_DIRS. Pruned in-place during the walk
-// so we never descend into them.
-var skipDirs = map[string]struct{}{
-	".git": {}, "node_modules": {}, "vendor": {}, "__pycache__": {},
-	".venv": {}, "venv": {}, "dist": {}, "build": {}, ".tox": {},
-}
-
-// scanExtensions mirrors python _SCAN_EXTENSIONS. Lower-case match on
-// filepath.Ext.
-var scanExtensions = map[string]struct{}{
-	".py": {}, ".js": {}, ".ts": {}, ".jsx": {}, ".tsx": {}, ".go": {},
-	".java": {}, ".rb": {}, ".php": {}, ".env": {}, ".cfg": {}, ".ini": {},
-	".yaml": {}, ".yml": {}, ".toml": {}, ".json": {}, ".xml": {},
-	".tf": {}, ".hcl": {}, ".sh": {}, ".bash": {}, ".zsh": {},
-	".conf": {}, ".config": {},
-}
+// maxFileBytes is the cap on the bytes read from one file. It is a variable so
+// a test can lower it; production code never assigns it.
+var maxFileBytes int64 = defaultMaxFileBytes
 
 // valueGroup selectors — which part of a match is credential material, for
 // redaction (redact.go) and placeholder classification (placeholder.go).
@@ -121,6 +119,21 @@ type pattern struct {
 	// valueGroup selects which part of a match is credential material. Zero
 	// (valueGroupAuto) for all but the three entries that say otherwise.
 	valueGroup int
+	// valueSpans, when set, replaces valueGroup: it returns every credential
+	// span the match covers, the match's own value first. A pattern needs it
+	// when the regex capture cannot reach the end of the credential (a
+	// connection-string password holding ; & ' " @ or a space, or a second
+	// password property later in the same URL; see connectionStringSpans).
+	// It never changes what matches, only what is redacted.
+	valueSpans func(line string, sub []int) [][2]int
+	// lineAnchored marks a pattern whose regex is anchored to the start of the
+	// line (^). On a line longer than a window only the first window starts
+	// at the line start, so the later windows skip it.
+	lineAnchored bool
+	// required, derived at start-up (prefilter.go), is a set of lower-cased
+	// strings of which every match contains at least one; the pattern runs on a
+	// line only when the line contains one.
+	required []string
 }
 
 // CatalogRule is the public, non-sensitive contract metadata for one bundled
@@ -306,9 +319,16 @@ var patterns = []pattern{
 		// match; a `$` later in the value is part of the password, and the
 		// whole value is the capture (a value class that excluded `$` anywhere
 		// stopped at it and published the rest of the password).
-		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+|jdbc:[a-z0-9]+:(?://)?[^\s"'?;]+[?;][^\s"']*?\bpassword=([^&;\s"'$][^&;\s"']*)`),
-		severity: models.SeverityHigh,
-		cwe:      "CWE-214",
+		//
+		// The capture marks where the password STARTS; it stops at the first
+		// ; & ' " whitespace (or, for userinfo, @), which a password can
+		// contain. Redaction therefore does not use the capture's end:
+		// connectionStringSpans extends it to the end of the password
+		// property (R-013), so no part of the password reaches evidence.
+		regex:      regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+|jdbc:[a-z0-9]+:(?://)?[^\s"'?;]+[?;][^\s"']*?\bpassword=([^&;\s"'$][^&;\s"']*)`),
+		severity:   models.SeverityHigh,
+		cwe:        "CWE-214",
+		valueSpans: connectionStringSpans,
 	},
 	{
 		id:    "GITHUB_TOKEN",
@@ -405,9 +425,10 @@ var envPatterns = []pattern{
 		// regex is multiline-anchored via ^...$; in Go the (?m) flag
 		// has the same effect, but we apply per-line so plain
 		// anchors are fine.
-		regex:    regexp.MustCompile(`^([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)S?(?:_[A-Z0-9_]+)?)\s*=\s*([^\s"'#][^\n#]{3,})\s*$`),
-		severity: models.SeverityHigh,
-		cwe:      "CWE-798",
+		regex:        regexp.MustCompile(`^([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)S?(?:_[A-Z0-9_]+)?)\s*=\s*([^\s"'#][^\n#]{3,})\s*$`),
+		severity:     models.SeverityHigh,
+		cwe:          "CWE-798",
+		lineAnchored: true,
 	},
 }
 
@@ -436,65 +457,243 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 // pruning are unchanged; non-allowlisted files are skipped before scanFile
 // opens them.
 func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
+	findings, _, err := ScanCoverage(ctx, codePath, allow)
+	return findings, err
+}
+
+// ScanCoverage is ScanWithAllowlist that also returns what the scan left
+// unread (decision D6). A file the scanner reads (ReadsFile) that was over
+// the size cap, could not be read, or was replaced between the walk and the
+// read, and a directory it could not list, are lost evaluation: the caller
+// records the scan a coverage gap naming them and keeps the findings. A
+// declared generated artifact over the cap (scope.Generated) and a pruned
+// vendored or build-output directory are declared out of scope, listed only.
+func ScanCoverage(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, scope.Coverage, error) {
+	var findings []evidence.Evidence
+	var cov scope.Coverage
+	err := scanTree(ctx, codePath, allow, func(out []emitted) {
+		for _, e := range out {
+			findings = append(findings, e.ev)
+		}
+	}, &cov)
+	return findings, cov, err
+}
+
+// noteUnread files a file the walk did not (fully) read: too large (declared
+// out of scope only when its content proves it a generated artifact, D6') or
+// unreadable. A file proven binary is not text and is not recorded.
+func noteUnread(cov *scope.Coverage, absRoot, path string, err error) {
+	if cov == nil || err == nil || errors.Is(err, errBinary) {
+		return
+	}
+	rel, rerr := filepath.Rel(absRoot, path)
+	if rerr != nil {
+		return
+	}
+	rel = filepath.ToSlash(rel)
+	switch {
+	case errors.Is(err, errTooLarge):
+		if info, serr := os.Lstat(path); serr == nil {
+			if v := scope.ClassifyFile(path, rel, info.Size()); !v.None() {
+				cov.Exclude(v.Reason, SafeName(rel))
+				return
+			}
+		}
+		cov.TooLarge(lostName(rel))
+	case errors.Is(err, errTooManyFindings):
+		// The file is not evaluated past its findings cap: lost, not skipped.
+		cov.TooLarge(lostName(rel))
+	default:
+		cov.Unreadable(lostName(rel))
+	}
+}
+
+// noteSymlink files a symbolic link the scan refused to follow (sre3-06). A
+// link whose target is inside the scan root loses nothing: the walk reaches the
+// target directly. A dangling link has nothing to read. A link to a file or
+// directory outside the root is content that exists and was not read, so it is
+// listed as declared out of scope (a symbolic link) instead of vanishing from a
+// scan that says ok.
+func noteSymlink(cov *scope.Coverage, absRoot, path string) {
+	NoteRefusedSymlink(cov, absRoot, path, ReadsFile)
+}
+
+// NoteRefusedSymlink is noteSymlink for another scanner: reads says whether a
+// file of this base name is one that scanner reads, so a link to a file it
+// would never read is not a loss. A link to a directory always is.
+func NoteRefusedSymlink(cov *scope.Coverage, absRoot, path string, reads func(base string) bool) {
+	if cov == nil {
+		return
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return
+	}
+	rel, err := filepath.Rel(absRoot, path)
+	if err != nil {
+		return
+	}
+	if rootReal, err := filepath.EvalSymlinks(absRoot); err == nil {
+		if tr, err := filepath.Rel(rootReal, target); err == nil && tr != ".." && !strings.HasPrefix(tr, ".."+string(filepath.Separator)) {
+			return
+		}
+	}
+	if info, err := os.Stat(target); err != nil || (!info.IsDir() && !reads(filepath.Base(path))) {
+		return
+	}
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		cov.Symlink(SafeName(filepath.ToSlash(rel)) + "/")
+		return
+	}
+	cov.Symlink(SafeName(filepath.ToSlash(rel)))
+}
+
+// emitted is one finding plus the redaction markers that identify the
+// credential it reports (see Sighting). Only ScanSightings keeps the markers.
+type emitted struct {
+	ev      evidence.Evidence
+	markers []string
+}
+
+// scanTree is the body of ScanWithAllowlist: it walks codePath (or reads the
+// allowlist's files) and hands every file's findings to collect. On a walk
+// error collect has already received the findings read so far.
+//
+// cov, when not nil, receives what the walk left unread (ScanCoverage).
+func scanTree(ctx context.Context, codePath string, allow *gitdiff.Allowlist, collect func([]emitted), cov *scope.Coverage) error {
+	return walkTree(ctx, codePath, allow, func(ctx context.Context, root *os.Root, path, rootDir string, d fs.DirEntry) error {
+		emits, err := scanFile(ctx, root, path, rootDir, d)
+		// What was read is kept even when the rest of the file was not.
+		collect(emits)
+		return err
+	}, cov)
+}
+
+// fileVisitor reads one regular file the walk reached, through root. The error
+// it returns says why the file was not read in full (errTooLarge, errBinary, an
+// open or read error); the walk records it in the coverage.
+type fileVisitor func(ctx context.Context, root *os.Root, path, rootDir string, d fs.DirEntry) error
+
+// walkTree walks codePath (or visits the allowlist's files) and hands every
+// regular file the scan reads to visit. It is the one walk both the scan and
+// the credential search use, so they agree on what is in scope: the same
+// pruned directories, the same symlink refusals, the same containment.
+func walkTree(ctx context.Context, codePath string, allow *gitdiff.Allowlist, visit fileVisitor, cov *scope.Coverage) error {
+	return walkTreeWith(ctx, codePath, allow, visit, cov, walkOptions{})
+}
+
+// walkOptions are the two things a walk's caller may change: which directories
+// are pruned and which unreadable files count as lost.
+type walkOptions struct {
+	// prune says whether the directory at abs (rel under the root) is left
+	// unread, why, and whether that is not worth listing. nil means PrunedDir.
+	prune func(abs, rel string) (scope.Reason, bool)
+	// reads says whether a file of this base name is one the walk must read.
+	// nil means ReadsFile.
+	reads func(base string) bool
+}
+
+// walkTreeWith is walkTree with its options.
+func walkTreeWith(ctx context.Context, codePath string, allow *gitdiff.Allowlist, visit fileVisitor, cov *scope.Coverage, opts walkOptions) error {
+	if opts.prune == nil {
+		opts.prune = PrunedDir
+	}
+	if opts.reads == nil {
+		opts.reads = ReadsFile
+	}
 	if codePath == "" {
-		return nil, ErrCodePathMissing
+		return ErrCodePathMissing
 	}
 	info, err := os.Stat(codePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrCodePathMissing
+			return ErrCodePathMissing
 		}
-		return nil, fmt.Errorf("secrets: stat %q: %w", codePath, err)
+		return fmt.Errorf("secrets: stat %q: %w", codePath, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("secrets: %q is not a directory", codePath)
+		return fmt.Errorf("secrets: %q is not a directory", codePath)
 	}
 
 	absRoot, err := filepath.Abs(codePath)
 	if err != nil {
-		return nil, fmt.Errorf("secrets: resolve %q: %w", codePath, err)
+		return fmt.Errorf("secrets: resolve %q: %w", codePath, err)
 	}
-
-	var findings []evidence.Evidence
 
 	// A diff that matched zero scannable files → nothing to do. Guard here too
 	// (the orchestrator also short-circuits) since this is exported.
 	if allow.Empty() {
-		return nil, nil
+		return nil
 	}
+
+	// Every read goes through an os.Root opened on the scan root, so no path
+	// the walk or the allowlist produces can resolve outside it, even if the
+	// tree changes while the scan runs (R-003).
+	root, err := os.OpenRoot(absRoot)
+	if err != nil {
+		return fmt.Errorf("secrets: open %q: %w", absRoot, err)
+	}
+	defer root.Close()
 
 	// Diff-aware fast path: when the allowlist names specific changed files,
 	// scan exactly those — O(changed files) — instead of walking the whole
 	// tree to filter it down to them. Parity with the walk below is preserved:
-	// the same skipDirs prune (a committed vendor/ file stays skipped), the
-	// file set stays a strict subset of the walk's (TraversesSymlink rejects
-	// any file reached through a symlinked parent — which the walk never
-	// descends and which could escape the repo root), and directories are
-	// excluded via Lstat. (Empty allowlists already returned above.)
+	// the same pruned directories (a committed node_modules file stays
+	// skipped), the file set stays a strict subset of the walk's
+	// (TraversesSymlink rejects any file reached through a symlinked parent —
+	// which the walk never descends and which could escape the repo root), and
+	// anything that is not a regular file — a directory, a symlinked leaf, a
+	// device — is excluded via Lstat, as the walk excludes it. (Empty
+	// allowlists already returned above.)
 	if allow != nil {
+		noted := map[string]bool{}
 		for _, path := range allow.AbsPaths() {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
-			if underSkipDir(absRoot, path) || gitdiff.TraversesSymlink(absRoot, path) {
+			if NotePrunedAncestor(cov, noted, absRoot, path) != "" || gitdiff.TraversesSymlink(absRoot, path) {
 				continue
 			}
 			info, err := os.Lstat(path)
-			if err != nil || info.IsDir() {
-				continue
-			}
-			fileFindings, err := scanFile(path, absRoot, fs.FileInfoToDirEntry(info))
 			if err != nil {
 				continue
 			}
-			findings = append(findings, fileFindings...)
+			if info.Mode()&fs.ModeSymlink != 0 {
+				noteSymlink(cov, absRoot, path)
+				continue
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			if err := visit(ctx, root, path, absRoot, fs.FileInfoToDirEntry(info)); err != nil {
+				if errors.Is(err, errStopWalk) {
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				noteUnread(cov, absRoot, path, err)
+			}
 		}
-		return findings, nil
+		return nil
 	}
 
-	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, walkErrIn error) error {
+	// walkRoot, not filepath.WalkDir: a root that is itself a symlink is the
+	// scope the user chose, and WalkDir would report it as one non-directory
+	// entry and walk nothing (redteam-secrets-01).
+	walkErr := walkRoot(absRoot, func(path string, d fs.DirEntry, walkErrIn error) error {
 		if walkErrIn != nil {
-			// Permissions errors / vanished files — skip but keep walking.
+			// Permissions errors / vanished files: skip and keep walking, but
+			// a directory not listed, or a file of a kind the scanner reads,
+			// is in scope and was not searched (security-01).
+			if rel, rerr := filepath.Rel(absRoot, path); rerr == nil && rel != "." && cov != nil {
+				switch {
+				case d != nil && d.IsDir():
+					cov.Unreadable(lostName(filepath.ToSlash(rel)) + "/")
+				case opts.reads(filepath.Base(path)):
+					cov.Unreadable(lostName(filepath.ToSlash(rel)))
+				}
+			}
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
 			}
@@ -507,9 +706,34 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 			if path == absRoot {
 				return nil
 			}
-			if _, skip := skipDirs[d.Name()]; skip {
+			rel, rerr := filepath.Rel(absRoot, path)
+			if rerr != nil {
+				return nil
+			}
+			if reason, quiet := opts.prune(path, rel); reason != "" {
+				if cov != nil && !quiet {
+					cov.Exclude(reason, SafeName(filepath.ToSlash(rel))+"/")
+				}
 				return fs.SkipDir
 			}
+			return nil
+		}
+
+		// Regular files only (R-003). A symlink is never followed: one that
+		// points outside the root would publish another file's contents
+		// (a worker's environment, a mounted key) in this tree's evidence,
+		// and one to /dev/zero would be read until memory runs out. One that
+		// points inside the root loses nothing, because the walk reaches its
+		// target directly; one that points outside is named (noteSymlink).
+		// Devices, FIFOs and sockets are never source.
+		// (WalkDir already does not descend a symlinked directory.)
+		if d.Type()&fs.ModeSymlink != 0 {
+			if allow.Allows(path) {
+				NoteRefusedSymlink(cov, absRoot, path, opts.reads)
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
 			return nil
 		}
 
@@ -519,71 +743,64 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 			return nil
 		}
 
-		fileFindings, err := scanFile(path, absRoot, d)
-		if err != nil {
+		if err := visit(ctx, root, path, absRoot, d); err != nil {
+			if errors.Is(err, errStopWalk) {
+				return fs.SkipAll
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			// Per-file errors are non-fatal (matches Python's
-			// try/except OSError: return).
-			return nil
+			// try/except OSError: return), and recorded as lost evaluation.
+			noteUnread(cov, absRoot, path, err)
 		}
-		findings = append(findings, fileFindings...)
 		return nil
 	})
 
 	if walkErr != nil {
 		if errors.Is(walkErr, context.Canceled) || errors.Is(walkErr, context.DeadlineExceeded) {
-			return findings, walkErr
+			return walkErr
 		}
-		return findings, fmt.Errorf("secrets: walk %q: %w", absRoot, walkErr)
+		return fmt.Errorf("secrets: walk %q: %w", absRoot, walkErr)
 	}
-	return findings, nil
+	return nil
 }
 
-// scanFile reads one file, applies the pattern registry, and returns
-// any findings it produces. The file is silently skipped if it isn't
-// readable, exceeds maxFileBytes, or has an extension that's not in
-// scanExtensions (unless it's a .env-style file).
-// underSkipDir reports whether any directory component of abs (relative to
-// root) is a pruned directory. The diff-aware fast path uses it to preserve
-// parity with the walk, which prunes skipDirs subtrees (e.g. a committed
-// vendor/ file the walk never reaches).
-func underSkipDir(root, abs string) bool {
-	return skippedDir(root, abs) != ""
-}
-
-// skippedDir returns the name of the first pruned directory between root and
-// abs (the file's own name excluded), or "" when there is none.
-func skippedDir(root, abs string) string {
-	rel, err := filepath.Rel(root, abs)
+// walkRoot is filepath.WalkDir(root, fn) except that root itself is followed
+// when it is a symbolic link. WalkDir Lstats its root, so a linked root is one
+// non-directory entry and nothing under it is visited; the scan then recorded
+// secrets ok over zero files. The link is resolved once, the resolved
+// directory is walked, and every path is reported under root as the caller
+// gave it, so the allowlist, the os.Root reads and the endpoints are unchanged.
+// Links inside the tree are still never followed.
+func walkRoot(root string, fn fs.WalkDirFunc) error {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return filepath.WalkDir(root, fn)
+	}
+	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return ""
+		return fmt.Errorf("resolve the root link %q: %w", root, err)
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for _, part := range parts[:len(parts)-1] { // dir components only, not the file
-		if _, skip := skipDirs[part]; skip {
-			return part
+	return filepath.WalkDir(resolved, func(path string, d fs.DirEntry, err error) error {
+		rel, rerr := filepath.Rel(resolved, path)
+		if rerr != nil {
+			return rerr
 		}
-	}
-	return ""
-}
-
-// ReadsFile reports whether Scan reads a file of this base name: its extension
-// is in scanExtensions, or it is an .env-style file. scanFile uses it, so the
-// two cannot drift.
-func ReadsFile(name string) bool {
-	if isEnvFile(name) {
-		return true
-	}
-	_, ok := scanExtensions[strings.ToLower(filepath.Ext(name))]
-	return ok
+		return fn(filepath.Join(root, rel), d, err)
+	})
 }
 
 // SkipReason says why a full Scan of root would not read the file at path, or
 // returns "" when it would. It applies the checks Scan applies: a pruned
-// directory (skipDirs) between root and the file, an extension Scan does not
-// read, and a file over maxFileBytes. A caller that re-tests a finding with
-// Scan uses it to tell "no longer flagged" from "never looked at". An
-// unreadable file returns "", so the caller's own inspection reports it.
-func SkipReason(root, path string) string {
+// directory between root and the file, a binary file type, and a file over the
+// size cap. A caller that re-tests a finding with Scan uses it to tell "no
+// longer flagged" from "never looked at". An unreadable file returns "", so
+// the caller's own inspection reports it.
+func SkipReason(root, path string) string { return skipReason(root, path, true) }
+
+// skipReason is SkipReason, with the size check optional.
+func skipReason(root, path string, checkSize bool) string {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return ""
@@ -592,25 +809,115 @@ func SkipReason(root, path string) string {
 	if err != nil {
 		return ""
 	}
-	if dir := skippedDir(absRoot, absPath); dir != "" {
+	if dir := prunedAncestor(absRoot, absPath); dir != "" {
 		return fmt.Sprintf("it is under the skipped directory %q", dir)
 	}
 	name := filepath.Base(absPath)
 	if !ReadsFile(name) {
-		return fmt.Sprintf("files with the extension %q are not read", strings.ToLower(filepath.Ext(name)))
+		return fmt.Sprintf("files of the binary type %q are not read", strings.ToLower(filepath.Ext(name)))
 	}
-	if info, err := os.Stat(absPath); err == nil && exceedsFileLimit(info.Size()) {
-		return fmt.Sprintf("it is larger than %d bytes", maxFileBytes)
+	if info, err := os.Lstat(absPath); err == nil {
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return "it is a symbolic link, which the scanner never follows"
+		}
+		if !info.Mode().IsRegular() {
+			return "it is not a regular file"
+		}
+		if checkSize && info.Size() > maxFileBytes {
+			return fmt.Sprintf("it is larger than %d bytes", maxFileBytes)
+		}
+	}
+	if gitdiff.TraversesSymlink(absRoot, absPath) {
+		return "it is reached through a symbolic link, which the scanner never follows"
 	}
 	return ""
 }
 
-// exceedsFileLimit reports whether a file of this size is skipped.
-func exceedsFileLimit(size int64) bool { return size > maxFileBytes }
+// errStopWalk is returned by a visitor that has its answer and wants the walk to
+// end without recording anything as unread.
+var errStopWalk = errors.New("stop the walk")
 
-func scanFile(path, root string, d fs.DirEntry) ([]evidence.Evidence, error) {
+// relUnder is path relative to rootDir, or an error when it is outside it.
+func relUnder(rootDir, path string) (string, error) {
+	rel, err := filepath.Rel(rootDir, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("secrets: %q is outside the scan root", path)
+	}
+	return rel, nil
+}
+
+// errNotRegular, errChanged, errTooLarge and errBinary are why a file is not
+// (fully) read. They are per-file conditions: the walk goes on.
+var (
+	errNotRegular = errors.New("not a regular file")
+	errChanged    = errors.New("the file changed between the walk and the read")
+	errTooLarge   = errors.New("larger than the read cap")
+	// errBinary: the first bytes of a file of an unknown kind hold a NUL, which
+	// proves it is not text. It is not lost evaluation and is not recorded.
+	errBinary = errors.New("not a text file")
+	// errTooManyFindings: one file reported maxFindingsPerFile findings, so the
+	// rest of it was not read. The findings so far are kept.
+	errTooManyFindings = errors.New("too many findings in one file")
+)
+
+// maxFindingsPerFile bounds the memory one file can cost: a file of nothing but
+// credential-shaped lines would otherwise hold a finding per line. A file that
+// reaches it is recorded as lost evaluation, not skipped.
+var maxFindingsPerFile = 20000
+
+// openRegularFile opens rel through root, which refuses any path that
+// resolves outside the scan root. It returns only a regular file, and only the
+// file the walk saw (walked, from Lstat): a path swapped for a link, a device
+// or another file after the walk is refused.
+func openRegularFile(root *os.Root, rel string, walked fs.FileInfo) (*os.File, error) {
+	if testHookBeforeOpen != nil {
+		testHookBeforeOpen(rel)
+	}
+	f, err := root.OpenFile(rel, openReadFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, errNotRegular
+	}
+	if walked != nil && !os.SameFile(walked, info) {
+		f.Close()
+		return nil, errChanged
+	}
+	// The size is not checked here: the caller has, and the read itself is
+	// bounded by maxFileBytes whatever the file does after it was sized.
+	return f, nil
+}
+
+// Test hooks, nil outside tests (qa-engine-06). They let a test change the
+// tree at the exact points between the walk and the read, so each containment
+// layer can be shown to be the one that refuses the change.
+var (
+	// testHookScanFile is called with the path of every entry that reaches
+	// scanFile: only regular files ever should.
+	testHookScanFile func(path string)
+	// testHookBeforeOpen runs after the walk's Lstat and before the open.
+	testHookBeforeOpen func(rel string)
+	// testHookReadSource wraps the opened file before it is read.
+	testHookReadSource func(io.Reader) io.Reader
+)
+
+// scanFile reads one regular file through root, in bounded memory, and
+// applies the pattern registry. It returns the findings and an error that says
+// why the file was not read in full: errTooLarge (the findings read before the
+// cap are returned with it), errBinary, or an open or read error. The walk
+// records them (D6). A file the scanner does not read by name returns nothing.
+func scanFile(ctx context.Context, root *os.Root, path, rootDir string, d fs.DirEntry) ([]emitted, error) {
+	if testHookScanFile != nil {
+		testHookScanFile(path)
+	}
 	name := d.Name()
-	envFile := isEnvFile(name)
 	if !ReadsFile(name) {
 		return nil, nil
 	}
@@ -619,149 +926,197 @@ func scanFile(path, root string, d fs.DirEntry) ([]evidence.Evidence, error) {
 	if err != nil {
 		return nil, err
 	}
-	if exceedsFileLimit(info.Size()) {
-		return nil, nil
+	if !info.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
+	if info.Size() > maxFileBytes {
+		return nil, errTooLarge
 	}
 
-	data, err := os.ReadFile(path)
+	rel, err := relUnder(rootDir, path)
 	if err != nil {
 		return nil, err
 	}
-
-	rel, err := filepath.Rel(root, path)
+	f, err := openRegularFile(root, rel, info)
 	if err != nil {
-		rel = path
+		return nil, err
 	}
-	rel = filepath.ToSlash(rel)
+	defer f.Close()
+	return scanOpenFile(ctx, f, name, filepath.ToSlash(rel))
+}
 
+// scanOpenFile streams an open file through the pattern registry. The read is
+// bounded by maxFileBytes whatever the file does after it was sized: a file
+// that keeps growing is cut one byte past the cap and is errTooLarge, with the
+// findings of the bytes read.
+func scanOpenFile(ctx context.Context, f io.Reader, name, rel string) ([]emitted, error) {
+	src := f
+	if testHookReadSource != nil {
+		src = testHookReadSource(src)
+	}
+	lim := &io.LimitedReader{R: src, N: maxFileBytes + 1}
+	r, err := textReader(lim, name)
+	if err != nil {
+		return nil, err
+	}
+	out, err := scanReader(ctx, name, rel, r)
+	if err == nil && lim.N <= 0 {
+		err = errTooLarge
+	}
+	return out, err
+}
+
+// lineScanner applies the pattern registry to the windows of one file.
+type lineScanner struct {
+	active  []pattern
+	matches [][][]int
+	rel     string
+	out     []emitted
+}
+
+// scanReader applies the pattern registry to a stream. rel is the
+// slash-separated path findings are reported at. Each finding carries the
+// markers that identify its credential: the marker of its own value and, when
+// that value was merged with an overlapping span on the line, the marker the
+// evidence shows.
+func scanReader(ctx context.Context, name, rel string, r io.Reader) ([]emitted, error) {
 	active := patterns
-	if envFile {
+	if isEnvFile(name) {
 		active = make([]pattern, 0, len(patterns)+len(envPatterns))
 		active = append(active, patterns...)
 		active = append(active, envPatterns...)
 	}
-
-	var out []evidence.Evidence
-	isJSOrTS := strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".ts")
-	text := string(data)
-	lineno := 0
 	// matches holds one FindAllStringSubmatchIndex row set per active
 	// pattern for the CURRENT line. Reused across lines, and shared by the
 	// redaction pre-pass and the emit loop so each regex runs exactly once
 	// per line rather than once per consumer.
-	matches := make([][][]int, len(active))
-	for _, line := range splitLines(text) {
-		lineno++
-		if isJSOrTS && len(line) > minifiedLineLen {
-			continue
-		}
-		matched := false
-		for i := range active {
-			matches[i] = active[i].regex.FindAllStringSubmatchIndex(line, -1)
-			matched = matched || matches[i] != nil
-		}
-		if !matched {
-			continue
-		}
-
-		// One redaction pass per line, over the union of EVERY pattern's
-		// credential spans — not just the emitting pattern's own. Evidence is
-		// a window over the SOURCE LINE, so a line carrying two credentials
-		// would otherwise ship each one in the clear inside the other's
-		// window. See redact.go for the full argument.
-		//
-		// INVARIANT from here down: `line` is used ONLY for offsets, pattern
-		// matching and placeholder classification. The only string that may
-		// reach an evidence.Evidence is `redacted`.
-		spans := lineSecretSpans(line, active, matches)
-		redacted, newSpans := redactSpans(line, spans)
-
-		for i := range active {
-			pat := &active[i]
-			for _, sub := range matches[i] {
-				if !boundaryOK(line, sub[0], sub[1], pat.leftBoundary, pat.rightBoundary) {
-					continue
-				}
-				match := line[sub[0]:sub[1]]
-				// B1/B2: drop matches that are references-not-credentials
-				// (an ARN / Secrets-Manager lookup key) or well-known
-				// placeholders (YOUR_TOKEN_HERE, example keys, changeme…).
-				// These are the two false-positive classes that previously
-				// had to be hand-suppressed per file:line in .fendix-ignore.
-				// Unchanged: it still receives the FULL match.
-				if isReferenceOrPlaceholder(line, match) {
-					continue
-				}
-				vStart, vEnd, hasValue := secretValueSpan(pat, line, sub)
-				value := ""
-				if hasValue {
-					value = line[vStart:vEnd]
-				}
-				aStart, aEnd := evidenceAnchor(sub[0], vStart, hasValue, spans, newSpans)
-				safeEvidence := truncateEvidenceAround(redacted, aStart, aEnd)
-				lineRef := fmt.Sprintf("%s:%d", rel, lineno)
-				lineCopy := lineRef
-				out = append(out, evidence.Evidence{
-					ID:         "SEC-" + pat.id,
-					RuleID:     "secrets/" + pat.id, // v0.22 native provenance
-					Title:      pat.title,
-					Severity:   pat.severity,
-					Source:     models.SourceWhitebox,
-					Category:   "secrets",
-					Endpoint:   lineRef,
-					Evidence:   safeEvidence,
-					Fix:        fixText,
-					References: []string{pat.cwe},
-					Confidence: models.ConfidenceHigh,
-					Line:       &lineCopy,
-					// The SAFE identity the v2 fingerprint keys on: which
-					// identifier this credential is bound to, and where it
-					// lives. Never the credential, never a digest of it — see
-					// models.SecretRef. lastAssignmentKey is reused rather
-					// than re-derived so identity and the placeholder
-					// classifier always agree on what the key is.
-					Secret: &models.SecretRef{
-						Identifier: secretIdentifier(line, vStart, hasValue),
-						File:       rel,
-					},
-					// Deterministic fixture-credential classification. An
-					// EVIDENCE ANNOTATION, not a filter — the finding is
-					// emitted either way, at the same ID, severity and
-					// endpoint, with full (redacted) evidence. The confidence
-					// scorer turns it into one named negative delta. See
-					// placeholder.go for why this is not folded into
-					// isReferenceOrPlaceholder.
-					Placeholder: classifyPlaceholder(line, vStart, value).isPlaceholder(),
-					// Whether the match was anchored on the provider's own
-					// token signature rather than on a surrounding assignment.
-					// Bounds how far the fixture classification above is
-					// allowed to de-escalate — see providerAnchoredRules.
-					ProviderAnchored: isProviderAnchored(pat.id),
-				})
+	ls := &lineScanner{active: active, matches: make([][][]int, len(active)), rel: rel}
+	n := 0
+	err := streamLines(r, func(seg segment) error {
+		if n++; n&0xff == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 		}
-	}
-	return out, nil
+		ls.scan(seg)
+		if len(ls.out) >= maxFindingsPerFile {
+			return errTooManyFindings
+		}
+		return nil
+	})
+	return ls.out, err
 }
 
-// splitLines splits text on \n and \r\n line endings without including
-// the terminator in each line. Mirrors python str.splitlines() closely
-// enough for this scanner's purposes (we don't care about exotic
-// terminators like U+2028 — secrets in those would also be exotic).
-func splitLines(text string) []string {
-	if text == "" {
-		return nil
+// scan applies the registry to one window of one line.
+func (ls *lineScanner) scan(seg segment) {
+	line, lineno, rel := seg.text, seg.lineno, ls.rel
+	active, matches := ls.active, ls.matches
+	matched := false
+	lower := strings.ToLower(line)
+	ascii := isASCII(line)
+	for i := range active {
+		matches[i] = nil
+		if !seg.first && active[i].lineAnchored {
+			continue
+		}
+		if !active[i].mayMatch(lower, ascii) {
+			continue
+		}
+		matches[i] = active[i].regex.FindAllStringSubmatchIndex(line, -1)
+		matched = matched || matches[i] != nil
 	}
-	// Normalise \r\n → \n, then split on \n. Drop trailing empty if
-	// the file ends in a newline so line numbers match Python's
-	// splitlines (which also drops trailing empty).
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	if !matched {
+		return
 	}
-	return lines
+
+	// One redaction pass per line, over the union of EVERY pattern's
+	// credential spans — not just the emitting pattern's own. Evidence is
+	// a window over the SOURCE LINE, so a line carrying two credentials
+	// would otherwise ship each one in the clear inside the other's
+	// window. See redact.go for the full argument.
+	//
+	// INVARIANT from here down: `line` is used ONLY for offsets, pattern
+	// matching and placeholder classification. The only string that may
+	// reach an evidence.Evidence is `redacted`.
+	spans := lineSecretSpans(line, active, matches)
+	redacted, newSpans := redactSpans(line, spans)
+
+	for i := range active {
+		pat := &active[i]
+		for _, sub := range matches[i] {
+			if sub[0] < seg.ownStart || sub[0] >= seg.ownEnd {
+				// Owned by the previous window (context here) or by the next,
+				// which sees the whole match.
+				continue
+			}
+			if !boundaryOK(line, sub[0], sub[1], pat.leftBoundary, pat.rightBoundary) {
+				continue
+			}
+			match := line[sub[0]:sub[1]]
+			// B1/B2: drop matches that are references-not-credentials
+			// (an ARN / Secrets-Manager lookup key) or well-known
+			// placeholders (YOUR_TOKEN_HERE, example keys, changeme…).
+			// These are the two false-positive classes that previously
+			// had to be hand-suppressed per file:line in .fendix-ignore.
+			// Unchanged: it still receives the FULL match.
+			if isReferenceOrPlaceholder(line, match) {
+				continue
+			}
+			vStart, vEnd, hasValue := secretValueSpan(pat, line, sub)
+			value := ""
+			if hasValue {
+				value = line[vStart:vEnd]
+			}
+			aStart, aEnd := evidenceAnchor(sub[0], vStart, hasValue, spans, newSpans)
+			safeEvidence := truncateEvidenceAround(redacted, aStart, aEnd)
+			var markers []string
+			if hasValue {
+				markers = append(markers, redactionMarker(value))
+				if m := mergedMarker(vStart, spans, newSpans, redacted); m != "" && m != markers[0] {
+					markers = append(markers, m)
+				}
+			}
+			lineRef := fmt.Sprintf("%s:%d", rel, lineno)
+			lineCopy := lineRef
+			ls.out = append(ls.out, emitted{markers: markers, ev: evidence.Evidence{
+				ID:         "SEC-" + pat.id,
+				RuleID:     "secrets/" + pat.id, // v0.22 native provenance
+				Title:      pat.title,
+				Severity:   pat.severity,
+				Source:     models.SourceWhitebox,
+				Category:   "secrets",
+				Endpoint:   lineRef,
+				Evidence:   safeEvidence,
+				Fix:        fixText,
+				References: []string{pat.cwe},
+				Confidence: models.ConfidenceHigh,
+				Line:       &lineCopy,
+				// The SAFE identity the v2 fingerprint keys on: which
+				// identifier this credential is bound to, and where it
+				// lives. Never the credential, never a digest of it — see
+				// models.SecretRef. lastAssignmentKey is reused rather
+				// than re-derived so identity and the placeholder
+				// classifier always agree on what the key is.
+				Secret: &models.SecretRef{
+					Identifier: secretIdentifier(line, vStart, hasValue),
+					File:       rel,
+				},
+				// Deterministic fixture-credential classification. An
+				// EVIDENCE ANNOTATION, not a filter — the finding is
+				// emitted either way, at the same ID, severity and
+				// endpoint, with full (redacted) evidence. The confidence
+				// scorer turns it into one named negative delta. See
+				// placeholder.go for why this is not folded into
+				// isReferenceOrPlaceholder.
+				Placeholder: classifyPlaceholder(line, vStart, value).isPlaceholder(),
+				// Whether the match was anchored on the provider's own
+				// token signature rather than on a surrounding assignment.
+				// Bounds how far the fixture classification above is
+				// allowed to de-escalate — see providerAnchoredRules.
+				ProviderAnchored: isProviderAnchored(pat.id),
+			}})
+		}
+	}
 }
 
 // boundaryOK returns false when the character immediately before

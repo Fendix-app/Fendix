@@ -435,6 +435,9 @@ func TestScan_EvidenceRedactsRawSecret(t *testing.T) {
 
 func TestScan_SkipsGitDirectory(t *testing.T) {
 	dir := t.TempDir()
+	// Version-control metadata is recognised by its structure: HEAD and objects/.
+	writeFile(t, dir, ".git/HEAD", "ref: refs/heads/main\n")
+	writeFile(t, dir, ".git/objects/pack/p", "x")
 	writeFile(t, dir, ".git/config", `password = "hardcoded_secret_12345"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -445,8 +448,25 @@ func TestScan_SkipsGitDirectory(t *testing.T) {
 	}
 }
 
+// D6': a directory is pruned on evidence, never on its name. A folder that is
+// only called .git, node_modules, vendor, dist or build is first-party source.
+func TestScan_ReadsADirectoryThatIsOnlyNamedLikeADependencyTree(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{".git", "node_modules", "vendor", "dist", "build", "target", ".venv"} {
+		writeFile(t, dir, d+"/app.py", `password = "hardcoded_secret_12345"`)
+	}
+	fs, err := Scan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(fs) != 7 {
+		t.Errorf("want one finding in each of the 7 folders, got %d: %v", len(fs), endpointsOf(fs))
+	}
+}
+
 func TestScan_SkipsNodeModules(t *testing.T) {
 	dir := t.TempDir()
+	writeFile(t, dir, "node_modules/.package-lock.json", `{"name":"x","lockfileVersion":3}`)
 	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIA` + `IOSFODNN7EXAMPLE";`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -457,15 +477,17 @@ func TestScan_SkipsNodeModules(t *testing.T) {
 	}
 }
 
-func TestScan_SkipsLargeFile(t *testing.T) {
+// R-010: a file over 1 MiB is streamed, not skipped. The secret on its last
+// line is reported. (Round 3 pinned the opposite, "oversized file not
+// skipped", which is the silent skip this round removes.)
+func TestScan_StreamsAFileFarOverOneMiB(t *testing.T) {
 	dir := t.TempDir()
 	full := writeFile(t, dir, "big.py", "x = 1\n")
-	// Append until we cross 1MB plus a buried secret on the final line.
 	f, err := os.OpenFile(full, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	junk := strings.Repeat("y = 1\n", 200_000) // ~1.2 MB
+	junk := strings.Repeat("y = 1\n", 600_000) // ~3.6 MB
 	if _, err := f.WriteString(junk); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -473,38 +495,65 @@ func TestScan_SkipsLargeFile(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	f.Close()
-	fs, err := Scan(context.Background(), dir)
+	fs, cov, err := ScanCoverage(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("oversized file not skipped: %v", fs)
+	if cov.Lost() {
+		t.Errorf("a file the scanner can stream was recorded lost: %s", cov.LostDetail(240))
+	}
+	if len(fs) != 1 || fs[0].Endpoint != "big.py:600002" {
+		t.Errorf("want the secret on the last line (big.py:600002), got %v", endpointsOf(fs))
 	}
 }
 
-func TestScan_SkipsMinifiedJSLine(t *testing.T) {
+// R-010 (security3-03, redteam3-secrets-01): a line over 500 characters in a
+// .js or .ts file is scanned like any other. Round 3 pinned the skip.
+func TestScan_ScansALongJSLine(t *testing.T) {
 	dir := t.TempDir()
-	// One 600-char line with the secret embedded — Python skips, Go must too.
 	line := strings.Repeat("a", 580) + ` "AKIA` + `IOSFODNN7EXAMPLE";`
 	writeFile(t, dir, "bundle.min.js", line)
+	writeFile(t, dir, "config.ts", `const c = {a: "`+strings.Repeat("b", 700)+`", password: "Hunter2Passw0rd!"};`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("minified line not skipped: %v", fs)
+	got := map[string]bool{}
+	for _, f := range fs {
+		got[f.ID+"@"+f.Endpoint] = true
+	}
+	if !got["SEC-AWS_ACCESS_KEY@bundle.min.js:1"] || !got["SEC-HARDCODED_PASSWORD@config.ts:1"] {
+		t.Errorf("long lines were not scanned: %v", endpointsOf(fs))
 	}
 }
 
-func TestScan_SkipsUnsupportedExtension(t *testing.T) {
+// R-010: a Markdown file, a .properties file and an extension-less file are
+// read. Round 3 accepted that they were not (redteam2-verify-02); the verify
+// false-resolved that caused (security3-01) is why they are read now.
+func TestScan_ReadsEveryTextFile(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "doc.md", `password = "hardcoded_secret_12345"`)
+	for _, name := range []string{"doc.md", "app.properties", "credentials", "Dockerfile", "notes.txt"} {
+		writeFile(t, dir, name, `aws_secret_access_key = "wJalrXUtnFEMI/K7MDEN` + `G/bPxRfiCYQ9fG2kLmNp"`)
+	}
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("unsupported ext scanned: %v", fs)
+	if len(fs) != 5 {
+		t.Errorf("want a finding in each of 5 text files, got %d: %v", len(fs), endpointsOf(fs))
+	}
+}
+
+func TestScan_DoesNotReadABinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "blob", "\x00\x01"+`AKIA` + `IOSFODNN7EXAMPLE`)
+	writeFile(t, dir, "logo.png", `AKIA` + `IOSFODNN7EXAMPLE`)
+	fs, cov, err := ScanCoverage(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(fs) != 0 || cov.Lost() {
+		t.Errorf("a binary file is not text: findings %v, lost %q", endpointsOf(fs), cov.LostDetail(240))
 	}
 }
 
@@ -865,7 +914,8 @@ func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 	dir := t.TempDir()
 	secret := `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`
 	changed := writeFile(t, dir, "app.py", secret)
-	writeFile(t, dir, "vendor/dep.py", secret) // committed vendor → must be skipped
+	writeFile(t, dir, "vendor/modules.txt", "# example.com/dep v1.2.3\n## explicit\nexample.com/dep\n")
+	writeFile(t, dir, "vendor/dep.py", secret) // a Go vendor tree (modules.txt) → must be skipped
 	writeFile(t, dir, "untouched.py", secret)  // not in allowlist → must be ignored
 
 	allow := gitdiff.NewAllowlist(dir, []string{changed, filepath.Join(dir, "vendor/dep.py")})
@@ -1230,9 +1280,16 @@ func TestJDBCURLPasswordWithDollarIsFullyRedacted(t *testing.T) {
 }
 
 func TestReadsFile(t *testing.T) {
+	// R-010 (D6'): every file that is not a known binary type is read, so a
+	// credential in a Dockerfile, a .properties file or an extension-less file
+	// cannot go unseen. Round 3 accepted the old list; the verify false-resolved
+	// it caused (security3-01) made that untenable.
 	for name, want := range map[string]bool{
 		"a.py": true, "a.JS": true, "a.json": true, ".env": true, ".env.production": true,
-		"a.mjs": false, "a.cjs": false, "a.mts": false, "a.cts": false, "a.md": false,
+		"a.mjs": true, "a.cjs": true, "a.mts": true, "a.cts": true, "a.md": true,
+		"Dockerfile": true, "Dockerfile.dev": true, "app.properties": true, "credentials": true,
+		"notes.txt": true, "Makefile": true, ".netrc": true,
+		"logo.png": false, "a.zip": false, "A.JAR": false, "lib.so": false, "keys.p12": false,
 	} {
 		if got := ReadsFile(name); got != want {
 			t.Errorf("ReadsFile(%q) = %v, want %v", name, got, want)
@@ -1241,6 +1298,7 @@ func TestReadsFile(t *testing.T) {
 }
 
 func TestSkipReason(t *testing.T) {
+	withCap(t, 1<<20)
 	root := t.TempDir()
 	write := func(rel string, size int) string {
 		p := filepath.Join(root, filepath.FromSlash(rel))
@@ -1258,17 +1316,25 @@ func TestSkipReason(t *testing.T) {
 		want string // substring of the reason; "" means read
 	}{
 		{"src/a.js", 10, ""},
-		{"src/a.mjs", 10, "extension"},
-		{"node_modules/p/a.js", 10, "node_modules"},
-		{"a/vendor/b/a.py", 10, "vendor"},
-		{"src/a.js", maxFileBytes, ""},
-		{"src/big.js", maxFileBytes + 1, "larger than"},
+		{"src/a.mjs", 10, ""},
+		{"src/a.png", 10, "binary type"},
+		{"node_modules/p/a.js", 10, ""}, // a name alone prunes nothing (D6')
+		{"src/a.js", int(maxFileBytes), ""},
+		{"src/big.js", int(maxFileBytes) + 1, "larger than"},
 	} {
 		if got := SkipReason(root, write(tc.rel, tc.size)); (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
 			t.Errorf("SkipReason(%s, %d bytes) = %q, want %q", tc.rel, tc.size, got, tc.want)
 		}
 	}
-	// The scan root's own name is never a skipped directory.
+	// A directory with the evidence that it is an installed-package tree is
+	// pruned; the scan root's own directory never is.
+	write("node_modules/.package-lock.json", 0)
+	if err := os.WriteFile(filepath.Join(root, "node_modules/.package-lock.json"), []byte(`{"lockfileVersion": 3}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := SkipReason(root, write("node_modules/p/a.js", 10)); !strings.Contains(got, "node_modules") {
+		t.Errorf("an installed node_modules tree should be skipped, got %q", got)
+	}
 	if got := SkipReason(filepath.Join(root, "node_modules"), write("node_modules/a.js", 10)); got != "" {
 		t.Errorf("a root named node_modules should be read, got %q", got)
 	}

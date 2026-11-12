@@ -53,6 +53,7 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/Fendix-app/Fendix/go/internal/scanner/secrets"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // Rule describes one SAST pattern. A file matches a rule when its
@@ -113,6 +114,24 @@ func Scan(rootDir string, rules []Rule) ([]evidence.Evidence, error) {
 // skip-dir pruning still happens) but non-allowlisted files are skipped
 // before they are read, keeping diff scans sub-second on large trees.
 func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
+	findings, _, err := ScanCoverage(rootDir, rules, allow)
+	return findings, err
+}
+
+// ScanCoverage is ScanWithAllowlist that also returns what the scan left
+// unread (decision D6). A file one of the rules applies to that was over the
+// size cap, could not be read, or is not text (a NUL byte in its first 512
+// bytes), and a directory the walk could not list, are lost evaluation: the
+// caller records the scan a coverage gap naming them and keeps the findings.
+// A declared generated artifact (scope.Generated) left unread and a pruned
+// vendored or build-output directory are declared out of scope, listed only.
+func ScanCoverage(rootDir string, rules []Rule, allow *gitdiff.Allowlist) ([]evidence.Evidence, scope.Coverage, error) {
+	var cov scope.Coverage
+	findings, err := scanTree(rootDir, rules, allow, &cov)
+	return findings, cov, err
+}
+
+func scanTree(rootDir string, rules []Rule, allow *gitdiff.Allowlist, cov *scope.Coverage) ([]evidence.Evidence, error) {
 	var findings []evidence.Evidence
 
 	if rootDir == "" {
@@ -144,22 +163,43 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 		if err != nil {
 			return nil, fmt.Errorf("textscan: resolve %s: %w", rootDir, err)
 		}
+		noted := map[string]bool{}
 		for _, path := range allow.AbsPaths() {
 			info, err := os.Lstat(path)
-			if err != nil || info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+			if err != nil || info.IsDir() {
 				continue
 			}
-			if underSkipDir(absRoot, path) || gitdiff.TraversesSymlink(absRoot, path) {
+			if info.Mode()&fs.ModeSymlink != 0 {
+				secrets.NoteRefusedSymlink(cov, absRoot, path, func(base string) bool { return hasApplicableRule(base, rules) })
 				continue
 			}
-			findings = append(findings, scanCandidate(absRoot, path, fs.FileInfoToDirEntry(info), rules)...)
+			if secrets.NotePrunedAncestor(cov, noted, absRoot, path) != "" || gitdiff.TraversesSymlink(absRoot, path) {
+				continue
+			}
+			findings = append(findings, scanCandidate(absRoot, path, fs.FileInfoToDirEntry(info), rules, cov)...)
 		}
 		return findings, nil
 	}
 
-	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
+	// walkRoot, not filepath.WalkDir: a root that is itself a symlink is the
+	// scope the user chose, and WalkDir would report it as one symlink entry,
+	// which the check below drops, and walk nothing (redteam-secrets-01).
+	cleanRoot := filepath.Clean(rootDir)
+	err := walkRoot(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return nil // skip unreadable entries; don't fail the walk
+			// Skip unreadable entries and keep walking, but a directory not
+			// listed, or a file a rule applies to, is in scope and was not
+			// read (security-01).
+			if filepath.Clean(path) != cleanRoot {
+				rel := pathRel(rootDir, path)
+				switch {
+				case d != nil && d.IsDir():
+					cov.Unreadable(secrets.LostName(rel) + "/")
+				case hasApplicableRule(path, rules):
+					cov.Unreadable(secrets.LostName(rel))
+				}
+			}
+			return nil
 		}
 		// Skip symlinks unconditionally — both file and directory
 		// symlinks. filepath.WalkDir does not follow symlinks (it uses
@@ -168,11 +208,29 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 		// to descend or read either way. Prevents loops and silent
 		// privilege boundary crossings (e.g. /tmp symlink to /etc).
 		if d.Type()&fs.ModeSymlink != 0 {
+			// A link that leaves the root is content that exists and was not
+			// read: named, not dropped (sre3-06).
+			if allow.Allows(path) {
+				if absRoot, err := filepath.Abs(rootDir); err == nil {
+					if abs, err := filepath.Abs(path); err == nil {
+						secrets.NoteRefusedSymlink(cov, absRoot, abs, func(base string) bool { return hasApplicableRule(base, rules) })
+					}
+				}
+			}
 			return nil
 		}
 		if d.IsDir() {
-			// Skip noisy build / vendor / VCS dirs.
-			if _, skip := textSkipDirs[d.Name()]; skip {
+			// Skip dependency, build-output and VCS dirs, but only on evidence
+			// in the directory itself (D6'), and never the root itself:
+			// `--code ./build` is the scope the user chose.
+			if filepath.Clean(path) == cleanRoot {
+				return nil
+			}
+			rel := pathRel(rootDir, path)
+			if reason, quiet := secrets.PrunedDir(path, rel); reason != "" {
+				if !quiet {
+					cov.Exclude(reason, secrets.SafeName(rel)+"/")
+				}
 				return filepath.SkipDir
 			}
 			return nil
@@ -182,7 +240,7 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 		if !allow.Allows(path) {
 			return nil
 		}
-		findings = append(findings, scanCandidate(rootDir, path, d, rules)...)
+		findings = append(findings, scanCandidate(rootDir, path, d, rules, cov)...)
 		return nil
 	})
 	if err != nil {
@@ -191,22 +249,50 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 	return findings, nil
 }
 
-// textSkipDirs are the build / vendor / VCS directories pruned from the scan.
-// Single-sourced so the full walk and the diff-aware fast path agree on what
-// to skip.
-var textSkipDirs = map[string]struct{}{
-	".git": {}, "node_modules": {}, "vendor": {}, "__pycache__": {},
-	".venv": {}, "build": {}, "dist": {}, ".pytest_cache": {},
-	".next": {}, ".nuxt": {}, ".svelte-kit": {}, ".cache": {}, "target": {},
+// walkRoot is filepath.WalkDir(root, fn) except that root itself is followed
+// when it is a symbolic link: the link is resolved once, the resolved directory
+// is walked, and every path is reported under root as the caller gave it, so
+// the allowlist and the reported endpoints are unchanged. Links inside the tree
+// are still never followed.
+func walkRoot(root string, fn fs.WalkDirFunc) error {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return filepath.WalkDir(root, fn)
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve the root link %s: %w", root, err)
+	}
+	return filepath.WalkDir(resolved, func(path string, d fs.DirEntry, err error) error {
+		rel, rerr := filepath.Rel(resolved, path)
+		if rerr != nil {
+			return rerr
+		}
+		return fn(filepath.Join(root, rel), d, err)
+	})
 }
 
-const textMaxFileBytes = 1 << 20 // 1 MiB
+const textMaxFileBytes = scope.MaxFileBytes // 1 MiB, shared by every Go analyzer (D6)
+
+// hasApplicableRule reports whether any rule applies to path.
+func hasApplicableRule(path string, rules []Rule) bool {
+	for i := range rules {
+		if rules[i].Applies != nil && rules[i].Applies(path) {
+			return true
+		}
+	}
+	return false
+}
 
 // scanCandidate runs the applicable rules against a single file that has
 // already passed the symlink / dir / allowlist gates. Shared by the full walk
 // and the diff-aware fast path so both apply identical rule-applicability,
 // size, and binary-sniff logic — no parity drift between the two code paths.
-func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule) []evidence.Evidence {
+//
+// A file a rule applies to that it does not read is recorded in cov (D6):
+// over the cap (declared out of scope when it is a generated artifact),
+// unreadable, or not text.
+func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule, cov *scope.Coverage) []evidence.Evidence {
 	applicable := make([]*Rule, 0, len(rules))
 	for i := range rules {
 		if rules[i].Applies != nil && rules[i].Applies(path) {
@@ -216,39 +302,43 @@ func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule) []evidence
 	if len(applicable) == 0 {
 		return nil
 	}
+	rel := pathRel(rootDir, path)
 	info, err := d.Info()
-	if err != nil || info.Size() > textMaxFileBytes {
+	if err != nil {
+		cov.Unreadable(secrets.LostName(rel))
+		return nil
+	}
+	if info.Size() > textMaxFileBytes {
+		if v := scope.ClassifyFile(path, rel, info.Size()); !v.None() {
+			cov.Exclude(v.Reason, secrets.SafeName(rel))
+		} else {
+			cov.TooLarge(secrets.LostName(rel))
+		}
 		return nil
 	}
 	// Skip binary blobs. Reading PNGs/jars/sqlite line-by-line against every
 	// regex is CPU waste and produces false-positive AKIA hits in binary
 	// noise; sniff the first 512 bytes so the AWS-key et al. rules never run
-	// on non-text.
-	if looksBinary, _ := isBinaryFile(path); looksBinary {
+	// on non-text. A file a rule applies to that is skipped so is still a
+	// file of the scan's scope left unread.
+	looksBinary, err := isBinaryFile(path)
+	switch {
+	case err != nil:
+		cov.Unreadable(secrets.LostName(rel))
+		return nil
+	case looksBinary && !scope.ClassifyFile(path, rel, info.Size()).None():
+		cov.Exclude(scope.ClassifyFile(path, rel, info.Size()).Reason, secrets.SafeName(rel))
+		return nil
+	case looksBinary:
+		cov.NotText(secrets.LostName(rel))
 		return nil
 	}
 	got, err := scanFile(rootDir, path, applicable)
 	if err != nil {
-		return nil
+		// What was read is kept; the rest of the file is lost evaluation.
+		cov.Unreadable(secrets.LostName(rel))
 	}
 	return got
-}
-
-// underSkipDir reports whether any directory component of abs (relative to
-// root) is a pruned directory — preserving walk parity for the diff-aware
-// fast path (e.g. a committed vendor/ file the walk would never reach).
-func underSkipDir(root, abs string) bool {
-	rel, err := filepath.Rel(root, abs)
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for _, part := range parts[:len(parts)-1] { // dir components only, not the file
-		if _, skip := textSkipDirs[part]; skip {
-			return true
-		}
-	}
-	return false
 }
 
 // dockerfileUserRe matches a `USER <name>` directive. Package-level because

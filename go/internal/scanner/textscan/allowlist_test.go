@@ -82,6 +82,9 @@ func TestScanWithAllowlist_EmptyFindsNothing(t *testing.T) {
 func TestScanWithAllowlist_FastPathPrunesVendor(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "a.go", vulnGo)
+	// A Go vendor tree, proven by vendor/modules.txt (D6': a folder only named
+	// vendor is first-party and is scanned).
+	writeFile(t, root, "vendor/modules.txt", "# example.com/dep v1.2.3\n## explicit\nexample.com/dep\n")
 	writeFile(t, root, "vendor/v.go", vulnGo) // committed vendor → must be pruned
 
 	allow := gitdiff.NewAllowlist(root, []string{"a.go", filepath.Join("vendor", "v.go")})

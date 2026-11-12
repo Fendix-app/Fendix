@@ -326,11 +326,28 @@ func TestDockerfileAliasStateDoesNotLeakAcrossFiles(t *testing.T) {
 
 func TestScan_SkipsNoiseDirs(t *testing.T) {
 	dir := t.TempDir()
+	// Dependency trees are pruned on evidence in the directory (D6'), never by
+	// name: npm's hidden lockfile, Go's vendor/modules.txt.
+	writeFile(t, dir, "node_modules/.package-lock.json", `{"lockfileVersion": 3}`)
 	writeFile(t, dir, "node_modules/x/pwned.js", `eval(userCode);`)
+	writeFile(t, dir, "vendor/modules.txt", "# example.com/y v1.0.0\n## explicit\n")
 	writeFile(t, dir, "vendor/y/pwned.go", `var k = "AKIA1234567890ABCDEF"`)
 	got, _ := Scan(dir, AllRules())
 	if len(got) != 0 {
 		t.Errorf("noise dirs should be skipped; got %d findings: %+v", len(got), got)
+	}
+}
+
+// D6': a folder that is only called node_modules, vendor, build or dist holds
+// first-party code until its content says otherwise, and is scanned.
+func TestScan_ScansAFolderThatIsOnlyNamedLikeANoiseDir(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "node_modules/x/pwned.js", `eval(userCode);`)
+	writeFile(t, dir, "vendor/y/pwned.go", `var k = "AKIA1234567890ABCDEF"`)
+	writeFile(t, dir, "build/z/pwned.js", `eval(userCode);`)
+	got, _ := Scan(dir, AllRules())
+	if len(got) != 3 {
+		t.Errorf("want one finding in each of the 3 folders, got %d: %v", len(got), eps(got))
 	}
 }
 
