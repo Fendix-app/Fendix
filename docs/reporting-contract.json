@@ -15,6 +15,164 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "definitions": {
+        "ActiveProbeCoverage": {
+          "additionalProperties": false,
+          "description": "Present when active probing was enabled. Accounts for every active probe sent. A scan-wide configured_complete is never proof that every probe was evaluated: read this beside it. attempted = evaluated + inconclusive + unknown_origin + scanner_failed.",
+          "properties": {
+            "attempted": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "evaluated": {
+              "description": "A response came back and the check judged it.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inconclusive": {
+              "description": "Confirmed target-side non-answer: not an evaluation, never evidence that anything is absent, safe or fixed, and not a scanner gap.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "not_evaluated_checks": {
+              "description": "Distinct (check, endpoint, origin, reason) with a probe that was not evaluated, scanner then unknown then target. A (check, endpoint) pair absent from the list was evaluated only when truncated is false.",
+              "items": {
+                "$ref": "#/definitions/NotEvaluatedCheck"
+              },
+              "maxItems": 200,
+              "type": "array"
+            },
+            "reasons": {
+              "additionalProperties": false,
+              "description": "{origin: {reason: count}}. Origins: target, unknown, scanner. Reasons are a closed vocabulary per origin.",
+              "properties": {
+                "scanner": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "internal_error": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "not_sent": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "proxy_failure": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "request_construction": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "resource_exhausted": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scan_cancelled": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scan_deadline": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "target": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "connection_refused": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "connection_reset": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "other_transport": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "rate_limited": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "service_unavailable": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "tls_error": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "unknown": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "connection_refused": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "dns_failure": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "network_unreachable": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "tls_handshake": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "unclassified": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "scanner_failed": {
+              "description": "The engine failed or never sent the probe. Not evaluated, and a coverage gap for active-probes.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "description": "not_evaluated_checks was cut at 200 entries.",
+              "type": "boolean"
+            },
+            "unknown_origin": {
+              "description": "No evidence settles whose fault the failure is. Fail-closed: not evaluated, and a coverage gap for active-probes.",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "attempted",
+            "evaluated",
+            "inconclusive",
+            "unknown_origin",
+            "scanner_failed",
+            "reasons",
+            "not_evaluated_checks",
+            "truncated"
+          ],
+          "type": "object"
+        },
         "ConfidenceReason": {
           "additionalProperties": false,
           "description": "One scoring rule's contribution to a confidence score. `code` is the stable machine-readable identity a consumer matches on; `text` is human wording and is free to be reworded. The `delta` values of a finding's confidence_breakdown sum to its confidence_score.",
@@ -39,6 +197,9 @@
         "Coverage": {
           "additionalProperties": false,
           "properties": {
+            "active_probes": {
+              "$ref": "#/definitions/ActiveProbeCoverage"
+            },
             "configured_complete": {
               "type": "boolean"
             },
@@ -383,6 +544,42 @@
           "required": [
             "tool",
             "results"
+          ],
+          "type": "object"
+        },
+        "NotEvaluatedCheck": {
+          "additionalProperties": false,
+          "properties": {
+            "check": {
+              "description": "The rule-id family of the findings the probe could produce: injection, xss, ssrf, openredirect, hostheader, graphql, methodtamper.",
+              "type": "string"
+            },
+            "endpoint": {
+              "description": "METHOD /path, exactly as a finding names its endpoint.",
+              "type": "string"
+            },
+            "evidence": {
+              "description": "A fixed phrase stating what was observed.",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "target",
+                "unknown",
+                "scanner"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "check",
+            "endpoint",
+            "origin",
+            "reason",
+            "evidence"
           ],
           "type": "object"
         },

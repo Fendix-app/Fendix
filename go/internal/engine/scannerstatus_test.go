@@ -170,13 +170,15 @@ func TestClassifyErr_MinimalMapping(t *testing.T) {
 	}
 }
 
-// A Semgrep run in which a rule hit its per-rule timeout is recorded ok, as
-// v3.7.0 records it: Semgrep itself calls the run successful, and a timeout on
-// one rule and file loses only that rule's matches there (R-pf90). The detail
-// names each timed-out rule and file, so the loss is not invisible, and the
-// findings the run did produce are kept. A run that was killed, or that did
-// not load a rule, is the failed case (the tests below).
-func TestSemgrepRunWithRuleTimeoutsIsOkWithDetailAndKeepsFindings(t *testing.T) {
+// A Semgrep run in which a rule hit its per-rule timeout is recorded failed,
+// reason timeout (decision D1, R-007). This test used to require ok with a
+// detail, as v3.7.0 and commit 3c929ec record it (ruling R-pf90); that is
+// changed on purpose: the rule's matches in that file are missing, and an ok
+// entry gave the scan coverage complete and a PASS while Semgrep knew it had
+// given up (R-007, reproduced on a 2,719-line Spring controller). The detail
+// names the counts and the first rules and files, and the findings the run did
+// produce are kept.
+func TestSemgrepRunWithRuleTimeoutsIsFailedWithDetailAndKeepsFindings(t *testing.T) {
 	found := []evidence.Evidence{{ID: "SEC-PYTHON_EVAL_INJECTION", RuleID: "python-eval-injection"}}
 
 	var clean scannerStatusList
@@ -200,18 +202,18 @@ func TestSemgrepRunWithRuleTimeoutsIsOkWithDetailAndKeepsFindings(t *testing.T) 
 			{RuleID: "js-sqli-taint", Path: "src/big.js"},
 			{RuleID: "python-eval-injection", Path: "app/gen.py"},
 		}, semgrep.Report{Incomplete: map[string]int{"Timeout": 2}},
-			[]string{"2 rule timeouts,", "js-sqli-taint on src/big.js", "python-eval-injection on app/gen.py", "matches missing"},
+			[]string{"lost evaluation: 2 rule timeouts on 2 files;", "first: src/big.js (js-sqli-taint); app/gen.py (python-eval-injection)"},
 			[]string{"non-fatal per-file"}},
 		{"one", []semgrep.RuleTimeout{{RuleID: "js-sqli-taint", Path: "src/big.js"}},
 			semgrep.Report{Incomplete: map[string]int{"Timeout": 1}},
-			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js", "matches missing"}, nil},
+			[]string{"lost evaluation: 1 rule timeout on 1 file;", "first: src/big.js (js-sqli-taint)"}, nil},
 		{"unnamed", []semgrep.RuleTimeout{{}}, semgrep.Report{},
-			[]string{"1 rule timeout,", "unknown rule on unknown file"}, nil},
+			[]string{"1 rule timeout on 1 file", "unknown file (unknown rule)"}, nil},
 		// The other per-file problems of the run are still counted, once: a
 		// Timeout is already named above.
 		{"with other per-file problems", []semgrep.RuleTimeout{{RuleID: "js-sqli-taint", Path: "src/big.js"}},
 			semgrep.Report{Incomplete: map[string]int{"Timeout": 1, "PartialParsing": 2}},
-			[]string{"1 rule timeout,", "js-sqli-taint on src/big.js", "PartialParsing 2"},
+			[]string{"1 rule timeout on 1 file", "src/big.js (js-sqli-taint)", "PartialParsing 2"},
 			[]string{"Timeout 1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,11 +224,11 @@ func TestSemgrepRunWithRuleTimeoutsIsOkWithDetailAndKeepsFindings(t *testing.T) 
 				t.Fatalf("entries = %+v; want one", status)
 			}
 			got := status[0]
-			if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerOK || got.Reason != "" {
-				t.Errorf("entry = %+v; want semgrep, ok, no reason", got)
+			if got.Name != AnalyzerSemgrep || got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonTimeout {
+				t.Errorf("entry = %+v; want semgrep, failed, timeout", got)
 			}
-			if status.hasFailure() {
-				t.Error("a rule timeout alone must not count as a scanner failure")
+			if !status.hasFailure() {
+				t.Error("a rule timeout must count as a scanner failure")
 			}
 			for _, want := range tc.want {
 				if !strings.Contains(got.Detail, want) {
@@ -245,10 +247,14 @@ func TestSemgrepRunWithRuleTimeoutsIsOkWithDetailAndKeepsFindings(t *testing.T) 
 	}
 }
 
-// Options dropped for an older host Semgrep are named in the detail of the
-// run, which stays ok.
+// Options dropped for an older host Semgrep whose absence does not change what
+// is scanned or matched (semgrep.optionalArgs classifies each) are named in
+// the detail of the run, which stays ok. This test used to use the
+// --project-root note, which stayed ok too; going without --project-root
+// changes which files the packs' path filters exclude, so it is now the failed
+// case below (decision D1).
 func TestSemgrepRunThatDroppedOptionsStaysOkAndNamesThem(t *testing.T) {
-	const note = "semgrep 1.45.0: dropped --project-root (needs 1.111.0)"
+	const note = "semgrep 0.100.0: dropped --dataflow-traces (needs 0.107.0)"
 	var status scannerStatusList
 	var evid []evidence.Evidence
 	recordSemgrepRun(&status, &evid, semgrep.Run{Report: semgrep.Report{Dropped: note}})
@@ -299,5 +305,105 @@ func TestSemgrepRunWithRuleErrorsFailsAndKeepsFindings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(evid, found) {
 		t.Errorf("findings = %+v; want the run's findings kept", evid)
+	}
+}
+
+// An option dropped for an older host Semgrep whose absence changes what is
+// scanned (--project-root) makes the run failed, execution_error (D1).
+func TestSemgrepRunThatDroppedADetectionOptionIsFailed(t *testing.T) {
+	const note = "semgrep 1.45.0: dropped --project-root (needs 1.111.0)"
+	var status scannerStatusList
+	var evid []evidence.Evidence
+	recordSemgrepRun(&status, &evid, semgrep.Run{Report: semgrep.Report{Dropped: note, DroppedDetection: note}})
+	if len(status) != 1 {
+		t.Fatalf("entries = %+v; want one", status)
+	}
+	got := status[0]
+	if got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonExecutionError {
+		t.Errorf("entry = %+v; want semgrep, failed, execution_error", got)
+	}
+	if !strings.HasPrefix(got.Detail, note+"; files may be skipped") {
+		t.Errorf("detail = %q; want it to start with %q", got.Detail, note)
+	}
+}
+
+// Each loss class gets its reason: timeouts alone are timeout, anything else
+// (or a mix) is execution_error.
+func TestSemgrepLostEvaluationReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		run    semgrep.Run
+		reason reporters.ScannerReason
+		want   []string
+	}{
+		{"fixpoint", semgrep.Run{FixpointTimeouts: []semgrep.FixpointTimeout{{Path: "routes/api.js", Line: 1, Rules: 2, FirstRule: "js-sqli-taint"}}},
+			reporters.ReasonTimeout, []string{"lost evaluation: 1 taint fixpoint timeout on 1 file; first: routes/api.js (taint fixpoint at line 1, 2 taint rules from js-sqli-taint)"}},
+		{"threshold", semgrep.Run{
+			Timeouts:       []semgrep.RuleTimeout{{RuleID: "a", Path: "Big.java"}, {RuleID: "b", Path: "Big.java"}, {RuleID: "c", Path: "Big.java"}},
+			ThresholdFiles: []string{"Big.java"},
+		}, reporters.ReasonTimeout, []string{"lost evaluation: 3 rule timeouts on 1 file, every other rule skipped on 1 file after 3 rule timeouts; first: Big.java (a, b, c)"}},
+		{"interfile timeout", semgrep.Run{FileErrors: []semgrep.FileError{{Type: "Timeout during interfile analysis", Path: "a.java"}}},
+			reporters.ReasonTimeout, []string{"1 per-file error (Timeout during interfile analysis 1)"}},
+		{"out of memory", semgrep.Run{FileErrors: []semgrep.FileError{{Type: "Out of memory", Path: "gen.js"}}},
+			reporters.ReasonExecutionError, []string{"lost evaluation: 1 per-file error (Out of memory 1); first: gen.js (Out of memory)"}},
+		{"too many matches", semgrep.Run{FileErrors: []semgrep.FileError{{Type: "Too many matches", RuleID: "r", Path: "x.py"}}},
+			reporters.ReasonExecutionError, []string{"x.py (Too many matches running r)"}},
+		{"mixed", semgrep.Run{
+			Timeouts:   []semgrep.RuleTimeout{{RuleID: "a", Path: "Big.java"}},
+			FileErrors: []semgrep.FileError{{Type: "Stack overflow", Path: "deep.js"}},
+		}, reporters.ReasonExecutionError, []string{"1 rule timeout on 1 file", "Stack overflow 1"}},
+		{"skipped rules", semgrep.Run{SkippedRules: []string{"java-xss-taint"}},
+			reporters.ReasonExecutionError, []string{"1 rule skipped by semgrep", "skipped rules (java-xss-taint)"}},
+		{"fixpoint unreported", semgrep.Run{FixpointUnreported: true},
+			reporters.ReasonExecutionError, []string{"semgrep reported no taint fixpoint timeouts list (--time)"}},
+		{"timeout and fixpoint unreported", semgrep.Run{Timeouts: []semgrep.RuleTimeout{{RuleID: "a", Path: "b"}}, FixpointUnreported: true},
+			reporters.ReasonExecutionError, []string{"1 rule timeout on 1 file", "no taint fixpoint timeouts list"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			found := []evidence.Evidence{{RuleID: "kept"}}
+			tc.run.Findings = found
+			var status scannerStatusList
+			var evid []evidence.Evidence
+			recordSemgrepRun(&status, &evid, tc.run)
+			got := status[0]
+			if got.State != reporters.ScannerFailed || got.Reason != tc.reason {
+				t.Errorf("entry = %+v; want failed/%s", got, tc.reason)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got.Detail, w) {
+					t.Errorf("detail %q lacks %q", got.Detail, w)
+				}
+			}
+			if !reflect.DeepEqual(evid, found) {
+				t.Errorf("findings = %+v; want kept", evid)
+			}
+		})
+	}
+}
+
+// A file that only partially parses, with few skipped lines reported, loses no
+// evaluation Semgrep cannot name: ok with its count and the skipped lines.
+// A whole-file parse failure (Syntax error) is lost evaluation (D1'): even
+// beside partial parses the run is failed.
+func TestSemgrepRunWithOnlyParseProblemsStaysOk(t *testing.T) {
+	var status scannerStatusList
+	var evid []evidence.Evidence
+	recordSemgrepRun(&status, &evid, semgrep.Run{
+		Report:        semgrep.Report{Incomplete: map[string]int{"PartialParsing": 2}},
+		PartialParses: []semgrep.PartialParse{{Path: "a.py", Spans: []semgrep.Span{{StartLine: 4, EndLine: 4}}, Reported: true, Skipped: 1, Total: 40}, {Path: "b.js", Spans: []semgrep.Span{{StartLine: 10, EndLine: 11}}, Reported: true, Skipped: 2, Total: 80}},
+	})
+	got := status[0]
+	if got.State != reporters.ScannerOK || !strings.Contains(got.Detail, "PartialParsing 2") || strings.Contains(got.Detail, "lost evaluation") {
+		t.Errorf("entry = %+v; want ok with the parse counts", got)
+	}
+	// The detail says what was skipped, in a segment a classifier can read.
+	if !strings.Contains(got.Detail, "partial parse, 2 files with skipped lines: a.py 4, b.js 10-11") {
+		t.Errorf("detail %q does not name the skipped lines", got.Detail)
+	}
+
+	status = nil
+	recordSemgrepRun(&status, &evid, semgrep.Run{Report: semgrep.Report{Incomplete: map[string]int{"PartialParsing": 2, "Syntax error": 1}}})
+	if got := status[0]; got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonExecutionError {
+		t.Errorf("entry = %+v; want failed/execution_error: a Syntax error is lost evaluation", got)
 	}
 }

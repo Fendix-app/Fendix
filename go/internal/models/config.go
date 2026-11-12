@@ -63,6 +63,18 @@ type ScanConfig struct {
 	// context with `context.WithTimeout(parent, MaxDuration)`; deadline
 	// expiry triggers the same soft-stop path as MaxRequests.
 	MaxDuration time.Duration
+	// SemgrepJobs, SemgrepMaxMemoryMiB and SemgrepWallBudget bound the Semgrep
+	// analyzer (round 4, R-008). The zero value of each derives it from the
+	// host: --jobs from the cgroup CPU quota, --max-memory from the cgroup
+	// memory limit (half the host's memory with none), and a total wall budget
+	// for the whole Semgrep stage of 300 s, shrunk to leave room under
+	// --max-duration. SemgrepMaxMemoryMiB < 0 passes no --max-memory. The
+	// FENDIX_SEMGREP_JOBS, FENDIX_SEMGREP_MAX_MEMORY_MIB and
+	// FENDIX_SEMGREP_BUDGET_SECONDS environment variables set the same three
+	// when the field is zero.
+	SemgrepJobs         int
+	SemgrepMaxMemoryMiB int
+	SemgrepWallBudget   time.Duration
 	// RespectRobots controls how robots.txt Disallow directives are
 	// interpreted. Default false: disallowed paths are queued as endpoint
 	// hints (the security-tool default — those paths are exactly the URLs

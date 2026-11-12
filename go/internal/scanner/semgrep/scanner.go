@@ -12,10 +12,19 @@
 //   - Category: rule metadata.category; default "code".
 //   - References: rule metadata.cwe (string or list).
 //   - Evidence: matched source lines, truncated at 200 chars + "...".
-//   - A 300 s deadline per invocation (defaultTimeout), and a 30 s bound
-//     per rule and file (ruleTimeoutSeconds); a rule that hits it is
-//     reported in Run.Timeouts, not dropped silently.
-//   - Build output and vendored code are never scanned (buildOutputExcludes).
+//   - A bounded stage (round 4, R-008; budget.go, plan.go): --jobs from the
+//     cgroup CPU quota, --max-memory from the cgroup memory limit, a total
+//     wall budget of DefaultWall (300 s) for every invocation together, a
+//     large multi-language tree run as one invocation per language group, and
+//     the files that timed out re-run alone with a larger per-file timeout.
+//   - A 30 s bound per rule and file (ruleTimeoutSeconds); a rule that hits it
+//     is reported in Run.Timeouts, not dropped silently.
+//   - Installed packages, build output and vendored libraries are left out of a
+//     run only on evidence read from the tree (decision D6', targets.go), and
+//     every one left out is listed, never dropped silently.
+//   - A `// nosemgrep` comment is honoured as Semgrep honours it, but the run
+//     passes --disable-nosem and the engine applies the comment itself
+//     (nosem.go), so every suppressed result is reported in Run.Suppressed.
 //
 // Distribution: rules are embedded into the binary via //go:embed
 // and extracted to a per-process temp directory on first Scan call so
@@ -46,6 +55,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -54,6 +64,7 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // ErrSemgrepUnavailable signals that no `semgrep` binary was found on
@@ -82,12 +93,15 @@ var ErrFatal = errors.New("semgrep: fatal error")
 // orchestrator records failed/malformed_output.
 var ErrMalformedOutput = errors.New("semgrep: no JSON results envelope")
 
-// defaultTimeout bounds one semgrep run, so a runaway rule can't hold the
-// orchestrator hostage. One run executes every bundled pack, and the pack is
-// growing from Python alone to Python, JavaScript/TypeScript, Java and Go, so
-// it is 300 s; it was 120 s, mirroring python semgrep_runner.py. A run that
-// exceeds it fails, and the scan has no Semgrep findings at all.
-const defaultTimeout = 300 * time.Second
+// defaultTimeout bounds the Semgrep stage (DefaultWall), so a runaway rule
+// can't hold the orchestrator hostage. The stage executes every bundled pack,
+// and the pack is growing from Python alone to Python, JavaScript/TypeScript,
+// Java and Go, so it is 300 s; it was 120 s, mirroring python
+// semgrep_runner.py. A stage that exceeds it fails: a single invocation keeps
+// no Semgrep finding (Semgrep prints its JSON once, at the end), while a tree
+// run as one invocation per language group loses only the groups that did not
+// finish.
+const defaultTimeout = DefaultWall
 
 // ruleTimeoutSeconds is Semgrep's --timeout: how long one rule may run on one
 // file before Semgrep gives up on that pair and moves on. Semgrep's default,
@@ -97,21 +111,16 @@ const defaultTimeout = 300 * time.Second
 // reports it in its errors, which ScanRun surfaces as Run.Timeouts. Semgrep's
 // --timeout-threshold (3 by default) still applies: after three rules time
 // out on one file, it skips the remaining rules on that file.
-const ruleTimeoutSeconds = 30
+var ruleTimeoutSeconds = 30
 
-// buildOutputExcludes keeps build output, installed dependencies and vendored
-// code out of every semgrep run, whatever the language (Review Focus 3): a
-// finding there is in code the project does not write, or a copy of code it
-// does. Each is a gitignore-style pattern matched against paths relative to
-// the scan root, so a directory of that name at any depth is skipped, but a
-// scan root that itself lies under one (/srv/build/repo) is not, and neither
-// is a file named like one (build.py).
-//
-// dist/ and build/ are also where Python packaging writes its output, so this
-// covers Python too. Semgrep skips most of these by itself, but only for a
-// project without a .semgrepignore of its own; .next/ and target/ are not on
-// its list at all.
-var buildOutputExcludes = []string{"node_modules", "dist", "build", ".next", "target", "vendor", "*.min.js"}
+// SetRuleTimeoutForTesting sets the per-rule --timeout for the rest of a test
+// and returns the function that restores it. Tests that need a real Semgrep
+// rule timeout on a file of ordinary size use it; nothing else may.
+func SetRuleTimeoutForTesting(seconds int) (restore func()) {
+	prev := ruleTimeoutSeconds
+	ruleTimeoutSeconds = seconds
+	return func() { ruleTimeoutSeconds = prev }
+}
 
 // evidenceMaxLen mirrors python truncate-at-200-chars + "..." behaviour.
 const evidenceMaxLen = 200
@@ -194,27 +203,172 @@ type Run struct {
 	RuleErrors []RuleError
 	// Timeouts lists the rules Semgrep stopped on a file. ScanRun returns
 	// no error for them, since Findings holds everything else the run
-	// found; the orchestrator records such a run ok, with the rules and files
-	// in the detail, as Semgrep itself calls it successful.
+	// found. The rule's matches in that file are missing, so the orchestrator
+	// records the run failed (reason timeout, decision D1) and keeps Findings.
 	Timeouts []RuleTimeout
+	// ThresholdFiles are the files on which timeoutThreshold rules timed out:
+	// Semgrep runs no other rule on such a file, and names none of them.
+	ThresholdFiles []string
+	// FixpointTimeouts lists the functions whose taint analysis Semgrep
+	// stopped at its internal fixpoint budget (R-004). Semgrep reports them
+	// only in its --time profile, never in `errors`; the taint rules named
+	// lost their matches in that function.
+	FixpointTimeouts []FixpointTimeout
+	// FixpointUnreported is set when the run's --time profile carried no
+	// fixpoint_timeouts list, so a taint rule that ran out of budget would be
+	// silent: the run cannot show its taint analysis finished.
+	FixpointUnreported bool
+	// FileErrors lists the other per-file errors that cost rule evaluation
+	// on a file (out of memory, stack overflow, an internal matching error,
+	// too many matches, an interfile limit, and any type this engine does not
+	// know): every entry of a type IsLossType reports, but a rule Timeout and
+	// a fixpoint timeout.
+	FileErrors []FileError
+	// SkippedRules are rules Semgrep loaded and did not run (its
+	// `skipped_rules`, for example a rule this Semgrep is too old for).
+	SkippedRules []string
+	// Coverage is what the run left unread (decision D6, targets.go): the
+	// in-scope files too large, unreadable or not in Semgrep's paths.scanned,
+	// which are lost evaluation, and the files and directories declared out
+	// of scope, which the ok detail lists.
+	Coverage scope.Coverage
+	// ParseFailures lists the files Semgrep could not parse at all (decision
+	// D1'): no rule ran on them. ScanRun also records each in Coverage as lost
+	// evaluation, so the orchestrator names them from there.
+	ParseFailures []ParseFailure
+	// PartialParses lists the files Semgrep parsed only in part, with the lines
+	// it skipped. A file whose skipped lines are few and reported leaves the run
+	// ok (the detail names them); any other is recorded in Coverage as lost
+	// evaluation.
+	PartialParses []PartialParse
+	// Suppressed lists the results a nosemgrep comment removed from Findings
+	// (nosem.go). They are reported, never silent.
+	Suppressed []Suppressed
 	// Report counts the other non-fatal, per-file problems Semgrep reported.
 	Report Report
+	// Budget is the CPU, memory and wall budget the stage ran under.
+	Budget Budget
+	// Groups names the per-language invocations a split run made, in order;
+	// empty for a run of one invocation.
+	Groups []string
+	// Retries is what the retry pass did with each file that lost evaluation
+	// to time in pass 1: re-ran it alone (resolved or not) or did not.
+	Retries []Retry
 }
+
+// FixpointTimeout is one function whose taint analysis Semgrep stopped at its
+// internal fixpoint budget. That budget is wall-clock and not configurable, so
+// the same file can lose its taint matches on a loaded worker and keep them on
+// an idle one.
+type FixpointTimeout struct {
+	Path      string // relative to the scan root, forward slashes
+	Line      int    // where the function starts
+	Rules     int    // taint rules that lost it, from Semgrep's message; 0 when it does not say
+	FirstRule string // the first of them, as a finding's RuleID; "" when it does not say
+	// InErrors is set when Semgrep reported it as an entry of `errors`, where
+	// it is also counted in Report.Incomplete, rather than in the profile.
+	InErrors bool
+}
+
+// FileError is one per-file Semgrep error that cost rule evaluation on a file,
+// other than a rule timeout (Run.Timeouts) or a fixpoint timeout.
+type FileError struct {
+	Type   string // Semgrep's error type, "Out of memory"
+	RuleID string // the rule, when Semgrep names one
+	Path   string // relative to the scan root, forward slashes
+}
+
+// IsTimeout reports whether the error is a timeout class (an interfile
+// timeout), as opposed to a resource or engine failure.
+func (e FileError) IsTimeout() bool { return IsTimeoutType(e.Type) }
+
+// timeoutThreshold is Semgrep's --timeout-threshold, which ScanRun leaves at
+// its default: after this many rules time out on one file, Semgrep skips the
+// remaining rules on that file and reports only the timeouts.
+const timeoutThreshold = 3
+
+// TimeoutThreshold is timeoutThreshold, for the scanner-status detail.
+func TimeoutThreshold() int { return timeoutThreshold }
+
+// The per-file error types Semgrep writes, by what they cost (decisions D1 and
+// D1'). Semgrep 1.182.1 spells them as semgrep_interfaces/semgrep_output_v1.py
+// error_type's to_json does ("Out of memory", "Internal matching error", ...);
+// the ATD constructor names (OutOfMemory, MatchingError, ...) are what some
+// releases and this engine's own tables have used.
+//
+// A timeout class is failed/timeout (timeoutLossTypes). Every other type,
+// including one this engine does not know and one that could not be decoded at
+// all, is failed/execution_error: an out of memory, a stack overflow, an
+// internal matching error, too many matches, a missing plugin, a fatal error, a
+// warning of a kind not listed here. A type cannot be shown to have cost nothing
+// unless it is listed as such, so the engine fails closed.
+//
+// D1' (round 4): a whole-file parse failure (parseFailureTypes: "Syntax error",
+// "Lexical error", "Other syntax error", "AST builder error" and their
+// constructor spellings) means Semgrep evaluated no rule on that file, whatever
+// its exit code says, so it is lost evaluation and the files are named. The one
+// parse type that is not is "PartialParsing" (partialParsingType): Semgrep
+// parsed the file as far as it could and reports the spans it skipped, so the
+// analysed scope is known. It stays ok only while those spans are reported and
+// small (partialSkipOK); otherwise it is lost evaluation too.
+var (
+	partialParsingType = "PartialParsing"
+	parseFailureTypes  = map[string]bool{
+		"Syntax error":       true,
+		"ParseError":         true,
+		"Lexical error":      true,
+		"LexicalError":       true,
+		"Other syntax error": true,
+		"OtherParseError":    true,
+		"AST builder error":  true,
+		"AstBuilderError":    true,
+	}
+	timeoutLossTypes = map[string]bool{
+		"Timeout":                           true,
+		"Fixpoint timeout":                  true,
+		"FixpointTimeout":                   true,
+		"Timeout during interfile analysis": true,
+		"TimeoutDuringInterfile":            true,
+	}
+)
+
+// IsLossType reports whether a Semgrep error type means evaluation was lost
+// on a file: every type but "PartialParsing", which is lost only when its skipped
+// spans are not reported or are not small (decision D1').
+func IsLossType(typ string) bool { return typ != partialParsingType }
+
+// IsParseFailureType reports whether a Semgrep error type is a whole-file parse
+// failure (decision D1').
+func IsParseFailureType(typ string) bool { return parseFailureTypes[typ] }
+
+// IsTimeoutType reports whether a lost-evaluation type is a timeout class.
+func IsTimeoutType(typ string) bool { return timeoutLossTypes[typ] }
 
 // Report is what one Semgrep run said about itself besides its findings.
 type Report struct {
 	// Incomplete counts the non-fatal, per-file problems Semgrep reported
-	// (level "warn": a file that did not parse fully, a per-file or per-rule
-	// timeout, a per-file memory limit), by Semgrep error type. The run is
-	// still ok by Semgrep's own contract; findings in those files may be
-	// missing. A rule Timeout is counted here and, separately, in
-	// Run.Timeouts, which the orchestrator names in the detail of the ok run.
+	// (any level but "error" and "info": a file that did not parse fully, a
+	// per-file or per-rule timeout, a per-file memory limit), by Semgrep
+	// error type; an entry that could not be decoded is counted under
+	// "undecodable". Semgrep's own exit calls such a run successful. The
+	// orchestrator does not (decision D1): every type but a parse problem is
+	// lost evaluation and records the run failed. The decoded entries are
+	// also in Run.Timeouts, Run.FixpointTimeouts and Run.FileErrors; a count
+	// here beyond what they hold is an entry the decoders could not read,
+	// which fails the run too (qa-engine-01).
 	Incomplete map[string]int
 	// Dropped names the options the run went without because the host
 	// Semgrep predates the release that added them, "semgrep 1.45.0: dropped
-	// --project-root (needs 1.111.0)", or "" when none were. The run is still
-	// ok; its matches are the same, less what the option adds.
+	// --project-root (needs 1.111.0)", or "" when none were.
 	Dropped string
+	// DroppedDetection is the part of Dropped whose absence changes what is
+	// scanned or matched (see optionalArgs), in the same form, or "" when
+	// none of the dropped options does. The orchestrator records such a run
+	// failed; the others leave it ok with Dropped in the detail.
+	DroppedDetection string
+	// DroppedWhy says what DroppedDetection costs, "files may be skipped:
+	// ...", or "" when DroppedDetection is "".
+	DroppedWhy string
 }
 
 // Summary is the scanner-status detail for a clean run with per-file
@@ -265,6 +419,97 @@ func ScanWithReport(ctx context.Context, codePath string, allow *gitdiff.Allowli
 // nothing rather than run semgrep with no --include — which would scan the
 // WHOLE tree, the exact opposite of the diff intent (the historical footgun).
 func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Run, error) {
+	return ScanRunWithOptions(ctx, codePath, allow, Options{})
+}
+
+// Options set the budget of one ScanRun. A zero value derives it from the
+// host's limits and the environment (budget.go).
+type Options struct {
+	// Jobs is Semgrep's --jobs; 0 derives it from the CPU quota.
+	Jobs int
+	// MaxMemoryMiB is Semgrep's --max-memory; 0 derives it from the memory
+	// limit, a negative value passes none.
+	MaxMemoryMiB int
+	// Wall is the stage's total wall budget; 0 uses DefaultWall.
+	Wall time.Duration
+	// SplitBytes is the in-scope source size from which a tree in several
+	// languages runs one invocation per language; 0 uses DefaultSplitBytes, a
+	// negative value never splits.
+	SplitBytes int64
+	// MaxRetryFiles bounds the retry pass; 0 uses DefaultMaxRetryFiles, a
+	// negative value disables it.
+	MaxRetryFiles int
+}
+
+// limitsFunc and getenv are how the budget reads the host; tests replace them.
+var (
+	limitsFunc = ReadLimits
+	getenv     = os.Getenv
+)
+
+// resolveBudget derives the stage's budget: the host's limits and the
+// environment, overridden by what opts sets.
+func resolveBudget(ctx context.Context, opts Options) Budget {
+	remaining := time.Duration(-1)
+	if dl, ok := ctx.Deadline(); ok {
+		remaining = time.Until(dl)
+	}
+	b := DeriveBudget(limitsFunc(), remaining, getenv)
+	if opts.Jobs > 0 {
+		b.Jobs = opts.Jobs
+		b.Overridden = append(b.Overridden, "options.jobs")
+	}
+	switch {
+	case opts.MaxMemoryMiB > 0:
+		b.MaxMemoryMiB = opts.MaxMemoryMiB
+		b.Overridden = append(b.Overridden, "options.max-memory")
+	case opts.MaxMemoryMiB < 0:
+		b.MaxMemoryMiB = 0
+		b.Overridden = append(b.Overridden, "options.max-memory=none")
+	}
+	if opts.Wall > 0 {
+		b.Wall = stageWall(opts.Wall, remaining)
+		b.Overridden = append(b.Overridden, "options.wall")
+	}
+	return b
+}
+
+// baseArgs are the flags every invocation of a stage takes, beside its
+// --config, the options optionalArgs adds and its targets.
+func baseArgs() []string {
+	return []string{
+		"--json",
+		"--no-git-ignore",
+		"--quiet",
+		// Without this, every run first asks semgrep.dev whether a newer
+		// Semgrep exists. Fendix pins Semgrep itself and --quiet hides the
+		// answer, so the check only adds outbound traffic, and with no route
+		// out it is a wait: about 25 s on Semgrep 1.141.0 and 96 s on
+		// 1.182.1, enough to push a mid-size tree past the stage budget and
+		// record semgrep failed/timeout on an offline scan.
+		"--disable-version-check",
+		// Semgrep reports a taint rule that ran out of its fixpoint budget on
+		// a function only in the run's profile (time.fixpoint_timeouts), never
+		// in `errors` (R-004). The defect at 07a1324 was that the engine never
+		// read that profile; Semgrep 1.182.1 writes it with or without --time
+		// (qa-engine-04). --time is passed so that a release which writes the
+		// profile only on request writes it too; detection does not depend on
+		// it, because a document without a fixpoint_timeouts list is
+		// FixpointUnreported, which the orchestrator records as a gap.
+		"--time",
+		// The size cap every Go analyzer applies (decision D6), explicit so
+		// that a Semgrep whose default differs skips exactly the files the
+		// engine lists as too large. Every supported release has the option.
+		"--max-target-bytes", strconv.Itoa(scope.MaxFileBytes),
+		// A `// nosemgrep` comment is applied by the engine (nosem.go), which
+		// reports what it suppressed; Semgrep itself must not drop the result
+		// without a trace (redteam3-semgrep-01).
+		"--disable-nosem",
+	}
+}
+
+// ScanRunWithOptions is ScanRun with an explicit budget.
+func ScanRunWithOptions(ctx context.Context, codePath string, allow *gitdiff.Allowlist, opts Options) (Run, error) {
 	if codePath == "" {
 		return Run{}, ErrCodePathMissing
 	}
@@ -276,6 +521,12 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 	} else if !info.IsDir() {
 		return Run{}, fmt.Errorf("semgrep: %q is not a directory", codePath)
 	}
+	// A root that is itself a symbolic link is the scope the caller chose.
+	// Semgrep does not follow a linked scanning root (it scanned nothing and
+	// the run read ok), so it is given the directory the link resolves to.
+	// The allowlist's paths are reduced to root-relative --include filters
+	// against the root as the caller gave it, so they keep matching.
+	target := resolveRootLink(codePath)
 
 	// A diff that matched zero scannable files → nothing to do. Guard here too
 	// (not just in the orchestrator) because this function is exported and
@@ -306,63 +557,321 @@ func ScanRun(ctx context.Context, codePath string, allow *gitdiff.Allowlist) (Ru
 	}
 	defer release()
 
-	runCtx, cancel := contextWithDefaultTimeout(ctx, defaultTimeout)
-	defer cancel()
+	// The version probe is bounded on its own (versionProbeTimeout) and does
+	// not spend the run's deadline.
+	version := semgrepVersionOf(ctx, bin)
 
-	version := semgrepVersionOf(runCtx, bin)
-	args := []string{
-		"--config", rules,
-		"--json",
-		"--no-git-ignore",
-		"--quiet",
-		// Without this, every run first asks semgrep.dev whether a newer
-		// Semgrep exists. Fendix pins Semgrep itself and --quiet hides the
-		// answer, so the check only adds outbound traffic, and with no route
-		// out it is a wait: about 25 s on Semgrep 1.141.0 and 96 s on
-		// 1.182.1, enough to push a mid-size tree past defaultTimeout and
-		// record semgrep failed/timeout on an offline scan.
-		"--disable-version-check",
-	}
-	optional, dropped := optionalArgs(version, codePath)
-	args = append(args, optional...)
-	note := droppedNote(version, dropped)
-	for _, rel := range includes {
-		args = append(args, "--include", rel)
-	}
-	args = append(args, codePath)
+	// Decision D6': what the run leaves out is decided from the tree before it
+	// starts, so Semgrep is told to skip exactly those paths.
+	targets := inScopeTargets(target, scopeAllowlist(allow, codePath, target))
 
-	cmd := commandContext(runCtx, bin, args...)
-	var stderr strings.Builder
-	cmd.Stderr = &limitedWriter{w: &stderr, n: stderrKeep}
-	stdout, err := cmd.Output()
-	if err != nil {
-		// Context errors (cancel/deadline) are always real failures —
-		// surface them so the orchestrator can stop the scan.
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return Run{}, fmt.Errorf("%w after %s", ErrTimeout, defaultTimeout)
+	budget := resolveBudget(ctx, opts)
+	slog.Info("semgrep: stage budget", "budget", budget.String())
+	started := time.Now()
+	end := started.Add(budget.Wall)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(end) {
+		end = dl
+	}
+	st := &stage{
+		bin:      bin,
+		target:   target,
+		base:     baseArgs(),
+		version:  version,
+		excludes: targets.Excludes,
+		includes: includes,
+		budget:   budget,
+		end:      end,
+	}
+
+	// The plan: one invocation over every pack (a small tree, or one in a
+	// single language), or one per language group (plan.go).
+	splitBytes := opts.SplitBytes
+	if splitBytes == 0 {
+		splitBytes = splitBytesFromEnv(getenv)
+	}
+	var shards []shard
+	groups, gerr := readPackGroups(rules)
+	if gerr != nil {
+		slog.Warn("semgrep: could not group the rule packs by language; running them as one invocation", "error", gerr)
+	} else {
+		shards = planShards(targets, groups, splitBytes)
+	}
+
+	if len(shards) > 0 {
+		names := make([]string, len(shards))
+		for i, sh := range shards {
+			names[i] = fmt.Sprintf("%s(%s, %d KiB)", sh.name, filesNoun(len(sh.files)), sh.bytes>>10)
 		}
-		if errors.Is(runCtx.Err(), context.Canceled) {
-			return Run{}, runCtx.Err()
+		slog.Info("semgrep: the tree is run as one invocation per language group, cheapest first", "groups", strings.Join(names, ", "))
+	}
+
+	var results []invResult
+	var unfinished []string
+	if len(shards) == 0 {
+		res := st.run(ctx, invocation{
+			label:    "semgrep",
+			configs:  []string{rules},
+			timeout:  ruleTimeoutSeconds,
+			jobs:     budget.Jobs,
+			deadline: end,
+		})
+		switch {
+		case res.ctxErr != nil:
+			return Run{}, res.ctxErr
+		case res.timedOut:
+			return Run{}, fmt.Errorf("%w after %s", ErrTimeout, end.Sub(started).Round(time.Second))
+		case res.startErr != nil:
+			return Run{}, fmt.Errorf("semgrep: %w", res.startErr)
+		}
+		results = []invResult{res}
+	} else {
+		offsets := shardDeadlines(shards, end.Sub(started))
+		for i, sh := range shards {
+			deadline := minTime(end, started.Add(offsets[i]))
+			if time.Until(deadline) < minShardWindow {
+				unfinished = append(unfinished, fmt.Sprintf("%s %s", sh.name, filesNoun(len(sh.files))))
+				continue
+			}
+			res := st.run(ctx, invocation{
+				label:    sh.name,
+				configs:  sh.configs,
+				timeout:  ruleTimeoutSeconds,
+				jobs:     budget.Jobs,
+				deadline: deadline,
+			})
+			switch {
+			case res.ctxErr != nil:
+				return Run{}, res.ctxErr
+			case res.timedOut:
+				slog.Warn("semgrep: a language group did not finish within its share of the stage budget; its findings are lost",
+					"group", sh.name, "files", len(sh.files), "elapsed", res.elapsed.Round(time.Second))
+				unfinished = append(unfinished, fmt.Sprintf("%s %s", sh.name, filesNoun(len(sh.files))))
+				continue
+			case res.startErr != nil:
+				return Run{}, fmt.Errorf("semgrep: %w", res.startErr)
+			}
+			results = append(results, res)
 		}
 	}
-	status := exitStatus{code: 0}
-	if err != nil {
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			return Run{}, fmt.Errorf("semgrep: %w", err)
+
+	// The extensions pass (decision D6', redteam4-d6-02, DE4-04): source files
+	// Semgrep does not select by their extension (APP.JS, x.mts, a .vue
+	// component) are named to it one by one with --scan-unknown-extensions,
+	// with every pack, so they are evaluated like any other source file. A file
+	// this pass does not report is lost evaluation (checkScanned), never an
+	// exclusion by name.
+	if len(targets.explicit) > 0 {
+		// One invocation per language group, with only that group's packs: an
+		// explicit file of an unselected extension is parsed as every language
+		// of every rule it is run with, and a Python rule would report the
+		// JavaScript file as a syntax error.
+		byGroup := map[string][]string{}
+		var order []string
+		for _, rel := range targets.explicit {
+			g := groupOfLanguage[languageOf(rel)]
+			if _, seen := byGroup[g]; !seen {
+				order = append(order, g)
+			}
+			byGroup[g] = append(byGroup[g], filepath.Join(target, filepath.FromSlash(rel)))
 		}
-		status = exitStatusOf(exitErr)
+		for _, g := range order {
+			files := byGroup[g]
+			configs := []string{rules}
+			if gerr == nil {
+				configs = nil
+				for _, pg := range groups {
+					if pg.name == g {
+						configs = append(configs, pg.configs...)
+					}
+				}
+				if len(configs) == 0 {
+					configs = []string{rules}
+				}
+			}
+			label := "extensions " + g
+			if time.Until(end) < minShardWindow {
+				unfinished = append(unfinished, label+" "+filesNoun(len(files)))
+				continue
+			}
+			res := st.run(ctx, invocation{
+				label:      label,
+				configs:    configs,
+				targets:    files,
+				timeout:    ruleTimeoutSeconds,
+				jobs:       budget.Jobs,
+				deadline:   end,
+				explicit:   true,
+				unknownExt: true,
+			})
+			switch {
+			case res.ctxErr != nil:
+				return Run{}, res.ctxErr
+			case res.timedOut:
+				slog.Warn("semgrep: the extensions pass did not finish within the stage budget; its files are not evaluated",
+					"group", g, "files", len(files), "elapsed", res.elapsed.Round(time.Second))
+				unfinished = append(unfinished, label+" "+filesNoun(len(files)))
+			case res.startErr != nil:
+				return Run{}, fmt.Errorf("semgrep: %w", res.startErr)
+			default:
+				results = append(results, res)
+			}
+		}
 	}
-	out, report, cerr := classifyRun(status, stdout, stderr.String())
-	report.Dropped = note
-	if out == nil {
-		return Run{Report: report}, cerr
+
+	// Classify each invocation as a run of its own, so a fatal one is named
+	// and every document that did print is kept.
+	var docs []*semgrepOutput
+	var cerr error
+	var report Report
+	var firstStatus exitStatus
+	var firstStderr string
+	for i, res := range results {
+		out, rep, err := classifyRun(res.status, res.stdout, res.stderr)
+		if i == 0 {
+			report, firstStatus, firstStderr = rep, res.status, res.stderr
+		}
+		if err != nil {
+			if len(results) > 1 || len(shards) > 0 {
+				err = fmt.Errorf("%s: %w", res.label, err)
+			}
+			if cerr == nil {
+				cerr = err
+			}
+		}
+		if out != nil {
+			docs = append(docs, out)
+		} else if len(shards) > 0 {
+			slog.Warn("semgrep: a language group produced no results document; its files are not evaluated",
+				"group", res.label, "error", err)
+		}
+	}
+	if len(docs) == 0 {
+		report.Dropped, report.DroppedDetection, report.DroppedWhy = st.note, st.lossyNote, st.why
+		if cerr != nil && !version.known {
+			if why := versionProbeProblem(bin); why != "" {
+				cerr = fmt.Errorf("%w (semgrep --version could not be read: %s, so every option was passed)", cerr, why)
+			}
+		}
+		if cerr == nil && len(unfinished) > 0 {
+			cerr = &StageTimeoutError{Wall: end.Sub(started), Unfinished: unfinished}
+		}
+		return Run{Report: report, Budget: budget}, cerr
+	}
+	merged := mergeOutputs(docs)
+	absTarget, aerr := filepath.Abs(target)
+	if aerr != nil {
+		absTarget = target
+	}
+
+	// The retry pass: files that lost evaluation to time, alone, with a
+	// timeout scaled to their size, in what is left of the stage's wall budget.
+	packsFor := func(rel string) []string {
+		if len(shards) == 0 && semgrepSelects(rel) {
+			return []string{rules}
+		}
+		var configs []string
+		for _, g := range groups {
+			if g.name == otherGroup || g.name == groupOfLanguage[languageOf(rel)] {
+				configs = append(configs, g.configs...)
+			}
+		}
+		if len(configs) == 0 {
+			return []string{rules}
+		}
+		return configs
+	}
+	retries := st.retryPass(ctx, merged, absTarget, func(rel string) int64 { return targets.size[rel] }, packsFor, opts.MaxRetryFiles)
+
+	// The report: classified again from the document as it now stands (a
+	// resolved retry removed its pass-1 loss), with the first invocation's own
+	// exit status when it is the only one.
+	if len(results) == 1 && len(shards) == 0 {
+		_, report, cerr = classifyDecoded(firstStatus, merged, "", firstStderr)
+	} else {
+		_, report, _ = classifyDecoded(exitStatus{}, merged, "", "")
+	}
+	report.Dropped = st.note
+	report.DroppedDetection = st.lossyNote
+	report.DroppedWhy = st.why
+	if cerr != nil && !version.known {
+		if why := versionProbeProblem(bin); why != "" {
+			cerr = fmt.Errorf("%w (semgrep --version could not be read: %s, so every option was passed)", cerr, why)
+		}
 	}
 	// A fatal run still returns its findings, rule errors and timeouts: the
 	// orchestrator keeps the findings and records the run failed.
-	run := runFromOutput(out, codePath)
+	run := runFromOutput(merged, target)
 	run.Report = report
+	run.Budget = budget
+	run.Retries = retries
+	for _, sh := range shards {
+		run.Groups = append(run.Groups, sh.name)
+	}
+	if cerr == nil {
+		// Decision D6: what the run was meant to evaluate, against what it
+		// says it evaluated. A failed run is a gap already. A language group
+		// that did not finish is not in paths.scanned, so its files are named
+		// here as not evaluated.
+		scanned, reported := scannedPaths(merged.Paths, absTarget)
+		targets.checkScanned(scanned, reported)
+		// Decision D1': a file Semgrep could not parse, or parsed only in part
+		// with a large or unreported skip, was not evaluated.
+		for _, pf := range run.ParseFailures {
+			targets.Coverage.NotParsed(orUnknownPath(pf.Path))
+		}
+		for i := range run.PartialParses {
+			pp := &run.PartialParses[i]
+			if !pp.judge(absTarget) {
+				pp.Lost = true
+				targets.Coverage.NotParsed(orUnknownPath(pp.Path))
+			}
+		}
+		run.Coverage = targets.Coverage
+	}
+	if len(unfinished) > 0 {
+		timeout := &StageTimeoutError{Wall: end.Sub(started), Unfinished: unfinished}
+		if cerr == nil {
+			cerr = timeout
+		} else {
+			cerr = fmt.Errorf("%w; and %s", cerr, timeout.Error())
+		}
+	}
 	return run, cerr
+}
+
+// orUnknownPath names a file whose error entry carried no path.
+func orUnknownPath(p string) string {
+	if p == "" {
+		return "unknown file"
+	}
+	return p
+}
+
+// resolveRootLink is root, or the directory it resolves to when root itself
+// is a symbolic link. Links below the root are not resolved.
+func resolveRootLink(root string) string {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return root
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return root
+	}
+	return resolved
+}
+
+// scopeAllowlist re-roots the allowlist's paths from the root the caller gave
+// to the directory Semgrep scanned, when the two differ (a linked root).
+func scopeAllowlist(allow *gitdiff.Allowlist, given, target string) *gitdiff.Allowlist {
+	if allow == nil || given == target {
+		return allow
+	}
+	rel, err := allow.RelPaths(given)
+	if err != nil {
+		return gitdiff.NewAllowlist(target, nil)
+	}
+	return gitdiff.NewAllowlist(target, rel)
 }
 
 // stderrKeep bounds how much of semgrep's stderr is kept for an error
@@ -425,18 +934,33 @@ type semgrepError struct {
 // level is the error's level ("warn", "error"), or "" when it has none.
 func (e semgrepError) level() string { return rawString(e.LevelRaw) }
 
+// undecodableType is the Report.Incomplete key of an `errors` entry that
+// could not be decoded at all.
+const undecodableType = "undecodable"
+
+// isInfoLevel reports whether an `errors` entry's level is one Semgrep uses
+// for notes that do not concern a file's evaluation.
+func isInfoLevel(level string) bool {
+	return strings.EqualFold(level, "info") || strings.EqualFold(level, "debug")
+}
+
 // message is the error's message, or "" when it has none or it is not a string.
 func (e semgrepError) message() string { return rawString(e.MessageRaw) }
 
-// typeName is the error's Semgrep type: a JSON string ("Timeout") or the
-// first element of a constructor array (["PartialParsing", [...]]).
-func (e semgrepError) typeName() string {
+// typeName is the error's Semgrep type (see errorTypeName).
+func (e semgrepError) typeName() string { return errorTypeName(e.Type) }
+
+// errorTypeName is a Semgrep error type: a JSON string ("Timeout") or the
+// first element of a constructor array (["PartialParsing", [...]]), or
+// "unknown" when it is neither. classifyRun and the decoders share it, so an
+// entry is counted and decoded under the same type.
+func errorTypeName(raw json.RawMessage) string {
 	var s string
-	if json.Unmarshal(e.Type, &s) == nil && s != "" {
+	if json.Unmarshal(raw, &s) == nil && s != "" {
 		return s
 	}
 	var parts []json.RawMessage
-	if json.Unmarshal(e.Type, &parts) == nil && len(parts) > 0 && json.Unmarshal(parts[0], &s) == nil && s != "" {
+	if json.Unmarshal(raw, &parts) == nil && len(parts) > 0 && json.Unmarshal(parts[0], &s) == nil && s != "" {
 		return s
 	}
 	return "unknown"
@@ -480,11 +1004,31 @@ var nonBlockingErrorTypes = map[string]bool{
 // without a JSON results envelope is ErrMalformedOutput. The envelope, when
 // there is one, is returned with the error so findings it carries are kept.
 func classifyRun(status exitStatus, stdout []byte, stderr string) (*semgrepOutput, Report, error) {
-	report := Report{}
 	out, envErr := decodeEnvelope(stdout)
+	return classifyDecoded(status, out, envErr, stderr)
+}
+
+// classifyDecoded is classifyRun for a document already decoded (or not:
+// out == nil, envErr saying why), so the stage can classify the merge of
+// several invocations' documents, and a document a retry changed, the same way
+// it classifies one.
+func classifyDecoded(status exitStatus, out *semgrepOutput, envErr, stderr string) (*semgrepOutput, Report, error) {
+	report := Report{}
 	var fatal *semgrepError
 	if out != nil {
-		entries := out.errorList()
+		entries, undecodable := out.errorList()
+		count := func(typ string, n int) {
+			if n == 0 {
+				return
+			}
+			if report.Incomplete == nil {
+				report.Incomplete = map[string]int{}
+			}
+			report.Incomplete[typ] += n
+		}
+		// An entry that is not an object, or an `errors` that is not a list,
+		// cannot be shown to have cost nothing (qa-engine-01).
+		count(undecodableType, undecodable)
 		for i := range entries {
 			e := entries[i]
 			typ := e.typeName()
@@ -494,12 +1038,13 @@ func classifyRun(status exitStatus, stdout []byte, stderr string) (*semgrepOutpu
 				}
 				continue
 			}
-			if strings.EqualFold(e.level(), "warn") || strings.EqualFold(e.level(), "warning") || nonBlockingErrorTypes[typ] {
-				if report.Incomplete == nil {
-					report.Incomplete = map[string]int{}
-				}
-				report.Incomplete[typ]++
+			// "info" is Semgrep's level for notes about the run, not about a
+			// file's evaluation. Every other level, "warn" and also a missing
+			// or unfamiliar one, is a per-file problem and counted.
+			if isInfoLevel(e.level()) {
+				continue
 			}
+			count(typ, 1)
 		}
 	}
 
@@ -598,18 +1143,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// contextWithDefaultTimeout returns a context with the given timeout
-// only when ctx itself has no earlier deadline; otherwise returns a
-// no-op cancel + the original context.
-func contextWithDefaultTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	if dl, ok := ctx.Deadline(); ok {
-		if time.Until(dl) <= d {
-			return ctx, func() {}
-		}
-	}
-	return context.WithTimeout(ctx, d)
-}
-
 // semgrepResult mirrors the subset of the Semgrep JSON schema we use.
 type semgrepResult struct {
 	CheckID string         `json:"check_id"`
@@ -655,25 +1188,75 @@ type semgrepOutput struct {
 	// ruleErrors): an entry of an unexpected shape must cost that entry,
 	// never the results.
 	Errors json.RawMessage `json:"errors"`
+	// Time is the --time profile, read only for its fixpoint_timeouts; nil
+	// when the document has none.
+	Time *semgrepTime `json:"time"`
+	// SkippedRules is kept raw for the same reason as Errors.
+	SkippedRules json.RawMessage `json:"skipped_rules"`
+	// Paths is kept raw and read only for paths.scanned (scannedPaths).
+	Paths json.RawMessage `json:"paths"`
+}
+
+// semgrepTime is the part of the --time profile ScanRun reads. Its decoder
+// never fails: a profile of an unexpected shape leaves fixpoint unreported,
+// which the orchestrator records as a gap, and never costs the results.
+type semgrepTime struct {
+	fixpoint    []json.RawMessage
+	hasFixpoint bool
+}
+
+func (t *semgrepTime) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Fixpoint json.RawMessage `json:"fixpoint_timeouts"`
+	}
+	// Only a list is a report: null, an object or a string cannot show that
+	// taint analysis finished.
+	if json.Unmarshal(data, &raw) != nil || !strings.HasPrefix(strings.TrimSpace(string(raw.Fixpoint)), "[") {
+		return nil
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(raw.Fixpoint, &entries) != nil {
+		return nil
+	}
+	t.fixpoint, t.hasFixpoint = entries, true
+	return nil
 }
 
 // errorList decodes the envelope's errors entry by entry, for classifyRun: an
 // entry of an unexpected shape, or an `errors` that is not a list, costs that
-// entry and never the results beside it.
-func (o *semgrepOutput) errorList() []semgrepError {
-	var entries []json.RawMessage
-	if len(o.Errors) == 0 || json.Unmarshal(o.Errors, &entries) != nil {
-		return nil
+// entry and never the results beside it. It also returns how many entries
+// could not be decoded at all (an `errors` that is present and not a list
+// counts as one), which classifyRun counts as lost evaluation.
+func (o *semgrepOutput) errorList() ([]semgrepError, int) {
+	entries, ok := errorEntries(o.Errors)
+	if !ok {
+		return nil, 1
 	}
 	list := make([]semgrepError, 0, len(entries))
+	undecodable := 0
 	for _, entry := range entries {
 		var e semgrepError
 		if json.Unmarshal(entry, &e) != nil {
+			undecodable++
 			continue
 		}
 		list = append(list, e)
 	}
-	return list
+	return list, undecodable
+}
+
+// errorEntries splits the document's `errors` into its entries. An absent or
+// null `errors` is no entries; one that is present and not a list is not ok.
+func errorEntries(raw json.RawMessage) ([]json.RawMessage, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, true
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil, false
+	}
+	return entries, true
 }
 
 // semgrepErrorDetail is one entry of the document's `errors`, read for the
@@ -686,43 +1269,63 @@ func (o *semgrepOutput) errorList() []semgrepError {
 // and still exits 0. Type is kept raw: other error types are ATD variants,
 // encoded as an array whose first element is the tag.
 //
-// The message fields are kept raw as well, so a message of an unexpected type
-// costs the message and never the entry (a Timeout is still counted).
+// Every field is kept raw, so a field of an unexpected type (a rule_id that is
+// an object, a path that is a number, a message that is a list) costs that
+// field and never the entry: the entry still says what was lost
+// (qa-engine-01).
 type semgrepErrorDetail struct {
 	Type     json.RawMessage `json:"type"`
-	RuleID   string          `json:"rule_id"`
-	Path     string          `json:"path"`
+	Level    json.RawMessage `json:"level"`
+	RuleIDv  json.RawMessage `json:"rule_id"`
+	PathV    json.RawMessage `json:"path"`
 	Message  json.RawMessage `json:"message"`
 	ShortMsg json.RawMessage `json:"short_msg"`
 	LongMsg  json.RawMessage `json:"long_msg"`
+}
+
+// ruleID is the rule the entry names, "" when it names none or the field is
+// not a string.
+func (e semgrepErrorDetail) ruleID() string { return rawString(e.RuleIDv) }
+
+// path is the file the entry is about, "" when it names none or the field is
+// not a string.
+func (e semgrepErrorDetail) path() string { return rawString(e.PathV) }
+
+// perFile reports whether the entry is a per-file problem as classifyRun
+// counts it: any level but "info"/"debug", and not a fatal "error" entry
+// (which fails the run on its own).
+func (e semgrepErrorDetail) perFile() bool {
+	level := rawString(e.Level)
+	if isInfoLevel(level) {
+		return false
+	}
+	return !strings.EqualFold(level, "error") || nonBlockingErrorTypes[e.typeTag()]
 }
 
 // ruleErrorTypes are the error types that say Semgrep could not load a rule.
 // The others in `errors` are about a scanned file (ParseError, LexicalError,
 // PartialParsing, "Syntax error") or about a run limit (Timeout, OutOfMemory)
 // and do not mean the pack did not run.
+//
+// Each type is listed under the constructor name and, where it differs, the
+// spelling Semgrep 1.182.1 writes ("Rule parse error", "Invalid YAML",
+// "Pattern parse error", "Incompatible rule").
 var ruleErrorTypes = map[string]bool{
 	"InvalidRuleSchemaError": true,
 	"RuleParseError":         true,
+	"Rule parse error":       true,
 	"PatternParseError":      true,
+	"Pattern parse error":    true,
 	"UnknownLanguageError":   true,
 	"InvalidYaml":            true,
+	"Invalid YAML":           true,
 	"IncompatibleRule":       true,
+	"Incompatible rule":      true,
 }
 
-// typeTag is the error's type: a plain string, or the first element of an ATD
-// variant array. "" when it is neither.
-func (e semgrepErrorDetail) typeTag() string {
-	var tag string
-	if json.Unmarshal(e.Type, &tag) == nil {
-		return tag
-	}
-	var variant []json.RawMessage
-	if json.Unmarshal(e.Type, &variant) == nil && len(variant) > 0 && json.Unmarshal(variant[0], &tag) == nil {
-		return tag
-	}
-	return ""
-}
+// typeTag is the error's type (errorTypeName): "unknown" when it is neither a
+// string nor a variant array.
+func (e semgrepErrorDetail) typeTag() string { return errorTypeName(e.Type) }
 
 func rawString(raw json.RawMessage) string {
 	var s string
@@ -762,6 +1365,13 @@ func (e semgrepErrorDetail) isTimeout() bool {
 	return e.typeTag() == "Timeout"
 }
 
+// isFixpointTimeout reports whether the error is a taint fixpoint timeout,
+// in either spelling.
+func (e semgrepErrorDetail) isFixpointTimeout() bool {
+	tag := e.typeTag()
+	return tag == "Fixpoint timeout" || tag == "FixpointTimeout"
+}
+
 // parseAndMap decodes Semgrep's stdout JSON and converts each result
 // into a fendix Finding. Empty or malformed stdout returns (nil, nil)
 // so the caller treats it as zero-findings; ScanRun does not rely on this
@@ -790,10 +1400,172 @@ func runFromOutput(out *semgrepOutput, codeRoot string) Run {
 	if err != nil {
 		absRoot = codeRoot
 	}
-	run := Run{Findings: mapResults(out, codeRoot)}
+	kept, suppressed := splitSuppressed(out.Results, absRoot)
+	view := *out
+	view.Results = kept
+	run := Run{Findings: mapResults(&view, codeRoot), Suppressed: suppressed}
+	run.ParseFailures = parseFailures(out.Errors, absRoot)
+	run.PartialParses = partialParses(out.Errors, absRoot)
 	run.Timeouts = ruleTimeouts(out.Errors, absRoot)
 	run.RuleErrors = ruleErrors(out.Errors)
+	run.ThresholdFiles = thresholdFiles(run.Timeouts)
+	run.FileErrors = fileErrors(out.Errors, absRoot)
+	run.FixpointTimeouts = fixpointTimeouts(out, absRoot)
+	run.FixpointUnreported = out.Time == nil || !out.Time.hasFixpoint
+	run.SkippedRules = skippedRules(out.SkippedRules)
 	return run
+}
+
+// thresholdFiles are the files with at least timeoutThreshold rule timeouts,
+// in first-seen order.
+func thresholdFiles(timeouts []RuleTimeout) []string {
+	count := map[string]int{}
+	var order []string
+	for _, t := range timeouts {
+		if count[t.Path] == 0 {
+			order = append(order, t.Path)
+		}
+		count[t.Path]++
+	}
+	var out []string
+	for _, p := range order {
+		if count[p] >= timeoutThreshold {
+			slog.Warn("semgrep: rules timed out on a file up to --timeout-threshold; no other rule ran on it",
+				"path", p, "timeouts", count[p])
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// fixpointEntry is one fixpoint timeout, from the profile or from `errors`.
+// Its fields are read leniently (fixpointEntry.UnmarshalJSON), so a field of
+// an unexpected type costs the field and never the entry.
+type fixpointEntry struct {
+	Message  json.RawMessage
+	Path     string
+	Location struct {
+		Path  string
+		Start struct{ Line int }
+	}
+}
+
+func (f *fixpointEntry) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Message  json.RawMessage `json:"message"`
+		Path     json.RawMessage `json:"path"`
+		Location json.RawMessage `json:"location"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	f.Message, f.Path = raw.Message, rawString(raw.Path)
+	var loc struct {
+		Path  json.RawMessage `json:"path"`
+		Start json.RawMessage `json:"start"`
+	}
+	if json.Unmarshal(raw.Location, &loc) == nil {
+		f.Location.Path = rawString(loc.Path)
+		var start struct {
+			Line int `json:"line"`
+		}
+		if json.Unmarshal(loc.Start, &start) == nil {
+			f.Location.Start.Line = start.Line
+		}
+	}
+	return nil
+}
+
+// fixpointMessage is the tail Semgrep puts on a fixpoint timeout's message:
+// "... at /w/routes/api.js:1:0 [rules: 2, first: rules.js-sqli-taint]".
+var fixpointMessage = regexp.MustCompile(`\[rules: (\d+), first: ([^\]\s]+)\]`)
+
+// fixpointTimeouts reads the profile's fixpoint_timeouts, and any "Fixpoint
+// timeout" entry in `errors`, where a Semgrep could also put one.
+func fixpointTimeouts(out *semgrepOutput, absRoot string) []FixpointTimeout {
+	var raw []json.RawMessage
+	if out.Time != nil {
+		raw = append(raw, out.Time.fixpoint...)
+	}
+	fromProfile := len(raw)
+	errs, _ := errorEntries(out.Errors)
+	for _, e := range errs {
+		var d semgrepErrorDetail
+		if json.Unmarshal(e, &d) == nil && d.isFixpointTimeout() && d.perFile() {
+			raw = append(raw, e)
+		}
+	}
+	var list []FixpointTimeout
+	for i, entry := range raw {
+		var e fixpointEntry
+		if json.Unmarshal(entry, &e) != nil {
+			// Still a fixpoint timeout, just not one this decoder can place.
+			list = append(list, FixpointTimeout{InErrors: i >= fromProfile})
+			continue
+		}
+		f := FixpointTimeout{Line: e.Location.Start.Line, InErrors: i >= fromProfile}
+		if p := firstNonEmpty(e.Location.Path, e.Path); p != "" {
+			f.Path = relPath(p, absRoot)
+		}
+		if m := fixpointMessage.FindStringSubmatch(rawString(e.Message)); m != nil {
+			f.Rules, _ = strconv.Atoi(m[1])
+			f.FirstRule = normalizeCheckID(m[2])
+		}
+		slog.Warn("semgrep: taint analysis ran out of its fixpoint budget on a function; taint matches there are missing",
+			"path", f.Path, "line", f.Line, "rules", f.Rules, "first_rule", f.FirstRule)
+		list = append(list, f)
+	}
+	return list
+}
+
+// fileErrors decodes the `errors` entries whose type means a rule, or every
+// rule, was not evaluated on a file, other than a rule Timeout (ruleTimeouts)
+// and a fixpoint timeout (fixpointTimeouts).
+func fileErrors(raw json.RawMessage, absRoot string) []FileError {
+	entries, _ := errorEntries(raw)
+	var out []FileError
+	for _, entry := range entries {
+		var e semgrepErrorDetail
+		if json.Unmarshal(entry, &e) != nil || !e.perFile() {
+			continue
+		}
+		typ := e.typeTag()
+		if e.isTimeout() || e.isFixpointTimeout() || !IsLossType(typ) || IsParseFailureType(typ) || ruleErrorTypes[typ] {
+			continue
+		}
+		fe := FileError{Type: typ, RuleID: normalizeCheckID(e.ruleID())}
+		if p := e.path(); p != "" {
+			fe.Path = relPath(p, absRoot)
+		}
+		slog.Warn("semgrep: a per-file error cost rule evaluation; matches there are missing",
+			"type", fe.Type, "rule", fe.RuleID, "path", fe.Path)
+		out = append(out, fe)
+	}
+	return out
+}
+
+// skippedRules reads the rule ids of the document's `skipped_rules`.
+func skippedRules(raw json.RawMessage) []string {
+	var entries []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	var out []string
+	for _, entry := range entries {
+		var e struct {
+			RuleID string `json:"rule_id"`
+		}
+		_ = json.Unmarshal(entry, &e)
+		id := normalizeCheckID(e.RuleID)
+		if id == "" {
+			id = "unknown rule"
+		}
+		out = append(out, id)
+	}
+	if len(out) > 0 {
+		slog.Warn("semgrep: rules were loaded and not run; their matches are missing", "rules", out)
+	}
+	return out
 }
 
 // mapResults converts every result of a decoded envelope to a Finding.
@@ -817,10 +1589,7 @@ func mapResults(out *semgrepOutput, codeRoot string) []evidence.Evidence {
 // not be loaded, and logs each one. An `errors` that is not a list, and an
 // entry that does not decode, are skipped.
 func ruleErrors(raw json.RawMessage) []RuleError {
-	var entries []json.RawMessage
-	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
-		return nil
-	}
+	entries, _ := errorEntries(raw)
 	var out []RuleError
 	for _, entry := range entries {
 		var e semgrepErrorDetail
@@ -841,17 +1610,17 @@ func ruleErrors(raw json.RawMessage) []RuleError {
 // logs each one. An `errors` that is not a list, and an entry that does not
 // decode, are skipped: they only ever add timeouts to a run.
 func ruleTimeouts(raw json.RawMessage, absRoot string) []RuleTimeout {
-	var entries []json.RawMessage
-	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
-		return nil
-	}
+	entries, _ := errorEntries(raw)
 	var out []RuleTimeout
 	for _, entry := range entries {
 		var e semgrepErrorDetail
-		if json.Unmarshal(entry, &e) != nil || !e.isTimeout() {
+		if json.Unmarshal(entry, &e) != nil || !e.isTimeout() || !e.perFile() {
 			continue
 		}
-		t := RuleTimeout{RuleID: normalizeCheckID(e.RuleID), Path: relPath(e.Path, absRoot)}
+		t := RuleTimeout{RuleID: normalizeCheckID(e.ruleID())}
+		if p := e.path(); p != "" {
+			t.Path = relPath(p, absRoot)
+		}
 		slog.Warn("semgrep: rule timed out on a file; its matches there are missing",
 			"rule", t.RuleID, "path", t.Path, "timeout_seconds", ruleTimeoutSeconds)
 		out = append(out, t)
@@ -1258,7 +2027,8 @@ func ensureRulesLocked() (string, error) {
 				return err
 			}
 			out := filepath.Join(dir, filepath.Base(path))
-			return os.WriteFile(out, data, 0o644)
+			// Decision D6': no rule skips a file by its path (rulepaths.go).
+			return os.WriteFile(out, stripPathExcludes(data), 0o644)
 		})
 		if err != nil {
 			// Don't strand a half-populated dir on a failed extraction.

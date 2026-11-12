@@ -1,0 +1,75 @@
+package engine
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scanner"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
+)
+
+// The active-probes scanner-status detail (contract C5.3). Segments are joined
+// by "; " and composed by scope.Compose, so a listing is never cut half-way and
+// the loss segment always comes first; when the budget runs out the detail ends
+// with "and N more (see report metadata)", and the complete account is in
+// metadata.coverage.active_probes.
+//
+//	lost evaluation: <U+F> probe(s) not evaluated (U unknown-origin, F scanner-failed)
+//	probe evaluation: A attempted, E evaluated, I inconclusive (target), U unknown-origin, F scanner-failed
+//	inconclusive probes (target did not answer): timeout 3, connection_reset 1
+//	unknown-origin probes (not evaluated): dns_failure 2
+//	scanner-failed probes (not evaluated): not_sent 1
+//
+// A segment lists only non-zero reasons, in the fixed vocabulary order.
+
+func probeReasonList(cov models.ActiveProbeCoverage, origin scanner.ProbeOrigin, order []scanner.ProbeReason) string {
+	counts := cov.Reasons[string(origin)]
+	var parts []string
+	for _, r := range order {
+		if n := counts[string(r)]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", r, n))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func probeCountsSegment(cov models.ActiveProbeCoverage) string {
+	return fmt.Sprintf("probe evaluation: %d attempted, %d evaluated, %d inconclusive (target), %d unknown-origin, %d scanner-failed",
+		cov.Attempted, cov.Evaluated, cov.Inconclusive, cov.UnknownOrigin, cov.ScannerFailed)
+}
+
+// probeDetailSegs are the composable segments after the first (loss or counts).
+func probeSegs(cov models.ActiveProbeCoverage, lead string) []scope.Seg {
+	fixed := func(s string) scope.Seg { return func(int) string { return s } }
+	segs := []scope.Seg{}
+	if lead != "" {
+		segs = append(segs, fixed(lead))
+	}
+	segs = append(segs, fixed(probeCountsSegment(cov)))
+	if cov.Inconclusive > 0 {
+		segs = append(segs, fixed("inconclusive probes (target did not answer): "+probeReasonList(cov, scanner.OriginTarget, scanner.TargetReasonOrder)))
+	}
+	if cov.UnknownOrigin > 0 {
+		segs = append(segs, fixed("unknown-origin probes (not evaluated): "+probeReasonList(cov, scanner.OriginUnknown, scanner.UnknownReasonOrder)))
+	}
+	if cov.ScannerFailed > 0 {
+		segs = append(segs, fixed("scanner-failed probes (not evaluated): "+probeReasonList(cov, scanner.OriginScanner, scanner.ScannerReasonOrder)))
+	}
+	return segs
+}
+
+// probeLossSegment is the failed entry's first segment.
+func probeLossSegment(cov models.ActiveProbeCoverage) string {
+	return fmt.Sprintf("lost evaluation: %d probe(s) not evaluated (%d unknown-origin, %d scanner-failed)",
+		cov.UnknownOrigin+cov.ScannerFailed, cov.UnknownOrigin, cov.ScannerFailed)
+}
+
+// probeDetail composes the active-probes detail. lead, when set, is the
+// pass-level cause (deadline, request budget) that precedes everything.
+func probeDetail(cov models.ActiveProbeCoverage, failed bool, lead string) string {
+	if failed && lead == "" {
+		lead = probeLossSegment(cov)
+	}
+	return scope.Compose(detailMax, probeSegs(cov, lead)...)
+}

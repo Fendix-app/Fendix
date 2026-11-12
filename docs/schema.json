@@ -69,7 +69,58 @@
         "limitations":         { "type": "array", "items": { "type": "string" } },
         "required_analyzers":  { "type": "array", "items": { "type": "string" } },
         "required_gaps":       { "type": "array", "items": { "type": "string" } },
-        "retried":             { "type": "array", "items": { "type": "string" } }
+        "retried":             { "type": "array", "items": { "type": "string" } },
+        "active_probes":       { "$ref": "#/definitions/ActiveProbeCoverage" }
+      }
+    },
+    "ActiveProbeCoverage": {
+      "type": "object",
+      "description": "Present when active probing was enabled. Accounts for every active probe sent. A scan-wide configured_complete is never proof that every probe was evaluated: read this beside it. attempted = evaluated + inconclusive + unknown_origin + scanner_failed.",
+      "required": ["attempted", "evaluated", "inconclusive", "unknown_origin", "scanner_failed", "reasons", "not_evaluated_checks", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "attempted":      { "type": "integer", "minimum": 0 },
+        "evaluated":      { "type": "integer", "minimum": 0, "description": "A response came back and the check judged it." },
+        "inconclusive":   { "type": "integer", "minimum": 0, "description": "Confirmed target-side non-answer: not an evaluation, never evidence that anything is absent, safe or fixed, and not a scanner gap." },
+        "unknown_origin": { "type": "integer", "minimum": 0, "description": "No evidence settles whose fault the failure is. Fail-closed: not evaluated, and a coverage gap for active-probes." },
+        "scanner_failed": { "type": "integer", "minimum": 0, "description": "The engine failed or never sent the probe. Not evaluated, and a coverage gap for active-probes." },
+        "reasons": {
+          "type": "object",
+          "description": "{origin: {reason: count}}. Origins: target, unknown, scanner. Reasons are a closed vocabulary per origin.",
+          "additionalProperties": false,
+          "properties": {
+            "target":  { "type": "object", "additionalProperties": false, "properties": {
+              "timeout": { "type": "integer", "minimum": 1 }, "connection_reset": { "type": "integer", "minimum": 1 }, "connection_refused": { "type": "integer", "minimum": 1 },
+              "tls_error": { "type": "integer", "minimum": 1 }, "rate_limited": { "type": "integer", "minimum": 1 }, "service_unavailable": { "type": "integer", "minimum": 1 },
+              "other_transport": { "type": "integer", "minimum": 1 } } },
+            "unknown": { "type": "object", "additionalProperties": false, "properties": {
+              "dns_failure": { "type": "integer", "minimum": 1 }, "timeout": { "type": "integer", "minimum": 1 }, "connection_refused": { "type": "integer", "minimum": 1 },
+              "network_unreachable": { "type": "integer", "minimum": 1 }, "tls_handshake": { "type": "integer", "minimum": 1 }, "unclassified": { "type": "integer", "minimum": 1 } } },
+            "scanner": { "type": "object", "additionalProperties": false, "properties": {
+              "internal_error": { "type": "integer", "minimum": 1 }, "scan_deadline": { "type": "integer", "minimum": 1 }, "scan_cancelled": { "type": "integer", "minimum": 1 },
+              "resource_exhausted": { "type": "integer", "minimum": 1 }, "proxy_failure": { "type": "integer", "minimum": 1 }, "request_construction": { "type": "integer", "minimum": 1 },
+              "not_sent": { "type": "integer", "minimum": 1 } } }
+          }
+        },
+        "not_evaluated_checks": {
+          "type": "array",
+          "maxItems": 200,
+          "description": "Distinct (check, endpoint, origin, reason) with a probe that was not evaluated, scanner then unknown then target. A (check, endpoint) pair absent from the list was evaluated only when truncated is false.",
+          "items": { "$ref": "#/definitions/NotEvaluatedCheck" }
+        },
+        "truncated": { "type": "boolean", "description": "not_evaluated_checks was cut at 200 entries." }
+      }
+    },
+    "NotEvaluatedCheck": {
+      "type": "object",
+      "required": ["check", "endpoint", "origin", "reason", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "check":    { "type": "string", "description": "The rule-id family of the findings the probe could produce: injection, xss, ssrf, openredirect, hostheader, graphql, methodtamper." },
+        "endpoint": { "type": "string", "description": "METHOD /path, exactly as a finding names its endpoint." },
+        "origin":   { "type": "string", "enum": ["target", "unknown", "scanner"] },
+        "reason":   { "type": "string" },
+        "evidence": { "type": "string", "description": "A fixed phrase stating what was observed." }
       }
     },
     "SeverityCounts": {

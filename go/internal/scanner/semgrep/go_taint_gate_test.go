@@ -4,8 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
@@ -151,12 +149,14 @@ func TestShippedGateIsClosedForTheGoTaintRule(t *testing.T) {
 	requireShim(t, ev)
 }
 
-// The Go pack skips Go test code: *_test.go files, mocks and the
-// conventional helper directories (testdata, testhelpers, testutil,
-// testutils, testing, test, tests, unittest, mock, mocks, fakes).
-// The patterns match below the scan root, so a checkout that itself lies
-// under a directory named test is scanned like any other.
-func TestGoRulesSkipGoTestCode(t *testing.T) {
+// Decision D6' (redteam4-d6-03): the Go pack evaluates Go test code too:
+// *_test.go files, mocks and the conventional helper directories (testdata,
+// testhelpers, testutil, testutils, testing, test, tests, unittest, mock,
+// mocks, fakes). A rule never skips a file by where it is or what it is
+// called; the engine's confidence model lowers a finding in a test path. The
+// test this replaces, TestGoRulesSkipGoTestCode, pinned the pack's path
+// filters, which the engine no longer passes to Semgrep (rulepaths.go).
+func TestGoRulesEvaluateGoTestCode(t *testing.T) {
 	requireSemgrep(t)
 	resetRulesCacheForTesting()
 	base := t.TempDir()
@@ -183,13 +183,20 @@ func TestGoRulesSkipGoTestCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	var got []string
+	got := map[string]bool{}
 	for _, ev := range evs {
-		if strings.HasPrefix(ev.RuleID, "go-") {
-			got = append(got, ev.RuleID+"@"+ev.Endpoint)
+		if ev.RuleID == goTaintRuleID {
+			got[ev.Endpoint] = true
 		}
 	}
-	if want := []string{goTaintRuleID + "@app/handler.go:11"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("Go findings = %v, want %v", got, want)
+	for _, rel := range []string{
+		"app/handler.go", "app/handler_test.go", "pkg/testhelpers/handler.go", "internal/testutil/handler.go",
+		"internal/testutils/handler.go", "internal/testing/handler.go", "testdata/handler.go", "test/handler.go",
+		"tests/handler.go", "models/unittest/handler.go", "internal/mock/handler.go", "internal/mocks/handler.go",
+		"internal/fakes/handler.go", "app/mock_handler.go", "app/handler_mock.go",
+	} {
+		if !got[rel+":11"] {
+			t.Errorf("%s was not evaluated: %v", rel, got)
+		}
 	}
 }

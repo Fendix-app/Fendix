@@ -1,0 +1,198 @@
+{
+ "version": "1.182.1",
+ "results": [],
+ "errors": [],
+ "paths": {
+  "scanned": [
+   "/fx/js-param-1000-end/routes/api.js"
+  ]
+ },
+ "time": {
+  "rules": [
+   "tmp.fendix-semgrep-rules-1234.js-weak-password-hash-taint",
+   "tmp.fendix-semgrep-rules-1234.js-weak-password-hash-sink",
+   "tmp.fendix-semgrep-rules-1234.js-jwt-no-verify-taint",
+   "tmp.fendix-semgrep-rules-1234.js-jwt-no-verify-sink",
+   "tmp.fendix-semgrep-rules-1234.js-weak-random-token-taint",
+   "tmp.fendix-semgrep-rules-1234.js-sqli-taint",
+   "tmp.fendix-semgrep-rules-1234.js-sqli-sink",
+   "tmp.fendix-semgrep-rules-1234.js-cmdi-taint",
+   "tmp.fendix-semgrep-rules-1234.js-cmdi-sink",
+   "tmp.fendix-semgrep-rules-1234.js-ssti-taint",
+   "tmp.fendix-semgrep-rules-1234.js-ssti-sink",
+   "tmp.fendix-semgrep-rules-1234.js-xss-taint",
+   "tmp.fendix-semgrep-rules-1234.js-ssrf-taint",
+   "tmp.fendix-semgrep-rules-1234.js-path-traversal-taint",
+   "tmp.fendix-semgrep-rules-1234.js-xss-sink",
+   "tmp.fendix-semgrep-rules-1234.js-open-redirect-taint",
+   "tmp.fendix-semgrep-rules-1234.js-open-redirect-sink"
+  ],
+  "rules_parse_time": 0.21607613563537598,
+  "profiling_times": {
+   "config_time": 3.6026182174682617,
+   "core_time": 14.697836637496948,
+   "ignores_time": 0.0003895759582519531,
+   "total_time": 18.3183753490448
+  },
+  "parsing_time": {
+   "total_time": 0.7711210250854492,
+   "per_file_time": {
+    "mean": 0.2570403416951498,
+    "std_dev": 0.1321375134626174
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.9999950530498566,
+    "count_ratio": 0.3333333333333333
+   },
+   "very_slow_files": [
+    {
+     "fpath": "/fx/js-param-1000-end/routes/api.js",
+     "ftime": 0.7711172103881836
+    }
+   ]
+  },
+  "scanning_time": {
+   "total_time": 14.130733966827393,
+   "per_file_time": {
+    "mean": 14.130733966827393,
+    "std_dev": 0.0
+   },
+   "very_slow_stats": {
+    "time_ratio": 1.0,
+    "count_ratio": 1.0
+   },
+   "very_slow_files": [
+    {
+     "fpath": "/fx/js-param-1000-end/routes/api.js",
+     "ftime": 14.130733966827393
+    }
+   ]
+  },
+  "matching_time": {
+   "total_time": 11.762873888015747,
+   "per_file_and_rule_time": {
+    "mean": 3.9209579626719155,
+    "std_dev": 8.010612093183997
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.995447378521817,
+    "count_ratio": 0.6666666666666666
+   },
+   "very_slow_rules_on_files": [
+    {
+     "fpath": "/fx/js-param-1000-end/routes/api.js",
+     "rule_id": "tmp.fendix-semgrep-rules-1234.js-sqli-taint",
+     "time": 4.96118688583374
+    },
+    {
+     "fpath": "/fx/js-param-1000-end/routes/api.js",
+     "rule_id": "tmp.fendix-semgrep-rules-1234.js-ssrf-taint",
+     "time": 6.748135089874268
+    }
+   ]
+  },
+  "tainting_time": {
+   "total_time": 1.2460050582885742,
+   "per_def_and_rule_time": {
+    "mean": 0.6230025291442871,
+    "std_dev": 0.006636780257451846
+   },
+   "very_slow_stats": {
+    "time_ratio": 1.0,
+    "count_ratio": 1.0
+   },
+   "very_slow_rules_on_defs": [
+    {
+     "fpath": "/fx/js-param-1000-end/routes/api.js",
+     "fline": 1,
+     "rule_id": "tmp.fendix-semgrep-rules-1234.js-ssrf-taint",
+     "time": 0.5415360927581787
+    },
+    {
+     "fpath": "/fx/js-param-1000-end/routes/api.js",
+     "fline": 1,
+     "rule_id": "tmp.fendix-semgrep-rules-1234.js-sqli-taint",
+     "time": 0.7044689655303955
+    }
+   ]
+  },
+  "fixpoint_timeouts": [
+   {
+    "error_type": "Fixpoint timeout",
+    "severity": "warn",
+    "message": "Fixpoint timeout while performing taint analysis at /fx/js-param-1000-end/routes/api.js:1:0 [rules: 2, first: tmp.fendix-semgrep-rules-1234.js-sqli-taint]",
+    "location": {
+     "path": "/fx/js-param-1000-end/routes/api.js",
+     "start": {
+      "line": 1,
+      "col": 1,
+      "offset": 0
+     },
+     "end": {
+      "line": 1,
+      "col": 1,
+      "offset": 0
+     }
+    }
+   }
+  ],
+  "prefiltering": {
+   "project_level_time": 0.0,
+   "file_level_time": 0.0,
+   "rules_with_project_prefilters_ratio": 0.0,
+   "rules_with_file_prefilters_ratio": 0.8823529411764706,
+   "rules_selected_ratio": 0.17647058823529413,
+   "rules_matched_ratio": 0.17647058823529413
+  },
+  "targets": [
+   {
+    "path": "/fx/js-param-1000-end/routes/api.js",
+    "num_bytes": 246087,
+    "match_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     5.710808038711548,
+     0.05355191230773926,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     7.335984230041504,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "parse_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.7711172103881836,
+     1.9073486328125e-06,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.9073486328125e-06,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "run_time": 14.130733966827393
+   }
+  ],
+  "total_bytes": 246087,
+  "max_memory_bytes": 1418555968
+ },
+ "engine_requested": "OSS",
+ "skipped_rules": [],
+ "profiling_results": []
+}

@@ -90,14 +90,21 @@ func recordedArgs(t *testing.T, argvFile string) string {
 func TestScanDropsTheOptionsAnOlderHostSemgrepDoesNotKnow(t *testing.T) {
 	argv := filepath.Join(t.TempDir(), "argv")
 	installVersionedSemgrep(t, "1.45.0", []string{"--project-root"}, argv)
-	if _, err := Scan(context.Background(), t.TempDir()); err != nil {
+	// D6': the paths left out are the ones the tree holds evidence for, so the
+	// run's tree has an installed npm tree and a vendored Go tree.
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"node_modules/.package-lock.json": `{"lockfileVersion": 3}`,
+		"vendor/modules.txt":              "# example.com/m v1.0.0\n",
+	})
+	if _, err := Scan(context.Background(), root); err != nil {
 		t.Fatalf("Scan on Semgrep 1.45.0: %v", err)
 	}
 	args := recordedArgs(t, argv)
 	if strings.Contains(args, "--project-root") {
 		t.Errorf("--project-root passed to Semgrep 1.45.0:%s", args)
 	}
-	for _, kept := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--exclude\nnode_modules\n", "\n--exclude\n*.min.js\n"} {
+	for _, kept := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--exclude\n/node_modules\n", "\n--exclude\n/vendor\n"} {
 		if !strings.Contains(args, kept) {
 			t.Errorf("Semgrep 1.45.0 takes %q, which was dropped:%s", strings.TrimSpace(kept), args)
 		}
@@ -111,7 +118,7 @@ func TestScanDropsEveryOptionTheVersionPredates(t *testing.T) {
 		t.Fatalf("Scan on Semgrep 0.10.0: %v", err)
 	}
 	args := recordedArgs(t, argv)
-	for _, gone := range []string{"--project-root", "--dataflow-traces", "--timeout", "--exclude"} {
+	for _, gone := range []string{"--project-root", "--dataflow-traces", "--timeout", "--exclude", "--x-ignore-semgrepignore-files"} {
 		if strings.Contains(args, gone) {
 			t.Errorf("%s passed to Semgrep 0.10.0:%s", gone, args)
 		}
@@ -126,11 +133,13 @@ func TestScanPassesEveryOptionToASemgrepThatHasThem(t *testing.T) {
 		argv := filepath.Join(t.TempDir(), "argv")
 		installVersionedSemgrep(t, version, nil, argv)
 		root := t.TempDir()
+		writeTree(t, root, map[string]string{"vendor/modules.txt": "# example.com/m v1.0.0\n"})
 		if _, err := Scan(context.Background(), root); err != nil {
 			t.Fatalf("Scan on Semgrep %s: %v", version, err)
 		}
 		args := recordedArgs(t, argv)
-		for _, want := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--project-root\n" + root + "\n", "\n--exclude\nvendor\n"} {
+		for _, want := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--project-root\n" + root + "\n", "\n--exclude\n/vendor\n",
+			"\n--x-ignore-semgrepignore-files\n", "\n--max-target-bytes\n1048576\n"} {
 			if !strings.Contains(args, want) {
 				t.Errorf("Semgrep %s was not given %q:%s", version, strings.TrimSpace(want), args)
 			}
@@ -227,7 +236,7 @@ func TestScanRunReportsTheOptionsItDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanRun on Semgrep 1.45.0: %v", err)
 	}
-	const want = "semgrep 1.45.0: dropped --project-root (needs 1.111.0)"
+	const want = "semgrep 1.45.0: dropped --project-root (needs 1.111.0), --x-ignore-semgrepignore-files (needs 1.96.0)"
 	if run.Report.Dropped != want {
 		t.Errorf("Report.Dropped = %q, want %q", run.Report.Dropped, want)
 	}
@@ -246,8 +255,8 @@ func TestScanRunReportsNothingDroppedForACurrentSemgrep(t *testing.T) {
 }
 
 func TestDroppedNameEveryOptionTheVersionPredates(t *testing.T) {
-	_, dropped := optionalArgs(parseSemgrepVersion("0.10.0"), "/code")
-	const want = "semgrep 0.10.0: dropped --dataflow-traces (needs 0.107.0), --timeout (needs 0.17.0), --project-root (needs 1.111.0), --exclude (needs 0.12.0)"
+	_, dropped, _, _ := optionalArgs(parseSemgrepVersion("0.10.0"), "/code", nil, runOptions{jobs: 2, maxMemory: 512})
+	const want = "semgrep 0.10.0: dropped --dataflow-traces (needs 0.107.0), --timeout (needs 0.17.0), --jobs (needs 1.0.0), --max-memory (needs 1.0.0), --project-root (needs 1.111.0), --x-ignore-semgrepignore-files (needs 1.96.0), --exclude (needs 0.12.0)"
 	if got := droppedNote(parseSemgrepVersion("0.10.0"), dropped); got != want {
 		t.Errorf("droppedNote = %q, want %q", got, want)
 	}

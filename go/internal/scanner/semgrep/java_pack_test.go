@@ -271,12 +271,14 @@ func TestJavaRulesShareTheTestPathExcludes(t *testing.T) {
 	}
 }
 
-// Real semgrep, through Scan: the same vulnerable controller is reported in
-// main code (and under names that only look like a test or mock location),
-// and not under any excluded path. Semgrep skips test/ and tests/ by itself,
-// but only for a project without a .semgrepignore of its own, so the tree is
-// scanned both ways.
-func TestJavaTestAndMockCodeIsNotScanned(t *testing.T) {
+// Real semgrep, through Scan, decision D6' (redteam4-d6-03): the same
+// vulnerable controller is reported in main code and under every test, mock,
+// fixture and integration-test path: no rule skips a file by where it is. The
+// pack's own paths.exclude is still pinned above (it is the embedded pack); the
+// engine removes it when it extracts the pack for a run (rulepaths.go). This
+// replaces TestJavaTestAndMockCodeIsNotScanned. The tree is scanned with and
+// without a project .semgrepignore.
+func TestJavaTestAndMockCodeIsScanned(t *testing.T) {
 	requireSemgrep(t)
 	resetRulesCacheForTesting()
 	t.Cleanup(resetRulesCacheForTesting)
@@ -314,6 +316,7 @@ func TestJavaTestAndMockCodeIsNotScanned(t *testing.T) {
 	}
 	for _, rel := range excluded {
 		files[rel] = javaGateApp
+		want[rel+":22"] = true
 	}
 
 	for _, project := range []struct{ name, semgrepignore string }{

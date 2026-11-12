@@ -199,6 +199,12 @@ func runCheck(ctx context.Context, cc *scanner.CheckContext, cfg *models.ScanCon
 			epLabel := fmt.Sprintf("%s %s", job.endpoint.Method, job.endpoint.Path)
 			slog.Error("scanner check panicked — job contained, scan continues",
 				"worker", workerID, "endpoint", epLabel, "check", job.check.Name(), "panic", r)
+			// An active check that panicked did not finish its probes: record
+			// that as a scanner-side failure so the active-probe account says so.
+			if job.check.Tier() == scanner.TierActive {
+				scanner.RecordScannerFailure(scanner.RuleFamilyOfCheck(job.check.Name()), job.endpoint.FullURL, scanner.ReasonInternalError,
+					"a scanner check panicked before it finished its probes")
+			}
 			findings = []evidence.Evidence{{
 				// The rule is the CHECK that panicked, not "something
 				// panicked": two different checks failing at one endpoint are

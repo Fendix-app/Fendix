@@ -57,6 +57,18 @@ type CheckStatus struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// Scope is the complete lists behind the detail's counts (C2): the files
+	// the check did not fully analyse and the paths it left out on purpose, each
+	// as [path, reason]. Additive; an engine that does not send it is read as
+	// before.
+	Scope *CheckScope `json:"scope,omitempty"`
+}
+
+// CheckScope is a status line's complete lost and declared lists.
+type CheckScope struct {
+	Lost      [][]string `json:"lost,omitempty"`
+	Declared  [][]string `json:"declared,omitempty"`
+	Truncated bool       `json:"truncated,omitempty"`
 }
 
 // SpawnOutcome classifies how the Python engine run ended, in the order the

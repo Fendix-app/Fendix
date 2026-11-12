@@ -360,12 +360,14 @@ func TestJavaScriptRulesShareOneTestCodeExclude(t *testing.T) {
 	}
 }
 
-// Real Semgrep, real pack: the same vulnerable route at a normal path and at
-// test, mock and fixture paths is reported only at the normal one. Semgrep
-// matches a rule's paths against paths relative to the scan root, so a
-// repository checked out under a directory named test or __tests__ is still
-// scanned; the roots below pin that.
-func TestJavaScriptPackSkipsTestCode(t *testing.T) {
+// Real Semgrep, real pack, decision D6' (redteam4-d6-03): the same vulnerable
+// route at a normal path and at test, mock and fixture paths is reported at
+// every one: no rule skips a file by where it is. This replaces
+// TestJavaScriptPackSkipsTestCode, which pinned the pack's path filters (still
+// pinned on the embedded pack by TestJavaScriptRulesShareOneTestCodeExclude;
+// the engine removes them when it extracts the pack, rulepaths.go). The roots
+// below also check a repository under a directory named test or __tests__.
+func TestJavaScriptPackEvaluatesTestCode(t *testing.T) {
 	requireSemgrep(t)
 	resetRulesCacheForTesting()
 
@@ -387,7 +389,11 @@ func TestJavaScriptPackSkipsTestCode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Scan: %v", err)
 			}
-			assertEndpoints(t, got, map[string]bool{"src/app.js:9": true, "src/testing/app.js:9": true})
+			want := map[string]bool{"src/app.js:9": true, "src/testing/app.js:9": true}
+			for _, rel := range skipped {
+				want[rel+":9"] = true
+			}
+			assertEndpoints(t, got, want)
 		})
 	}
 }

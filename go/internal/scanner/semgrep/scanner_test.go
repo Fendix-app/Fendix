@@ -1147,8 +1147,11 @@ func TestParseRunCountsOnlyTimeoutErrors(t *testing.T) {
 }
 
 // Semgrep's `errors` only add timeouts to a run. Whatever shape they arrive
-// in, the results beside them are kept: a malformed entry is skipped, and an
-// `errors` that is not a list is ignored.
+// in, the results beside them are kept. A Timeout entry whose rule_id or path
+// is not a string is still a timeout, with that field unknown (qa-engine-01:
+// it used to be dropped, and the run then read a plain ok); an entry that is
+// not an object, or an `errors` that is not a list, adds no timeout here and
+// is counted as undecodable by classifyRun, which fails the run.
 func TestParseRunKeepsResultsWhateverTheErrors(t *testing.T) {
 	const result = `{"check_id": "python-eval-injection", "path": "/code/app.py", "start": {"line": 3, "col": 1},
 	  "extra": {"message": "eval()/exec() with dynamic argument", "severity": "ERROR", "lines": "eval(x)", "metadata": {}}}`
@@ -1157,8 +1160,8 @@ func TestParseRunKeepsResultsWhateverTheErrors(t *testing.T) {
 		timeouts     []RuleTimeout
 	}{
 		{"rule_id of the wrong type", `[{"type": "Timeout", "rule_id": 7, "path": "a.py"}, {"type": "Timeout", "rule_id": "b", "path": "b.py"}]`,
-			[]RuleTimeout{{RuleID: "b", Path: "b.py"}}},
-		{"path of the wrong type", `[{"type": "Timeout", "rule_id": "a", "path": {"value": "a.py"}}]`, nil},
+			[]RuleTimeout{{RuleID: "", Path: "a.py"}, {RuleID: "b", Path: "b.py"}}},
+		{"path of the wrong type", `[{"type": "Timeout", "rule_id": "a", "path": {"value": "a.py"}}]`, []RuleTimeout{{RuleID: "a"}}},
 		{"null fields", `[{"type": "Timeout", "rule_id": null, "path": null}]`, []RuleTimeout{{}}},
 		{"an object", `{"unexpected": "object"}`, nil},
 		{"a list of strings", `["a string entry"]`, nil},

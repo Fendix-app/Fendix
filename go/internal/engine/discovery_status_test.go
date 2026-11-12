@@ -49,12 +49,16 @@ func TestRecordBlackbox_Table(t *testing.T) {
 			[2]string{"ok", ""}, [2]string{"ok", ""}, [2]string{"skipped", "disabled_by_flag"}},
 		{"spec parse failure", models.ScanConfig{URL: "http://t", SpecPath: "s.yaml"}, 2, nil, errors.New("yaml: bad"), checkPhaseOutcome{},
 			[2]string{"ok", ""}, [2]string{"failed", "input_error"}, [2]string{"skipped", "disabled_by_flag"}},
-		{"active, probes completed with responses", active, 2, nil, nil, checkPhaseOutcome{Attempted: 40},
+		{"active, probes completed with responses", active, 2, nil, nil, probePhase(40, 40, 0, 0, 0),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
-		{"active, some probes got no response", active, 2, nil, nil, checkPhaseOutcome{Attempted: 40, NoResponse: 3},
+		{"active, some probes inconclusive (target)", active, 2, nil, nil, probePhase(40, 37, 3, 0, 0),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
-		{"active, no probe got any response", active, 2, nil, nil, checkPhaseOutcome{Attempted: 40, NoResponse: 40},
-			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "network_error"}},
+		{"active, every probe inconclusive (target never answers)", active, 2, nil, nil, probePhase(40, 0, 40, 0, 0),
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
+		{"active, unknown-origin failures", active, 2, nil, nil, probePhase(40, 38, 0, 2, 0),
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "execution_error"}},
+		{"active, scanner-side failures", active, 2, nil, nil, probePhase(40, 39, 0, 0, 1),
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "execution_error"}},
 		{"active, nothing probe-eligible", active, 2, nil, nil, checkPhaseOutcome{},
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"skipped", "not_applicable"}},
 		{"active without endpoints", active, 0, nil, nil, checkPhaseOutcome{},
@@ -78,18 +82,37 @@ func TestRecordBlackbox_Table(t *testing.T) {
 			check(AnalyzerActiveProbes, tc.wantProbes)
 		})
 	}
-	// Partial probe failures stay visible in the detail of an ok entry.
+	// Inconclusive probes stay visible in the detail of an ok entry.
 	var l scannerStatusList
-	recordBlackbox(&l, &active, 2, nil, nil, checkPhaseOutcome{Attempted: 40, NoResponse: 3})
-	if got := find(l, AnalyzerActiveProbes); !strings.Contains(got.Detail, "3 of 40") {
-		t.Fatalf("partial failures must be named in detail, got %+v", got)
+	recordBlackbox(&l, &active, 2, nil, nil, probePhase(40, 37, 3, 0, 0))
+	if got := find(l, AnalyzerActiveProbes); !strings.HasPrefix(got.Detail, "probe evaluation: 40 attempted, 37 evaluated, 3 inconclusive (target)") {
+		t.Fatalf("inconclusive probes must be named in detail, got %+v", got)
 	}
+}
+
+// probePhase builds a check-phase outcome from probe counts. Reasons are filled
+// so the detail lists have something to say.
+func probePhase(attempted, evaluated, inconclusive, unknown, scannerFailed int) checkPhaseOutcome {
+	cov := models.ActiveProbeCoverage{Attempted: attempted, Evaluated: evaluated, Inconclusive: inconclusive,
+		UnknownOrigin: unknown, ScannerFailed: scannerFailed, Reasons: map[string]map[string]int{}}
+	if inconclusive > 0 {
+		cov.Reasons["target"] = map[string]int{"timeout": inconclusive}
+	}
+	if unknown > 0 {
+		cov.Reasons["unknown"] = map[string]int{"dns_failure": unknown}
+	}
+	if scannerFailed > 0 {
+		cov.Reasons["scanner"] = map[string]int{"not_sent": scannerFailed}
+	}
+	return checkPhaseOutcome{Attempted: attempted, Probes: cov}
 }
 
 func TestSummarizeCheckPhase(t *testing.T) {
 	records := []scanner.ProbeRecord{{Status: 200}, {Status: 0}, {Status: 500}, {Status: 0}}
 	got := summarizeCheckPhase(context.Background(), records, 0)
-	if got.Attempted != 4 || got.NoResponse != 2 || got.Rejected != 0 || got.Deadline {
+	// Two probes with no HTTP response and no failure evidence are unknown-origin
+	// (fail-closed), and a 500 is an evaluated response.
+	if got.Attempted != 4 || got.Probes.Evaluated != 2 || got.Probes.UnknownOrigin != 2 || got.Rejected != 0 || got.Deadline {
 		t.Fatalf("phase = %+v", got)
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))

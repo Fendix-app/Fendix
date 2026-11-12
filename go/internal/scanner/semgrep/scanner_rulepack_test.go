@@ -690,19 +690,23 @@ func TestRuleTestProblemsCatchesBrokenLayouts(t *testing.T) {
 
 // --- Build output and vendored code (Review Focus 3) ---------------------------
 
-// TestBuildOutputIsExcluded runs real Semgrep over a tree with the same sinks
-// inside and outside build output and vendored code. Nothing under
-// node_modules/, dist/, build/, .next/, target/ or vendor/, at any depth, nor
-// a *.min.js file, is reported; the copies elsewhere are, so the test cannot
-// pass by finding nothing. The JavaScript sink is reported by
-// testdata/taint_rule.yaml, passed as a second --config, as well as by the
-// bundled JavaScript pack, so the test does not depend on that pack's rules.
+// TestBuildOutputNamesAreNotEvidence (decision D6', replacing
+// TestBuildOutputIsExcluded, which pinned name-only exclusion) runs real
+// Semgrep over a tree with the same sinks inside and outside directories and
+// files that only have a build-output name: node_modules/, dist/, build/,
+// .next/, target/, vendor/ and *.min.js with no marker or content that says
+// they are installed, built or minified. A name is not evidence, so every one
+// of them is evaluated and reported. What IS evidence (a node_modules with
+// .package-lock.json, a minified bundle, ...) is left out and listed, which
+// TestRealSemgrepEvaluatesFirstPartyCodeWithABuildOutputName and the scope
+// package pin. The JavaScript sink is reported by testdata/taint_rule.yaml,
+// passed as a second --config, as well as by the bundled JavaScript pack.
 //
 // Semgrep has a built-in ignore list (node_modules/, build/, dist/, vendor/,
 // *.min.js and test directories), but only for a project that has no
-// .semgrepignore of its own: one that has one, for whatever reason, gets none
-// of it. So the tree is scanned both ways.
-func TestBuildOutputIsExcluded(t *testing.T) {
+// .semgrepignore of its own; the engine passes --x-ignore-semgrepignore-files,
+// so the tree is scanned both ways to show the list never applies.
+func TestBuildOutputNamesAreNotEvidence(t *testing.T) {
 	requireSemgrep(t)
 	resetRulesCacheForTesting()
 	withExtraSemgrepConfig(t, filepath.Join(testdataDir, "taint_rule.yaml"))
@@ -732,6 +736,13 @@ func TestBuildOutputIsExcluded(t *testing.T) {
 		"services/api/dist/app.py":         pySink,
 	}
 	want := map[string]bool{"app/views.py:5": true, "src/app.js:9": true, "app/build.py:5": true, "distribution/app.js:9": true}
+	for _, rel := range []string{
+		"node_modules/x/index.js:9", "node_modules/x/setup.py:5", "dist/app.js:9", "dist/app.py:5", "build/lib/app.py:5",
+		"build/app.js:9", ".next/server/app.js:9", "target/classes/app.py:5", "vendor/lib/app.py:5", "vendor/lib/app.js:9",
+		"static/app.min.js:9", "packages/web/node_modules/y/a.js:9", "services/api/dist/app.py:5",
+	} {
+		want[rel] = true
+	}
 
 	for _, project := range []struct{ name, semgrepignore string }{
 		{"without a project .semgrepignore", ""},
@@ -750,14 +761,14 @@ func TestBuildOutputIsExcluded(t *testing.T) {
 			}
 			assertEndpoints(t, got, want)
 
-			// A diff that touches build output: --include names the file,
-			// and the exclude still wins.
+			// A diff that touches such files: --include names them, and they are
+			// evaluated like any other changed file.
 			allow := gitdiff.NewAllowlist(root, []string{"dist/app.js", "vendor/lib/app.py", "app/views.py"})
 			got, err = ScanWithAllowlist(context.Background(), root, allow)
 			if err != nil {
 				t.Fatalf("ScanWithAllowlist: %v", err)
 			}
-			assertEndpoints(t, got, map[string]bool{"app/views.py:5": true})
+			assertEndpoints(t, got, map[string]bool{"app/views.py:5": true, "dist/app.js:9": true, "vendor/lib/app.py:5": true})
 		})
 	}
 
@@ -823,10 +834,27 @@ func withExtraSemgrepConfig(t *testing.T, config string) {
 // per-rule, per-file default (5 s) cuts a taint rule off on a large file; no
 // bound (--timeout 0) would let one file use up defaultTimeout and lose every
 // finding of the run.
+//
+// Decision D6' replaced the fixed list of excluded NAMES (node_modules, dist,
+// build, .next, target, vendor, *.min.js) with the paths the tree holds
+// evidence for: this test builds one tree of each kind of evidence and pins an
+// anchored --exclude for exactly those, and none for a directory that merely
+// has one of the old names.
 func TestScanArgsExcludeBuildOutputAndBoundRuleTimeout(t *testing.T) {
 	argv := filepath.Join(t.TempDir(), "argv")
 	installArgRecordingSemgrep(t, argv)
-	if _, err := Scan(context.Background(), t.TempDir()); err != nil {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"node_modules/.package-lock.json": `{"lockfileVersion": 3}`,
+		"vendor/modules.txt":              "# example.com/m v1.0.0\n",
+		"target/CACHEDIR.TAG":             "Signature: 8a477f597d28d172789f06886806bc55\n",
+		".next/BUILD_ID":                  "x",
+		".next/build-manifest.json":       "{}",
+		"web/venv/pyvenv.cfg":             "home = /usr/bin\n",
+		"dist/app.js":                     "run();\n", // named like build output, no evidence
+		"build/app.js":                    "run();\n",
+	})
+	if _, err := Scan(context.Background(), root); err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
 	raw, err := os.ReadFile(argv)
@@ -835,11 +863,16 @@ func TestScanArgsExcludeBuildOutputAndBoundRuleTimeout(t *testing.T) {
 	}
 	args := "\n" + string(raw)
 	for _, pair := range []string{
-		"--exclude\nnode_modules\n", "--exclude\ndist\n", "--exclude\nbuild\n", "--exclude\n.next\n",
-		"--exclude\ntarget\n", "--exclude\nvendor\n", "--exclude\n*.min.js\n", "--timeout\n30\n",
+		"--exclude\n/node_modules\n", "--exclude\n/vendor\n", "--exclude\n/target\n", "--exclude\n/.next\n",
+		"--exclude\n/web/venv\n", "--timeout\n30\n", "--disable-nosem\n",
 	} {
 		if !strings.Contains(args, "\n"+pair) {
 			t.Errorf("semgrep argv lacks %q:\n%s", strings.ReplaceAll(pair, "\n", " "), raw)
+		}
+	}
+	for _, pair := range []string{"--exclude\ndist\n", "--exclude\n/dist\n", "--exclude\nbuild\n", "--exclude\n/build\n"} {
+		if strings.Contains(args, "\n"+pair) {
+			t.Errorf("semgrep argv excludes %q, a directory with no evidence of being build output:\n%s", strings.ReplaceAll(pair, "\n", " "), raw)
 		}
 	}
 	if defaultTimeout != 300*time.Second {
