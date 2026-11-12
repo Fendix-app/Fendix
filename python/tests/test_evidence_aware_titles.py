@@ -244,7 +244,20 @@ def upload():
     return open(name).read()
 """
 
+# The guard must reject an absolute path as well as "..": `open(name)` of
+# "/etc/passwd" has no ".." in it (redteam2-py-02).
 TRAVERSAL_REJECTED = """
+import os
+from flask import request, abort
+
+def read_report():
+    name = request.args.get("name")
+    if ".." in name or os.path.isabs(name):
+        abort(400)
+    return open(name).read()
+"""
+
+DOTDOT_ONLY_REJECTED = """
 from flask import request, abort
 
 def read_report():
@@ -293,8 +306,13 @@ def test_secure_filename_contains_traversal():
 def test_dominating_traversal_rejection_guard_contains():
     findings = _analyze(TRAVERSAL_REJECTED)
     assert not [f for f in findings if f["id"] == "SEC-PY_PATH_TRAVERSAL"], (
-        "an early-exit guard rejecting '..' before the sink contains the flow"
+        "an early-exit guard rejecting '..' and absolute paths before the sink contains the flow"
     )
+
+
+def test_dotdot_only_guard_does_not_contain_an_absolute_path():
+    f = _one(_analyze(DOTDOT_ONLY_REJECTED), "SEC-PY_PATH_TRAVERSAL")
+    assert f, "a '..' check alone lets open('/etc/passwd') through (redteam2-py-02)"
 
 
 def test_bare_resolve_is_not_treated_as_containment():

@@ -2144,17 +2144,32 @@ class TestEdgeCases:
         with tempfile.TemporaryDirectory() as tmpdir:
             assert _collect(tmpdir) == []
 
-    def test_syntax_error_file_skipped_gracefully(self) -> None:
+    def test_syntax_error_file_is_lost_evaluation_not_a_clean_result(self) -> None:
+        # Round 4 (D1', DE-03): the broken file is reported by name through
+        # AnalysisIncomplete (never a crash, never a silent skip), and the
+        # findings already emitted for the rest of the tree are kept.
+        from analyzers.ast_analyzer import AnalysisIncomplete
+
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "broken.py").write_text("def (((broken syntax\n")
-            findings = _collect(tmpdir)
-            # Should not raise; may produce zero findings for the broken file
-            assert isinstance(findings, list)
+            with pytest.raises(AnalysisIncomplete) as raised:
+                _collect(tmpdir)
+            assert [name for name, _ in raised.value.files] == ["broken.py"]
 
-    def test_skips_node_modules(self) -> None:
+    def test_a_directory_called_node_modules_is_scanned_without_evidence(self) -> None:
+        # Round 4 (D6'): a name is not evidence. `node_modules/lib` with no
+        # package.json is first-party code until something says otherwise.
         with tempfile.TemporaryDirectory() as tmpdir:
             nm = Path(tmpdir, "node_modules", "lib")
             nm.mkdir(parents=True)
+            (nm / "index.js").write_text("eval(userInput);\n")
+            assert [f["id"] for f in _collect(tmpdir)] == ["SEC-JS_EVAL"]
+
+    def test_installed_npm_package_with_name_and_version_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            nm = Path(tmpdir, "node_modules", "lib")
+            nm.mkdir(parents=True)
+            (nm / "package.json").write_text('{"name": "lib", "version": "1.0.0"}')
             (nm / "index.js").write_text("eval(userInput);\n")
             assert _collect(tmpdir) == []
 
@@ -2256,8 +2271,13 @@ class TestPathTraversalReachable:
             assert len(pt) >= 1
             assert pt[0].get("reachable") is True
 
-    def test_send_from_directory_uses_second_arg(self) -> None:
-        """send_from_directory(safe_dir, request.args['f']) — arg index 1."""
+    def test_send_from_directory_constant_dir_request_name_not_proven(self) -> None:
+        """send_from_directory(<constant dir>, request.args['f']) is contained.
+
+        Werkzeug's safe_join confines the filename to the constant directory,
+        so this is not a proven path traversal (R-006). Before the remediation
+        this test asserted the false positive.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "h.py").write_text(
                 "from flask import send_from_directory, request\n"
@@ -2266,10 +2286,26 @@ class TestPathTraversalReachable:
                 "    return send_from_directory(UPLOAD_DIR, request.args['f'])\n"
             )
             findings = _collect(tmpdir)
+            pt = [
+                f
+                for f in findings
+                if f["id"] == "SEC-PY_PATH_TRAVERSAL" and f.get("reachable") is True
+            ]
+            assert pt == []
+
+    def test_send_from_directory_request_dir_is_proven(self) -> None:
+        """send_from_directory(request.args['d'], 'report.pdf') — the directory
+        argument is not contained by safe_join, so it stays a proven sink."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "h.py").write_text(
+                "from flask import send_from_directory, request\n"
+                "def download():\n"
+                "    return send_from_directory(request.args['d'], 'report.pdf')\n"
+            )
+            findings = _collect(tmpdir)
             pt = [f for f in findings if f["id"] == "SEC-PY_PATH_TRAVERSAL"]
             assert len(pt) >= 1
             assert pt[0].get("reachable") is True
-            # The chain should reference the user-controlled SECOND arg.
             assert any("request.args" in link["expr"] for link in pt[0]["taint_chain"])
 
     def test_open_literal_arg_no_finding(self) -> None:

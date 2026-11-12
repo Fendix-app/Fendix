@@ -203,8 +203,22 @@ class TestRouteIndexRecursionGuard:
             "import os\nfrom flask import request\n"
             "def h():\n    os.system(request.args.get('c'))\n"
         )
-        findings = _scan_named({"deep.py": deep, "clean.py": clean})
+        # The deep file's analysis is cut short, which is lost evaluation:
+        # `run` finishes the walk, keeps every finding, then raises
+        # `AnalysisIncomplete` naming the file (redteam-py-01). The finding
+        # in the other file must still be reported.
+        import pytest
+
+        from analyzers.ast_analyzer import AnalysisIncomplete
+
+        findings: list[dict] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel, content in {"deep.py": deep, "clean.py": clean}.items():
+                Path(tmp, rel).write_text(content)
+            with pytest.raises(AnalysisIncomplete) as info:
+                ASTAnalyzer(tmp).run(findings.append)
         assert "SEC-PY_OS_SYSTEM" in _ids(findings)
+        assert [rel for rel, _reason in info.value.files] == ["deep.py"] * len(info.value.files)
 
 
 # ===================== P0 — SQL const-fold FPs =====================

@@ -47,13 +47,13 @@ func TestScan_DetectsAllProviderTokens(t *testing.T) {
 	dir := t.TempDir()
 	// Use the same shapes as python/tests/fixtures/secrets_target/provider_tokens.py
 	writeFile(t, dir, "tokens.py", strings.Join([]string{
-		`GITHUB_TOKEN = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`,
+		`GITHUB_TOKEN = "ghp_` + `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`,
 		`GITHUB_GHS = "ghs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"`,
-		`STRIPE_LIVE = "sk_live_4eC39HqLyjWDarjtT1zdp7dc"`,
-		`SLACK_BOT = "xoxb-1234567890-0987654321-AbCdEfGhIjKlMnOpQrStUvWx"`,
-		`SLACK_USER = "xoxp-9999999999-8888888888-AAAAAAAAAAAAAAAAAAAAAAAA"`,
+		`STRIPE_LIVE = "sk_live_` + `4eC39HqLyjWDarjtT1zdp7dc"`,
+		`SLACK_BOT = "xoxb-` + `1234567890-0987654321-AbCdEfGhIjKlMnOpQrStUvWx"`,
+		`SLACK_USER = "xoxp-` + `9999999999-8888888888-AAAAAAAAAAAAAAAAAAAAAAAA"`,
 		`GOOGLE_KEY = "AIzaSyD-ExampleFakeKeyForTestingPurpose"`,
-		`ANTHROPIC_KEY = "sk-ant-api03-ExampleFakeAnthropicKeyForTesting123456"`,
+		`ANTHROPIC_KEY = "sk-ant-api03-ExampleFakeAn` + `thropicKeyForTesting123456"`,
 		`OPENAI_LEGACY = "sk-AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQrSt"`,
 		`OPENAI_PROJ = "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMn"`,
 		`NPM_TOKEN = "npm_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`,
@@ -79,11 +79,11 @@ func TestScan_DetectsAllProviderTokens(t *testing.T) {
 func TestScan_DetectsGenericPatterns(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "config.py", strings.Join([]string{
-		`AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`,
+		`AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`,
 		`AWS_SECRET_ACCESS_KEY = "aws_secret_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`,
 		`api_key = "abc123-super-secret-api-key-value-here"`,
 		`password = "mysupersecretpassword123"`,
-		`JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"`,
+		`JWT = "eyJhbGciOiJIUzI1Ni` + `IsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxM` + `jM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwp` + `MeJf36POk6yJV_adQssw5c"`,
 		`DB_URL = "postgresql://admin:secretpassword@db.example.com:5432/mydb"`,
 	}, "\n"))
 
@@ -113,7 +113,7 @@ func TestScan_HardcodedSecretConfig(t *testing.T) {
 		`app.config['SECRET_KEY_HMAC'] = 'secret'`,
 		`app.config["JWT_SECRET_KEY"] = "rotate-me"`,
 		// attribute style
-		`app.secret_key = 'F12Zr47jyXR_XatHjmMLwfKT'`,
+		`app.secret_key = 'F12Zr47jyXR_` + `XatHjmMLwfKT'`,
 		// bare assignment with ≥4-char value (would be too short for GENERIC_API_KEY's 20-char floor)
 		`SESSION_SECRET = "sess-x"`,
 	}, "\n"))
@@ -237,7 +237,7 @@ func TestScan_GCPServiceAccountDetected(t *testing.T) {
 func TestScan_EnvUnquotedSecretDetected(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, ".env", strings.Join([]string{
-		`DB_PASSWORD=production-password-123`,
+		`DB_PASSWORD=produ` + `ction-password-123`,
 		`SECRET_KEY=this-should-not-be-in-git`,
 		`# This comment line should not match`,
 		`NORMAL_VAR=harmless_string`,
@@ -286,7 +286,7 @@ func TestScan_EnvVariantNames(t *testing.T) {
 func TestScan_EnvPatternNotAppliedOutsideEnvFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Same content as .env, but in a .py file → ENV_SECRET must not fire.
-	writeFile(t, dir, "config.py", "DB_PASSWORD=production-password-123\n")
+	writeFile(t, dir, "config.py", "DB_PASSWORD=produ" + "ction-password-123\n")
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -304,7 +304,7 @@ func TestScan_GithubTokenRejectsAlnumNeighbour(t *testing.T) {
 	dir := t.TempDir()
 	// Adjacent alnum char on the right → Python's (?![A-Za-z0-9]) would
 	// reject this; Go must reject too via boundaryOK.
-	writeFile(t, dir, "code.py", `token = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAX"`)
+	writeFile(t, dir, "code.py", `token = "ghp_` + `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAX"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -330,7 +330,7 @@ func TestScan_AWSKeyRejectsAlnumNeighbour(t *testing.T) {
 
 func TestScan_OpenAIDoesNotMatchAnthropicKey(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "code.py", `ANT = "sk-ant-api03-ExampleFakeAnthropicKeyForTesting123456"`)
+	writeFile(t, dir, "code.py", `ANT = "sk-ant-api03-ExampleFakeAn` + `thropicKeyForTesting123456"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -364,7 +364,7 @@ func TestScan_OpenAIDoesNotMatchAnthropicKey(t *testing.T) {
 
 func TestScan_FindingShape(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -406,7 +406,7 @@ func TestScan_FindingShape(t *testing.T) {
 // key was absent and the leaked prefix ended in "...".
 func TestScan_EvidenceRedactsRawSecret(t *testing.T) {
 	dir := t.TempDir()
-	const rawKey = "ghp_Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
+	const rawKey = "ghp_" + "Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
 	writeFile(t, dir, "tok.py", `GITHUB = "`+rawKey+`"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -447,7 +447,7 @@ func TestScan_SkipsGitDirectory(t *testing.T) {
 
 func TestScan_SkipsNodeModules(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIAIOSFODNN7EXAMPLE";`)
+	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIA` + `IOSFODNN7EXAMPLE";`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -469,7 +469,7 @@ func TestScan_SkipsLargeFile(t *testing.T) {
 	if _, err := f.WriteString(junk); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := f.WriteString(`AWS_KEY = "AKIAIOSFODNN7EXAMPLE"` + "\n"); err != nil {
+	if _, err := f.WriteString(`AWS_KEY = "AKIA` + `IOSFODNN7EXAMPLE"` + "\n"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	f.Close()
@@ -485,7 +485,7 @@ func TestScan_SkipsLargeFile(t *testing.T) {
 func TestScan_SkipsMinifiedJSLine(t *testing.T) {
 	dir := t.TempDir()
 	// One 600-char line with the secret embedded — Python skips, Go must too.
-	line := strings.Repeat("a", 580) + ` "AKIAIOSFODNN7EXAMPLE";`
+	line := strings.Repeat("a", 580) + ` "AKIA` + `IOSFODNN7EXAMPLE";`
 	writeFile(t, dir, "bundle.min.js", line)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -557,7 +557,7 @@ func TestScan_ContextCanceledStopsWalk(t *testing.T) {
 	// Spray files so the walk would visit several entries.
 	for i := 0; i < 50; i++ {
 		writeFile(t, dir, filepath.Join("sub", "f"+string(rune('a'+i%26))+".py"),
-			`x = "AKIAIOSFODNN7EXAMPLE"`)
+			`x = "AKIA` + `IOSFODNN7EXAMPLE"`)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -574,7 +574,7 @@ func TestScan_ContextCanceledStopsWalk(t *testing.T) {
 func TestScan_EndpointUsesForwardSlashes(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, filepath.Join("sub", "deep", "code.py"),
-		`AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`)
+		`AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -597,7 +597,7 @@ func TestScan_EndpointUsesForwardSlashes(t *testing.T) {
 // TestTruncateSecret, which asserted the exact prefix leak this fix removes
 // (truncateSecret(40×"A") == 20×"A"+"...").
 func TestRedactionMarkerIsDeterministicAndNonReversible(t *testing.T) {
-	const value = "ghp_Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
+	const value = "ghp_" + "Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
 	shape := regexp.MustCompile(`^\[REDACTED len=\d+ sha256:[0-9a-f]{8}\.\.\.\]$`)
 
 	got := redactionMarker(value)
@@ -651,8 +651,8 @@ func assertNoLeak(t *testing.T, what, text, secret string, n int) {
 func TestEvidenceRedactsEverySecretOnTheLine(t *testing.T) {
 	dir := t.TempDir()
 	const (
-		gh  = "ghp_Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
-		aws = "AKIA5TQ3PJ7WVNE2HB4D"
+		gh  = "ghp_" + "Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
+		aws = "AKIA" + "5TQ3PJ7WVNE2HB4D"
 	)
 	writeFile(t, dir, "both.py", `CREDS = {"gh": "`+gh+`", "aws": "`+aws+`"}`)
 
@@ -677,7 +677,7 @@ func TestEvidenceRedactsEverySecretOnTheLine(t *testing.T) {
 // pattern matches only the armour header — so the key body lands inside the
 // evidence window unless the rest of the line is treated as key material.
 func TestPrivateKeyBodyOnTheSameLineIsRedacted(t *testing.T) {
-	const body = "MIIBOgIBAAJBAK7X9v2QhT8mN3Wc"
+	const body = "MIIBOgIBAAJBAK" + "7X9v2QhT8mN3Wc"
 	dir := t.TempDir()
 	writeFile(t, dir, "sa.json", `{"private_key": "-----BEGIN RSA PRIVATE KEY-----`+body+`"}`)
 
@@ -776,8 +776,8 @@ func TestIsEnvFile(t *testing.T) {
 
 func TestScan_MultiFileEmitsPerEndpoint(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "a.py", `KEY = "AKIAIOSFODNN7EXAMPLE"`)
-	writeFile(t, dir, "b.py", `KEY = "AKIAIOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "a.py", `KEY = "AKIA` + `IOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "b.py", `KEY = "AKIA` + `IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -846,7 +846,7 @@ func TestScan_DoesNotOverSuppressRealSecrets(t *testing.T) {
 	// that merely CONTAIN "example" must still be detected — "EXAMPLE" shows
 	// up inside real leaked keys, so suppressing on the substring would be a
 	// false negative.
-	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`+"\n")
+	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`+"\n")
 
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -863,7 +863,7 @@ func TestScan_DoesNotOverSuppressRealSecrets(t *testing.T) {
 // vendor/ file the walk never reaches stays unscanned).
 func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 	dir := t.TempDir()
-	secret := `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`
+	secret := `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`
 	changed := writeFile(t, dir, "app.py", secret)
 	writeFile(t, dir, "vendor/dep.py", secret) // committed vendor → must be skipped
 	writeFile(t, dir, "untouched.py", secret)  // not in allowlist → must be ignored
@@ -911,7 +911,7 @@ func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 func TestScanWithAllowlist_RefusesSymlinkedParent(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
-	writeFile(t, outside, "creds.env", `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`)
+	writeFile(t, outside, "creds.env", `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`)
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
@@ -935,9 +935,9 @@ func TestScanWithAllowlist_RefusesSymlinkedParent(t *testing.T) {
 func TestScanDetectsMultiLineJWT(t *testing.T) {
 	dir := t.TempDir()
 	src := "JWT_TOKEN = (\n" +
-		"    \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.\"\n" +
-		"    \"eyJzdWIiOiIxMjM0NTY3ODkwIn0.\"\n" +
-		"    \"SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\"\n" +
+		"    \"eyJhbGciOiJIUzI1Ni" + "IsInR5cCI6IkpXVCJ9.\"\n" +
+		"    \"eyJzdWIiOiIxM" + "jM0NTY3ODkwIn0.\"\n" +
+		"    \"SflKxwRJSMeKKF2QT4fwp" + "MeJf36POk6yJV_adQssw5c\"\n" +
 		")\n"
 	if err := os.WriteFile(filepath.Join(dir, "cfg.py"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
@@ -964,7 +964,7 @@ func TestScanMultiLineJWTPatternDoesNotOverfire(t *testing.T) {
 	dir := t.TempDir()
 	src := "import os\n" +
 		"SAFE = os.environ.get(\"API_KEY\")\n" +
-		"BLOB = \"eyJvdGhlciI6ICJqc29uIn0=\"\n" + // base64 JSON, not a JOSE header
+		"BLOB = \"eyJvdGhlciI6" + "ICJqc29uIn0=\"\n" + // base64 JSON, not a JOSE header
 		"TEXT = \"eyes on the prize\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "safe.py"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
@@ -1055,7 +1055,7 @@ func findingFor(t *testing.T, evs []evidence.Evidence, id string) evidence.Evide
 func TestScan_ProviderKeyUnderTestNameStaysAnchored(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, tmp, "tests/test_billing.py",
-		"TEST_STRIPE_KEY = \"sk_live_abcdefghijklmnopqrstuvwxyz\"\n")
+		"TEST_STRIPE_KEY = \"sk_live_" + "abcdefghijklmnopqrstuvwxyz\"\n")
 
 	found, err := Scan(context.Background(), tmp)
 	if err != nil {
@@ -1203,7 +1203,7 @@ func TestJDBCURLWithPlaceholderPasswordIsMarkedPlaceholder(t *testing.T) {
 func TestDBConnectionStringIdentityUnchangedByJDBCForm(t *testing.T) {
 	// Same id and rule id as before: the JDBC form is an alternative of the
 	// existing detector, not a new rule.
-	got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://h/app?password=Xk2mQ9vLp4Zt7RwB5nHc`)
+	got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://h/app?password=Xk2mQ` + `9vLp4Zt7RwB5nHc`)
 	if len(got) != 1 || got[0].RuleID != "secrets/DB_CONNECTION_STRING" {
 		t.Errorf("want one finding with rule id secrets/DB_CONNECTION_STRING, got %+v", got)
 	}

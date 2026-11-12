@@ -1669,8 +1669,27 @@ def test_a_failure_in_the_call_index_never_stops_the_helper_files_visit(monkeypa
             ),
         }
     )
-    findings = _scan(files)
-    _assert_unproven(_sqli_in(files, "app/services/h.py"))
+    # The lost cross-file proof is reported, not silent: `run` still visits
+    # the helper file and keeps its findings, then raises
+    # `AnalysisIncomplete` naming the caller (redteam-py-01).
+    from analyzers.ast_analyzer import AnalysisIncomplete
+
+    findings: list[dict] = []
+    with tempfile.TemporaryDirectory() as d:
+        for name, content in files.items():
+            p = Path(d) / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        with pytest.raises(AnalysisIncomplete) as info:
+            ASTAnalyzer(d).run(findings.append)
+    assert ("app/views.py", "call index: internal error: RuntimeError") in info.value.files
+    sqli = [
+        f
+        for f in _rule(findings, "PY_SQL_INJECTION")
+        if f["line"].startswith("app/services/h.py:")
+    ]
+    assert len(sqli) == 1, sqli
+    _assert_unproven(sqli[0])
     assert _rule(findings, "PY_OS_SYSTEM"), findings
 
 

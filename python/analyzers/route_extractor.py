@@ -276,15 +276,28 @@ def extract_routes(source: str, rel_path: str) -> RouteTable:
     return scan_module(source, rel_path)[0]
 
 
-def scan_module(source: str, rel_path: str) -> tuple[RouteTable, ModuleSummary | None]:
+def scan_module(
+    source: str, rel_path: str, *, errors: list[str] | None = None
+) -> tuple[RouteTable, ModuleSummary | None]:
     """Parse `source` once: its RouteTable, and the ModuleSummary a project
-    pass hands to `RouteTable.resolve_views` (None when it does not parse)."""
+    pass hands to `RouteTable.resolve_views` (None when it does not parse).
+
+    `errors`, when given, receives a reason for each way the scan was cut
+    short on source Python could run (the recursion limit, out of memory):
+    the file's routes are then missing, so its handlers' route parameters
+    are no request sources, and the caller reports that as lost evaluation
+    (redteam-py-01). A syntax error is not reported: such a file is not
+    code the server runs."""
     table = RouteTable()
     try:
         tree = ast.parse(source)
-    except (SyntaxError, RecursionError, ValueError):
-        # audit #18: a file we can't parse (or that trips the recursion limit /
-        # "too many nested" guard) contributes no routes — never aborts.
+    except (SyntaxError, ValueError):
+        # audit #18: a file we can't parse contributes no routes — never aborts.
+        return table, None
+    except (RecursionError, MemoryError) as exc:
+        # Too deep (or too large) for the parser: no routes, never aborts.
+        if errors is not None:
+            errors.append(_abort_reason(exc))
         return table, None
 
     try:
@@ -298,9 +311,16 @@ def scan_module(source: str, rel_path: str) -> tuple[RouteTable, ModuleSummary |
             star_modules=tuple(imports.star_modules),
             framework=imports.framework(),
         )
-    except RecursionError:
+    except RecursionError as exc:
+        if errors is not None:
+            errors.append(_abort_reason(exc))
         return RouteTable(), None
     return table, summary
+
+
+def _abort_reason(exc: BaseException) -> str:
+    """A short reason for a cut-short scan (`scan_module`'s `errors`)."""
+    return "out of memory" if isinstance(exc, MemoryError) else "recursion limit"
 
 
 def _module_level_defs(tree: ast.AST):

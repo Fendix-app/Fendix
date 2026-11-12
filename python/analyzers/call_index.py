@@ -11,7 +11,7 @@ of the project: a view in `app/views.py` that does
 is a tainted caller of `find` in `app/services/q.py`.
 
 **Building.** `ProjectCallIndex.build(root, route_table)` reads every Python
-file once, honouring the analyzer's own walk (`_SKIP_DIRS`, symlinked files,
+file once, honouring the analyzer's own walk (`SourceWalk`, symlinked files,
 `_MAX_FILE_BYTES`). Request input is a `request`/`req` name, so only a file
 that names one, or that holds a route handler whose parameters are sources,
 can pass request input to a call: those files are parsed, the rest are not.
@@ -44,10 +44,11 @@ written, else the keyword `name`; a negative `index` is a keyword-only
 parameter, matched by keyword alone). When the record says it may carry
 request input, the call is proved in the caller's own file exactly as a
 same-file caller is (`_caller_arg_chain` of a visitor on that file): the last
-assignment before the call decides, and the caller-side sanitiser union of the
-same-file hop (R-pf32) runs with the existing predicates in the caller's file
-and function (R-pf50 a), under the template-source rule of the trace that
-asks. One link per proven call, in the caller's file; `first=True` stops at
+assignment before the call decides, and the caller-side sanitisers of the
+same-file hop (R-pf32) for the helper's sink class (R-002: `sink_class`, so an
+escaped value still proves a shell or SQL sink) run with the existing
+predicates in the caller's file and function (R-pf50 a), under the
+template-source rule of the trace that asks. One link per proven call, in the caller's file; `first=True` stops at
 the first, which is all the taint chain shows. A caller's tree and visitor are
 built on demand and kept in a least-recently-used cache capped at
 `_CALLER_CACHE_MAX_BYTES` of source; a file evicted from it is parsed again
@@ -83,16 +84,18 @@ from analyzers.ast_analyzer import (
     _MAX_TAINT_HOPS,
     _REQUEST_NAMES,
     _SCOPE_NODES,
-    _SKIP_DIRS,
     _call_argument,
     _dotted,
     _file_visitor,
     _is_test_path,
+    _ProjectMentions,
     _PythonSecurityVisitor,
+    _read_python_source,
     _references_request_input,
     _same_scope_nodes,
 )
 from analyzers.route_extractor import _ImportScope, _module_name
+from analyzers.scope_evidence import SourceWalk
 
 # Total source size of the parsed modules kept for `_analyze_python` to reuse;
 # past it, a file is parsed again when it is analysed. A parsed module takes
@@ -200,17 +203,37 @@ class ProjectCallIndex:
         self._caller_bytes = 0
         self._answers: dict[tuple, tuple[CallSiteLink, ...]] = {}
         self._firsts: dict[tuple, CallSiteLink | None] = {}
+        # (rel, reason) for each caller file whose calls could not be indexed,
+        # or whose proof failed, on code Python could run. The analyzer reads
+        # it after its walk and reports the lost cross-file evaluation
+        # (`ast_analyzer.AnalysisIncomplete`, redteam-py-01).
+        self.incomplete: list[tuple[str, str]] = []
+        # The project's files (`_ProjectMentions`), for an allowlist another
+        # file may change, judged by the caller visitors (`_caller`); set by
+        # `build`.
+        self.project_mentions: _ProjectMentions | None = None
+
+    def _note_incomplete(self, rel: str, exc: BaseException) -> None:
+        if isinstance(exc, RecursionError):
+            reason = "call index: recursion limit"
+        elif isinstance(exc, MemoryError):
+            reason = "call index: out of memory"
+        else:
+            reason = f"call index: internal error: {type(exc).__name__}"
+        if (rel, reason) not in self.incomplete:
+            self.incomplete.append((rel, reason))
 
     # -- building ---------------------------------------------------------
 
     @classmethod
-    def build(cls, root: Path, route_table) -> ProjectCallIndex:
+    def build(cls, root: Path, route_table, walk: SourceWalk | None = None) -> ProjectCallIndex:
         """Read every Python file under `root` once, parse the ones that can
         pass request input to a call, and index the calls between the
         project's modules. `route_table` is the analyzer's project
         `RouteTable` (or None): it decides which callers are route handlers."""
         index = cls(route_table, root)
-        files = list(_python_files(index._root))
+        files = list(_python_files(index._root, walk))
+        index.project_mentions = _ProjectMentions(files)
         for _path, rel in files:
             index._learn_module(index.module_of(rel))
         index._learn_key_prefixes()
@@ -286,9 +309,9 @@ class ProjectCallIndex:
         if _is_test_path(rel):
             return
         try:
-            source = path.read_text(encoding="utf-8", errors="replace")
+            source = _read_python_source(path)
         except OSError:
-            return
+            return  # `_analyze_python` reads it again and reports it (D6)
         if not holds_handlers and not _NAMES_THE_REQUEST.search(source):
             return
         try:
@@ -297,7 +320,9 @@ class ProjectCallIndex:
             return  # `_analyze_python` reads it again and decides, as before
         try:
             sites = self._call_sites(rel, source, tree)
-        except (RecursionError, Exception):  # noqa: BLE001 — one file never aborts the index
+        except (RecursionError, Exception) as exc:  # noqa: BLE001 — one file never aborts the index
+            # Its calls into other files are then never proven: reported.
+            self._note_incomplete(rel, exc)
             sites = []
         for key, site in sites:
             self._sites.setdefault(key, []).append(site)
@@ -398,15 +423,25 @@ class ProjectCallIndex:
         *,
         first: bool = False,
         skip_template_sources: bool = False,
+        sink_class: str = "other",
     ) -> list[CallSiteLink]:
         """One `CallSiteLink` per call in the project that passes request input
         to parameter `param_name` (at position `param_index`; negative for a
         keyword-only parameter) of the module-level function `callee_name`
         of `callee_module`, in the order the calls were indexed. `first`
         stops at the first proving call. `skip_template_sources` proves the
-        caller as `_without_template_sources` does. Answers are cached per
-        query, the flag included."""
-        key = (callee_module, callee_name, param_index, param_name, skip_template_sources)
+        caller as `_without_template_sources` does. `sink_class` is the class
+        of the helper's sink (`_SINK_CLASSES` of the analyzer): only the
+        caller-side sanitisers of that class leave a call unproven. Answers
+        are cached per query, both flags included."""
+        key = (
+            callee_module,
+            callee_name,
+            param_index,
+            param_name,
+            skip_template_sources,
+            sink_class,
+        )
         answer = self._answers.get(key)
         if answer is not None:
             return list(answer[:1] if first else answer)
@@ -425,12 +460,15 @@ class ProjectCallIndex:
         param_index: int,
         param_name: str,
         skip_template_sources: bool,
+        sink_class: str = "other",
     ) -> Iterator[CallSiteLink]:
         for module in self._names_for(callee_module):
             for site in self._sites.get((module, callee_name), ()):
                 if not site.may_carry(param_index, param_name):
                     continue
-                link = self._prove(site, param_index, param_name, skip_template_sources)
+                link = self._prove(
+                    site, param_index, param_name, skip_template_sources, sink_class
+                )
                 if link is not None:
                     yield link
 
@@ -446,12 +484,17 @@ class ProjectCallIndex:
             yield suffix
 
     def _prove(
-        self, site: _CallSite, param_index: int, param_name: str, skip_template_sources: bool
+        self,
+        site: _CallSite,
+        param_index: int,
+        param_name: str,
+        skip_template_sources: bool,
+        sink_class: str = "other",
     ) -> CallSiteLink | None:
         """The link the caller proves for the argument, judged by a visitor on
         the caller's file exactly as a same-file caller is
         (`_caller_arg_chain`: the caller's bindings before the call, its
-        route parameters, and the caller-side sanitiser union), or None. Any
+        route parameters, and the caller-side sanitisers of `sink_class`), or None. Any
         failure, from re-reading the caller to the proof, proves nothing; it
         never aborts the callee's analysis."""
         try:
@@ -465,8 +508,13 @@ class ProjectCallIndex:
             visitor = caller.visitor
             rule = visitor._without_template_sources() if skip_template_sources else nullcontext()
             with rule:
-                prefix = visitor._caller_arg_chain(call, scope, arg, None, 0)
-        except (RecursionError, Exception):  # noqa: BLE001 — best-effort proof
+                prefix = visitor._caller_arg_chain(
+                    call, scope, arg, None, 0, sink_class=sink_class
+                )
+        except (RecursionError, Exception) as exc:  # noqa: BLE001 — best-effort proof
+            # Never aborts the callee's analysis, but the proof is lost
+            # evaluation, not "unproven": reported.
+            self._note_incomplete(site.rel, exc)
             return None
         if not prefix:
             return None
@@ -487,7 +535,7 @@ class ProjectCallIndex:
             source, tree = kept
         else:
             path = self._paths[rel]
-            source = path.read_text(encoding="utf-8", errors="replace")
+            source = _read_python_source(path)
             tree = ast.parse(source, filename=str(path))
         wanted = self._spans.get(rel, set())
         calls = {
@@ -496,7 +544,13 @@ class ProjectCallIndex:
             if _span(call) in wanted
         }
         visitor = _file_visitor(
-            source, rel, _discard, tree, route_table=self._route_table, primed=True
+            source,
+            rel,
+            _discard,
+            tree,
+            route_table=self._route_table,
+            primed=True,
+            project_mentions=self.project_mentions,
         )
         caller = self._callers[rel] = _Caller(len(source), visitor, calls)
         self._caller_bytes += caller.size
@@ -638,15 +692,17 @@ def _span(node: ast.AST) -> Span:
     return (node.lineno, node.col_offset, node.end_lineno or 0, node.end_col_offset or 0)
 
 
-def _python_files(root: Path) -> Iterator[tuple[Path, str]]:
+def _python_files(root: Path, walk: SourceWalk | None = None) -> Iterator[tuple[Path, str]]:
     """`(path, rel)` of every file the analyzer would analyse as Python: the
-    same walk as `ASTAnalyzer.run`, without symlinked or oversized files.
+    same walk as `ASTAnalyzer.run` (`SourceWalk`, so what D6' evidence leaves
+    out of scope is left out here too), without symlinked or oversized files.
+    The walk in `ASTAnalyzer.run` reports an oversized or unreadable one
+    (D6), so the index skips it without a record of its own.
     Sorted, so the first proving caller does not depend on the order the
     filesystem lists a directory in."""
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
-        for fname in sorted(filenames):
-            if not fname.endswith(".py"):
+    for dirpath, filenames in (walk or SourceWalk(root)).walk():
+        for fname in filenames:
+            if not fname.lower().endswith(".py"):
                 continue
             path = Path(dirpath) / fname
             try:

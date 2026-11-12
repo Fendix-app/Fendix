@@ -11,32 +11,83 @@ is not a Python stdlib dependency.
 from __future__ import annotations
 
 import ast
+import io
 import os
 import posixpath
 import re
 import sys
+import tokenize
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator, Literal, Mapping
 
-# Skip directories (same as secrets analyzer)
-_SKIP_DIRS: frozenset[str] = frozenset(
-    {
-        ".git",
-        "node_modules",
-        "vendor",
-        "__pycache__",
-        ".venv",
-        "venv",
-        "dist",
-        "build",
-        ".tox",
-    }
-)
+from analyzers import status_detail
+from analyzers.interpreter import syntax_reason
+from analyzers.reaching_defs import ReachingDefs
+from analyzers.scope_evidence import SourceWalk, file_evidence, generated_marker
 
 _MAX_FILE_BYTES = 1_048_576  # 1 MB
+
+# What the analyzer leaves out of its scope is decided by evidence, never by a
+# directory or file name alone (D6'; `analyzers/scope_evidence.py`): a virtual
+# environment, installed packages, Git metadata, a generated, minified or
+# vendored-library file. Everything left out on purpose is recorded with its
+# reason and reported by name in the injection check's status detail
+# (`ASTAnalyzer.scope_note`); a symlink is not followed, and said so (F-L12).
+# Compared in lower case (D6'): `APP.JS` and `Server.Py` are source files too; a
+# file's letter case is a name, not evidence that it is not code.
+_SOURCE_SUFFIXES_JS = frozenset({".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts"})
+
+
+def _read_python_source(path: Path) -> str:
+    """The text of a Python source file decoded as CPython decodes it: a
+    UTF-8 byte-order mark is dropped and a PEP 263 coding declaration is
+    honoured (redteam2-py-01: a BOM file kept U+FEFF, failed to parse and was
+    skipped silently while the server runs it). Bytes the encoding cannot
+    decode are replaced, as before, so a stray byte in a comment never loses
+    the file; line endings are translated as `read_text` did. Raises OSError
+    when the file cannot be read."""
+    data = path.read_bytes()
+    try:
+        encoding, _lines = tokenize.detect_encoding(io.BytesIO(data).readline)
+    except SyntaxError:
+        # An unknown or conflicting declaration: decoded as UTF-8, as before.
+        encoding = "utf-8"
+    try:
+        text = data.decode(encoding, errors="replace")
+    except LookupError:
+        text = data.decode("utf-8", errors="replace")
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _read_head(path: Path, limit: int = _MAX_FILE_BYTES) -> str:
+    """The first `limit` bytes of `path` as text, for the evidence that says a
+    file too large to analyse is generated. An unreadable file has none."""
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(limit).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _read_tail(path: Path, size: int, limit: int = 2048) -> str:
+    """The last `limit` bytes of `path` (of `size` bytes) as text: where a
+    compiler writes its `//# sourceMappingURL=` comment."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(max(0, size - limit))
+            return handle.read(limit).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _os_error_reason(exc: OSError) -> str:
+    """A short reason naming why a path could not be read."""
+    return f"unreadable: {type(exc).__name__}"
 
 # Hard cap on taint-chain hops (F-H5b). A crafted "assignment bomb" — a long
 # linear chain `a0 = source; a1 = a0; a2 = a1; ...; sink(aN)` — would otherwise
@@ -104,7 +155,14 @@ _JS_PATTERNS: list[tuple[str, str, re.Pattern[str], str, str, str]] = [
         # `Prisma.sql`...`` are TAGGED templates. The tag receives the strings
         # and the values apart and binds the values as parameters (postgres.js,
         # slonik, Prisma), so they are not string-built SQL.
-        re.compile(r"(?<![\w$.)\]])`[^`]*(?:SELECT|INSERT|UPDATE|DELETE)[^`]*\$\{"),
+        #
+        # Linear on a long line: the lookahead finds the FIRST keyword in the
+        # template and `\1` consumes it atomically, so a template with
+        # thousands of keywords and no `${` is not retried at each one (a
+        # keyword after the first cannot reach a `${` the first did not).
+        re.compile(
+            r"(?<![\w$.)\]])`(?=([^`]*?(?:SELECT|INSERT|UPDATE|DELETE)))\1[^`]*\$\{"
+        ),
         "HIGH",
         "HIGH",
         "CWE-89",
@@ -156,6 +214,48 @@ def _js_template_only_constants(line: str, source: str) -> bool:
     return checked
 
 
+class AnalysisIncomplete(RuntimeError):
+    """Raised by `ASTAnalyzer.run` AFTER the whole tree was walked when the
+    analysis of one or more files was cut short (redteam-py-01): the recursion
+    limit, an out-of-memory parse, or any other exception mid-walk. Every
+    finding already emitted stays emitted, and every other file was analysed.
+
+    It exists so the lost evaluation reaches the coverage contract through
+    the existing vocabulary: `engine.py`'s `_run_check` turns it into the
+    injection check's `failed/execution_error` status line, which the Go side
+    records as the `python-engine/injection` entry and the coverage contract
+    counts as a gap. Before it, the per-file guard logged to stderr and the
+    check reported `ok`, so a proven BLOCK in the rest of such a file vanished
+    from a scan that said it was complete.
+
+    An in-scope source file that was never analysed is lost evaluation too
+    (D6): one over the 1 MB size cap (`_MAX_FILE_BYTES`) that nothing in it
+    shows to be generated, a file or directory that cannot be read, and a
+    file the interpreter cannot parse (D1', DE-03). A SyntaxError is not "code
+    the server does not run": a `match` statement under Python 3.9 is valid
+    Python the interpreter is too old for, and dropping it hid a proven
+    command injection. The reason says which it is (`analyzers/interpreter.py`).
+    What the analyzer leaves out on purpose is not (`analyzers/scope_evidence.py`);
+    it is listed by name instead.
+
+    `status_detail` is the failed entry's detail, built by
+    `analyzers/status_detail.py` within the Go side's 240-byte bound so that
+    side never cuts it: the file count first, the first files named, then
+    "and N more (see report metadata)", then what was declared out of scope
+    in a segment starting "declared out of scope, not scanned:" (C1, C2).
+    `str(exc)` is the same text."""
+
+    def __init__(
+        self,
+        files: list[tuple[str, str]],
+        declared: list[tuple[str, str]] | None = None,
+    ) -> None:
+        self.files = list(files)
+        self.declared = list(declared or [])
+        self.status_detail = status_detail.fit(loss=self.files, declared=self.declared)
+        super().__init__(self.status_detail)
+
+
 class ASTAnalyzer:
     """Analyzes source code ASTs for security-relevant patterns.
 
@@ -174,28 +274,72 @@ class ASTAnalyzer:
         # "unsupported_target" (a JavaScript-only tree only got regex
         # heuristics) — see engine.py's _injection_support.
         self.file_stats: dict = {"python": 0, "javascript": 0}
+        # (rel, reason) for every file whose analysis was cut short during
+        # `run`; non-empty makes `run` raise `AnalysisIncomplete` once the
+        # walk is done (redteam-py-01).
+        self.incomplete_files: list[tuple[str, str]] = []
+        # (rel, why) for every path left out of scope on purpose during `run`:
+        # what `analyzers/scope_evidence.py` shows is not the project's own
+        # code, and symlinks (D6'). Listed by `scope_note`.
+        self.excluded: list[tuple[str, str]] = []
+        # (path, rel) of every Python file the route pass read, for
+        # `_ProjectMentions`.
+        self._python_paths: list[tuple[Path, str]] = []
+
+    def scope_note(self, budget: int = status_detail.DETAIL_BUDGET) -> str:
+        """The segment naming what `run` left out of scope on purpose, "declared
+        out of scope, not scanned: N paths: a/ (why), ... and K more (see
+        report metadata)", fitted to `budget` bytes and never cut, or "" when
+        there was nothing (D6', C1, C2)."""
+        if not self.excluded:
+            return ""
+        return status_detail.fit(declared=self.excluded, budget=budget)
+
+    def scope_payload(self) -> dict | None:
+        """The complete lists of what was lost and what was declared, for the
+        status line's additive `scope` field (C2)."""
+        return status_detail.scope_payload(self.incomplete_files, self.excluded)
+
+    def _record_incomplete(self, rel: str, reason: str) -> None:
+        """Note that the analysis of `rel` was cut short (`AnalysisIncomplete`)."""
+        entry = (rel, reason)
+        if entry not in self.incomplete_files:
+            self.incomplete_files.append(entry)
 
     def run(self, emit_fn: Callable[[dict], None]) -> None:
-        """Walk code_path and emit findings for security patterns detected."""
+        """Walk code_path and emit findings for security patterns detected.
+
+        Raises `AnalysisIncomplete` after the walk when any file's analysis
+        was cut short, or an in-scope source file was skipped for size or
+        could not be read (D6); the findings it emitted, and every other
+        file's, are kept (redteam-py-01)."""
+        self.incomplete_files = []
+        self.excluded = []
+        self._python_paths: list[tuple[Path, str]] = []
         root = Path(self.code_path)
         if not root.exists():
             return
+        # One walk for every pass, so the route index, the call index and the
+        # analysis agree on what is in scope (D6').
+        walk = SourceWalk(root)
 
         # Proven Path v1: pre-pass builds a project-wide handler→route index
         # so a finding's sink can be bound to the route that reaches it —
         # even when the route is declared in urls.py and the view lives in a
         # different file (Django). Best-effort and metadata-only; a failure
         # here leaves binding off and never blocks the security pass.
-        self._routes_by_func = self._build_route_index(root)
+        self._routes_by_func = self._build_route_index(root, walk)
+        # Every Python file the route pass read, for an allowlist another
+        # file may change (`_allowlist_shared`, redteam2-r001-01).
+        self._project_mentions = _ProjectMentions(self._python_paths)
         # Task 3.8: a second pre-pass indexes the calls between the project's
         # modules, so a helper's parameter can be followed one hop to a caller
         # in another file. It parses each file once and hands the parse to
         # `_analyze_python`. Best-effort like the route index: on failure the
         # helper hop stays within each file.
-        self._call_index = self._build_call_index(root, self._routes_by_func)
+        self._call_index = self._build_call_index(root, self._routes_by_func, walk)
 
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for dirpath, filenames in walk.walk(record=True):
             for fname in filenames:
                 fpath = Path(dirpath) / fname
 
@@ -207,25 +351,40 @@ class ASTAnalyzer:
                 # /etc/passwd) in 'evidence'. Mirror the Go textscan symlink
                 # skip (internal/scanner/textscan): refuse symlinked files
                 # unconditionally. islink() does not raise on a broken link.
+                rel = str(fpath.relative_to(root))
+                suffix = fpath.suffix.lower()
+                source_file = suffix == ".py" or suffix in _SOURCE_SUFFIXES_JS
                 try:
                     if fpath.is_symlink():
+                        # Not followed, and said so (D6).
+                        if source_file:
+                            self.excluded.append((rel, "symlink, not followed"))
                         continue
-                except OSError:
+                except OSError as exc:
+                    if source_file:
+                        self._record_incomplete(rel, _os_error_reason(exc))
                     continue
 
-                rel = str(fpath.relative_to(root))
-
-                if fpath.suffix == ".py":
+                if suffix == ".py":
                     self.file_stats["python"] += 1
                     self._analyze_python(fpath, rel, emit_fn)
-                elif fpath.suffix in {".js", ".ts", ".jsx", ".tsx"}:
+                elif suffix in _SOURCE_SUFFIXES_JS:
                     self.file_stats["javascript"] += 1
                     self._analyze_js_heuristic(fpath, rel, emit_fn)
+        walk.finish()
+        self.excluded = walk.declared + self.excluded
+        for rel, reason in walk.lost:
+            self._record_incomplete(rel, reason)
         # The index holds the callers' parsed trees; nothing reads it after
-        # the walk.
+        # the walk. A caller it could not index or prove is lost evaluation
+        # of a cross-file hop.
+        for rel, reason in getattr(self._call_index, "incomplete", ()):
+            self._record_incomplete(rel, reason)
         self._call_index = None
+        if self.incomplete_files:
+            raise AnalysisIncomplete(self.incomplete_files, self.excluded)
 
-    def _build_route_index(self, root: Path):
+    def _build_route_index(self, root: Path, walk: SourceWalk | None = None):
         """Walk the tree once and merge every file's routes into one
         function-name → Route index. Keyed on the handler function's name so
         a Django urls.py route binds to its view defined elsewhere. Once every
@@ -242,25 +401,35 @@ class ASTAnalyzer:
             return None
         index = RouteTable()
         summaries = []
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for dirpath, filenames in (walk or SourceWalk(root)).walk():
             for fname in filenames:
-                if not fname.endswith(".py"):
+                if not fname.lower().endswith(".py"):
                     continue
                 fpath = Path(dirpath) / fname
-                try:
-                    if fpath.is_symlink() or fpath.stat().st_size > _MAX_FILE_BYTES:
-                        continue
-                    src = fpath.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
                 rel = str(fpath.relative_to(root))
                 try:
-                    table, summary = scan_module(src, rel)
-                except (RecursionError, Exception):  # noqa: BLE001 — binding is best-effort
-                    # audit #18: one crafted/large file must not abort the
-                    # route index (and thus the whole injection pass). Skip it.
+                    if fpath.is_symlink() or fpath.stat().st_size > _MAX_FILE_BYTES:
+                        # Reported by the main walk (`_analyze_python`, D6).
+                        continue
+                    src = _read_python_source(fpath)
+                except OSError as exc:
+                    # Its routes are missing, so its handlers' route
+                    # parameters are no request sources (D6).
+                    self._record_incomplete(rel, f"route index: {_os_error_reason(exc)}")
                     continue
+                self._python_paths.append((fpath, rel))
+                errors: list[str] = []
+                try:
+                    table, summary = scan_module(src, rel, errors=errors)
+                except (RecursionError, Exception) as exc:  # noqa: BLE001 — binding is best-effort
+                    # audit #18: one crafted/large file must not abort the
+                    # route index (and thus the whole injection pass). Skip
+                    # it, but its handlers' route parameters are then no
+                    # request sources: lost evaluation (redteam-py-01).
+                    self._record_incomplete(rel, f"route index: {_exc_reason(exc)}")
+                    continue
+                for reason in errors:
+                    self._record_incomplete(rel, f"route index: {reason}")
                 for route in table.routes:
                     index.add(route)
                 if summary is not None:
@@ -276,19 +445,22 @@ class ASTAnalyzer:
             )
         return index
 
-    def _build_call_index(self, root: Path, route_table):
+    def _build_call_index(self, root: Path, route_table, walk: SourceWalk | None = None):
         """The project's `ProjectCallIndex` (analyzers/call_index.py), or None
         when it cannot be built. Imported here, not at module level: the
         index module imports this one."""
         try:
             from analyzers.call_index import ProjectCallIndex
 
-            return ProjectCallIndex.build(root, route_table)
+            return ProjectCallIndex.build(root, route_table, walk)
         except (RecursionError, Exception) as exc:  # noqa: BLE001 — the hop is optional
             print(
                 f"[fendix-engine] ast_analyzer: project call index failed: {exc}",
                 file=sys.stderr,
             )
+            # Without the index no cross-file hop is proven anywhere: lost
+            # evaluation (redteam-py-01).
+            self._record_incomplete("(project call index)", _exc_reason(exc))
             return None
 
     # ------------------------------------------------------------------
@@ -306,11 +478,36 @@ class ASTAnalyzer:
             source, tree = parsed
         else:
             try:
-                if filepath.stat().st_size > _MAX_FILE_BYTES:
+                size = filepath.stat().st_size
+                if size > _MAX_FILE_BYTES:
+                    # Too large to read: out of scope only when its own
+                    # header says a generator wrote it, else an in-scope
+                    # source file that was never analysed (D6, D6').
+                    marker = generated_marker(_read_head(filepath))
+                    if marker:
+                        self.excluded.append(
+                            (rel, f"generated: {marker}, over the 1 MB cap")
+                        )
+                    else:
+                        self._record_incomplete(rel, _size_reason(size))
                     return
-                source = filepath.read_text(encoding="utf-8", errors="replace")
+                source = _read_python_source(filepath)
+            except OSError as exc:
+                # An in-scope source file that was never analysed (D6).
+                self._record_incomplete(rel, _os_error_reason(exc))
+                return
+            try:
                 tree = ast.parse(source, filename=str(filepath))
-            except (OSError, SyntaxError):
+            except (SyntaxError, ValueError) as exc:
+                # A file this interpreter cannot parse is lost evaluation, not
+                # a clean result (D1', DE-03): the file is broken, or the
+                # interpreter is older than its syntax; the reason says which.
+                self._record_incomplete(rel, syntax_reason(exc, source))
+                return
+            except (RecursionError, MemoryError) as exc:
+                # Valid source too deep or too large for the parser: the
+                # file was never analysed (redteam-py-01).
+                self._record_incomplete(rel, f"parse: {_exc_reason(exc)}")
                 return
 
         # F-H5b: isolate the per-file AST walk. A crafted file (deeply nested
@@ -328,20 +525,28 @@ class ASTAnalyzer:
             tree,
             route_table=getattr(self, "_routes_by_func", None),
             call_index=call_index,
+            project_mentions=getattr(self, "_project_mentions", None),
         )
+        #
+        # The rest of the file is lost evaluation, not a clean result: it is
+        # recorded, and `run` raises `AnalysisIncomplete` once every other
+        # file is done, so the injection check is not reported `ok`
+        # (redteam-py-01).
         try:
             visitor.visit(tree)
-        except RecursionError:
+        except RecursionError as exc:
             print(
                 f"[fendix-engine] ast_analyzer: recursion limit hit on {rel}; "
                 "skipping rest of file",
                 file=sys.stderr,
             )
+            self._record_incomplete(rel, _exc_reason(exc))
         except Exception as exc:  # noqa: BLE001 — never let one file abort the pass
             print(
                 f"[fendix-engine] ast_analyzer: failed to analyze {rel}: {exc}",
                 file=sys.stderr,
             )
+            self._record_incomplete(rel, _exc_reason(exc))
 
     # ------------------------------------------------------------------
     # JavaScript heuristic analysis
@@ -350,18 +555,43 @@ class ASTAnalyzer:
     def _analyze_js_heuristic(
         self, filepath: Path, rel: str, emit_fn: Callable[[dict], None]
     ) -> None:
-        """Apply regex heuristics to a JavaScript/TypeScript file."""
+        """Apply regex heuristics to a JavaScript/TypeScript file.
+
+        A file is left out of scope only when its content shows it is not the
+        project's own code (`file_evidence`: a generator header, a well-known
+        library's banner, or measured minification), and is then listed by
+        name (`scope_note`). It is never skipped for its name, and no line is
+        skipped for its length: a hand-written line of 900 characters is
+        scanned like any other (D6'). Any file over the size cap that nothing
+        in it shows to be generated, or one that cannot be read, is an
+        in-scope source file that was never checked (D6)."""
         try:
-            if filepath.stat().st_size > _MAX_FILE_BYTES:
+            size = filepath.stat().st_size
+            if size > _MAX_FILE_BYTES:
+                why = file_evidence(
+                    _read_head(filepath, 65536),
+                    size=size,
+                    tail=_read_tail(filepath, size),
+                )
+                if why:
+                    self.excluded.append((rel, f"{why}, over the 1 MB cap"))
+                else:
+                    self._record_incomplete(rel, _size_reason(size))
                 return
             source = filepath.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except OSError as exc:
+            self._record_incomplete(rel, _os_error_reason(exc))
+            return
+
+        # Within the cap only minified and vendored evidence leaves a file
+        # out, as in the Go analysers: a generated file is still scanned.
+        why = file_evidence(source, size=size, under_cap=True)
+        if why:
+            self.excluded.append((rel, why))
             return
 
         lines = source.splitlines()
         for lineno, line in enumerate(lines, start=1):
-            if len(line) > 500:  # skip minified lines
-                continue
             for pat_id, title, pattern, severity, confidence, cwe in _JS_PATTERNS:
                 if pattern.search(line):
                     if pat_id == "JS_SQL_TEMPLATE" and _js_template_only_constants(
@@ -417,6 +647,57 @@ _JS_FIX: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
+class _ProjectMentions:
+    """Which project files can reach a name of another module, read on demand
+    and cached per name (redteam2-r001-01): a file that imports it
+    (`from app import ALLOWED`, also inside a parenthesised import, or a
+    star import with the name in the file), reads it as an attribute
+    (`app.ALLOWED`) or names it in a string (`getattr(app, "ALLOWED")`).
+    Text-level, so it can only over-count (a comment, an unrelated module's
+    attribute of the same name), which makes an allowlist count less."""
+
+    def __init__(self, files: list[tuple[Path, str]]) -> None:
+        self._files = list(files)
+        self._reached: dict[str, frozenset[str]] = {}
+
+    def reached_from_outside(self, name: str, rel: str) -> bool:
+        reached = self._reached.get(name)
+        if reached is None:
+            n = re.escape(name)
+            word = re.compile(rf"\b{n}\b")
+            reach = re.compile(
+                rf"\.\s*{n}\b|\bimport\b[^\n]*\b{n}\b|\bimport\s*\([^)]*\b{n}\b|['\"]{n}['\"]"
+            )
+            star = re.compile(r"\bimport\s+\*")
+            found = set()
+            for path, other in self._files:
+                try:
+                    text = _read_python_source(path)
+                except OSError:
+                    found.add(other)  # unknown: may reach it
+                    continue
+                if not word.search(text):
+                    continue
+                if reach.search(text) or star.search(text):
+                    found.add(other)
+            reached = self._reached[name] = frozenset(found)
+        return bool(reached - {rel})
+
+
+def _size_reason(size: int) -> str:
+    """The reason for an in-scope source file skipped for size (D6)."""
+    return f"skipped: over the 1 MB size cap ({size} bytes)"
+
+
+def _exc_reason(exc: BaseException) -> str:
+    """A short reason for an aborted analysis (`AnalysisIncomplete`)."""
+    if isinstance(exc, RecursionError):
+        return "recursion limit"
+    if isinstance(exc, MemoryError):
+        return "out of memory"
+    return f"internal error: {type(exc).__name__}"
+
+
 def _file_visitor(
     source: str,
     rel: str,
@@ -426,6 +707,7 @@ def _file_visitor(
     route_table=None,
     call_index=None,
     primed: bool = False,
+    project_mentions: _ProjectMentions | None = None,
 ) -> _PythonSecurityVisitor:
     """The visitor for one file: `_analyze_python` walks it, and the project
     call index (Task 3.8) asks a caller file's visitor questions without
@@ -440,6 +722,7 @@ def _file_visitor(
         call_index=call_index,
     )
     visitor._module_root = tree  # enable 1-hop interprocedural call-site index
+    visitor._project_mentions = project_mentions
     if primed:
         visitor._prime()
     return visitor
@@ -474,6 +757,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # function body. Top of stack is the innermost function being
         # visited.
         self._func_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        # (function, name) -> its reaching definitions (`_guard_covers`). The
+        # function is kept in the value so its id is never reused while cached.
+        self._reaching_defs_cache: dict[tuple[int, str], tuple[ast.AST, ReachingDefs]] = {}
         # Maps local alias → canonical module name, populated by visit_Import.
         # Lets `import pickle as p; p.loads(data)` be detected despite the alias.
         self._module_aliases: dict[str, str] = {}
@@ -501,6 +787,19 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             dict[ast.AST, list[tuple[tuple[int, int], str, ast.AST]]] | None
         ) = None
         self._interproc_depth: int = 0
+        # R-002: the class of the sink whose taint chain is being collected
+        # (`_SINK_CLASSES`), and that sink's argument. The helper hop reads
+        # both to apply only the caller-side sanitisers that neutralise THIS
+        # sink class (`_caller_arg_is_sanitised`); "other" honours only the
+        # sink-agnostic allowlist sanitisers.
+        self._sink_class: str = "other"
+        self._sink_arg: ast.AST | None = None
+        # R-001: module-level allowlist names → bound once and never mutated
+        # (`_allowlist_name_is_stable`), computed on first need.
+        self._allowlist_stable: dict[str, bool] = {}
+        # The project's other files, for a module-level allowlist another
+        # file may change (`_allowlist_shared`); set by `_file_visitor`.
+        self._project_mentions: _ProjectMentions | None = None
         # Task 3.8: the project's call index (call_index.ProjectCallIndex), for
         # a helper's callers in other files, and this file's dotted module,
         # the name those callers import it by. None: the hop stays in the
@@ -515,6 +814,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # `from pickle import loads as pl; pl(x)` resolve back to os.system /
         # pickle.loads despite the call being a bare ast.Name (audit #8-13).
         self._from_imports: dict[str, tuple[str, str]] = {}
+        # The modules of `from <module> import *`, which can supply any name
+        # that module defines (`_star_imported_never_returns`).
+        self._star_imports: list[str] = []
         # `os.path.join(...)` calls written as the direct argument of a path
         # resolution (`realpath(join(...))`, `Path(join(...)).resolve()`),
         # mapped to that resolving call. `_note_resolved_join` records them
@@ -798,7 +1100,13 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # ------------------------------------------------------------------
 
     def _collect_taint_chain(
-        self, sink_arg: ast.AST, sink_lineno: int, sink_expr: str, extra_source=None
+        self,
+        sink_arg: ast.AST,
+        sink_lineno: int,
+        sink_expr: str,
+        extra_source=None,
+        *,
+        sink_class: str = "other",
     ) -> list[dict] | None:
         """Walk back from ``sink_arg`` through scope assignments to a request source.
 
@@ -809,8 +1117,26 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         BinOp containing Name ``q``, then ``q`` -> Call referencing
         ``request.args``.
 
+        ``sink_class`` (one of `_SINK_CLASSES`) names what the sink is
+        vulnerable to. The one-hop helper proof applies only the caller-side
+        sanitisers of that class (R-002): an escaped value still proves a
+        shell, SQL, path, SSRF or redirect sink in the helper.
+
         Each link is ``{"file": str, "line": int, "expr": str}``.
         """
+        saved = self._sink_class, self._sink_arg
+        self._sink_class, self._sink_arg = sink_class, sink_arg
+        try:
+            return self._collect_taint_chain_for(
+                sink_arg, sink_lineno, sink_expr, extra_source
+            )
+        finally:
+            self._sink_class, self._sink_arg = saved
+
+    def _collect_taint_chain_for(
+        self, sink_arg: ast.AST, sink_lineno: int, sink_expr: str, extra_source
+    ) -> list[dict] | None:
+        """`_collect_taint_chain` once the sink class is in force."""
         # Inline case: the sink's argument is itself a request-input
         # reference (no intermediate variables). The chain is two links:
         # source @ sink-lineno → sink @ sink-lineno.
@@ -1154,18 +1480,68 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         same code written inline would not.
 
         When no caller in this file proves the parameter, the callers in other
-        files are asked (`_cross_file_caller_link`, Task 3.8)."""
+        files are asked (`_cross_file_caller_link`, Task 3.8).
+
+        The caller-side sanitisers are those of the helper's sink class
+        (`_hop_sink_class`, R-002)."""
+        hop_class = self._hop_sink_class(param_name)
         for call, scope, arg in self._caller_args(param_name):
             self._interproc_depth += 1
             try:
-                prefix = self._caller_arg_chain(call, scope, arg, extra_source, depth)
+                prefix = self._caller_arg_chain(
+                    call, scope, arg, extra_source, depth, sink_class=hop_class
+                )
             finally:
                 self._interproc_depth -= 1
             if prefix is not None:
                 return prefix
-        return self._cross_file_caller_link(param_name)
+        return self._cross_file_caller_link(param_name, hop_class)
 
-    def _cross_file_caller_link(self, param_name: str) -> list[dict] | None:
+    def _hop_sink_class(self, param_name: str) -> str:
+        """The sink class the caller's argument for `param_name` is judged
+        under: the class of the sink being traced, except that a URL sink
+        whose argument does not START with the parameter (`requests.get(
+        "https://" + url)`) is "url_part". The URL-host sanitisers (a netloc
+        allowlist guard, a constant scheme and host) describe a whole URL
+        string; embedded after other text it can name another host
+        (`evil.com://api.example.com/x` has netloc api.example.com)."""
+        if self._sink_class != "url":
+            return self._sink_class
+        if self._sink_arg is not None and self._expr_leads_with(
+            self._sink_arg, param_name, frozenset()
+        ):
+            return "url"
+        return "url_part"
+
+    def _expr_leads_with(
+        self, expr: ast.AST, name: str, seen: frozenset[str], _depth: int = 0
+    ) -> bool:
+        """True when the value of `expr` starts with the whole value of the
+        Name `name`: the Name itself, a local bound to such an expression, the
+        leftmost operand of a `+`, or the first part of an f-string."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(expr, ast.Name):
+            if expr.id == name:
+                return True
+            if expr.id in seen:
+                return False
+            bound = self._scope_binding(expr.id)
+            return bound is not None and self._expr_leads_with(
+                bound, name, seen | {expr.id}, _depth + 1
+            )
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            return self._expr_leads_with(expr.left, name, seen, _depth + 1)
+        if isinstance(expr, ast.JoinedStr) and expr.values:
+            first = expr.values[0]
+            return isinstance(first, ast.FormattedValue) and self._expr_leads_with(
+                first.value, name, seen, _depth + 1
+            )
+        return False
+
+    def _cross_file_caller_link(
+        self, param_name: str, sink_class: str = "other"
+    ) -> list[dict] | None:
         """Task 3.8: the one-hop chain prefix a caller in ANOTHER file proves
         for parameter `param_name` of the innermost enclosing function, or
         None. The project call index (`self._call_index`) holds the calls that
@@ -1201,18 +1577,26 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             param_name,
             first=True,
             skip_template_sources=self._skip_template_sources,
+            sink_class=sink_class,
         )
         return [asdict(links[0])] if links else None
 
     def _caller_arg_chain(
-        self, call: ast.Call, scope: ast.AST, arg: ast.AST, extra_source, depth: int
+        self,
+        call: ast.Call,
+        scope: ast.AST,
+        arg: ast.AST,
+        extra_source,
+        depth: int,
+        *,
+        sink_class: str = "other",
     ) -> list[dict] | None:
         """The chain prefix one caller's argument proves, or None: the
         argument as an inline source, or traced through the caller's bindings
         before the call (to a request expression, or to a request-carrying
         parameter of a caller that is a route handler) and followed by the
-        call itself. None as well when a sanitiser accepts the argument in
-        the caller."""
+        call itself. None as well when a sanitiser of the helper's sink class
+        (`sink_class`) accepts the argument in the caller."""
         if self._is_source(arg, extra_source):
             prefix = [self._link(call.lineno, _ast_expr_text(arg))]
         else:
@@ -1227,7 +1611,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             if prefix is None:
                 return None
             prefix = prefix + [self._link(call.lineno, _ast_expr_text(call))]
-        if self._caller_arg_is_sanitised(scope, call, arg):
+        if self._caller_arg_is_sanitised(scope, call, arg, sink_class):
             return None
         return prefix
 
@@ -1249,27 +1633,51 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         return source
 
     def _caller_arg_is_sanitised(
-        self, scope: ast.AST, call: ast.Call, arg: ast.AST
+        self, scope: ast.AST, call: ast.Call, arg: ast.AST, sink_class: str = "other"
     ) -> bool:
-        """True when any sanitiser a direct sink honours accepts `arg` where
-        the caller passes it: a dict/collection allowlist lookup, an escaping
-        call, a safe URL builder, a membership guard or a `urlparse(...).netloc`
-        allowlist guard (`_arg_is_sanitised` with `url_sink`), a fully escaped
-        HTML expression (`_expr_is_fully_escaped`), path containment
-        (`_path_is_contained`), or a URL whose scheme and host are fixed
-        (`_url_authority_is_constant`).
+        """True when a sanitiser that neutralises the helper's sink class
+        (`sink_class`, see `_SINK_CLASSES`) accepts `arg` where the caller
+        passes it, exactly as the direct sink of that class would:
 
-        The hop does not know which sink the helper holds, so it takes the
-        union of every sink's sanitisers: a sanitised argument leaves the
-        helper's finding unproven rather than proven. Guards must dominate the
-        call, exactly as they must dominate a sink."""
+          * every class: a constant-collection lookup or a dominating
+            membership guard (the value is one of a set of constants);
+          * "html": an escaping call (`_is_escaped_call`), a safe URL builder,
+            or a fully escaped expression (`_expr_is_fully_escaped`);
+          * "url": a safe URL builder, a `urlparse(...).netloc` allowlist guard
+            or a URL whose scheme and host are fixed
+            (`_url_authority_is_constant`); "url_part" (the helper embeds the
+            value after other text) only a safe URL builder;
+          * "path" / "path_strict": path containment (`_path_is_contained`),
+            basename-reduced values only for "path";
+          * "shell": `shlex.quote` (`_is_shell_quoted`).
+
+        R-002: the hop used to take the union of every sink's sanitisers, so
+        `html.escape` or `basename` in the caller hid a command injection in
+        the helper. Escaping neutralises markup only; `basename` and
+        `secure_filename` remove directory structure only; URL-encoding does
+        not fix a URL's host; `shlex.quote` protects a shell word only.
+
+        Guards must dominate the call, exactly as they must dominate a sink."""
         with self._caller_context(scope, call):
-            return (
-                self._arg_is_sanitised(arg, call.lineno, url_sink=True)
-                or self._expr_is_fully_escaped(arg)
-                or self._path_is_contained(arg, call.lineno)
-                or self._url_authority_is_constant(arg)
-            )
+            if sink_class == "url":
+                return self._arg_is_sanitised(
+                    arg, call.lineno, url_sink=True
+                ) or self._url_authority_is_constant(arg)
+            if sink_class == "html":
+                return self._arg_is_sanitised(
+                    arg, call.lineno, sink="html"
+                ) or self._expr_is_fully_escaped(arg)
+            if sink_class in ("path", "path_strict"):
+                return self._arg_is_sanitised(
+                    arg, call.lineno, sink="path"
+                ) or self._path_is_contained(
+                    arg, call.lineno, file_sink=sink_class == "path"
+                )
+            if sink_class == "shell":
+                return self._arg_is_sanitised(
+                    arg, call.lineno, sink="shell"
+                ) or self._is_shell_quoted(arg)
+            return self._arg_is_sanitised(arg, call.lineno, sink=sink_class)
 
     @contextmanager
     def _caller_context(self, scope: ast.AST, call: ast.Call):
@@ -1402,7 +1810,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return isinstance(assigned, (ast.Dict, ast.Set, ast.List, ast.Tuple))
         return False
 
-    def _name_is_membership_guarded(self, name: str, sink_line: int) -> bool:
+    def _name_is_membership_guarded(
+        self, name: str, sink_line: int, use: ast.AST | None = None
+    ) -> bool:
         """Return True if the innermost enclosing FunctionDef body contains an
         early-return guard of the shape ``if <name> not in <const_collection>:
         return/raise/abort`` that DOMINATES the sink at ``sink_line``.
@@ -1453,26 +1863,24 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 )
             if checked_name != name or collection is None:
                 continue
-            if not self._collection_is_literal(collection):
+            # R-001: members must be constants of an allowlist nothing
+            # rebinds or mutates, and the guarded name must keep the value it
+            # was checked with: no definition that reaches the use is one the
+            # guard did not see (`_guard_covers`).
+            if not self._allowlist_is_constant(collection):
                 continue
-            # Check the if-body ends control flow — return/raise/abort
-            if any(
-                isinstance(s, (ast.Return, ast.Raise))
-                or (
-                    isinstance(s, ast.Expr)
-                    and isinstance(s.value, ast.Call)
-                    and (
-                        (
-                            isinstance(s.value.func, ast.Name)
-                            and s.value.func.id in {"abort", "exit"}
-                        )
-                        or (
-                            isinstance(s.value.func, ast.Attribute)
-                            and s.value.func.attr in {"abort", "exit"}
-                        )
-                    )
-                )
-                for s in stmt.body
+            if not self._guard_covers(
+                name, _loads_of(stmt.test, name), use, (stmt.lineno, stmt.col_offset)
+            ):
+                continue
+            # The rejecting body must END control flow, proven (return, raise
+            # or a call known never to return: `_body_ends_control_flow`), and
+            # the sink must lie after it: a sink inside the guard's own body
+            # runs exactly when the value is NOT in the allowlist
+            # (redteam4-py-01).
+            if (
+                self._body_ends_control_flow(stmt.body)
+                and stmt.body[-1].end_lineno < sink_line
             ):
                 return True
         return False
@@ -1511,7 +1919,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     #     `evil.com://api.example.com/x` has netloc api.example.com.
     _URL_PARSE_CALL_NAMES = frozenset({"urlparse", "urlsplit"})
 
-    def _url_host_is_allowlisted(self, name: str, sink_line: int) -> bool:
+    def _url_host_is_allowlisted(
+        self, name: str, sink_line: int, use: ast.AST | None = None
+    ) -> bool:
         """Return True if the innermost enclosing function body contains a
         DOMINATING early-exit guard that rejects `name` unless its parsed
         authority is in a literal collection::
@@ -1532,20 +1942,36 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         inside the rejecting branch itself is not suppressed. The collection
         must be literal for the same reason as there: an allowlist read from
         the environment or a call cannot be proven bounded.
-        """
-        return self._has_dominating_exit_guard(
-            sink_line,
-            lambda test: self._test_rejects_unlisted_host(test, name),
-            before_sink="ends",
-        )
 
-    def _test_rejects_unlisted_host(self, test: ast.AST, name: str) -> bool:
+        R-001: the guard bounds the VALUE it parsed, not the name. It counts
+        only for a use whose every reaching definition of `name` also reached
+        the parse (`_guard_covers`: a rebind after the parse, a stale
+        `p = urlparse(name)` with `name` re-read before the check, a rebind in
+        a loop around the sink), when a bound parse `p` has one binding in the
+        function, before the guard, and when every allowlist member is a
+        non-empty string constant of an allowlist nothing rebinds or mutates
+        (`_allowlist_is_constant`).
+        """
+
+        def covered(test: ast.AST) -> bool:
+            parses: list[ast.Call] = []
+            if not self._test_rejects_unlisted_host(test, name, parses):
+                return False
+            tested = [n for parse in parses for n in _loads_of(parse, name)]
+            return self._guard_covers(name, tested, use, (test.lineno, test.col_offset))
+
+        return self._has_dominating_exit_guard(sink_line, covered, before_sink="ends")
+
+    def _test_rejects_unlisted_host(
+        self, test: ast.AST, name: str, parses: list[ast.Call] | None = None
+    ) -> bool:
         """True when `test` is True whenever `name`'s parsed netloc is outside
         a literal collection: the `not in` comparison itself, or an `or` with
-        that comparison among its operands."""
+        that comparison among its operands. Each `urlparse(name)` call it finds
+        is appended to `parses`."""
         if isinstance(test, ast.BoolOp):
             return isinstance(test.op, ast.Or) and any(
-                self._test_rejects_unlisted_host(v, name) for v in test.values
+                self._test_rejects_unlisted_host(v, name, parses) for v in test.values
             )
         if not (
             isinstance(test, ast.Compare)
@@ -1557,67 +1983,462 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         host = test.left
         if not (isinstance(host, ast.Attribute) and host.attr == "netloc"):
             return False
-        if not self._is_url_parse_of(host.value, name):
+        parse = self._url_parse_of(host.value, name, test)
+        if parse is None:
             return False
-        allowed = test.comparators[0]
-        if not self._collection_is_literal(allowed):
+        # Every member a non-empty string constant: an allowlist holding ""
+        # admits every host-less URL, and one holding request data or any
+        # other non-constant value bounds nothing (R-001).
+        if not self._allowlist_is_constant(test.comparators[0], hosts=True):
             return False
-        # Check the RESOLVED collection (usually a module-level Name): an
-        # allowlist holding "" admits every host-less URL.
-        if isinstance(allowed, ast.Name):
-            allowed = self._resolve_binding(allowed)
-        members = allowed.keys if isinstance(allowed, ast.Dict) else allowed.elts
-        return not any(isinstance(m, ast.Constant) and m.value == "" for m in members)
+        if parses is not None:
+            parses.append(parse)
+        return True
 
-    def _is_url_parse_of(self, expr: ast.AST, name: str) -> bool:
-        """True when `expr` is `urlparse(name)` / `urlsplit(name)`, inline or
-        through a Name bound to that call in the scope chain."""
+    def _url_parse_of(
+        self, expr: ast.AST, name: str, test: ast.AST
+    ) -> ast.Call | None:
+        """The `urlparse(name)` / `urlsplit(name)` call the guard `test`
+        checks: `expr` itself, or the value of the Name `expr` when that is
+        its ONLY binding in the innermost function, a top-level assignment
+        before the guard. The scope chain would give the binding live at the
+        sink instead, which may be a later parse of another value."""
         if isinstance(expr, ast.Name):
-            expr = self._resolve_binding(expr)
+            if not self._func_stack:
+                return None
+            binding = self._sole_top_level_assign(self._func_stack[-1], expr.id)
+            if binding is None or binding.lineno >= test.lineno:
+                return None
+            expr = binding.value
         if not (isinstance(expr, ast.Call) and expr.args):
-            return False
+            return None
         fn = expr.func
         called = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
         if called not in self._URL_PARSE_CALL_NAMES:
-            return False
+            return None
         first = expr.args[0]
-        return isinstance(first, ast.Name) and first.id == name
+        if isinstance(first, ast.Name) and first.id == name:
+            return expr
+        return None
 
-    def _collection_is_literal(self, expr: ast.AST) -> bool:
-        """Return True if `expr` is a literal dict/set/list/tuple, or a
-        Name that resolves to one in the scope chain.
+    def _reaching_defs(self, name: str) -> ReachingDefs | None:
+        """The reaching definitions of `name` in the innermost function (cached
+        per function and name), or None outside a function."""
+        if not self._func_stack:
+            return None
+        func = self._func_stack[-1]
+        key = (id(func), name)
+        cached = self._reaching_defs_cache.get(key)
+        if cached is None:
+            cached = (func, ReachingDefs(func, name))
+            self._reaching_defs_cache[key] = cached
+        return cached[1]
+
+    def _guard_covers(
+        self,
+        name: str,
+        tested: list[ast.Name],
+        use: ast.AST | None,
+        guard_pos: tuple[int, int],
+        *,
+        only: ast.AST | None = None,
+    ) -> bool:
+        """The one rule for every guard on a name (redteam3-py-01): a guard
+        protects a use only if every definition of `name` that can supply the
+        use's value also reached the guard.
+
+        `tested` are the reads of `name` the guard checks (the operands of its
+        test, or of the `urlparse(name)` it checks); the definitions that reach
+        them are the values the guard actually tested. `use` is the read the
+        sink consumes (or an alias chain's read). A reassignment, an augmented
+        assignment, a decode, a concatenation, a loop or `with` target, a
+        walrus, an `except ... as` or a `del` between the guard and the use
+        puts a definition in the use's set that the guard never saw, and the
+        guard no longer counts. See `analyzers/reaching_defs.py`.
+
+        `only`, when given, is the one definition the guard must have tested
+        (the assignment that resolved the path, for a containment guard).
+
+        A name another scope can rebind (`global`/`nonlocal`) is never proven.
+        When the analysis never reached `use` (a read in another scope, or no
+        read given), the answer is the conservative one: nothing may bind the
+        name after the guard, anywhere in the function.
         """
-        if isinstance(expr, (ast.Dict, ast.Set, ast.List, ast.Tuple)):
+        rd = self._reaching_defs(name)
+        if rd is None or rd.volatile or not tested:
+            return False
+        tested_defs: frozenset = frozenset()
+        for node in tested:
+            reached = rd.defs_at(node)
+            if reached is None:
+                return False
+            tested_defs |= reached
+        if not tested_defs or (only is not None and tested_defs != {only}):
+            return False
+        used = rd.defs_at(use) if use is not None else None
+        if used is None:
+            # A read in a scope the analysis does not enter (a lambda, a nested
+            # def: where the name may be a parameter of its own), or none given.
+            # Nested scopes count here, which can only over-count.
+            for node in _stores_of(rd.func, name):
+                pos = (getattr(node, "lineno", None), getattr(node, "col_offset", 0))
+                if pos[0] is None or pos > guard_pos:
+                    return False
             return True
+        return used <= tested_defs
+
+    # Methods that change a set, list or dict in place.
+    # The methods that can put a new member into a set, list or dict.
+    _COLLECTION_MUTATORS = frozenset(
+        {
+            "add",
+            "update",
+            "append",
+            "extend",
+            "insert",
+            "setdefault",
+            "__setitem__",
+            "__ior__",
+            "__iadd__",
+            "__ixor__",
+            "symmetric_difference_update",
+        }
+    )
+
+    def _allowlist_is_constant(self, expr: ast.AST, *, hosts: bool = False) -> bool:
+        """True when `expr` is a literal set, list, tuple or dict (its keys)
+        whose every member is a constant, written inline or as a Name with ONE
+        binding in the module that nothing mutates (`.add(...)`, `|=`,
+        `ALLOWED[k] = ...`). With `hosts`, every member must be a non-empty
+        string. Otherwise a member may also be a Name bound to a constant or
+        a dotted attribute (`Color.RED`) that reads no request input.
+
+        A literal holding request data (`{request.args["host"]}`), an
+        allowlist extended at run time and one rebound anywhere bound
+        nothing the analyzer can see (R-001)."""
         if isinstance(expr, ast.Name):
-            for scope in reversed(self._scopes):
-                if expr.id in scope:
-                    return isinstance(
-                        scope[expr.id], (ast.Dict, ast.Set, ast.List, ast.Tuple)
-                    )
+            if not self._allowlist_name_is_stable(expr.id):
+                return False
+            expr = self._resolve_binding(expr)
+        if isinstance(expr, ast.Dict):
+            if any(k is None for k in expr.keys):  # `**other`
+                return False
+            members = list(expr.keys)
+        elif isinstance(expr, (ast.Set, ast.List, ast.Tuple)):
+            members = list(expr.elts)
+        else:
+            return False
+        return all(self._allowlist_member_is_constant(m, hosts) for m in members)
+
+    def _allowlist_member_is_constant(self, member: ast.AST, hosts: bool) -> bool:
+        if isinstance(member, ast.Constant):
+            if hosts:
+                return isinstance(member.value, str) and member.value != ""
+            return True
+        if hosts:
+            return False
+        if isinstance(member, ast.Name):
+            return isinstance(self._resolve_binding(member), ast.Constant)
+        if isinstance(member, ast.Attribute):
+            node: ast.AST = member
+            while isinstance(node, ast.Attribute):
+                node = node.value
+            if not isinstance(node, ast.Name) or _references_request_input(member):
+                return False
+            # `Color.RED` names a module-level class or module. An attribute
+            # of a parameter or a local (`self.mode`) is run-time state.
+            if self._func_stack:
+                func = self._func_stack[-1]
+                params = {a.arg for a in ast.walk(func.args) if isinstance(a, ast.arg)}
+                if node.id in params or _stores_of(func, node.id):
+                    return False
+            return True
         return False
 
+    def _allowlist_name_is_stable(self, name: str) -> bool:
+        """True when the module binds `name` exactly once (counting every
+        scope, which can only over-count), never mutates it in place, and,
+        when it is bound to a mutable collection, never lets the collection
+        escape under another name (`_allowlist_escapes`, redteam-r001-01)."""
+        cache = self._allowlist_stable
+        if name in cache:
+            return cache[name]
+        # An alias cycle (`A = B` read while judging B) is not stable.
+        cache[name] = False
+        root = self._module_root
+        stable = False
+        if root is not None:
+            binds = 0
+            mutated = False
+            bound_value: ast.AST | None = None
+            for node in ast.walk(root):
+                if isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+                    isinstance(t, ast.Name) and t.id == name
+                    for t in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                ):
+                    bound_value = node.value
+                if _binds_name(node, name):
+                    binds += 1
+                elif isinstance(node, ast.Call):
+                    fn = node.func
+                    mutated = mutated or (
+                        isinstance(fn, ast.Attribute)
+                        and fn.attr in self._COLLECTION_MUTATORS
+                        and isinstance(fn.value, ast.Name)
+                        and fn.value.id == name
+                    )
+                elif isinstance(node, ast.AugAssign):
+                    mutated = mutated or (
+                        isinstance(node.target, ast.Name) and node.target.id == name
+                    )
+                elif isinstance(node, ast.Subscript) and not isinstance(node.ctx, ast.Load):
+                    mutated = mutated or (
+                        isinstance(node.value, ast.Name) and node.value.id == name
+                    )
+            stable = binds == 1 and not mutated
+            if stable and isinstance(bound_value, (ast.Set, ast.List, ast.Dict, ast.Name)):
+                stable = not self._allowlist_escapes(name) and not self._allowlist_shared(name)
+        cache[name] = stable
+        return stable
+
+    def _allowlist_shared(self, name: str) -> bool:
+        """True when another project file may reach the module-level
+        collection `name` and change it: it imports the name or reads it as
+        an attribute (`from app import ALLOWED`, `app.ALLOWED.add(h)`), which
+        this file's own analysis cannot see (redteam2-r001-01). Without the
+        project's file list (`_ProjectMentions`) nothing is known, so the
+        collection counts as shared."""
+        mentions = self._project_mentions
+        if mentions is None:
+            return True
+        return mentions.reached_from_outside(name, self._rel)
+
+    # Calls that read a collection argument without keeping or changing it.
+    _READ_ONLY_COLLECTION_CALLS = frozenset(
+        {
+            "len", "sorted", "list", "tuple", "set", "frozenset", "dict", "str", "repr",
+            "print", "any", "all", "iter", "min", "max", "sum", "enumerate", "reversed",
+            "isinstance", "bool", "hash", "format", "map", "filter", "zip",
+        }
+    )
+
+    def _allowlist_escapes(self, name: str) -> bool:
+        """True when a read of the module-level collection `name` hands the
+        collection itself to code that can change it, which the
+        name-based mutation check cannot see (redteam-r001-01): an alias
+        that is mutated or escapes in turn (`A2 = ALLOWED; A2.add(x)`), an
+        argument to a call that is not a known read-only builtin, a value
+        stored into another object or container, returned or yielded.
+
+        Reads that keep no reference are fine: a membership or other
+        comparison, an attribute read (`ALLOWED.copy()`; the mutating
+        methods are counted as mutation), a subscript read, iteration,
+        truthiness, formatting, `", ".join(ALLOWED)`."""
+        root = self._module_root
+        if root is None:
+            return True
+        for node in ast.walk(root):
+            if not (isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load)):
+                continue
+            parent = self._parent_of(node)
+            if isinstance(
+                parent,
+                (ast.Compare, ast.FormattedValue, ast.BoolOp, ast.UnaryOp, ast.Expr),
+            ):
+                continue
+            if isinstance(parent, ast.Attribute) and parent.value is node:
+                # A mutating method read without being called right away is a
+                # bound method that changes the collection wherever it goes
+                # (`f = ALLOWED.add; f(h)`, redteam2-r001-01). Called in
+                # place, `_allowlist_name_is_stable` counts it as mutation.
+                grand = self._parent_of(parent)
+                if parent.attr in self._COLLECTION_MUTATORS and not (
+                    isinstance(grand, ast.Call) and grand.func is parent
+                ):
+                    return True
+                continue
+            if isinstance(parent, ast.Subscript) and parent.value is node:
+                continue
+            if isinstance(parent, (ast.If, ast.While, ast.IfExp, ast.Assert)) and parent.test is node:
+                continue
+            if isinstance(parent, (ast.For, ast.AsyncFor, ast.comprehension)) and parent.iter is node:
+                continue
+            if isinstance(parent, ast.Call) and any(a is node for a in parent.args):
+                fn = parent.func
+                if (
+                    isinstance(fn, ast.Name)
+                    and fn.id in self._READ_ONLY_COLLECTION_CALLS
+                    and fn.id not in self._file_defined_names()
+                    and fn.id not in self._from_imports
+                ):
+                    continue
+                if (
+                    isinstance(fn, ast.Attribute)
+                    and fn.attr == "join"
+                    and isinstance(fn.value, ast.Constant)
+                    and isinstance(fn.value.value, str)
+                ):
+                    continue
+                return True
+            if (
+                isinstance(parent, ast.Assign)
+                and parent.value is node
+                and len(parent.targets) == 1
+                and isinstance(parent.targets[0], ast.Name)
+            ):
+                if self._allowlist_name_is_stable(parent.targets[0].id):
+                    continue
+                return True
+            return True
+        return False
+
+    # The sink classes a sanitiser is typed by (R-002 / R-058): what the sink
+    # is vulnerable to. "url_part" is a URL sink whose argument embeds the
+    # value after other text (see `_hop_sink_class`). "other" (SSTI, LLM
+    # prompts, JWT, weak hashes, ...) honours only the sanitisers that bound a
+    # value to constants.
+    #
+    # "path" is a path used as a FILE whose request value is the whole path
+    # or the last, sole request-carrying part of a join: a basename-reduced
+    # caller argument contains it. "path_strict" is every other path use (a
+    # directory, a part followed by more parts, a use not known to reject a
+    # directory): only `secure_filename` contains it, since `basename("..")`
+    # is ".." (redteam-r006-01).
+    _SINK_CLASSES = frozenset(
+        {"html", "url", "url_part", "path", "path_strict", "shell", "sql", "other"}
+    )
+
     # Escaping/encoding neutralizers that make a value safe to render (#24).
-    _ESCAPE_FUNCS = frozenset({"escape", "clean", "quote", "quote_plus", "escapejs"})
+    # HTML sinks only (R-058): none of them fixes a URL's host or removes a
+    # path's directory structure or a shell's metacharacters.
+    #
+    # Resolved through the file's imports (`_callee_qualname`), never on the
+    # terminal name (redteam-r058-01): `shlex.quote`, `pipes.quote` and
+    # `re.escape` leave `<` and `>` alone, and a project's own `escape()` or
+    # `clean()` may return its argument unchanged. `urllib.parse.quote`
+    # percent-encodes `<>"'&` unless its `safe=` set keeps them
+    # (`_URL_QUOTE_ESCAPES`). `markupsafe.Markup(x)` marks a value safe
+    # without escaping it, so it is not here.
+    _HTML_ESCAPES = frozenset(
+        {
+            "html.escape",
+            "cgi.escape",
+            "markupsafe.escape",
+            "markupsafe.escape_silent",
+            "markupsafe.Markup.escape",
+            "jinja2.escape",
+            "jinja2.utils.escape",
+            "jinja2.Markup.escape",
+            "flask.escape",
+            "werkzeug.escape",
+            "werkzeug.utils.escape",
+            "django.utils.html.escape",
+            "django.utils.html.conditional_escape",
+            "django.utils.html.escapejs",
+            "django.template.defaultfilters.escape",
+            "django.template.defaultfilters.force_escape",
+            "django.template.defaultfilters.escapejs",
+            "bleach.clean",
+            "nh3.clean",
+        }
+    )
+    _URL_QUOTE_ESCAPES = frozenset({"urllib.parse.quote", "urllib.parse.quote_plus"})
+    # Escapes with a `quote` flag that decides whether `"` and `'` are
+    # escaped, and the flag's default.
+    _QUOTE_FLAG_ESCAPES: Mapping[str, bool] = {"html.escape": True, "cgi.escape": False}
+    # The bleach sanitiser classes whose instances' `.clean(x)` escapes.
+    _HTML_CLEANER_CLASSES = frozenset({"bleach.Cleaner", "bleach.sanitizer.Cleaner"})
+
+    # Modules whose `quote` makes a value one shell word.
+    _SHELL_QUOTE_MODULES = frozenset({"shlex", "pipes"})
+
+    def _is_html_escape_call(self, call: ast.Call) -> bool:
+        """True when `call` escapes markup (see `_HTML_ESCAPES`)."""
+        name = self._callee_qualname(call.func)
+        if name in self._QUOTE_FLAG_ESCAPES:
+            # `html.escape(x, quote=False)` leaves `"` and `'` alone, so the
+            # value breaks out of a quoted attribute (redteam2-r058-01);
+            # `cgi.escape` does so by default. Only a literal true `quote`
+            # (or html.escape's default) escapes for every HTML context.
+            quote: ast.AST | None = call.args[1] if len(call.args) > 1 else None
+            for kw in call.keywords:
+                if kw.arg == "quote":
+                    quote = kw.value
+                elif kw.arg is None:  # `**opts` may carry `quote=`
+                    return False
+            if quote is None:
+                return self._QUOTE_FLAG_ESCAPES[name]
+            return isinstance(quote, ast.Constant) and quote.value is True
+        if name in self._HTML_ESCAPES:
+            return True
+        if name in self._URL_QUOTE_ESCAPES:
+            safe = call.args[1] if len(call.args) > 1 else None
+            for kw in call.keywords:
+                if kw.arg == "safe":
+                    safe = kw.value
+                elif kw.arg is None:  # `**opts` may carry `safe=`
+                    return False
+            if safe is None:
+                return True
+            if not isinstance(safe, ast.Constant) or not isinstance(safe.value, (str, bytes)):
+                return False
+            markup = "<>\"'&" if isinstance(safe.value, str) else b"<>\"'&"
+            return not any(c in safe.value for c in markup)
+        # `cleaner.clean(x)` on a `bleach.Cleaner(...)` instance.
+        fn = call.func
+        if isinstance(fn, ast.Attribute) and fn.attr == "clean":
+            recv = self._resolve_binding(fn.value) if isinstance(fn.value, ast.Name) else fn.value
+            return isinstance(recv, ast.Call) and (
+                self._callee_qualname(recv.func) in self._HTML_CLEANER_CLASSES
+            )
+        return False
+
+    def _is_shell_quoted(
+        self, expr: ast.AST, _resolving: frozenset[str] = frozenset()
+    ) -> bool:
+        """True when `expr` is `shlex.quote(x)` (or `pipes.quote`), written
+        through the module or as a bare `quote` imported from it, or a Name
+        bound to such a call. `urllib.parse.quote` is not: matched on the
+        module, never on the terminal name alone."""
+        if isinstance(expr, ast.Call):
+            fn = expr.func
+            if isinstance(fn, ast.Attribute):
+                return (
+                    fn.attr == "quote"
+                    and isinstance(fn.value, ast.Name)
+                    and self._module_aliases.get(fn.value.id, fn.value.id)
+                    in self._SHELL_QUOTE_MODULES
+                    and not self._name_is_shadowed(fn.value.id, fn.value)
+                )
+            if isinstance(fn, ast.Name):
+                origin = self._from_imports.get(fn.id)
+                return (
+                    origin is not None
+                    and origin[0] in self._SHELL_QUOTE_MODULES
+                    and origin[1] == "quote"
+                    and not self._name_is_shadowed(fn.id, fn)
+                )
+            return False
+        if isinstance(expr, ast.Name) and expr.id not in _resolving:
+            for scope in reversed(self._scopes):
+                if expr.id in scope:
+                    return self._is_shell_quoted(scope[expr.id], _resolving | {expr.id})
+        return False
 
     def _is_escaped_call(
         self, expr: ast.AST, _resolving: frozenset[str] = frozenset()
     ) -> bool:
-        """True if `expr` is a call to a recognized escaping/encoding function
-        (html.escape, markupsafe.escape, bleach.clean, urllib.parse.quote,
-        django escape/escapejs), or a Name bound to such a call (#24).
+        """True if `expr` is a call to a recognized HTML escaping function
+        (`_HTML_ESCAPES`: html.escape, markupsafe.escape, django's escape,
+        bleach.clean, ...; `urllib.parse.quote` with a safe set that keeps no
+        markup character), resolved through the file's imports, or a Name
+        bound to such a call (#24, redteam-r058-01).
 
         ``_resolving`` holds the Names being followed, so a binding that reads
         its own name (``html = html``) ends instead of recursing until the
         file is skipped at the recursion limit."""
         if isinstance(expr, ast.Call):
-            f = expr.func
-            name = (
-                f.attr
-                if isinstance(f, ast.Attribute)
-                else (f.id if isinstance(f, ast.Name) else "")
-            )
-            return name in self._ESCAPE_FUNCS
+            return self._is_html_escape_call(expr)
         if isinstance(expr, ast.Name):
             if expr.id in _resolving:
                 return False
@@ -1698,21 +2519,60 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     # achieved; that is the same discipline that keeps `.. in x` below gated on
     # control flow rather than on the mere presence of a comparison.
 
-    # Calls that reduce a value to a single path component. Each genuinely
-    # removes directory structure — basename() returns the trailing component,
-    # Werkzeug's secure_filename() strips separators and traversal sequences —
-    # so a traversal payload cannot survive them.
-    # Matched on the TERMINAL name so every import style is covered at once:
-    # `os.path.basename(x)`, `posixpath.basename(x)`, `from os.path import
-    # basename; basename(x)`, `werkzeug.utils.secure_filename(x)` and
-    # `from werkzeug.utils import secure_filename; secure_filename(x)`. Both
-    # names are unambiguous enough that a terminal match carries no realistic
-    # collision risk, unlike the `open`/`Path` receivers the sink predicate has
-    # to disambiguate.
-    _CONTAINMENT_CALL_NAMES = frozenset({"basename", "secure_filename"})
+    # Calls that reduce a value to a single path component, resolved through
+    # the file's imports (`_callee_qualname`, redteam-r006-02): a project's
+    # own `basename()` may return its argument unchanged.
+    #
+    #   * "secure": Werkzeug's `secure_filename()` strips separators and
+    #     traversal sequences (`secure_filename("..")` is ""), so it contains
+    #     a value anywhere in a path.
+    #   * "basename": `os.path.basename()` (also `posixpath`/`ntpath`) and
+    #     pathlib's `Path(x).name` drop the directories but KEEP `..`:
+    #     `os.path.basename("..")` is "..". `ROOT/<basename>` is at worst
+    #     `ROOT/..`, a directory, which a sink that reads or writes a FILE
+    #     rejects; anywhere else (a directory sink, a part followed by more
+    #     parts) it climbs out of ROOT (redteam-r006-01).
+    _SECURE_FILENAME_CALLS = frozenset({"werkzeug.utils.secure_filename", "werkzeug.secure_filename"})
+    _BASENAME_CALLS = frozenset({"os.path.basename", "posixpath.basename", "ntpath.basename"})
+    _PATHLIB_CTORS = frozenset({"Path", "PurePath", "PurePosixPath", "PureWindowsPath"})
+
+    def _containment_kind(self, expr: ast.AST) -> str | None:
+        """"secure", "basename" or None for `expr` itself (see above)."""
+        if isinstance(expr, ast.Call):
+            name = self._callee_qualname(expr.func)
+            if name in self._SECURE_FILENAME_CALLS:
+                return "secure"
+            if name in self._BASENAME_CALLS:
+                return "basename"
+            return None
+        if (
+            isinstance(expr, ast.Attribute)
+            and expr.attr == "name"
+            and isinstance(expr.value, ast.Call)
+        ):
+            # The RECEIVER must be a pathlib construction. Matching `.name` on
+            # any receiver is wrong and was actively harmful: Django's
+            # `request.FILES['f'].name` is the filename the UPLOADER chose.
+            fn = expr.value.func
+            if isinstance(fn, ast.Name) and fn.id in self._PATHLIB_CTORS:
+                if fn.id in self._file_defined_names() or self._name_is_shadowed(fn.id, fn):
+                    return None
+                origin = self._from_imports.get(fn.id)
+                if origin is None or origin == ("pathlib", fn.id):
+                    return "basename"
+                return None
+            name = self._callee_qualname(fn)
+            if name.startswith("pathlib.") and name.split(".", 1)[1] in self._PATHLIB_CTORS:
+                return "basename"
+        return None
 
     def _path_is_contained(
-        self, arg: ast.AST, sink_line: int, *, aliases_are_sole: bool = True
+        self,
+        arg: ast.AST,
+        sink_line: int,
+        *,
+        aliases_are_sole: bool = True,
+        file_sink: bool = True,
     ) -> bool:
         """Return True when `arg` cannot carry directory traversal into a
         filesystem sink, either because it was reduced to a bare filename or
@@ -1728,33 +2588,28 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         although it is raw input on the other branch. An asserted containment
         (`_path_containment_asserted`) holds for one binding of one name, so
         it is honoured only while every alias on the way is bound once.
+
+        A join (`os.path.join(ROOT, basename(name))`, `Path(ROOT) /
+        secure_filename(name)`) is contained when every part is a constant
+        or trusted base or is reduced to one path component
+        (`_path_join_uncontained_parts`, R-006).
+
+        `file_sink` is True when the path goes to a sink that reads or writes
+        a FILE (`open`, `send_file`, ...). Only then does a basename-reduced
+        value count (`_containment_kind`): `basename("..")` is "..", which a
+        directory sink climbs out with (redteam-r006-01).
         """
-        if isinstance(arg, ast.Call):
-            fn = arg.func
-            called = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
-            if called in self._CONTAINMENT_CALL_NAMES:
-                return True
-        # `Path(x).name` / `PurePath(x).name` — pathlib's single-component
-        # accessor, same effect as basename().
-        #
-        # The RECEIVER must be a pathlib construction. Matching `.name` on any
-        # receiver is wrong and was actively harmful: Django's
-        # `request.FILES['f'].name` is an attribute called `name` whose value is
-        # the filename the UPLOADER chose, i.e. the attacker-controlled input
-        # this rule exists to catch. A bare attribute name says nothing about
-        # what produced it.
-        if isinstance(arg, ast.Attribute) and arg.attr == "name":
-            recv = arg.value
-            if isinstance(recv, ast.Call):
-                fn = recv.func
-                ctor = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
-                if ctor in ("Path", "PurePath", "PurePosixPath", "PureWindowsPath"):
-                    return True
-            return False
+        if self._path_join_uncontained_parts(arg, sink_line, file_sink=file_sink) == []:
+            return True
+        kind = self._containment_kind(arg)
+        if kind == "secure" or (kind == "basename" and file_sink):
+            return True
         if isinstance(arg, ast.Name):
-            if self._name_is_traversal_rejected(arg.id, sink_line):
+            if self._name_is_traversal_rejected(arg.id, sink_line, arg):
                 return True
-            if aliases_are_sole and self._path_containment_asserted(arg.id, sink_line):
+            if aliases_are_sole and self._path_containment_asserted(
+                arg.id, sink_line, arg
+            ):
                 return True
             for scope in reversed(self._scopes):
                 if arg.id in scope:
@@ -1768,11 +2623,356 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                         or self._is_sole_binding(arg.id, bound)
                     )
                     return self._path_is_contained(
-                        bound, sink_line, aliases_are_sole=sole
+                        bound, sink_line, aliases_are_sole=sole, file_sink=file_sink
                     )
         return False
 
-    def _name_is_traversal_rejected(self, name: str, sink_line: int) -> bool:
+    # ─── joins whose request parts are one path component (R-006) ────
+    #
+    # `os.path.join(ROOT, os.path.basename(name))` cannot leave ROOT: the
+    # joined part has no separator, and a part without one cannot be absolute
+    # either, so the join does not restart at `/`. The same holds for
+    # `secure_filename(name)` and `Path(name).name`, and for pathlib's
+    # `Path(ROOT) / part` and `.joinpath(part)`. Every OTHER part must be a
+    # constant or a trusted, unproven base: `join(request.args["d"],
+    # basename(f))` is still traversal, through its directory.
+    #
+    # DELIBERATELY ABSENT as a contained part: a Name guarded by `".." in
+    # name` and an asserted containment. Neither stops an absolute part, and
+    # `join(ROOT, "/etc/passwd")` is `/etc/passwd`.
+
+    def _path_join_parts(self, expr: ast.AST, _depth: int = 0) -> list[ast.AST] | None:
+        """The parts of a path join, flattened: `os.path.join(a, b, ...)`,
+        `<pathlib path> / b` and `<pathlib path>.joinpath(b, ...)`; None
+        for anything else, or a join with a starred part or a keyword."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return None
+        if isinstance(expr, ast.Call):
+            if self._is_os_path_call(expr, "join"):
+                if len(expr.args) < 2 or expr.keywords:
+                    return None
+                if any(isinstance(a, ast.Starred) for a in expr.args):
+                    return None
+                return list(expr.args)
+            fn = expr.func
+            if (
+                isinstance(fn, ast.Attribute)
+                and fn.attr == "joinpath"
+                and expr.args
+                and not expr.keywords
+                and not any(isinstance(a, ast.Starred) for a in expr.args)
+                and self._is_pathlib_path(fn.value)
+            ):
+                head = self._path_join_parts(fn.value, _depth + 1) or [fn.value]
+                return head + list(expr.args)
+            return None
+        if (
+            isinstance(expr, ast.BinOp)
+            and isinstance(expr.op, ast.Div)
+            and self._is_pathlib_path(expr.left)
+        ):
+            head = self._path_join_parts(expr.left, _depth + 1) or [expr.left]
+            return head + [expr.right]
+        return None
+
+    def _path_join_uncontained_parts(
+        self, expr: ast.AST, sink_line: int, *, file_sink: bool = True
+    ) -> list[ast.AST] | None:
+        """For a path join (`_path_join_parts`), the parts that are not
+        contained, in order; an empty list when the join is contained. None
+        when `expr` is not a join. See `_join_part_statuses`."""
+        parts = self._path_join_parts(expr)
+        if parts is None:
+            return None
+        return [
+            p
+            for p, contained, _lenient in self._join_part_statuses(parts, sink_line, file_sink)
+            if not contained
+        ]
+
+    def _join_part_statuses(
+        self, parts: list[ast.AST], sink_line: int, file_sink: bool
+    ) -> list[tuple[ast.AST, bool, bool]]:
+        """`(part, contained, basename_ok)` for each part of a join.
+
+        A part is contained when it is a constant or trusted base
+        (`_join_part_is_trusted`) or `secure_filename`-reduced, or when it is
+        basename-reduced and `basename_ok`: the join goes to a FILE sink
+        (`file_sink`), the part is the LAST one, and every other part is a
+        trusted base or `secure_filename`-reduced. `ROOT/a/b/..` then names a
+        directory inside ROOT, which a file sink rejects. A basename part
+        anywhere else (`join(ROOT, basename(t), name)`, a directory sink)
+        climbs out of ROOT with `..` (redteam-r006-01)."""
+        kinds = [self._single_component_kind(p) for p in parts]
+        safe_other = [
+            kind == "secure" or (kind is None and self._join_part_is_trusted(p, sink_line))
+            for p, kind in zip(parts, kinds)
+        ]
+        out: list[tuple[ast.AST, bool, bool]] = []
+        last = len(parts) - 1
+        for i, (p, kind) in enumerate(zip(parts, kinds)):
+            basename_ok = (
+                file_sink
+                and i == last
+                and all(safe_other[j] for j in range(len(parts)) if j != i)
+            )
+            contained = safe_other[i] or (kind == "basename" and basename_ok)
+            out.append((p, contained, basename_ok))
+        return out
+
+    def _single_component_kind(self, expr: ast.AST, _depth: int = 0) -> str | None:
+        """The containment kind (`_containment_kind`) of `expr`, or of the
+        value a Name's ONLY binding in the enclosing function gives it. A
+        name bound on two branches (`safe = name` / `safe = basename(name)`)
+        has none: the scope chain records one binding, and the other may be
+        the raw value."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return None
+        if isinstance(expr, ast.Name):
+            if not self._func_stack:
+                return None
+            binding = self._sole_top_level_assign(self._func_stack[-1], expr.id)
+            if binding is None or binding.lineno >= getattr(expr, "lineno", 0):
+                return None
+            return self._single_component_kind(binding.value, _depth + 1)
+        return self._containment_kind(expr)
+
+    # ─── what a path value is used for (redteam-r006-01) ─────────────
+    #
+    # A basename-reduced part is contained only when the path is used as a
+    # FILE. These calls read, write or remove the file at their path argument
+    # and fail on a directory (`open("/srv/uploads/..")` is IsADirectoryError).
+    # `.save(path)` is Werkzeug's `FileStorage.save` (and PIL's
+    # `Image.save`), which open the path for writing.
+    _FILE_PATH_CALLS = frozenset({"os.remove", "os.unlink"})
+    # The `open` calls that open their path argument as a file and raise
+    # IsADirectoryError on a directory. `os.open` is not one.
+    _FILE_OPEN_CALLS = frozenset(
+        {"io.open", "codecs.open", "gzip.open", "bz2.open", "lzma.open", "builtins.open"}
+    )
+    _FILE_PATH_METHODS = frozenset({"save"})
+    # pathlib methods that open the file at the path.
+    _PATHLIB_FILE_METHODS = frozenset(
+        {"read_text", "read_bytes", "write_text", "write_bytes", "open", "unlink"}
+    )
+    # Calls that hand their argument's path on unchanged in kind: the result
+    # is judged by how IT is used.
+    _PATH_PASS_THROUGH = frozenset({"os.path.realpath", "os.path.abspath", "os.path.normpath"})
+    # Calls that only inspect a path; a use by one neither makes the path a
+    # file nor a directory.
+    _PATH_PREDICATES = frozenset(
+        {
+            "os.path.exists",
+            "os.path.lexists",
+            "os.path.isfile",
+            "os.path.isdir",
+            "os.path.islink",
+            "os.path.getsize",
+            "os.path.getmtime",
+            "os.path.getctime",
+            "os.path.getatime",
+        }
+    )
+
+    def _enclosing_scope_of(self, node: ast.AST) -> ast.AST | None:
+        """The def (or the module) whose body holds `node`."""
+        current = self._parent_of(node)
+        while current is not None and not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)
+        ):
+            current = self._parent_of(current)
+        return current if current is not None else self._module_root
+
+    def _same_file_def(self, func: ast.AST) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+        """The module-level def a bare-name call names, when the file defines
+        that name exactly once, at top level, and nothing rebinds it."""
+        root = self._module_root
+        if not isinstance(func, ast.Name) or root is None:
+            return None
+        if func.id in self._from_imports or self._scope_binding(func.id) is not None:
+            return None
+        defs = [
+            n
+            for n in root.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func.id
+        ]
+        if len(defs) != 1 or len(_stores_of(root, func.id)) != 1:
+            return None
+        return defs[0]
+
+    def _param_used_as_file(
+        self, func: ast.FunctionDef | ast.AsyncFunctionDef, param: str, _depth: int
+    ) -> bool:
+        """True when every read of parameter `param` in `func` is a file use
+        (`_use_is_file`), at least one of them is, and `func` never rebinds
+        it."""
+        if _stores_of(func, param):
+            return False
+        uses = [
+            n
+            for stmt in func.body
+            for n in ast.walk(stmt)
+            if isinstance(n, ast.Name) and n.id == param and isinstance(n.ctx, ast.Load)
+        ]
+        verdicts = [self._use_is_file(u, _depth + 1) for u in uses]
+        return any(v is True for v in verdicts) and all(v is not False for v in verdicts)
+
+    def _parent_of(self, node: ast.AST) -> ast.AST | None:
+        """`node`'s parent in the module tree (built once per file)."""
+        parents = getattr(self, "_parents", None)
+        if parents is None:
+            parents = {}
+            if self._module_root is not None:
+                for p in ast.walk(self._module_root):
+                    for c in ast.iter_child_nodes(p):
+                        parents[c] = p
+            self._parents = parents
+        return parents.get(node)
+
+    def _path_feeds_file_sink(self, node: ast.AST, _depth: int = 0) -> bool:
+        """True when the path value `node` (a join, a `Path(...)`, an
+        `os.path.*` call) is used ONLY as a file: the path argument of a file
+        sink (`_use_is_file`), directly, through a pass-through call
+        (`realpath(...)`, `Path(...)`), or through a Name whose only binding
+        in the function it is, every read of which is such a use or a mere
+        predicate (`os.path.isfile(p)`). Anything else, a directory sink, a
+        return or an unknown call included, is False: the use is not known
+        to reject a directory (redteam-r006-01)."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        parent = self._parent_of(node)
+        if isinstance(parent, ast.Assign):
+            if (
+                parent.value is not node
+                or len(parent.targets) != 1
+                or not isinstance(parent.targets[0], ast.Name)
+            ):
+                return False
+            name = parent.targets[0].id
+            scope = self._enclosing_scope_of(parent)
+            if scope is None or self._sole_top_level_assign(scope, name) is not parent:
+                return False
+            uses = [
+                n
+                for stmt in scope.body
+                for n in ast.walk(stmt)
+                if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)
+            ]
+            verdicts = [self._use_is_file(u, _depth + 1) for u in uses]
+            return any(v is True for v in verdicts) and all(v is not False for v in verdicts)
+        return self._use_is_file(node, _depth) is True
+
+    # Calls whose arguments are only logged or printed.
+    _LOG_METHODS = frozenset(
+        {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+    )
+
+    def _use_is_file(self, node: ast.AST, _depth: int) -> bool | None:
+        """True when the expression `node` is consumed as a file path, None
+        when it is only inspected (`_PATH_PREDICATES`) or logged, False
+        otherwise."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        parent = self._parent_of(node)
+        if isinstance(parent, ast.FormattedValue):
+            return None
+        if isinstance(parent, ast.Call) and node is not parent.func:
+            fn = parent.func
+            if (isinstance(fn, ast.Attribute) and fn.attr in self._LOG_METHODS) or (
+                isinstance(fn, ast.Name)
+                and fn.id == "print"
+                and fn.id not in self._file_defined_names()
+            ):
+                return None
+        if isinstance(parent, ast.Attribute) and parent.value is node:
+            grand = self._parent_of(parent)
+            return (
+                parent.attr in self._PATHLIB_FILE_METHODS
+                and isinstance(grand, ast.Call)
+                and grand.func is parent
+                and self._is_pathlib_path(node)
+            )
+        if isinstance(parent, ast.keyword):
+            call = self._parent_of(parent)
+        elif isinstance(parent, ast.Call) and node is not parent.func:
+            call = parent
+        else:
+            return False
+        if not isinstance(call, ast.Call):
+            return False
+        positional = bool(call.args) and call.args[0] is node
+        sink = self._path_traversal_sink_name(call)
+        if sink in ("open", "send_file", "FileResponse"):
+            # Only an `open` that opens a FILE: the builtin and the ones built
+            # on it (`_FILE_OPEN_CALLS`). `os.open(dir, os.O_RDONLY)` opens a
+            # directory, so `os.open(join(ROOT, basename("..")))` hands out
+            # ROOT's parent (redteam2-r006-01).
+            if sink == "open" and not self._opens_a_file(call.func):
+                return False
+            return positional or (
+                isinstance(parent, ast.keyword)
+                and parent.arg in ("file", "path", "path_or_file", "filename_or_fp")
+            )
+        if sink == "Path" and positional and len(call.args) == 1:
+            return self._path_feeds_file_sink(call, _depth + 1)
+        # A helper of this file: judged by what it does with the parameter
+        # (`serve(join(ROOT, basename(n)))` where `serve(p)` sends `p`).
+        helper = self._same_file_def(call.func)
+        if helper is not None:
+            params = [a.arg for a in helper.args.posonlyargs + helper.args.args]
+            if isinstance(parent, ast.keyword):
+                param = parent.arg
+            else:
+                index = next(i for i, a in enumerate(call.args) if a is node)
+                param = params[index] if index < len(params) else None
+            if param is None or any(isinstance(a, ast.Starred) for a in call.args):
+                return False
+            return self._param_used_as_file(helper, param, _depth)
+        name = self._callee_qualname(call.func)
+        if not positional:
+            return False
+        if name in self._PATH_PREDICATES:
+            return None
+        if name in self._PATH_PASS_THROUGH:
+            return self._path_feeds_file_sink(call, _depth + 1)
+        if name in self._FILE_PATH_CALLS:
+            return True
+        fn = call.func
+        return isinstance(fn, ast.Attribute) and fn.attr in self._FILE_PATH_METHODS and not name
+
+    def _join_part_is_trusted(self, expr: ast.AST, sink_line: int) -> bool:
+        """True when a join part is a constant path, or a trusted
+        non-request base (`_path_is_trusted_source`, or a framework config
+        read such as `app.config["UPLOAD_FOLDER"]`) that no request flow
+        reaches."""
+        if self._expr_is_constant_path(expr):
+            return True
+        if _references_request_input(expr):
+            return False
+        # `Path(ROOT)`: a pathlib path built from trusted parts.
+        if (
+            self._is_pathlib_ctor_call(expr)
+            and expr.args
+            and not expr.keywords
+            and all(self._join_part_is_trusted(a, sink_line) for a in expr.args)
+        ):
+            return True
+        trusted = self._path_is_trusted_source(expr) or (
+            isinstance(expr, ast.Subscript)
+            and isinstance(expr.value, ast.Attribute)
+            and expr.value.attr == "config"
+            and isinstance(expr.slice, ast.Constant)
+            and isinstance(expr.slice.value, str)
+        )
+        # A base is a directory: only `secure_filename` contains a caller's
+        # value there (`path_strict`).
+        return trusted and (
+            self._collect_taint_chain(expr, sink_line, "", sink_class="path_strict") is None
+        )
+
+    def _name_is_traversal_rejected(
+        self, name: str, sink_line: int, use: ast.AST | None = None
+    ) -> bool:
         """Return True if the enclosing function body contains a DOMINATING
         early-exit guard that rejects traversal in `name`, of the shape::
 
@@ -1785,10 +2985,26 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         branch that may not run — cannot suppress the finding. A guard that
         does not end control flow is ignored for the same reason: testing for
         '..' and continuing anyway protects nothing.
+
+        A '..' guard alone is not containment: `open("/etc/passwd")` has no
+        '..' (redteam2-py-02). An ABSOLUTE path must be rejected too, by a
+        dominating guard on the same name (`_rejects_absolute`), the same
+        `if` (`if ".." in name or os.path.isabs(name):`) or another one.
+
+        Each guard counts only for the value it tested (redteam3-py-01,
+        `_guard_covers`): after `if ".." in name or os.path.isabs(name):
+        abort()`, a `name = unquote(name)` or `name = "/" + name` before the
+        sink is a new value the guards never saw, and the sink is reported.
         """
 
-        def rejects_traversal(test: ast.AST) -> bool:
-            # `if ".." in name:` — a traversal sequence being looked for.
+        def operands(test: ast.AST) -> list[ast.AST]:
+            # `if A or B: <exit>` rejects A and B each.
+            if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
+                return list(test.values)
+            return [test]
+
+        def is_dotdot_test(test: ast.AST) -> bool:
+            # `".." in name` — a traversal sequence being looked for.
             return bool(
                 isinstance(test, ast.Compare)
                 and len(test.ops) == 1
@@ -1801,7 +3017,55 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 and test.comparators[0].id == name
             )
 
-        return self._has_dominating_exit_guard(sink_line, rejects_traversal)
+        def covers(test: ast.AST) -> bool:
+            return self._guard_covers(
+                name, _loads_of(test, name), use, (test.lineno, test.col_offset)
+            )
+
+        def rejects_traversal(test: ast.AST) -> bool:
+            return any(is_dotdot_test(t) for t in operands(test)) and covers(test)
+
+        def rejects_absolute(test: ast.AST) -> bool:
+            return any(
+                self._is_absolute_path_test(t, name) for t in operands(test)
+            ) and covers(test)
+
+        return self._has_dominating_exit_guard(
+            sink_line, rejects_traversal
+        ) and self._has_dominating_exit_guard(sink_line, rejects_absolute)
+
+    def _is_absolute_path_test(self, test: ast.AST, name: str) -> bool:
+        """True when `test` is True for every absolute POSIX path in `name`:
+        `os.path.isabs(name)` (or posixpath's), `name.startswith("/")` (a
+        tuple holding "/", or `os.sep`), or `Path(name).is_absolute()`,
+        each resolved through the file's imports (redteam2-py-02)."""
+        if not isinstance(test, ast.Call):
+            return False
+
+        def is_name(node: ast.AST) -> bool:
+            return isinstance(node, ast.Name) and node.id == name
+
+        fn = test.func
+        if self._callee_qualname(fn) in ("os.path.isabs", "posixpath.isabs"):
+            return len(test.args) == 1 and is_name(test.args[0]) and not test.keywords
+        if not isinstance(fn, ast.Attribute):
+            return False
+        if fn.attr == "startswith" and is_name(fn.value) and len(test.args) == 1:
+            prefix = test.args[0]
+            prefixes = prefix.elts if isinstance(prefix, ast.Tuple) else [prefix]
+            return any(
+                (isinstance(p, ast.Constant) and p.value == "/")
+                or self._import_origin(p) in ("os.sep", "os.path.sep")
+                for p in prefixes
+            )
+        if fn.attr == "is_absolute" and not test.args and isinstance(fn.value, ast.Call):
+            ctor = fn.value
+            return (
+                self._is_pathlib_ctor_call(ctor)
+                and len(ctor.args) == 1
+                and is_name(ctor.args[0])
+            )
+        return False
 
     # ─── asserted containment (CWE-22) ──────────────────────────────
     #
@@ -1838,42 +3102,85 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     #   try: full.relative_to(B)
     #   except ValueError: <exit>                       (every handler exits)
 
-    def _path_containment_asserted(self, name: str, sink_line: int) -> bool:
+    def _path_containment_asserted(
+        self, name: str, sink_line: int, use: ast.AST | None = None
+    ) -> bool:
         """Return True when `name` is a resolved path that a dominating guard
         asserts is under a fixed base directory, leaving the function when it
         is not (the accepted shapes are listed above).
 
-        `name` must be bound exactly once in the function, by a top-level
+        `name` must be resolved by a top-level
         `name = os.path.realpath(...)` or `name = <pathlib path>.resolve()`
-        that comes before the guard. Any other store of the name (on a branch,
-        as a loop target, after the guard) could put an unresolved or
-        unchecked value under the same name, so it disqualifies the guard.
+        that comes before the guard, and it must be the only definition that
+        reaches the guard. Any other definition that can supply the sink's
+        value (on a branch, as a loop target, after the guard) could put an
+        unresolved or unchecked value under the same name, so it disqualifies
+        the guard (`_guard_covers`).
 
         Dominance follows `_has_dominating_exit_guard`. A sink inside the
         rejecting body is not covered. A sink in the guard's `else` is, since
         that branch runs only when the containment test passed. The `try`
         form must end before the sink.
         """
-        return self._path_containment_guard(name, sink_line) is not None
+        return self._path_containment_guard(name, sink_line, use) is not None
 
-    def _path_containment_guard(self, name: str, sink_line: int) -> ast.stmt | None:
+    def _path_containment_guard(
+        self, name: str, sink_line: int, use: ast.AST | None = None
+    ) -> ast.stmt | None:
         """The first guard `_path_containment_asserted` accepts for `name`
-        before `sink_line` (an `if` or a `try`), or None."""
+        before `sink_line` (an `if` or a `try`), or None.
+
+        The guard must have tested the resolved value and nothing else: the
+        one definition of `name` that reaches it is the top-level
+        `name = <resolved path>` (`_guard_covers(only=...)`), and every
+        definition that reaches the use also reached the guard."""
         if not self._func_stack:
             return None
         bound = self._resolve_binding(ast.Name(id=name, ctx=ast.Load()))
         if bound is None or not self._is_resolved_path(bound):
             return None
-        binding = self._sole_top_level_assign(self._func_stack[-1], name)
-        if binding is None or binding.value is not bound:
+        binding = next(
+            (
+                stmt
+                for stmt in self._func_stack[-1].body
+                if isinstance(stmt, ast.Assign)
+                and stmt.value is bound
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == name
+            ),
+            None,
+        )
+        if binding is None:
             return None
         after = binding.end_lineno
+        resolved_def = binding.targets[0]
 
         def rejects_uncontained(test: ast.AST) -> bool:
-            return test.lineno > after and self._test_rejects_uncontained(test, name)
+            return (
+                test.lineno > after
+                and self._test_rejects_uncontained(test, name)
+                and self._guard_covers(
+                    name,
+                    _loads_of(test, name),
+                    use,
+                    (test.lineno, test.col_offset),
+                    only=resolved_def,
+                )
+            )
 
         def asserts_relative(stmt: ast.Try) -> bool:
-            return stmt.lineno > after and self._try_asserts_relative(stmt, name)
+            if not (stmt.lineno > after and self._try_asserts_relative(stmt, name)):
+                return False
+            tested = [
+                n
+                for s in stmt.body
+                if self._is_relative_to_call(s, name, stmt.lineno)
+                for n in _loads_of(s, name)
+            ]
+            return self._guard_covers(
+                name, tested, use, (stmt.lineno, stmt.col_offset), only=resolved_def
+            )
 
         return self._dominating_exit_guard(
             sink_line,
@@ -2298,24 +3605,116 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 continue
             if before_sink == "ends" and stmt.end_lineno >= sink_line:
                 continue
-            if before_sink == "body_ends" and stmt.body[-1].end_lineno >= sink_line:
+            # A sink inside the guard's own rejecting body (or in a multi-line
+            # test) runs when the value is exactly the one being rejected: the
+            # guard never covers it, in every extent (redteam4-py-01). Only
+            # code after the body, an `else` or `elif` included, can be covered.
+            if stmt.body[-1].end_lineno >= sink_line:
                 continue
             if test_pred(stmt.test) and self._body_ends_control_flow(stmt.body):
                 return stmt
         return None
 
-    @staticmethod
-    def _body_ends_control_flow(body: list) -> bool:
-        """True when a guard body returns, raises, or calls abort()/exit()."""
+    def _body_ends_control_flow(
+        self, body: list, _depth: int = 0, *, callee: bool = False
+    ) -> bool:
+        """True when a guard body provably leaves the function: a top-level
+        `return` or `raise`, a call known never to return (`_call_never_returns`),
+        or an `if`/`else` whose two branches both do.
+
+        A guard that "ends control flow" by the NAME of what it calls protects
+        nothing when the callee returns: a project's own `def abort(code):
+        print(code)`, `log.exit()` on an object, a function that falls through.
+        Termination is proven from the callee, never read from its name
+        (redteam4-py-01).
+
+        With `callee` (the body of a function being called, not a guard body) a
+        `return` leaves only that function, so it never counts."""
         for s in body:
-            if isinstance(s, (ast.Return, ast.Raise)):
+            if isinstance(s, ast.Raise) or (isinstance(s, ast.Return) and not callee):
                 return True
-            if isinstance(s, ast.Expr) and isinstance(s.value, ast.Call):
-                fn = s.value.func
-                called = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
-                if called in ("abort", "exit", "sys_exit"):
-                    return True
+            if (
+                isinstance(s, ast.Expr)
+                and isinstance(s.value, ast.Call)
+                and self._call_never_returns(s.value, _depth)
+            ):
+                return True
+            if (
+                isinstance(s, ast.If)
+                and s.orelse
+                and self._body_ends_control_flow(s.body, _depth, callee=callee)
+                and self._body_ends_control_flow(s.orelse, _depth, callee=callee)
+            ):
+                return True
         return False
+
+    def _call_never_returns(self, call: ast.Call, _depth: int = 0) -> bool:
+        """True when `call` is a call that never returns normally, proven from
+        what the callee IS: a known raising or exiting function resolved
+        through the file's imports (`sys.exit`, `flask.abort`, `os._exit`), the
+        `exit` / `quit` builtins when nothing in the file rebinds them, or a
+        function this file defines whose own body ends control flow on every
+        path (`_local_function_never_returns`). A name that merely sounds
+        terminal (`abort`, `exit`) and is not proven is not."""
+        fn = call.func
+        if self._callee_qualname(fn) in _NEVER_RETURNING_CALLS:
+            return True
+        if not isinstance(fn, ast.Name):
+            return False
+        if self._star_imported_never_returns(fn):
+            return True
+        if fn.id in ("exit", "quit"):
+            return (
+                fn.id not in self._file_defined_names()
+                and fn.id not in self._from_imports
+                and fn.id not in self._imported_modules
+                and self._scope_binding(fn.id) is None
+                and not self._name_is_shadowed(fn.id, fn)
+            )
+        if fn.id in self._file_defined_names() and _depth < 3:
+            return self._local_function_never_returns(fn.id, _depth + 1)
+        return False
+
+    def _star_imported_never_returns(self, fn: ast.Name) -> bool:
+        """True for a bare name that `from <module> import *` can only have
+        supplied from a module whose function of that name never returns
+        (`from flask import *` then `abort(400)`), when nothing else in the
+        file defines or rebinds the name."""
+        if not any(f"{m}.{fn.id}" in _NEVER_RETURNING_CALLS for m in self._star_imports):
+            return False
+        return (
+            fn.id not in self._file_defined_names()
+            and fn.id not in self._from_imports
+            and self._scope_binding(fn.id) is None
+            and not self._name_is_shadowed(fn.id, fn)
+        )
+
+    def _local_function_never_returns(self, name: str, depth: int) -> bool:
+        """True when `name` is a plain top-level function of this file, defined
+        once, undecorated, not a generator and not `async` (calling one runs
+        no body), whose body ends control flow on every path."""
+        root = self._module_root
+        if root is None:
+            return False
+        defs = [
+            n
+            for n in ast.walk(root)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and n.name == name
+        ]
+        if len(defs) != 1:
+            return False
+        fdef = defs[0]
+        if (
+            not isinstance(fdef, ast.FunctionDef)
+            or fdef.decorator_list
+            or not any(fdef is stmt for stmt in root.body)
+            or any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(fdef))
+        ):
+            return False
+        if any(isinstance(n, ast.Return) for n in ast.walk(fdef)):
+            return False  # a path through it returns
+        return self._body_ends_control_flow(fdef.body, depth, callee=True)
 
     def _arg_is_sanitised(
         self,
@@ -2323,9 +3722,17 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         sink_line: int = 1_000_000,
         *,
         url_sink: bool = False,
+        sink: str | None = None,
         _resolving: frozenset[str] = frozenset(),
     ) -> bool:
         """Composite check: dict-lookup whitelist OR membership-guarded Name.
+
+        ``sink`` is the sink's class (`_SINK_CLASSES`; "url" when only
+        ``url_sink`` is given, "other" when neither is). The sanitisers that
+        bound a value to constants (a constant-collection lookup, a dominating
+        membership guard) hold for every class. The others are typed
+        (R-058): an escaping call only for "html"; a safe URL builder
+        (`url_for` / `reverse`) for "html", "url" and "path".
 
         Called by the sink predicates (_is_ssrf / _is_open_redirect /
         path-traversal / XSS) to suppress findings where user input has
@@ -2358,19 +3765,22 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         and the file was skipped at the recursion limit; such a Name is not
         sanitised.
         """
+        cls = sink if sink is not None else ("url" if url_sink else "other")
         if self._arg_is_whitelisted_lookup(arg):
             return True
-        if self._is_escaped_call(arg):  # audit #24
+        # audit #24; R-058: escaping is an HTML sanitiser only. `quote()` keeps
+        # `//evil.com` and `html.escape()` keeps `../`, `;` and `$(...)`.
+        if cls == "html" and self._is_escaped_call(arg):
             return True
         # Server-controlled internal URL builders (reverse/url_for) produce a
         # route string, not attacker input — safe to interpolate into an href.
-        if self._is_safe_url_builder(arg):
+        if cls in ("html", "url", "path") and self._is_safe_url_builder(arg):
             return True
         if isinstance(arg, ast.Name):
             if arg.id in _resolving:
                 return False
-            if self._name_is_membership_guarded(arg.id, sink_line) or (
-                url_sink and self._url_host_is_allowlisted(arg.id, sink_line)
+            if self._name_is_membership_guarded(arg.id, sink_line, arg) or (
+                url_sink and self._url_host_is_allowlisted(arg.id, sink_line, arg)
             ):
                 return True
             # Resolve through scope and check the assigned expr is sanitised.
@@ -2387,6 +3797,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                         bound,
                         sink_line,
                         url_sink=url_sink,
+                        sink=cls,
                         _resolving=_resolving | {arg.id},
                     )
             return False
@@ -2409,7 +3820,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     )
                     return all(
                         isinstance(v, ast.Constant)
-                        or self._arg_is_sanitised(v, sink_line, _resolving=_resolving)
+                        or self._arg_is_sanitised(
+                            v, sink_line, sink=cls, _resolving=_resolving
+                        )
                         for v in values
                     )
                 return False
@@ -2420,7 +3833,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return all(
                 isinstance(sub, ast.Constant)
                 or self._arg_is_sanitised(
-                    sub, sink_line, url_sink=sub_url_sink, _resolving=_resolving
+                    sub,
+                    sink_line,
+                    url_sink=sub_url_sink,
+                    sink=cls,
+                    _resolving=_resolving,
                 )
                 for sub, sub_url_sink in ((arg.left, left_url_sink), (arg.right, False))
             )
@@ -2529,6 +3946,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     node.args[0],
                     node.lineno,
                     f"os.system({_ast_expr_text(node.args[0])})",
+                    sink_class="shell",
                 )
             self._emit_finding(
                 "PY_OS_SYSTEM",
@@ -2564,6 +3982,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     node.args[0],
                     node.lineno,
                     f"os.{popen_variant}({_ast_expr_text(node.args[0])})",
+                    sink_class="shell",
                 )
             self._emit_finding(
                 "PY_OS_POPEN",
@@ -2592,6 +4011,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     node.args[0],
                     node.lineno,
                     f"subprocess(shell=True, cmd={_ast_expr_text(node.args[0])})",
+                    sink_class="shell",
                 )
             self._emit_finding(
                 "PY_SUBPROCESS_SHELL",
@@ -2616,6 +4036,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     node.args[0],
                     node.lineno,
                     f"cursor.execute({_ast_expr_text(node.args[0])})",
+                    sink_class="sql",
                 )
             self._emit_finding(
                 "PY_SQL_INJECTION",
@@ -2649,6 +4070,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     tainted_arg,
                     node.lineno,
                     f"{sink_label}({_ast_expr_text(tainted_arg)})",
+                    sink_class="sql",
                 )
             self._emit_finding(
                 "PY_SQL_INJECTION",
@@ -2741,7 +4163,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             # whether or not the flow can be proven — see _emit_finding's sink.
             # Every constructor names it `redirect(<target>)`.
             sink_expr = f"redirect({_ast_expr_text(target)})"
-            chain = self._collect_taint_chain(target, node.lineno, sink_expr)
+            chain = self._collect_taint_chain(
+                target, node.lineno, sink_expr, sink_class="url"
+            )
             self._emit_finding(
                 "PY_OPEN_REDIRECT",
                 _OPEN_REDIRECT_TITLE,
@@ -2813,6 +4237,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     node.args[0],
                     node.lineno,
                     sink_expr,
+                    sink_class="html",
                 )
             self._emit_finding(
                 "PY_XSS_HTML_SINK",
@@ -2841,7 +4266,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             body = self._html_response_body(node, ctor)
             sink_expr = f"{ctor}({_ast_expr_text(body)})"
             with self._without_template_sources():
-                chain = self._collect_taint_chain(body, node.lineno, sink_expr)
+                chain = self._collect_taint_chain(
+                    body, node.lineno, sink_expr, sink_class="html"
+                )
             self._emit_finding(
                 "PY_XSS_HTML_SINK",
                 _XSS_HTML_SINK_TITLE,
@@ -2883,6 +4310,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     url_arg,
                     node.lineno,
                     sink_expr,
+                    sink_class="url",
                 )
             self._emit_finding(
                 "PY_SSRF",
@@ -2928,13 +4356,41 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             sink_expr = ""
             sink_name = self._path_traversal_sink_name(node)
             # The user-controlled arg is usually the FIRST positional
-            # except for send_from_directory(safe_dir, x) and
-            # os.path.join(base, x) where it's the second.
-            # _path_traversal_target handles that.
+            # except for os.path.join(base, x), where it's the second, and
+            # send_from_directory(dir, name), where only the directory can
+            # carry traversal (R-006). _path_traversal_target handles that.
             target = self._path_traversal_target(node)
             if target is not None:
                 sink_expr = f"{sink_name}({_ast_expr_text(target)})"
-                chain = self._collect_taint_chain(target, node.lineno, sink_expr)
+                file_sink, target_lenient = self._path_sink_context(node, sink_name)
+                # A join whose request-carrying parts are contained is proven
+                # only through its other parts (R-006): `join(request.args["d"],
+                # basename(f))` by the directory. Each part is traced under the
+                # class its position allows: a basename-reduced caller value
+                # contains only the last part of a file path (`path`), never a
+                # directory or a middle part (`path_strict`, redteam-r006-01).
+                parts = self._path_join_parts(target)
+                if parts is None:
+                    chain = self._collect_taint_chain(
+                        target,
+                        node.lineno,
+                        sink_expr,
+                        sink_class="path" if target_lenient else "path_strict",
+                    )
+                else:
+                    for part, contained, lenient in self._join_part_statuses(
+                        parts, node.lineno, file_sink
+                    ):
+                        if contained:
+                            continue
+                        chain = self._collect_taint_chain(
+                            part,
+                            node.lineno,
+                            sink_expr,
+                            sink_class="path" if lenient else "path_strict",
+                        )
+                        if chain is not None:
+                            break
             # `os.path.*` sinks (join/abspath/expanduser/expandvars) only
             # become path-traversal vulns when the argument actually
             # carries user input. They appear constantly in library code
@@ -3315,6 +4771,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _bind_target(self, target: ast.AST, value: ast.AST, scope: dict) -> None:
         """Bind one assignment target to `value` in `scope`."""
         if isinstance(target, ast.Name):
+            self._freeze_readers_of(target.id, scope)
             scope[target.id] = value
             return
         if isinstance(target, (ast.Tuple, ast.List)):
@@ -3322,7 +4779,26 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(
                 elts
             ):
+                # A tuple assignment evaluates every right-hand element before
+                # it binds any target: `name, other = other, name` gives
+                # `name` the value `other` had BEFORE the statement. Binding
+                # target by target made `name` read the NEW `other`, which
+                # reads the guarded `name`, so a tainted value hid behind a
+                # guard (DE4-08). An element that reads a name this statement
+                # also assigns is taken at the binding in effect before it.
+                assigned = {
+                    n.id
+                    for t in elts
+                    for n in ast.walk(t)
+                    if isinstance(n, ast.Name)
+                }
+                before = {k: scope[k] for k in assigned if k in scope}
                 for t, v in zip(elts, value.elts):
+                    if isinstance(v, ast.Name) and v.id in assigned:
+                        if v.id in before:
+                            v = before[v.id]
+                        elif self._name_is_route_param_source(v.id):
+                            v = _ENTRY_SOURCE
                     self._bind_target(t, v, scope)
             else:
                 # Non-decomposable RHS — bind every target to the whole RHS so
@@ -3333,6 +4809,59 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         key = _binding_key(target)
         if key is not None:
             scope[key] = value
+
+    def _name_is_guard_tested(self, name: str) -> bool:
+        """True when a top-level `if` or `try` of the innermost function reads
+        `name` in its test (a possible guard on it). Cached per function."""
+        if not self._func_stack:
+            return False
+        func = self._func_stack[-1]
+        cache = self.__dict__.setdefault("_tested_names_cache", {})
+        tested = cache.get(id(func))
+        if tested is None or tested[0] is not func:
+            names: set[str] = set()
+            for stmt in func.body:
+                if isinstance(stmt, ast.If):
+                    names.update(
+                        n.id for n in ast.walk(stmt.test) if isinstance(n, ast.Name)
+                    )
+                elif isinstance(stmt, ast.Try):
+                    names.update(
+                        n.id
+                        for s in stmt.body
+                        for n in ast.walk(s)
+                        if isinstance(n, ast.Name)
+                    )
+            tested = (func, names)
+            cache[id(func)] = tested
+        return name in tested[1]
+
+    def _freeze_readers_of(self, key: str, scope: dict) -> None:
+        """Before `key` is rebound in `scope`: every other binding that reads
+        the name keeps the value the name held until now (alias-then-rebind:
+        `base = name; name = "x"; open(base)` opens what `name` held, not "x").
+        Without a prior binding (a parameter) there is nothing to substitute
+        and the later binding stands. Bounded by `_FREEZE_MAX_NODES` per value
+        and by the number of bindings in the scope."""
+        if self._name_is_guard_tested(key):
+            # A guard tests this name: the guard checks follow an alias by the
+            # name and its reaching definitions (`_guard_covers`), which a
+            # substituted value would lose. They already keep an alias on the
+            # value it was guarded with.
+            return
+        prior = scope.get(key)
+        if prior is None and self._name_is_route_param_source(key):
+            # A request-carrying parameter has no binding, but it is a
+            # source: readers keep it as request input, not as whatever the
+            # name is rebound to.
+            prior = _ENTRY_SOURCE
+        if prior is None or len(scope) > 400:
+            return
+        for other, value in list(scope.items()):
+            if other == key or not isinstance(value, ast.AST):
+                continue
+            if _reads_name(value, key) and not _reads_name(prior, key):
+                scope[other] = _SubstituteName(key, prior).visit(value)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
         """Record `x += value` (audit #1). Rebinds the target to a synthesized
@@ -3348,6 +4877,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             )
             if key is not None:
                 prior = scope.get(key, node.target)
+                if key in scope and isinstance(node.target, ast.Name):
+                    self._freeze_readers_of(key, scope)
                 scope[key] = ast.BinOp(left=prior, op=node.op, right=node.value)
         self.generic_visit(node)
 
@@ -3397,6 +4928,8 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         module = node.module or ""
         for alias in node.names:
             local_name = alias.asname or alias.name
+            if alias.name == "*":
+                self._star_imports.append(module)
             self._from_imports[local_name] = (module, alias.name)
         self.generic_visit(node)
 
@@ -3980,12 +5513,44 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # → sanitised.
         if self._arg_is_sanitised(value, sink_line, url_sink=True):
             return False
+        # A target that starts with a literal naming the destination: a fixed
+        # scheme and host, or a same-origin path (`"/search?q=" + quote(q)`).
+        # Escaping is no redirect sanitiser (R-058), so this is what keeps the
+        # escaped query of a fixed path safe.
+        if self._redirect_prefix_is_fixed(value):
+            return False
         # Framework URL builders produce safe internal URLs from a route NAME,
         # not user input: Flask url_for(...), Django reverse(...). A redirect to
         # one of these is not an open redirect (real-data FP on flask/django).
         if self._is_safe_url_builder(value):
             return False
         return True
+
+    def _redirect_prefix_is_fixed(self, value: ast.AST, _depth: int = 0) -> bool:
+        """True when a redirect target is a `+` concatenation or an f-string
+        whose LEADING part is a string literal that fixes where the browser
+        goes: `http(s)://host/` (`_literal_url_fixes_host`), or a same-origin
+        path, `/` followed by a letter, digit or one of `?#.-_~%`. `"/"`
+        alone is not (`"/" + "/evil.com"` is protocol-relative), nor is
+        `"/\\"`. Only a literal counts; a configured base may be `"/"`."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return False
+        if isinstance(value, ast.Name):
+            bound = self._resolve_binding(value)
+            return bound is not None and self._redirect_prefix_is_fixed(bound, _depth + 1)
+        lead: ast.AST | None = None
+        if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+            lead = value.left
+            while isinstance(lead, ast.BinOp) and isinstance(lead.op, ast.Add):
+                lead = lead.left
+        elif isinstance(value, ast.JoinedStr) and value.values:
+            lead = value.values[0]
+        if not (isinstance(lead, ast.Constant) and isinstance(lead.value, str)):
+            return False
+        s = lead.value
+        if self._literal_url_fixes_host(s):
+            return True
+        return len(s) >= 2 and s[0] == "/" and (s[1].isalnum() or s[1] in "?#.-_~%")
 
     # ─── Redirect constructors and Location headers (Task 3.5) ───────
     #
@@ -4162,7 +5727,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         """Emit PY_OPEN_REDIRECT for a ``Location`` header set to ``value``.
         The sink is named ``Location: <value>`` in every form."""
         sink_expr = f"Location: {_ast_expr_text(value)}"
-        chain = self._collect_taint_chain(value, lineno, sink_expr)
+        chain = self._collect_taint_chain(value, lineno, sink_expr, sink_class="url")
         self._emit_finding(
             "PY_OPEN_REDIRECT",
             _OPEN_REDIRECT_TITLE,
@@ -4602,7 +6167,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                         return False
                     break  # innermost binding wins (audit #17)
         # Whitelisted dict lookup / set-membership guard → sanitised.
-        if self._arg_is_sanitised(first, node.lineno):
+        if self._arg_is_sanitised(first, node.lineno, sink="html"):
             return False
         return True
 
@@ -4656,7 +6221,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if self._response_is_non_html(node, ctor, package):
             return None
         if self._expr_is_fully_escaped(body) or self._arg_is_sanitised(
-            body, node.lineno
+            body, node.lineno, sink="html"
         ):
             return None
         if not self._html_body_carries_text(body, node.lineno):
@@ -4872,7 +6437,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # returned tuple do not re-identify the finding.
         sink_expr = f"return {_ast_expr_text(body)}"
         with self._without_template_sources():
-            chain = self._collect_taint_chain(body, node.lineno, sink_expr)
+            chain = self._collect_taint_chain(
+                body, node.lineno, sink_expr, sink_class="html"
+            )
         if not chain:
             return
         self._emit_finding(
@@ -4974,6 +6541,109 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         else:
             return ""
         return f"{base}.{rest}" if rest else base
+
+    def _callee_qualname(self, func: ast.AST, _depth: int = 0) -> str:
+        """The dotted name a called expression stands for through the file's
+        imports: ``html.escape`` for ``html.escape`` / ``from html import
+        escape as e; e``, ``os.path.basename`` for ``osp.basename`` after
+        ``import os.path as osp``. A bare name bound in scope to another
+        callee (``e = html.escape``) resolves through that binding. "" when
+        the name is defined in the file (``def escape(s)``), bound to
+        anything else, or not imported: a function NAME alone says nothing
+        about what the function does (redteam-r006-02, redteam-r058-01).
+
+        An imported name is "" too where something else may stand for it
+        (`_name_is_shadowed`): a class of that name, a parameter of an
+        enclosing def or lambda (`def inner(basename=lambda p: p)`), or any
+        other store of it in an enclosing scope (redteam2-r006-02)."""
+        if _depth >= _MAX_TAINT_HOPS:
+            return ""
+        if isinstance(func, ast.Name):
+            if func.id in self._file_defined_names():
+                return ""
+            bound = self._scope_binding(func.id)
+            if bound is not None:
+                if isinstance(bound, (ast.Name, ast.Attribute)) and bound is not func:
+                    return self._callee_qualname(bound, _depth + 1)
+                return ""
+            origin = self._from_imports.get(func.id)
+            if origin is None or self._name_is_shadowed(func.id, func):
+                return ""
+            module, symbol = origin
+            return f"{module}.{symbol}" if module else symbol
+        if isinstance(func, ast.Attribute):
+            head = func
+            while isinstance(head, ast.Attribute):
+                head = head.value
+            if isinstance(head, ast.Name) and self._name_is_shadowed(head.id, head):
+                return ""
+            base = self._import_origin(func.value)
+            return f"{base}.{func.attr}" if base else ""
+        return ""
+
+    def _name_is_shadowed(self, name: str, at: ast.AST) -> bool:
+        """True when the bare `name` read at `at` may not be an import of it
+        (redteam2-r006-02). The scopes enclosing `at` are searched innermost
+        first, as Python resolves the name: def or lambda (its parameters and
+        its own stores), comprehension, class body, then the module. The
+        first scope that binds `name` decides: shadowed unless every binding
+        there is an import (a def or class of that name, a parameter, a
+        default, an assignment or loop target, in any order, since a later
+        store rebinds it for every call made after). A `global` declaration
+        of it anywhere also shadows the module's import. Over-reporting only
+        makes a sanitiser count less."""
+        cache = self.__dict__.setdefault("_shadow_cache", {})
+
+        def verdict(scope: ast.AST, params, nodes) -> bool | None:
+            """None when `scope` does not bind `name`; else shadowed or not."""
+            key = (id(scope), name)
+            if key not in cache:
+                binders = [x for x in params if x.arg == name]
+                binders += [
+                    n for stmt in nodes for n in _same_scope_nodes(stmt) if _binds_name(n, name)
+                ]
+                cache[key] = (
+                    None if not binders else not all(isinstance(b, ast.alias) for b in binders)
+                )
+            return cache[key]
+
+        node = at
+        parent = self._parent_of(node)
+        while parent is not None:
+            found: bool | None = None
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                inner = (
+                    node is parent.body
+                    if isinstance(parent, ast.Lambda)
+                    else any(node is stmt for stmt in parent.body)
+                )
+                if inner:
+                    a = parent.args
+                    params = [*a.posonlyargs, *a.args, *a.kwonlyargs]
+                    params += [x for x in (a.vararg, a.kwarg) if x is not None]
+                    body = [parent.body] if isinstance(parent, ast.Lambda) else parent.body
+                    found = verdict(parent, params, body)
+            elif isinstance(parent, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                if any(
+                    _binds_name(n, name) for gen in parent.generators for n in ast.walk(gen.target)
+                ):
+                    found = True
+            elif isinstance(parent, ast.ClassDef) and any(node is stmt for stmt in parent.body):
+                found = verdict(parent, [], parent.body)
+            if found is not None:
+                return found
+            node, parent = parent, self._parent_of(parent)
+        root = self._module_root
+        if root is None:
+            return False
+        key = (id(root), name, "global")
+        if key not in cache:
+            cache[key] = any(
+                isinstance(n, ast.Global) and name in n.names for n in ast.walk(root)
+            )
+        if cache[key]:
+            return True
+        return bool(verdict(root, [], root.body))
 
     @staticmethod
     def _response_args(node: ast.Call, ctor: str) -> list[ast.AST]:
@@ -5586,7 +7256,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return any(same(v) for v in expr.values)
         if isinstance(expr, ast.Starred):
             return part(expr.value)
-        if self._arg_is_sanitised(expr, sink_line):
+        if self._arg_is_sanitised(expr, sink_line, sink="html"):
             return False
         if isinstance(expr, (ast.Name, ast.Attribute, ast.Subscript)):
             key = expr.id if isinstance(expr, ast.Name) else _binding_key(expr)
@@ -5790,7 +7460,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 for b in (expr.body, expr.orelse)
             )
         if isinstance(expr, ast.Name) and expr.id not in _seen:
-            if self._name_is_membership_guarded(expr.id, sink_line):
+            if self._name_is_membership_guarded(expr.id, sink_line, expr):
                 return True
             bound = self._scope_binding(expr.id)
             return bound is not None and self._template_source_is_trusted(
@@ -5935,7 +7605,19 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if isinstance(segment, ast.Constant):
             return False
         line = getattr(segment, "lineno", 0)
-        return bool(self._collect_taint_chain(segment, line, _ast_expr_text(segment)))
+        return bool(
+            self._collect_taint_chain(
+                segment, line, _ast_expr_text(segment), sink_class="path"
+            )
+        )
+
+    def _opens_a_file(self, func: ast.AST) -> bool:
+        """True when the `open` that `func` names opens its path as a FILE and
+        fails on a directory: the builtin (not shadowed in scope) or one of
+        `_FILE_OPEN_CALLS`, never `os.open` (redteam2-r006-01)."""
+        if self._is_builtin_open(func):
+            return not self._name_is_shadowed("open", func)
+        return self._callee_qualname(func) in self._FILE_OPEN_CALLS
 
     def _is_builtin_open(self, func: ast.AST) -> bool:
         """True for a bare ``open`` that is the builtin: not imported, not
@@ -5975,8 +7657,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             site lets the chain prove user-input flow regardless of where
             the actual filesystem access happens)
           - send_file(x) / flask.send_file(x) — Flask file response
-          - send_from_directory(safe_dir, x) / flask.send_from_directory —
-            Flask file-by-name; the path arg is the SECOND positional
+          - send_from_directory(dir, x) / flask.send_from_directory —
+            Flask file-by-name, judged on `dir` only: Werkzeug's safe_join
+            contains `x` (R-006)
           - FileResponse(x) / FileResponse(path=x) — Starlette and FastAPI
             open and send the file at `x` (Task 3.6), resolved through the
             file's imports (`_is_file_response`). Given an `open(...)` call
@@ -6016,14 +7699,17 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                     if isinstance(scope[target.id], ast.Constant):
                         return False
                     break  # innermost binding wins (audit #17)
-        # Whitelisted dict lookup / set-membership guard → sanitised.
-        if self._arg_is_sanitised(target, node.lineno):
+        # Whitelisted dict lookup / set-membership guard → sanitised. Escaping
+        # is not a path sanitiser (R-058): `html.escape("../")` is `../`.
+        if self._arg_is_sanitised(target, node.lineno, sink="path"):
             return False
         # Traversal-specific containment: basename-family normalisation, or a
         # dominating guard that rejects '..' outright. These neutralise
         # traversal specifically, which the generic sanitiser set above does
-        # not model.
-        if self._path_is_contained(target, node.lineno):
+        # not model. A basename-reduced value counts only where the path is
+        # used as a file (`_path_sink_context`, redteam-r006-01).
+        file_sink, target_lenient = self._path_sink_context(node, sink_name)
+        if self._path_is_contained(target, node.lineno, file_sink=target_lenient):
             return False
         # TwiScope FP-4: a path that provably comes from a NON-request source —
         # __file__-relative Path, os.getenv, tempfile.*.name, settings.*, a
@@ -6033,13 +7719,47 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             target
         ):
             chain = (
-                self._collect_taint_chain(target, node.lineno, "")
+                self._collect_taint_chain(
+                    target,
+                    node.lineno,
+                    "",
+                    sink_class="path" if target_lenient else "path_strict",
+                )
                 if node.args
                 else None
             )
             if chain is None:  # no proven request flow either → trusted, suppress
                 return False
         return True
+
+    def _path_sink_context(self, node: ast.Call, sink_name: str) -> tuple[bool, bool]:
+        """`(file_sink, target_lenient)` for the path sink `node`.
+
+        `file_sink`: the sink's path is used as a FILE. `open`, `send_file`
+        and `FileResponse` read the file at their argument;
+        `send_from_directory` is judged on its DIRECTORY and never is one; a
+        `Path(...)`, an `os.path.join(...)` and the other `os.path.*` sinks
+        are one only when every use of their value is (`_path_feeds_file_sink`).
+
+        `target_lenient`: a basename-reduced value contains the TARGET
+        argument itself. For most sinks that is `file_sink`. The
+        `os.path.join` sink is judged on its second argument, which must also
+        be the join's last part with every other part trusted or
+        `secure_filename`-reduced (`_join_part_statuses`)."""
+        if sink_name == "open" and not self._opens_a_file(node.func):
+            # `os.open(path, os.O_RDONLY)` opens a directory as readily as a
+            # file (redteam2-r006-01).
+            return False, False
+        if sink_name in ("open", "send_file", "FileResponse"):
+            return True, True
+        if sink_name == "send_from_directory":
+            return False, False
+        file_sink = self._path_feeds_file_sink(node)
+        if sink_name == "os.path.join":
+            statuses = self._join_part_statuses(list(node.args), node.lineno, file_sink)
+            lenient = len(statuses) > 1 and statuses[1][2]
+            return file_sink, lenient
+        return file_sink, file_sink
 
     def _path_is_trusted_source(self, expr: ast.AST, _depth: int = 0) -> bool:
         """True if `expr` is built only from trusted (non-request) path sources:
@@ -6211,23 +7931,33 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def _path_traversal_arg_index(self, node: ast.Call) -> int:
         """Return the positional-arg index of the path argument.
 
-        `send_from_directory(safe_dir, filename)` and `os.path.join(base, x)`
-        put the user-controlled component at index 1; everything else at 0.
+        `os.path.join(base, x)` puts the user-controlled component at index 1;
+        everything else at 0.
+
+        `send_from_directory(directory, filename)` is judged on its DIRECTORY
+        (index 0, R-006): Flask joins the filename with Werkzeug's
+        `safe_join`, which refuses an absolute filename and any `..`
+        component (404), so a request-chosen filename cannot leave the
+        directory. A request-chosen directory can name any directory.
         """
         sink_name = self._path_traversal_sink_name(node)
-        if sink_name in {"send_from_directory", "os.path.join"}:
+        if sink_name == "os.path.join":
             return 1
         return 0
 
     def _path_traversal_target(self, node: ast.Call) -> ast.AST | None:
         """The path argument of a path-traversal sink: the positional argument
         at `_path_traversal_arg_index`, else, for `FileResponse`, its
-        ``path=`` keyword; None when the call passes neither."""
+        ``path=`` keyword and, for `send_from_directory`, its ``directory=``
+        keyword; None when the call passes neither."""
         arg_idx = self._path_traversal_arg_index(node)
         if arg_idx < len(node.args):
             return node.args[arg_idx]
-        if self._path_traversal_sink_name(node) == "FileResponse":
-            return next((kw.value for kw in node.keywords if kw.arg == "path"), None)
+        keyword = {"FileResponse": "path", "send_from_directory": "directory"}.get(
+            self._path_traversal_sink_name(node)
+        )
+        if keyword is not None:
+            return next((kw.value for kw in node.keywords if kw.arg == keyword), None)
         return None
 
     def _is_file_response(self, func: ast.AST) -> bool:
@@ -6720,8 +8450,9 @@ def _location_assignment_holder(target: ast.AST) -> tuple[str, bool] | None:
 
 # Path-traversal sinks recognised by `_is_path_traversal_sink` (TASK-134).
 # Bare-name `open(x)` is the stdlib builtin; attribute form `pathlib.Path(x)`
-# or `flask.send_file(x)` are also matched. send_from_directory's path arg
-# is the SECOND positional — see `_path_traversal_arg_index`.
+# or `flask.send_file(x)` are also matched. send_from_directory is judged on
+# its directory (the FIRST positional): its filename goes through Werkzeug's
+# `safe_join` — see `_path_traversal_arg_index`.
 _PATH_TRAVERSAL_SINK_NAMES: frozenset[str] = frozenset(
     {
         "open",
@@ -6942,6 +8673,78 @@ _URL_VARIABLE = re.compile(
 # How deep an annotation is unwrapped (`Optional[Annotated[list[int], ...]]`).
 # Real annotations nest a handful of levels; the cap only bounds a crafted one.
 _MAX_ANNOTATION_DEPTH = 16
+
+
+# A binding's value is read lazily: `base = name` binds `base` to the Name
+# `name`, and a LATER `name = "x"` would make `base` read "x". Rebinding a name
+# therefore first freezes every earlier binding that reads it, substituting the
+# value the name held (`_PythonSecurityVisitor._bind_name`). The bounds keep a
+# file of thousands of bindings linear.
+_FREEZE_MAX_NODES = 400
+
+
+def _reads_name(expr: ast.AST, name: str) -> bool:
+    """True when `expr` reads the bare name `name` (within `_FREEZE_MAX_NODES`
+    nodes)."""
+    for i, node in enumerate(ast.walk(expr)):
+        if i >= _FREEZE_MAX_NODES:
+            return False
+        if isinstance(node, ast.Name) and node.id == name:
+            return True
+    return False
+
+
+# What a request-carrying route parameter held on entry, as an expression the
+# taint trace recognises as request input.
+_ENTRY_SOURCE = ast.parse("request.args['__entry__']", mode="eval").body
+
+
+class _SubstituteName(ast.NodeTransformer):
+    """A copy of an expression with every read of `name` replaced by `value`."""
+
+    def __init__(self, name: str, value: ast.AST) -> None:
+        self._name = name
+        self._value = value
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:  # noqa: N802
+        if node.id == self._name and isinstance(node.ctx, ast.Load):
+            return self._value
+        return node
+
+    def generic_visit(self, node: ast.AST) -> ast.AST:
+        # Rebuild shallow copies so the original binding is never mutated.
+        clone = type(node)(**{f: getattr(node, f) for f in node._fields if hasattr(node, f)})
+        ast.copy_location(clone, node)
+        for field_name, old in ast.iter_fields(clone):
+            if isinstance(old, list):
+                new_items = []
+                for item in old:
+                    if isinstance(item, ast.AST):
+                        item = self.visit(item)
+                    new_items.append(item)
+                setattr(clone, field_name, new_items)
+            elif isinstance(old, ast.AST):
+                setattr(clone, field_name, self.visit(old))
+        return clone
+
+
+# Calls that never return normally, by the dotted name they resolve to through
+# the file's imports (`_callee_qualname`). `_call_never_returns` proves the
+# callee; a name alone ("abort") is not in this set (redteam4-py-01).
+_NEVER_RETURNING_CALLS = frozenset(
+    {
+        "sys.exit",
+        "os._exit",
+        "os.abort",
+        "builtins.exit",
+        "builtins.quit",
+        "flask.abort",
+        "flask.helpers.abort",
+        "werkzeug.exceptions.abort",
+        "quart.abort",
+        "bottle.abort",
+    }
+)
 
 
 def _terminal_name(node: ast.AST) -> str:
@@ -7357,6 +9160,16 @@ def _stores_of(func: ast.AST, name: str) -> list[ast.AST]:
     """Every node in `func`'s body that binds `name` (see `_binds_name`).
     Nested defs are searched too, which can only over-count."""
     return [n for stmt in func.body for n in ast.walk(stmt) if _binds_name(n, name)]
+
+
+def _loads_of(node: ast.AST, name: str) -> list[ast.Name]:
+    """Every read of `name` inside `node` (a guard's test, or the call it
+    parses), for `_PythonSecurityVisitor._guard_covers`."""
+    return [
+        n
+        for n in ast.walk(node)
+        if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)
+    ]
 
 
 # Path fragments that mark a file as test/fixture code (confidence demotion).
