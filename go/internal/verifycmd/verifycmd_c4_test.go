@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Fendix-app/Fendix/go/internal/models"
 )
@@ -113,8 +115,10 @@ func TestVerifyCorrelated_WhiteboxFileGone_Unknown(t *testing.T) {
 }
 
 func TestVerifyCorrelated_BlackboxGated_Resolved(t *testing.T) {
-	// The route now returns 403 (gated) → the DAST half no longer reproduces
-	// → correlation broken → resolved, even though the file still exists.
+	// Changed 2026-11-12 (contract C5.6): this was "resolved". A correlated SSRF's
+	// DAST half comes from an active probe, and a gated route (403) is a
+	// reachability change, not proof the probe's finding was fixed, so the
+	// result is unknown. The test keeps its name so the history reads.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
@@ -138,8 +142,8 @@ func TestVerifyCorrelated_BlackboxGated_Resolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if r.Status != StatusResolved {
-		t.Fatalf("blackbox gated → want resolved; got %v (%q)", r.Status, r.Reason)
+	if r.Status != StatusUnknown || !strings.Contains(r.Reason, "not proof of remediation") {
+		t.Fatalf("blackbox gated on an active-probe half → want unknown; got %v (%q)", r.Status, r.Reason)
 	}
 }
 
@@ -169,97 +173,159 @@ func TestVerifyCorrelated_NoInputsIsUnknown(t *testing.T) {
 
 // --- Active-probe ---------------------------------------------------------
 
-func TestVerifyActiveProbe_NoConsent_GatedIsResolved(t *testing.T) {
-	// An active-probe injection finding whose endpoint now returns 401 →
-	// resolved without needing a re-probe (reachability alone answers it).
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-	dir := t.TempDir()
-	baseline := writeBaseline(t, dir, []models.Finding{{
-		ID:       "SEC-ACT-1",
-		Title:    "SQL injection (active probe)",
-		Source:   models.SourceBlackbox,
-		Category: "injection",
-		Endpoint: "GET /api/item?id=1",
-		Evidence: "active probe: payload ' OR '1'='1 changed the response",
-	}})
+// Decision 2026-11-12 (amendment 1, contract C5.6): an active-probe finding is
+// never resolved by verify. 401/403/404/410 say the route changed, not that it
+// was fixed, and a response without the signal says one request did not carry
+// it. Only a reproduced marker is a result (still-present); everything else is
+// unknown with a reason naming what was observed.
 
-	r, err := Run(context.Background(), "SEC-ACT-1", Options{
-		BaselinePath: baseline, URL: srv.URL,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if r.Status != StatusResolved {
-		t.Fatalf("gated active-probe endpoint → want resolved; got %v (%q)", r.Status, r.Reason)
+func activeBaseline(t *testing.T, id, category, endpoint, evidence string) string {
+	t.Helper()
+	return writeBaseline(t, t.TempDir(), []models.Finding{{
+		ID: id, Title: "Injection (active probe)", Source: models.SourceBlackbox,
+		Category: category, Endpoint: endpoint, Evidence: evidence,
+	}})
+}
+
+func TestVerifyActiveProbe_GatedStatusIsNeverResolved(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusGone} {
+		for _, consent := range []bool{false, true} {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
+			baseline := activeBaseline(t, "SEC-ACT-1", "injection", "GET /api/item?id=1", "active probe: payload ' OR '1'='1 changed the response")
+			r, err := Run(context.Background(), "SEC-ACT-1", Options{BaselinePath: baseline, URL: srv.URL, EnableActive: consent})
+			srv.Close()
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if r.Status != StatusUnknown {
+				t.Fatalf("HTTP %d (consent=%v) -> %v (%q), want unknown: a gated status is not proof of remediation", code, consent, r.Status, r.Reason)
+			}
+			if !strings.Contains(r.Reason, "not proof of remediation") || !strings.Contains(r.Reason, strconv.Itoa(code)) {
+				t.Errorf("reason must name what was observed: %q", r.Reason)
+			}
+		}
 	}
 }
 
-func TestVerifyActiveProbe_NoConsent_OpenIsStillPresentWithNote(t *testing.T) {
-	// Endpoint still open, no consent to re-probe → still-present, but the
-	// reason must say a full re-probe needs --enable-active consent so the
-	// verdict isn't mistaken for a confirmed re-exploit.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	dir := t.TempDir()
-	baseline := writeBaseline(t, dir, []models.Finding{{
-		ID:       "SEC-ACT-2",
-		Title:    "Reflected XSS (active probe)",
-		Source:   models.SourceBlackbox,
-		Category: "xss",
-		Endpoint: "GET /search?q=x",
-		Evidence: "active probe: reflected <script> payload",
-	}})
-
-	r, err := Run(context.Background(), "SEC-ACT-2", Options{
-		BaselinePath: baseline, URL: srv.URL,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if r.Status != StatusStillPresent {
-		t.Fatalf("open active-probe endpoint w/o consent → want still-present; got %v (%q)", r.Status, r.Reason)
-	}
-	if !strings.Contains(strings.ToLower(r.Reason), "enable-active") {
-		t.Errorf("reason must flag that a full re-probe needs consent: %q", r.Reason)
+func TestVerifyActiveProbe_RateLimitAndTemporaryFailureAreUnknown(t *testing.T) {
+	for _, code := range []int{429, 502, 503, 504} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) }))
+		baseline := activeBaseline(t, "SEC-ACT-1", "injection", "GET /api/item?id=1", "active probe: payload x")
+		r, err := Run(context.Background(), "SEC-ACT-1", Options{BaselinePath: baseline, URL: srv.URL, EnableActive: true})
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Status != StatusUnknown || !strings.Contains(r.Reason, "proves nothing") {
+			t.Fatalf("HTTP %d -> %v (%q), want unknown", code, r.Status, r.Reason)
+		}
 	}
 }
 
-func TestVerifyActiveProbe_Consent_ReprobesEndpoint(t *testing.T) {
-	// With EnableActive consent, verify actually re-hits the endpoint; when the
-	// reflected signal is gone (endpoint sanitizes now) → resolved.
+func TestVerifyActiveProbe_NoResponseIsUnknown(t *testing.T) {
+	// A target that never answers (stall) and one that resets: nothing was
+	// evaluated, so nothing is concluded.
+	release := make(chan struct{})
+	stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer stall.Close()
+	defer close(release)
+	reset := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, _, _ := w.(http.Hijacker).Hijack()
+		c.Close()
+	}))
+	defer reset.Close()
+	for name, base := range map[string]string{"stall": stall.URL, "reset": reset.URL} {
+		baseline := activeBaseline(t, "SEC-ACT-1", "injection", "GET /api/item?id=1", "active probe: payload x")
+		r, err := Run(context.Background(), "SEC-ACT-1", Options{BaselinePath: baseline, URL: base, EnableActive: true, Timeout: 200 * time.Millisecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Status != StatusUnknown || !strings.Contains(r.Reason, "not evaluated") {
+			t.Fatalf("%s -> %v (%q), want unknown", name, r.Status, r.Reason)
+		}
+	}
+}
+
+func TestVerifyActiveProbe_NoConsent_OpenIsUnknownWithNote(t *testing.T) {
+	// Endpoint still open, no consent to re-probe: a reachability observation,
+	// not a re-test, and not an assertion that the finding is still present.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer srv.Close()
+	baseline := activeBaseline(t, "SEC-ACT-2", "xss", "GET /search?q=x", "active probe: reflected <script> payload")
+	r, err := Run(context.Background(), "SEC-ACT-2", Options{BaselinePath: baseline, URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != StatusUnknown {
+		t.Fatalf("open endpoint w/o consent -> %v (%q), want unknown", r.Status, r.Reason)
+	}
+	if !strings.Contains(strings.ToLower(r.Reason), "enable-active") || !strings.Contains(r.Reason, "reachability") {
+		t.Errorf("reason must say it is a reachability observation and that a re-probe needs consent: %q", r.Reason)
+	}
+}
+
+func TestVerifyActiveProbe_Consent_NoSignalIsUnknownNotResolved(t *testing.T) {
+	// With consent verify re-hits the endpoint. A clean response is one
+	// response: it does not prove the vulnerability is gone.
 	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
-		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("clean response, no reflection"))
 	}))
 	defer srv.Close()
-	dir := t.TempDir()
-	baseline := writeBaseline(t, dir, []models.Finding{{
-		ID:       "SEC-ACT-3",
-		Title:    "Reflected XSS (active probe)",
-		Source:   models.SourceBlackbox,
-		Category: "xss",
-		Endpoint: "GET /search?q=x",
-		Evidence: "active probe: reflected <script>alert(1)</script>",
-	}})
-
-	r, err := Run(context.Background(), "SEC-ACT-3", Options{
-		BaselinePath: baseline, URL: srv.URL, EnableActive: true,
-	})
+	baseline := activeBaseline(t, "SEC-ACT-3", "xss", "GET /search?q=x", "active probe: reflected <script>alert(1)</script>")
+	r, err := Run(context.Background(), "SEC-ACT-3", Options{BaselinePath: baseline, URL: srv.URL, EnableActive: true})
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatal(err)
 	}
 	if hits == 0 {
 		t.Fatal("consent given but endpoint was never re-probed")
 	}
-	if r.Status != StatusResolved {
-		t.Fatalf("re-probe found no reflection → want resolved; got %v (%q)", r.Status, r.Reason)
+	if r.Status != StatusUnknown || r.Status == StatusResolved {
+		t.Fatalf("re-probe found no reflection -> %v (%q), want unknown, never resolved", r.Status, r.Reason)
+	}
+}
+
+func TestVerifyActiveProbe_Consent_ReproducedSignalIsStillPresent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html><script>alert(1)</script></html>"))
+	}))
+	defer srv.Close()
+	baseline := activeBaseline(t, "SEC-ACT-4", "xss", "GET /search?q=x", "active probe: reflected <script>alert(1)</script>")
+	r, err := Run(context.Background(), "SEC-ACT-4", Options{BaselinePath: baseline, URL: srv.URL, EnableActive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != StatusStillPresent {
+		t.Fatalf("reproduced marker -> %v (%q), want still-present", r.Status, r.Reason)
+	}
+}
+
+func TestVerifyActiveProbe_AllCheckCategoriesAreRecognised(t *testing.T) {
+	// The categories the checks actually stamp, not only the hyphenated spellings.
+	for _, cat := range []string{"injection", "ssrf", "redirect", "host_header", "method_tamper", "graphql", "open-redirect", "host-header", "method-tamper"} {
+		f := models.Finding{Source: models.SourceBlackbox, Category: cat, Evidence: "active probe: payload x"}
+		if !isActiveProbeFinding(&f) {
+			t.Errorf("category %q is not recognised as an active-probe finding", cat)
+		}
+	}
+}
+
+func TestVerifyCorrelated_ActiveProbeHalfGatedIsUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) }))
+	defer srv.Close()
+	code := t.TempDir()
+	writeFile(t, code, "app/views.py", "def f(u):\n    return u\n")
+	baseline := writeBaseline(t, t.TempDir(), []models.Finding{{
+		ID: "SEC-CORR-ACT", Title: "SQL injection", Source: models.SourceCorrelated, Category: "injection",
+		Endpoint: "GET /api/item?id=1", AffectedEndpoints: []string{"app/views.py:2"}, Evidence: "active probe: payload ' OR 1=1",
+	}})
+	r, err := Run(context.Background(), "SEC-CORR-ACT", Options{BaselinePath: baseline, URL: srv.URL, CodePath: code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status == StatusResolved {
+		t.Fatalf("a correlated active-probe finding must not resolve on a gated status: %v (%q)", r.Status, r.Reason)
 	}
 }
 
@@ -272,6 +338,12 @@ func TestIsActiveProbeFinding(t *testing.T) {
 		{models.Finding{Category: "xss", Source: models.SourceBlackbox, Evidence: "active probe payload reflected"}, true},
 		{models.Finding{Category: "headers", Source: models.SourceBlackbox, Evidence: "CSP missing"}, false},
 		{models.Finding{Category: "injection", Source: models.SourceWhitebox, Evidence: "taint chain"}, false},
+		// The category decides. These evidence texts carry neither "active probe"
+		// nor "payload" (the open-redirect and host-header checks word it
+		// differently); they used to fall into the generic fallback, where a 404
+		// reads as "presumed gated or removed" and the finding as resolved.
+		{models.Finding{Category: "redirect", Source: models.SourceBlackbox, Evidence: "Open redirect confirmed: Location points at the canary host"}, true},
+		{models.Finding{Category: "host_header", Source: models.SourceBlackbox, Evidence: "Location host follows the Host header"}, true},
 	}
 	for i, c := range cases {
 		if got := isActiveProbeFinding(&c.f); got != c.want {

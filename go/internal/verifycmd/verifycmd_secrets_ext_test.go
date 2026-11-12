@@ -7,19 +7,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/Fendix-app/Fendix/go/internal/scanner/secrets"
 )
 
-// A secrets finding in a file the re-test scanner does not read must never be
-// "resolved": the secrets scanner skips .mjs/.cjs/.mts/.cts, so it can never
-// re-emit the finding, and its silence says nothing about the file.
-func TestVerify_SecretsFindingInUnreadExtensionIsNotResolved(t *testing.T) {
+// R-010 (security3-01). The secrets scanner reads every text file, so a finding
+// in a file whose extension it once skipped (.mjs/.cjs/.mts/.cts, and a
+// Dockerfile or an extension-less file) is re-tested like any other: still
+// present while it is committed, resolved once it is gone. Round 3 pinned these
+// as "unknown, never resolved" because the scanner could not read them; the
+// scanner now can, and unknown for a readable file would hide a real verdict.
+func TestVerify_SecretsFindingInAFormerlyUnreadFileIsReTested(t *testing.T) {
 	// Split so this test file holds no key-shaped literal.
 	key := "AKIA" + "ZXCVBNMASDFGHJKL"
 	body := "const awsKey = \"" + key + "\";\n"
 
-	// The .js case is the control: the same content is re-emitted and kept.
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "server.js"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -28,39 +31,42 @@ func TestVerify_SecretsFindingInUnreadExtensionIsNotResolved(t *testing.T) {
 	if err != nil || len(found) == 0 {
 		t.Fatalf("control: secrets.Scan found %d findings, err=%v", len(found), err)
 	}
-	title := found[0].Title
 
-	run := func(t *testing.T, name string) *Result {
+	run := func(t *testing.T, name, content string) *Result {
 		t.Helper()
 		d := t.TempDir()
 		if err := os.WriteFile(filepath.Join(d, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		baseline := writeBaseline(t, d, []models.Finding{{
-			ID: "SEC-KEY-1", Title: title, Source: models.SourceWhitebox,
-			Category: "secrets", Endpoint: name + ":1", RuleID: "JS_HARDCODED_AWS_KEY",
-		}})
-		res, err := Run(context.Background(), "SEC-KEY-1", Options{BaselinePath: baseline, CodePath: d})
+		// The baseline is what a real scan of the original file produced.
+		fs, err := secrets.Scan(context.Background(), d)
+		if err != nil || len(fs) == 0 {
+			t.Fatalf("%s: secrets.Scan found %d findings, err=%v", name, len(fs), err)
+		}
+		baseline := writeBaseline(t, d, evidence.ToFindings(fs))
+		if err := os.WriteFile(filepath.Join(d, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res, err := Run(context.Background(), evidence.ToFindings(fs)[0].ID, Options{BaselinePath: baseline, CodePath: d})
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
 		return res
 	}
 
-	t.Run(".js is re-tested as before", func(t *testing.T) {
-		res := run(t, "server.js")
-		if res.Status != StatusStillPresent {
-			t.Fatalf("status = %s, want %s: %s", res.Status, StatusStillPresent, res.Reason)
-		}
-	})
-	for _, ext := range []string{".mjs", ".cjs", ".mts", ".cts"} {
-		t.Run(ext+" is unknown, never resolved", func(t *testing.T) {
-			res := run(t, "server"+ext)
-			if res.Status != StatusUnknown {
-				t.Fatalf("status = %s, want %s: %s", res.Status, StatusUnknown, res.Reason)
+	for _, name := range []string{"server.js", "server.mjs", "server.cjs", "server.mts", "server.cts", "Dockerfile", "credentials", "app.properties"} {
+		t.Run(name+" unchanged is still present", func(t *testing.T) {
+			if res := run(t, name, body); res.Status != StatusStillPresent {
+				t.Fatalf("status = %s, want %s: %s", res.Status, StatusStillPresent, res.Reason)
 			}
-			if !strings.Contains(res.Reason, ext) || !strings.Contains(res.Reason, "secrets scanner") {
-				t.Errorf("reason should name the extension and the scanner: %s", res.Reason)
+		})
+		t.Run(name+" with the key removed is resolved", func(t *testing.T) {
+			res := run(t, name, "const awsKey = process.env.AWS_KEY;\n")
+			if res.Status != StatusResolved {
+				t.Fatalf("status = %s, want %s: %s", res.Status, StatusResolved, res.Reason)
+			}
+			if !strings.Contains(res.Reason, "searched") || !strings.Contains(res.Reason, "text files") {
+				t.Errorf("the reason must say what was searched: %s", res.Reason)
 			}
 		})
 	}
@@ -84,10 +90,14 @@ func TestVerify_SemgrepFindingWithSecretsCategoryIsKept(t *testing.T) {
 	assertKeptSemgrepFinding(t, res, "js-hardcoded-secret-sink")
 }
 
-// The secrets scanner also skips a file by path (a pruned directory such as
-// node_modules) and by size (over 1 MiB). A re-test that cannot read the file
-// must not call the finding resolved, and must name the skip.
-func TestVerify_SecretsFindingTheScannerSkipsByPathOrSizeIsNotResolved(t *testing.T) {
+// The secrets scanner prunes a directory only on evidence that it holds
+// installed or built output (D6'), and reads a file of any size up to its
+// streaming cap. A finding under an installed-package tree is re-tested as
+// unknown with the skip named; a finding under a folder that is only called
+// node_modules, vendor or build, and one in a file over 1 MiB, is re-tested
+// like any other. (Round 3 pinned those last three as unknown: that was the
+// scanner skipping first-party code by name and a 1 MiB file by size.)
+func TestVerify_SecretsFindingUnderEvidencedDependencyTreeIsNotResolved(t *testing.T) {
 	key := "AKIA" + "ZXCVBNMASDFGHJKL"
 	line := "const awsKey = \"" + key + "\";\n"
 
@@ -101,38 +111,46 @@ func TestVerify_SecretsFindingTheScannerSkipsByPathOrSizeIsNotResolved(t *testin
 	}
 	title := found[0].Title
 
-	// maxFileBytes is 1 MiB; pad a valid file to one byte over it, key first.
 	const limit = 1 << 20
 	over := line + strings.Repeat("x", limit+1-len(line))
-	exact := line + strings.Repeat("x", limit-len(line))
 
 	cases := []struct {
 		name    string
 		rel     string
+		extra   map[string]string
 		content string
 		status  Status
 		reason  string
 	}{
-		{"normal path control", "src/server.js", line, StatusStillPresent, ""},
-		{"file of exactly the size limit is still read", "src/big.js", exact, StatusStillPresent, ""},
-		{"under node_modules", "node_modules/pkg/server.js", line, StatusUnknown, "node_modules"},
-		{"under vendor", "vendor/pkg/server.js", line, StatusUnknown, "vendor"},
-		{"under build", "build/server.js", line, StatusUnknown, "build"},
-		{"just over the size limit", "src/big.js", over, StatusUnknown, "larger than"},
+		{"normal path control", "src/server.js", nil, line, StatusStillPresent, ""},
+		{"a file just over 1 MiB is read", "src/big.js", nil, over, StatusStillPresent, ""},
+		{"a folder only named node_modules is read", "node_modules/pkg/server.js", nil, line, StatusStillPresent, ""},
+		{"a folder only named vendor is read", "vendor/pkg/server.js", nil, line, StatusStillPresent, ""},
+		{"a folder only named build is read", "build/server.js", nil, line, StatusStillPresent, ""},
+		{"an installed npm tree is pruned", "node_modules/pkg/server.js",
+			map[string]string{"node_modules/.package-lock.json": `{"lockfileVersion": 3}`}, line, StatusUnknown, "node_modules"},
+		{"a Go vendor tree is pruned", "vendor/pkg/server.js",
+			map[string]string{"vendor/modules.txt": "# example.com/pkg v1.0.0\n"}, line, StatusUnknown, "vendor"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			abs := filepath.Join(dir, filepath.FromSlash(tc.rel))
-			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-				t.Fatal(err)
+			put := func(rel, content string) {
+				abs := filepath.Join(dir, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if err := os.WriteFile(abs, []byte(tc.content), 0o644); err != nil {
-				t.Fatal(err)
+			put(tc.rel, tc.content)
+			for rel, c := range tc.extra {
+				put(rel, c)
 			}
 			baseline := writeBaseline(t, dir, []models.Finding{{
 				ID: "SEC-KEY-2", Title: title, Source: models.SourceWhitebox,
-				Category: "secrets", Endpoint: tc.rel + ":1", RuleID: "JS_HARDCODED_AWS_KEY",
+				Category: "secrets", Endpoint: tc.rel + ":1", RuleID: found[0].RuleID,
 			}})
 			res, err := Run(context.Background(), "SEC-KEY-2", Options{BaselinePath: baseline, CodePath: dir})
 			if err != nil {

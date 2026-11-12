@@ -14,9 +14,19 @@
 //     the finding originally.
 //
 //   - File-anchored SAST findings (endpoint shape: "path/to/file.py:42";
-//     source: whitebox; category: secrets/injection/headers/...): re-scan
-//     the file containing the original endpoint and look for a finding
-//     with the same ID at the same approximate line.
+//     source: whitebox). Only a finding the native secrets scanner produced
+//     (rule_id "secrets/<PATTERN>", no source tier) is re-tested: the file is
+//     re-read by that scanner and the finding is still present while the same
+//     rule fires anywhere in the same file, or while the credential's VALUE
+//     (identified by the redaction marker in the baseline evidence) is found in
+//     any text file under --code, as written or with string concatenation,
+//     line continuations and backslash escapes undone (see verifySecret).
+//     Resolved needs the whole searchable tree read and the value found
+//     nowhere; anything that could not be searched is unknown. Every other
+//     file-anchored finding — Semgrep, textscan, the Python engine, including
+//     their `secrets`-category findings — is unknown: verify cannot re-run
+//     that analyzer on one file, and a scanner that never emits a rule can
+//     never prove it gone.
 //
 //   - Dep-CVE findings (category: deps, endpoint: "requirements.txt" or
 //     "package-lock.json" or similar): re-run the relevant native
@@ -36,15 +46,18 @@
 //     --enable-active, verify re-hits the endpoint and looks for the recorded
 //     payload signal.
 //
-// Process exit codes (Sprint 03):
+// Process exit codes (Sprint 03; mapped in cmd/fendix's verify command):
 //
-//   - 0 — Status: resolved. The finding no longer fires.
+//   - 0 — Status: resolved. The finding no longer fires. This is the ONLY
+//     status that exits 0.
 //   - 1 — Status: still-present. The finding still fires; CI should fail.
-//   - 2 — Status: unknown OR not-found-in-baseline. Verify could not
+//   - 2 — Status: unknown OR not-found-in-baseline (and any status the
+//     command does not recognise, and any command error). Verify could not
 //     produce a confident result; the operator should investigate but
 //     CI should NOT auto-fail on this — that would punish edge cases
 //     (correlated findings, baseline drift) the operator hasn't yet
-//     opted to handle.
+//     opted to handle. It is never the success code: a gate that treats
+//     exit 0 as "resolved" never closes an unknown.
 //
 // There's no automatic discovery of the scan target — the caller passes
 // --url / --code explicitly, the same way they did for the original scan.
@@ -116,6 +129,59 @@ type Options struct {
 	// active-probe finding's endpoint (C4). Without it, an active-probe verify
 	// falls back to a reachability-only verdict and says so.
 	EnableActive bool
+
+	// sightings caches one secrets-scanner pass over CodePath, and searches
+	// the credential search of each distinct set of markers, for every
+	// occurrence of the finding being verified (verifySecret). Run sets them.
+	sightings *sightingCache
+	searches  *searchCache
+}
+
+// sightingCache holds the secrets scanner's findings over the whole --code
+// root, computed at most once per Run.
+type sightingCache struct {
+	loaded bool
+	list   []secrets.Sighting
+	scope  secrets.SightingsScope
+	err    error
+}
+
+func (c *sightingCache) get(ctx context.Context, root string) ([]secrets.Sighting, secrets.SightingsScope, error) {
+	if c == nil {
+		return secrets.ScanSightingsDetail(ctx, root)
+	}
+	if !c.loaded {
+		c.list, c.scope, c.err = secrets.ScanSightingsDetail(ctx, root)
+		c.loaded = true
+	}
+	return c.list, c.scope, c.err
+}
+
+// searchCache holds the result of each credential search, so the occurrences of
+// one finding (and a repeated marker) read the tree once.
+type searchCache struct {
+	byKey map[string]searchEntry
+}
+
+type searchEntry struct {
+	res *secrets.SearchResult
+	err error
+}
+
+func (c *searchCache) get(ctx context.Context, root string, markers []string) (*secrets.SearchResult, error) {
+	if c == nil {
+		return secrets.SearchValues(ctx, root, markers)
+	}
+	key := strings.Join(markers, "\x00")
+	if e, ok := c.byKey[key]; ok {
+		return e.res, e.err
+	}
+	res, err := secrets.SearchValues(ctx, root, markers)
+	if c.byKey == nil {
+		c.byKey = map[string]searchEntry{}
+	}
+	c.byKey[key] = searchEntry{res, err}
+	return res, err
 }
 
 // Run loads the baseline, finds the requested ID, dispatches to the
@@ -143,6 +209,12 @@ func Run(ctx context.Context, findingID string, opts Options) (*Result, error) {
 		return out, nil
 	}
 	out.Original = original
+	if opts.sightings == nil {
+		opts.sightings = &sightingCache{}
+	}
+	if opts.searches == nil {
+		opts.searches = &searchCache{}
+	}
 
 	// A grouped finding presents several security occurrences. Re-testing
 	// only its primary location and reporting the result for the whole
@@ -443,6 +515,12 @@ func isFileFinding(f *models.Finding) bool {
 	if strings.Contains(base, ".env") {
 		return true
 	}
+	// A finding of the secrets scanner, which reads every text file (R-010): a
+	// Dockerfile, a credentials file or a .properties file has no extension on
+	// the list above but is a file the scanner anchors a finding to.
+	if strings.HasPrefix(f.RuleID, "secrets/") && base != ep {
+		return true
+	}
 	return false
 }
 
@@ -627,11 +705,9 @@ func checkURLFindingPresence(f *models.Finding, resp *http.Response, body []byte
 	}
 }
 
-// verifyFile re-scans the source file containing the original endpoint
-// and reports whether a finding with the same ID still emerges.
-// MVP implementation only handles secrets findings (which run via the
-// native Go secrets scanner — no subprocess, fast); other SAST
-// categories defer to a full re-scan.
+// verifyFile re-tests a file-anchored finding. Only the native secrets
+// scanner's own findings get a verdict (verifySecret: no subprocess, fast);
+// every other file-anchored finding is unknown and defers to a full re-scan.
 func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Result) {
 	if opts.CodePath == "" {
 		out.Status = StatusUnknown
@@ -671,47 +747,7 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 	}
 
 	if f.Category == "secrets" {
-		// textscan reads more than the secrets scanner does: more extensions
-		// (.mjs, .cjs, ...), and files under node_modules/ or over 1 MiB.
-		// A finding in a file the scanner skips can never be re-emitted, so
-		// its absence says nothing about the file: not resolved. (A skipped
-		// directory counts relative to the scan root, which the re-scan below
-		// does not, because it starts at the file's own directory.)
-		if why := secrets.SkipReason(opts.CodePath, absFile); why != "" {
-			out.Status = StatusUnknown
-			out.Reason = fmt.Sprintf(
-				"the secrets scanner skips %s (%s), so verify cannot re-test this finding and will "+
-					"not call it resolved. Re-run `fendix scan --code <path>` and diff against the "+
-					"baseline for a verdict.",
-				relPath, why)
-			return
-		}
-		// Re-run the native secrets scanner against the file's dir.
-		// (The scanner itself walks; pointing it at the immediate
-		// parent gives a fast, focused re-test.)
-		findings, err := secrets.Scan(ctx, filepath.Dir(absFile))
-		if err != nil {
-			out.Status = StatusUnknown
-			out.Reason = fmt.Sprintf("secrets re-scan failed: %v", err)
-			return
-		}
-		for _, nf := range findings {
-			if endpointFileMatches(nf.Endpoint, relPath) && titleMatches(nf.Title, f.Title) {
-				out.Status = StatusStillPresent
-				out.Reason = fmt.Sprintf("secrets scanner re-emitted the same finding at %s", nf.Endpoint)
-				return
-			}
-			// Also check affected_endpoints — secrets dedups across files.
-			for _, ep := range nf.AffectedEndpoints {
-				if endpointFileMatches(ep, relPath) && titleMatches(nf.Title, f.Title) {
-					out.Status = StatusStillPresent
-					out.Reason = fmt.Sprintf("secrets scanner re-emitted same finding at %s (via affected_endpoints)", ep)
-					return
-				}
-			}
-		}
-		out.Status = StatusResolved
-		out.Reason = fmt.Sprintf("secrets scanner no longer flags %s for %q", relPath, truncate(f.Title, 60))
+		verifySecret(ctx, f, opts, absFile, relPath, out)
 		return
 	}
 
@@ -719,6 +755,306 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 	// the Python engine — defer.
 	out.Status = StatusUnknown
 	out.Reason = "AST-based SAST verify (injection/xss/path-traversal/...) requires --python-engine and a focused re-scan harness; not in MVP. Run `fendix scan --code <path> --python-engine` for the full re-eval."
+}
+
+// verifySecret re-tests a `secrets`-category finding (R-010, decision D5).
+//
+// Only the secrets scanner's own findings are re-tested, and only by that
+// scanner. Other analyzers also file findings under category "secrets" —
+// textscan's GO_HARDCODED_AWS_KEY, JS_HARDCODED_AWS_KEY and
+// GO_WEAK_HASH_PASSWORD, the Python engine's PY_WEAK_CRYPTO_PASSWORD — with
+// rules and titles the secrets scanner never emits. Re-testing one of those
+// with the secrets scanner always came back empty, and verify called a live
+// CRITICAL key "resolved" (exit 0) on unchanged code. Their verdict is now
+// unknown (exit 2), because verify cannot re-run their analyzer on one file.
+//
+// For a secrets-scanner finding the re-test reads exactly the finding's file
+// through secrets.RetestFile, which refuses to answer for a file it cannot
+// read completely (a skipped path or binary type, a symlink, an unreadable or
+// over-cap file). Before anything is called resolved, the whole --code root is
+// searched for the credential ITSELF, identified by the redaction marker the
+// baseline evidence carries ([REDACTED len=N sha256:...], the byte length and
+// the first 4 bytes of the SHA-256 of the value): a rule stops matching as soon
+// as the literal changes shape, the value does not (secrets.SearchValues).
+// The search reads every text file, whatever its name or extension, and finds
+// the value as written, with adjacent string literals and line continuations
+// joined, and with backslash escapes undone. The verdict is:
+//
+//   - still-present: the scanner reports the same rule (rule_id) in the same
+//     file, at any line, or a value with the marker's length and digest is
+//     found anywhere under --code in any of those forms; the reason names where.
+//     A secret moved within the file, rotated in place to another literal of the
+//     same kind, moved to another file of any kind, or written another way
+//     (an environment lookup's default, a call argument, a concatenation) is
+//     still present.
+//   - resolved: the scanner read the whole file and reports that rule there no
+//     more, AND the search read every text file under --code and found the value
+//     nowhere. The reason says what was searched and what was not (binary
+//     files, directories pruned on evidence). When the baseline evidence carries
+//     no marker (a non-primary occurrence of a group, a signature-only rule, an
+//     older baseline) the value cannot be searched for, so resolved
+//     additionally needs a rule that matches the credential's own token shape
+//     (secrets.IsProviderAnchoredRule) and that fires nowhere under --code; an
+//     assignment-shaped rule stops matching when the literal moves into another
+//     shape, so it stays unknown.
+//   - unknown: everything else, including an incomplete re-test, a file under
+//     --code that could not be read or was over the read cap, and a credential
+//     too long to search for.
+//
+// One rule reported twice in a file keeps both findings present until both
+// are gone: the re-test cannot tell which literal a finding was, so it errs
+// towards still-present, never towards resolved. A credential encoded (base64,
+// hex), split over variables or built at run time is not found: that is stated
+// in the resolved reason, not hidden.
+func verifySecret(ctx context.Context, f *models.Finding, opts Options, absFile, relPath string, out *Result) {
+	if why := notSecretsScannerFinding(f); why != "" {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"%s; verify re-tests a secrets finding only with the analyzer that produced it, and "+
+				"cannot re-run that one against a single file, so this finding is kept as unconfirmed "+
+				"rather than resolved. Re-run `fendix scan --code <path>` and diff against the baseline "+
+				"for a verdict.",
+			why)
+		return
+	}
+	rootAbs, err := filepath.Abs(opts.CodePath)
+	if err == nil {
+		var fileAbs string
+		if fileAbs, err = filepath.Abs(absFile); err == nil {
+			var rel string
+			if rel, err = filepath.Rel(rootAbs, fileAbs); err == nil {
+				relPath = filepath.ToSlash(rel)
+			}
+		}
+	}
+	if err != nil {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf("cannot place %s inside --code %s: %v", secrets.SafeName(relPath), opts.CodePath, err)
+		return
+	}
+	safeRel := secrets.SafeName(relPath)
+	findings, retestErr := secrets.RetestFile(ctx, opts.CodePath, absFile)
+	for _, nf := range findings {
+		if nf.RuleID == f.RuleID && fileOfLineEndpoint(nf.Endpoint) == relPath {
+			out.Status = StatusStillPresent
+			out.Reason = fmt.Sprintf("secrets scanner still reports %s at %s", f.RuleID, safeEndpoint(nf.Endpoint))
+			return
+		}
+	}
+
+	// Not reported by the rule in its own file any more. Is the credential
+	// itself anywhere under --code, in any text file, in any form?
+	markers := secrets.Markers(f.Evidence)
+	var search *secrets.SearchResult
+	var searchErr error
+	if len(markers) > 0 {
+		search, searchErr = opts.searches.get(ctx, opts.CodePath, markers)
+		if searchErr == nil && len(search.Hits) > 0 {
+			out.Status = StatusStillPresent
+			out.Reason = fmt.Sprintf(
+				"the same credential (%s) is still committed: found at %s. "+
+					"It is no longer reported by %s in %s, but moving or reshaping a secret does not remove it from the repository.",
+				strings.Join(markers, ", "), listHits(search.Hits), f.RuleID, safeRel)
+			return
+		}
+	}
+	if retestErr != nil {
+		// Not re-emitted, but the re-test did not read the whole file.
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"the secrets scanner could not re-test %s completely (%v), so verify will not call this "+
+				"finding resolved. Re-run `fendix scan --code <path>` and diff against the baseline "+
+				"for a verdict.",
+			safeRel, retestErr)
+		return
+	}
+	if len(markers) > 0 {
+		switch {
+		case searchErr != nil:
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf(
+				"%s no longer reports %s in %s, but the rest of --code could not be searched for the "+
+					"same credential (%v), so verify will not call this finding resolved.",
+				"the secrets scanner", f.RuleID, safeRel, searchErr)
+		case !search.Complete():
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf(
+				"the secrets scanner no longer reports %s in %s, but the search for the same credential "+
+					"could not read all of --code (%s), so verify will not call this finding resolved. "+
+					"Searched: %d text files.",
+				f.RuleID, safeRel, search.Coverage.LostDetail(240), search.Files)
+		default:
+			// The value search found nothing. The scanner itself is the other
+			// witness: whatever it reports anywhere under --code for this
+			// credential (its own value marker) is still present, however the
+			// value search's candidates were chosen (redteam4-verify-01). Verify
+			// must never call resolved a credential the scanner still reports.
+			sightings, _, serr := opts.sightings.get(ctx, opts.CodePath)
+			if serr != nil {
+				out.Status = StatusUnknown
+				out.Reason = fmt.Sprintf(
+					"the credential (%s) was found nowhere by the value search, but the secrets scanner could not "+
+						"be applied to the rest of --code to confirm it (%v), so verify will not call this finding resolved.",
+					strings.Join(markers, ", "), serr)
+				return
+			}
+			if hit := sightingWithMarker(sightings, markers); hit != nil {
+				out.Status = StatusStillPresent
+				out.Reason = fmt.Sprintf(
+					"the secrets scanner still reports the same credential (%s) at %s (%s). It is no longer "+
+						"reported by %s in %s, but moving or reshaping a secret does not remove it from the repository.",
+					strings.Join(markers, ", "), safeEndpoint(hit.Endpoint), hit.RuleID, f.RuleID, safeRel)
+				return
+			}
+			out.Status = StatusResolved
+			out.Reason = fmt.Sprintf(
+				"secrets scanner re-read all of %s and no longer reports %s there, and the credential (%s) "+
+					"was found nowhere: %s",
+				safeRel, f.RuleID, strings.Join(markers, ", "), search.Scope())
+		}
+		return
+	}
+
+	// The baseline evidence does not identify the credential, so it cannot be
+	// searched for. Only a rule that matches the credential's own token shape,
+	// and fires nowhere under --code, shows it is gone.
+	if !secrets.IsProviderAnchoredRule(f.RuleID) {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"the secrets scanner no longer reports %s in %s, but the baseline evidence carries no "+
+				"redaction marker ([REDACTED len=N sha256:...]) identifying the credential, and %s matches "+
+				"an assignment shape rather than the credential's own format, so verify cannot rule out "+
+				"that the literal moved to a place the rule does not match. Re-run `fendix scan --code <path>` "+
+				"and diff against the baseline for a verdict.",
+			f.RuleID, safeRel, f.RuleID)
+		return
+	}
+	sightings, sc, searchErr := opts.sightings.get(ctx, opts.CodePath)
+	if searchErr != nil {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"the secrets scanner no longer reports %s in %s, but could not search the rest of --code for "+
+				"the same credential (%v), so verify will not call this finding resolved.",
+			f.RuleID, safeRel, searchErr)
+		return
+	}
+	scopeText := sc.Text
+	var same []secrets.Sighting
+	for _, s := range sightings {
+		if s.RuleID == f.RuleID {
+			same = append(same, s)
+		}
+	}
+	if len(same) > 0 {
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"the secrets scanner no longer reports %s in %s, but still reports it at %s, and the baseline "+
+				"evidence carries no redaction marker identifying this credential, so verify cannot tell "+
+				"whether that is this secret moved. Re-run `fendix scan --code <path>` and diff against "+
+				"the baseline for a verdict.",
+			f.RuleID, safeRel, listSightings(same))
+		return
+	}
+	if !sc.Complete() {
+		// With no value to search for, the rule is the only witness, and it did
+		// not read binary files, archives or the directories a scan prunes: the
+		// credential could be in any of them, in a form no rule matches.
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"the secrets scanner no longer reports %s in %s, and the baseline evidence carries no redaction "+
+				"marker identifying the credential, so only the rule could show it gone; %s, so the credential "+
+				"could be in what was not read. Re-run `fendix scan --code <path>` and diff against the baseline "+
+				"for a verdict.",
+			f.RuleID, safeRel, scopeText)
+		return
+	}
+	out.Status = StatusResolved
+	out.Reason = fmt.Sprintf(
+		"secrets scanner re-read all of %s and no longer reports %s there, and %s, which matches the "+
+			"credential's own format, fires nowhere under --code (%s; the baseline evidence carries no "+
+			"redaction marker to search for the credential itself)",
+		safeRel, f.RuleID, f.RuleID, scopeText)
+}
+
+// sightingWithMarker returns a sighting whose redaction markers include one of
+// the baseline's, or nil.
+func sightingWithMarker(ss []secrets.Sighting, markers []string) *secrets.Sighting {
+	want := map[string]bool{}
+	for _, m := range markers {
+		want[m] = true
+	}
+	for i := range ss {
+		for _, m := range ss[i].Markers {
+			if want[m] {
+				return &ss[i]
+			}
+		}
+	}
+	return nil
+}
+
+// listHits renders up to five hits as "path:line (form)".
+func listHits(hs []secrets.Hit) string {
+	const max = 5
+	parts := make([]string, 0, max+1)
+	for i, h := range hs {
+		if i == max {
+			parts = append(parts, fmt.Sprintf("and %d more", len(hs)-max))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s)", h.Endpoint, h.Form))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// listSightings renders up to five sightings as "path:line (rule)".
+func listSightings(ss []secrets.Sighting) string {
+	const max = 5
+	parts := make([]string, 0, max+1)
+	for i, s := range ss {
+		if i == max {
+			parts = append(parts, fmt.Sprintf("and %d more", len(ss)-max))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s)", safeEndpoint(s.Endpoint), s.RuleID))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// notSecretsScannerFinding returns why f cannot be shown to come from the
+// secrets scanner, or "" when it does. The scanner stamps rule_id
+// "secrets/<PATTERN>", leaves source_tier empty and reports whitebox; a
+// non-empty tier on such a finding means a member from another analyzer was
+// merged into it (dedup keeps the most trusted tier).
+func notSecretsScannerFinding(f *models.Finding) string {
+	switch {
+	case f.RuleID == "":
+		return "the finding records no rule_id, so the analyzer that produced it is unknown"
+	case !secrets.IsRuleID(f.RuleID):
+		return fmt.Sprintf("%s (%s) was not produced by the secrets scanner", f.RuleID, semgrepTierLabel(f))
+	case f.SourceTier != "":
+		return fmt.Sprintf("%s carries %s, so another analyzer contributed to it", f.RuleID, semgrepTierLabel(f))
+	case f.Source != models.SourceWhitebox:
+		return fmt.Sprintf("%s has source %q, not the secrets scanner's whitebox", f.RuleID, f.Source)
+	}
+	return ""
+}
+
+// safeEndpoint makes a "path:line" endpoint safe to put in a reason: the path is
+// sanitised and cut (secrets.SafeName), the line number kept.
+func safeEndpoint(ep string) string {
+	file := fileOfLineEndpoint(ep)
+	return secrets.SafeName(file) + ep[len(file):]
+}
+
+// fileOfLineEndpoint strips a trailing ":<line>" from a "path:line" endpoint.
+func fileOfLineEndpoint(ep string) string {
+	if i := strings.LastIndex(ep, ":"); i > 0 {
+		if _, err := stringToInt(ep[i+1:]); err == nil {
+			return ep[:i]
+		}
+	}
+	return ep
 }
 
 // verifyDep re-runs the native pip/npm scanner against the manifest's
@@ -820,22 +1156,29 @@ var activeProbeCategories = map[string]bool{
 	"host-header":   true,
 	"method-tamper": true,
 	"graphql":       true,
+	// The categories the checks actually stamp (Check.Category()): the hyphenated
+	// spellings above are kept for baselines written by older tooling.
+	"redirect":      true,
+	"host_header":   true,
+	"method_tamper": true,
 }
 
 // isActiveProbeFinding reports whether f came from an active-tier probe: a
-// blackbox finding in an active-probe category whose evidence records an
-// injected payload. Requiring both the category AND the "active probe" evidence
-// marker avoids misclassifying a whitebox taint finding (same category, source
-// whitebox) or a passively-observed one.
+// blackbox finding in an active-probe category. The category alone decides: an
+// earlier version also required the evidence to mention a payload, which let an
+// active finding whose evidence reads "Open redirect confirmed: ..." fall into
+// the generic per-title fallback, where a 404 reads as "presumed gated or
+// removed" and the finding as resolved. Source must still be blackbox, so a
+// whitebox taint finding in the same category is not misclassified.
 func isActiveProbeFinding(f *models.Finding) bool {
-	if f.Source != models.SourceBlackbox {
-		return false
-	}
-	if !activeProbeCategories[f.Category] {
-		return false
-	}
-	return strings.Contains(strings.ToLower(f.Evidence), "active probe") ||
-		strings.Contains(strings.ToLower(f.Evidence), "payload")
+	return f.Source == models.SourceBlackbox && activeProbeCategories[f.Category]
+}
+
+// isActiveProbeDerived reports whether f (of any Source, correlated included)
+// is in an active-probe category: the blackbox half of a correlated finding in
+// such a category comes from an active probe.
+func isActiveProbeDerived(f *models.Finding) bool {
+	return activeProbeCategories[f.Category]
 }
 
 // verifyCorrelated re-tests BOTH halves of a correlated finding. The blackbox
@@ -883,6 +1226,15 @@ func verifyCorrelated(ctx context.Context, f *models.Finding, opts Options, out 
 	if err != nil {
 		out.Status = StatusUnknown
 		out.Reason = fmt.Sprintf("correlated blackbox half: request to %s failed: %v", targetURL, err)
+		return
+	}
+	if isGatedStatus(status) && isActiveProbeDerived(f) {
+		// The blackbox half of this correlation is an active-probe finding: a
+		// gated or removed route is not proof it was fixed (contract C5.6).
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf(
+			"the blackbox half is an active-probe finding and its endpoint now returns HTTP %d; a reachability change is not proof of "+
+				"remediation, and no validated probe-specific verification contract exists", status)
 		return
 	}
 	if isGatedStatus(status) {
@@ -972,15 +1324,26 @@ func fileOfEndpoint(ep string) string {
 	return ""
 }
 
-// verifyActiveProbe re-tests an active-probe finding. Re-issuing the actual
-// attack payload requires explicit consent (opts.EnableActive) mirroring the
-// original scan's --enable-active gate:
+// verifyActiveProbe re-tests an active-probe finding. It NEVER returns
+// resolved, and returns still-present only when the recorded payload signal
+// reproduces. Everything else is unknown, with a reason naming what was
+// observed (decision 2026-11-12, amendment 1; contract C5.6).
 //
-//   - No consent: a reachability-only verdict. A gated endpoint (401/403/404/
-//     410) is resolved; an open one is reported still-present WITH a note that
-//     a confirmed re-exploit needs --enable-active.
-//   - Consent: re-hit the endpoint and look for the finding's signal in the
-//     response body (a reflected payload / marker). Absent → resolved.
+// Why no resolved: an active-probe finding is closed on evidence that the
+// probe was evaluated and the vulnerability is absent. A gated or removed
+// endpoint (401/403/404/410) says the route changed, not that it was fixed (an
+// auth wall, a WAF, a moved route or a rate limiter all produce the same
+// status); a response without the reflected marker says one request did not
+// reflect it. A probe-specific verification contract that has been
+// independently validated may one day establish a result; none exists, so a
+// result is unknown. This is the same rule as secrets-only resolution (D5).
+//
+//   - No consent (opts.EnableActive unset): a reachability observation only.
+//     Re-sending the attack payload needs the same consent as the original
+//     scan's --enable-active gate.
+//   - Consent: re-hit the endpoint and look for the finding's signal (a
+//     reflected payload marker). Present -> still-present, the one observation
+//     that is evidence about the vulnerability itself.
 func verifyActiveProbe(ctx context.Context, f *models.Finding, opts Options, out *Result) {
 	if opts.URL == "" {
 		out.Status = StatusUnknown
@@ -1015,39 +1378,40 @@ func verifyActiveProbe(ctx context.Context, f *models.Finding, opts Options, out
 	resp, err := client.Do(req)
 	if err != nil {
 		out.Status = StatusUnknown
-		out.Reason = fmt.Sprintf("request to %s failed: %v", targetURL, err)
+		out.Reason = fmt.Sprintf("request to %s failed (the probe was not evaluated; a failed request proves nothing about the finding): %v", targetURL, err)
 		return
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 
-	// A gated/removed endpoint resolves the finding regardless of consent —
-	// the attack surface is no longer reachable.
-	if isGatedStatus(resp.StatusCode) {
-		out.Status = StatusResolved
-		out.Reason = fmt.Sprintf("active-probe endpoint now returns %d (gated/removed) — attack surface no longer reachable", resp.StatusCode)
-		return
+	const noContract = "no validated probe-specific verification contract exists"
+
+	// Consent given: re-probe and look for the recorded signal first, so a
+	// reproduced finding is reported whatever the status.
+	if opts.EnableActive {
+		if marker := probeMarker(f); marker != "" && strings.Contains(string(body), marker) {
+			out.Status = StatusStillPresent
+			out.Reason = fmt.Sprintf("re-probe reflected the recorded payload marker %q in the response (HTTP %d); the finding reproduces", truncate(marker, 40), resp.StatusCode)
+			return
+		}
 	}
 
-	if !opts.EnableActive {
-		out.Status = StatusStillPresent
+	out.Status = StatusUnknown
+	switch {
+	case isGatedStatus(resp.StatusCode):
+		out.Reason = fmt.Sprintf("active-probe endpoint now returns HTTP %d; a reachability change is not proof of remediation (%s)", resp.StatusCode, noContract)
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusBadGateway ||
+		resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusGatewayTimeout:
+		out.Reason = fmt.Sprintf("active-probe endpoint returned HTTP %d, a rate limit or temporary failure; the probe was not evaluated and proves nothing about the finding", resp.StatusCode)
+	case !opts.EnableActive:
 		out.Reason = fmt.Sprintf(
-			"active-probe endpoint still reachable (HTTP %d). This is a REACHABILITY verdict only — a confirmed "+
-				"re-exploit requires re-sending the attack payload, which needs explicit consent: re-run with "+
-				"--enable-active (mirroring the original scan) to actually re-probe.", resp.StatusCode)
-		return
+			"active-probe endpoint is reachable (HTTP %d). This is a reachability observation only, not a re-test: re-sending the "+
+				"attack payload needs explicit consent, so re-run with --enable-active (mirroring the original scan). Even then %s, "+
+				"so a response without the signal is reported unknown, never resolved.", resp.StatusCode, noContract)
+	default:
+		out.Reason = fmt.Sprintf("re-probe (HTTP %d) did not reproduce the recorded payload signal; one response without it is not proof of remediation (%s). Re-run a full --enable-active scan for the evaluated result",
+			resp.StatusCode, noContract)
 	}
-
-	// Consent given: re-probe. Best-effort signal match — a reflected marker
-	// from the recorded payload still appearing in the body means the finding
-	// reproduces. If the recorded payload marker is gone, treat as resolved.
-	if marker := probeMarker(f); marker != "" && strings.Contains(string(body), marker) {
-		out.Status = StatusStillPresent
-		out.Reason = fmt.Sprintf("re-probe reflected the recorded payload marker %q in the response — finding reproduces", truncate(marker, 40))
-		return
-	}
-	out.Status = StatusResolved
-	out.Reason = "re-probe did not reproduce the recorded payload signal — finding presumed resolved (re-run a full --enable-active scan for exhaustive confirmation)"
 }
 
 // probeStatus issues a single request and returns the HTTP status code.
@@ -1135,25 +1499,6 @@ func joinURL(base, path string) string {
 	}
 	bu.Path = path
 	return bu.String()
-}
-
-func endpointFileMatches(endpoint, relPath string) bool {
-	if endpoint == "" {
-		return false
-	}
-	base := endpoint
-	if i := strings.LastIndex(base, ":"); i > 0 {
-		if _, err := stringToInt(base[i+1:]); err == nil {
-			base = base[:i]
-		}
-	}
-	return strings.HasSuffix(base, relPath) || strings.HasSuffix(relPath, base)
-}
-
-func titleMatches(a, b string) bool {
-	// Title equality with a small tolerance: the secrets scanner uses
-	// stable canonical titles, so equality is the common case.
-	return a == b
 }
 
 func stringToInt(s string) (int, error) {
