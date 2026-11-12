@@ -218,71 +218,72 @@ rules:
                   }
                   ...
           - pattern: $HELPER(...)
-      # An identifier allowlist (a constant name, or an array literal of string
-      # literals): the value is rejected (return or throw, the check alone or an operand of `||`, never
-      # under `&&`), or reset to a literal, or a ternary picks a literal.
       - patterns:
           - pattern-either:
-              - pattern-inside: |
-                  if (!$SET.$HAS($V)) $BODY
-                  ...
-              - pattern-inside: |
-                  if ($GUARD_OR || !$SET.$HAS($V)) $BODY
-                  ...
-              - pattern-inside: |
-                  if (!$SET.$HAS($V) || $GUARD_OR) $BODY
-                  ...
-          - metavariable-pattern:
-              metavariable: $BODY
-              patterns:
-                - pattern-either:
-                    - pattern: return ...;
-                    - pattern: throw $ERR;
-                - pattern-not-inside: function $EXIT_FN(...) { ... }
-                - pattern-not-inside: function (...) { ... }
-                - pattern-not-inside: (...) => $EXIT_ARROW
-                - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
-                - pattern-not-inside: for (...) $EXIT_STMT
-                - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
-          - metavariable-regex:
-              metavariable: $HAS
-              regex: ^(has|includes)$
-          - metavariable-regex:
-              metavariable: $SET
-              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
-          - pattern: $V
-      - patterns:
-          - pattern-either:
-              - pattern-inside: |
-                  if (!$SET.$HAS($V)) $V = "...";
-                  ...
-              - pattern-inside: |
-                  if ($GUARD_OR || !$SET.$HAS($V)) $V = "...";
-                  ...
-              - pattern-inside: |
-                  if (!$SET.$HAS($V) || $GUARD_OR) $V = "...";
-                  ...
-              - pattern-inside: |
-                  if (!$SET.$HAS($V)) {
-                    $V = "...";
-                  }
-                  ...
-              - pattern-inside: |
-                  if ($GUARD_OR || !$SET.$HAS($V)) {
-                    $V = "...";
-                  }
-                  ...
-              - pattern-inside: |
-                  if (!$SET.$HAS($V) || $GUARD_OR) {
-                    $V = "...";
-                  }
-                  ...
-          - metavariable-regex:
-              metavariable: $HAS
-              regex: ^(has|includes)$
-          - metavariable-regex:
-              metavariable: $SET
-              regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
+              # An identifier allowlist (a constant name, or an array literal of string
+              # literals): the value is rejected (return or throw, the check alone or an operand of `||`, never
+              # under `&&`), or reset to a literal, or a ternary picks a literal.
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          if (!$SET.$HAS($V)) $BODY
+                          ...
+                      - pattern-inside: |
+                          if ($GUARD_OR || !$SET.$HAS($V)) $BODY
+                          ...
+                      - pattern-inside: |
+                          if (!$SET.$HAS($V) || $GUARD_OR) $BODY
+                          ...
+                  - metavariable-pattern:
+                      metavariable: $BODY
+                      patterns:
+                        - pattern-either:
+                            - pattern: return ...;
+                            - pattern: throw $ERR;
+                        - pattern-not-inside: function $EXIT_FN(...) { ... }
+                        - pattern-not-inside: function (...) { ... }
+                        - pattern-not-inside: (...) => $EXIT_ARROW
+                        - pattern-not-inside: if ($EXIT_COND) $EXIT_STMT
+                        - pattern-not-inside: for (...) $EXIT_STMT
+                        - pattern-not-inside: while ($EXIT_COND) $EXIT_STMT
+                  - metavariable-regex:
+                      metavariable: $HAS
+                      regex: ^(has|includes)$
+                  - metavariable-regex:
+                      metavariable: $SET
+                      regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          if (!$SET.$HAS($V)) $V = "...";
+                          ...
+                      - pattern-inside: |
+                          if ($GUARD_OR || !$SET.$HAS($V)) $V = "...";
+                          ...
+                      - pattern-inside: |
+                          if (!$SET.$HAS($V) || $GUARD_OR) $V = "...";
+                          ...
+                      - pattern-inside: |
+                          if (!$SET.$HAS($V)) {
+                            $V = "...";
+                          }
+                          ...
+                      - pattern-inside: |
+                          if ($GUARD_OR || !$SET.$HAS($V)) {
+                            $V = "...";
+                          }
+                          ...
+                      - pattern-inside: |
+                          if (!$SET.$HAS($V) || $GUARD_OR) {
+                            $V = "...";
+                          }
+                          ...
+                  - metavariable-regex:
+                      metavariable: $HAS
+                      regex: ^(has|includes)$
+                  - metavariable-regex:
+                      metavariable: $SET
+                      regex: ^(?:[A-Za-z_$][\w$]*|\[\s*(?:'[^']*'|"[^"]*")(?:\s*,\s*(?:'[^']*'|"[^"]*"))*\s*,?\s*\])$
           - pattern: $V
       - patterns:
           - pattern: '$SET.$HAS($V) ? $V : "..."'

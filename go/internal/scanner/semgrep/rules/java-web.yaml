@@ -93,13 +93,16 @@ rules:
                       metavariable: $SMAP
                       regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
           - pattern: $SP
-      # One call deep: the parameter of a method of the same class (a direct
-      # member, not a nested class's) that a handler calls with such a value at
+      # One call deep: the parameter of a method in the handler's class (its
+      # own, or a nested class's) that a handler calls with such a value at
       # that position, matched by name and by the number of arguments (1 to 3).
       # Open-source Semgrep follows taint within one method; from this source it
       # follows the called method's own body, to the sink inside it. The argument
       # must be the value itself or a concatenation or format of it (see
       # $SARG below), and the handler must not reassign the parameter.
+      # The called method is matched on its own, inside the class the handler
+      # pattern spans: matching it as a member of a second class-wide pattern
+      # made every rule superlinear in the size of a class (R-008).
       - patterns:
           - pattern-either:
               - patterns:
@@ -114,11 +117,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -138,11 +137,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -166,11 +161,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -190,11 +181,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -218,11 +205,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -242,11 +225,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -270,11 +249,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -294,11 +269,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -322,11 +293,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -346,11 +313,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -374,11 +337,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -398,11 +357,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -720,13 +675,16 @@ rules:
                       metavariable: $SMAP
                       regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
           - pattern: $SP
-      # One call deep: the parameter of a method of the same class (a direct
-      # member, not a nested class's) that a handler calls with such a value at
+      # One call deep: the parameter of a method in the handler's class (its
+      # own, or a nested class's) that a handler calls with such a value at
       # that position, matched by name and by the number of arguments (1 to 3).
       # Open-source Semgrep follows taint within one method; from this source it
       # follows the called method's own body, to the sink inside it. The argument
       # must be the value itself or a concatenation or format of it (see
       # $SARG below), and the handler must not reassign the parameter.
+      # The called method is matched on its own, inside the class the handler
+      # pattern spans: matching it as a member of a second class-wide pattern
+      # made every rule superlinear in the size of a class (R-008).
       - patterns:
           - pattern-either:
               - patterns:
@@ -741,11 +699,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -765,11 +719,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -793,11 +743,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -817,11 +763,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -845,11 +787,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -869,11 +807,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -897,11 +831,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -921,11 +851,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -949,11 +875,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -973,11 +895,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -1001,11 +919,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -1025,11 +939,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -1959,13 +1869,16 @@ rules:
                       metavariable: $SMAP
                       regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
           - pattern: $SP
-      # One call deep: the parameter of a method of the same class (a direct
-      # member, not a nested class's) that a handler calls with such a value at
+      # One call deep: the parameter of a method in the handler's class (its
+      # own, or a nested class's) that a handler calls with such a value at
       # that position, matched by name and by the number of arguments (1 to 3).
       # Open-source Semgrep follows taint within one method; from this source it
       # follows the called method's own body, to the sink inside it. The argument
       # must be the value itself or a concatenation or format of it (see
       # $SARG below), and the handler must not reassign the parameter.
+      # The called method is matched on its own, inside the class the handler
+      # pattern spans: matching it as a member of a second class-wide pattern
+      # made every rule superlinear in the size of a class (R-008).
       - patterns:
           - pattern-either:
               - patterns:
@@ -1980,11 +1893,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2004,11 +1913,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -2032,11 +1937,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2056,11 +1957,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -2084,11 +1981,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2108,11 +2001,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -2136,11 +2025,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2160,11 +2045,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -2188,11 +2069,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2212,11 +2089,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -2240,11 +2113,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2264,11 +2133,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -2890,13 +2755,16 @@ rules:
                       metavariable: $SMAP
                       regex: ^(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)$
           - pattern: $SP
-      # One call deep: the parameter of a method of the same class (a direct
-      # member, not a nested class's) that a handler calls with such a value at
+      # One call deep: the parameter of a method in the handler's class (its
+      # own, or a nested class's) that a handler calls with such a value at
       # that position, matched by name and by the number of arguments (1 to 3).
       # Open-source Semgrep follows taint within one method; from this source it
       # follows the called method's own body, to the sink inside it. The argument
       # must be the value itself or a concatenation or format of it (see
       # $SARG below), and the handler must not reassign the parameter.
+      # The called method is matched on its own, inside the class the handler
+      # pattern spans: matching it as a member of a second class-wide pattern
+      # made every rule superlinear in the size of a class (R-008).
       - patterns:
           - pattern-either:
               - patterns:
@@ -2911,11 +2779,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2935,11 +2799,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -2963,11 +2823,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -2987,11 +2843,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -3015,11 +2867,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -3039,11 +2887,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -3067,11 +2911,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -3091,11 +2931,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT $SQ, $SHT2 $SHP2, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -3119,11 +2955,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -3143,11 +2975,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT $SQ, $SHT3 $SHP3) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -3171,11 +2999,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - metavariable-regex:
                       metavariable: $SANN
                       regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|RequestPart|MatrixVariable)$
@@ -3195,11 +3019,7 @@ rules:
                         ...
                       }
                   - pattern-inside: |
-                      class $SC {
-                        ...
-                        $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
-                        ...
-                      }
+                      $SHR $SH($SHT1 $SHP1, $SHT2 $SHP2, $SHT $SQ) { ... }
                   - pattern-not-inside: |
                       class $SC {
                         ...
@@ -3310,12 +3130,14 @@ rules:
           - metavariable-regex:
               metavariable: $GV
               regex: ^\w+$
-          - metavariable-pattern:
-              metavariable: $GIF
-              pattern: if ($GCOND) $GBODY;
+          # The regex first: it rejects every other statement at once, so the
+          # metavariable-pattern below re-matches only the statement it accepts.
           - metavariable-regex:
               metavariable: $GIF
               regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*(?<![\w.])(\w+)\.startsWith\("//"\)(?:(?!(?<![\w.])(?!\1\.)\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+          - metavariable-pattern:
+              metavariable: $GIF
+              pattern: if ($GCOND) $GBODY;
           - metavariable-pattern:
               metavariable: $GBODY
               pattern: '$GV = "...";'
@@ -3503,12 +3325,14 @@ rules:
                         regex: ^(response|resp|res|httpResponse|servletResponse|httpServletResponse)$
                 - pattern: '"redirect:" + $Q'
                 - pattern: new RedirectView($Q, ...)
-            - metavariable-pattern:
-                metavariable: $GIF
-                pattern: if ($GCOND) $GBODY;
+            # The regex first: it rejects every other statement at once, so the
+            # metavariable-pattern below re-matches only the statement it accepts.
             - metavariable-regex:
                 metavariable: $GIF
                 regex: '(?s)^(?!.*\belse\b)if\s*\((?:(?!\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*(?<![\w.])(\w+)\.startsWith\("//"\)(?:(?!(?<![\w.])(?!\1\.)\w+\.startsWith\("//"\))(?:(?!\)\s*\{)(?!\)\s*\w+\s*=).))*\)\s*(?:\{(?:.*[;{}])?\s*)?\1\s*=\s*"[^"\n]*"\s*;(?:\s*\w+\s*=\s*"[^"\n]*"\s*;)*\s*(?://[^\n]*\s*)*\}?\s*$'
+            - metavariable-pattern:
+                metavariable: $GIF
+                pattern: if ($GCOND) $GBODY;
             - metavariable-pattern:
                 metavariable: $GBODY
                 pattern: '$Q = "...";'

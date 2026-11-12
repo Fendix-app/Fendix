@@ -64,3 +64,25 @@ This directory is inside the Go module, so the `go` tool would compile a
 `//go:build ignore`, keep it `gofmt`-clean, and give it a `package` clause so
 Semgrep can parse it. Nothing in this directory is embedded in the `fendix`
 binary: only `../rules/*.yaml` is.
+
+## Merged sanitizer fixtures
+
+`javascript-web.merged-sanitizers.ts` and `javascript-injection.merged-sanitizers.ts`
+carry one handler per alternative of the JavaScript sanitizer items that end in
+the same bare `pattern: $X` (R-008). Semgrep matches a bare metavariable against
+every expression of the file, and it did so once per such item; the items of one
+rule are now merged into a single item whose alternatives are nested `patterns`
+blocks, so the bare pattern is matched once. A merge that dropped an alternative
+would make its handler a reported line, so each handler is a regression test for
+one alternative. The controls at the end are the same handlers without a guard
+and must stay reported. A guard shape the rule does not accept today (the
+`startsWith(BASE + path.sep)` family of `js-path-traversal-taint`) is not in
+the file: a test must not freeze a behaviour nobody chose.
+
+An alternative may be merged only when its conjuncts are `pattern-inside`,
+`pattern-either` of `pattern-inside`, or `metavariable-*`. A negated conjunct
+(`pattern-not-inside`, `pattern-not`) inside an alternative filters the guard's
+range instead of the use, which accepts more uses than the unmerged item did:
+the Java `$GV` guards lost two findings of `java-web.java` that way and are
+left as they were, and the Go call sanitizers, which carry dozens of negated
+conjuncts, were not shown equivalent and are left as they were too.
