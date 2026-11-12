@@ -52,8 +52,8 @@ What it measures: the same vulnerability, in different web frameworks. The corpu
 - **The development corpus.** Rules may be tuned against it, so a development
   figure is a statement about that corpus only.
 - **The blind holdout.** Labelled cases written by authors who never saw the
-  rules. Public accuracy figures come from this set, or are scoped to the
-  development corpus as below.
+  rules. Public accuracy figures come from this set, once it is re-measured
+  for the release (see below), or are scoped to the development corpus.
 
 | Language | Dev recall | Dev block recall | Blind holdout recall | Real-world blocking precision |
 |---|---|---|---|---|
@@ -68,9 +68,16 @@ What it measures: the same vulnerability, in different web frameworks. The corpu
   at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins). The
   real-world precision column was measured at commit `6901cf7` on Semgrep
   1.141.0.
+- **Pending re-measurement.** The blind-holdout and real-world columns predate
+  this release's detection changes (including the security fixes in
+  `CHANGELOG.md`, `[Unreleased]`, Security) and its Semgrep 1.182.1. They are
+  kept as measured at the commits named above and are pending re-measurement
+  at the release commit; until then they describe those commits, not this
+  release.
 - **Holdout recall is lower than dev recall for every language, and the drop
   exceeds the 0.10 limit in all four.** Python recall on the blind holdout (commit `e03655a`, Semgrep 1.141.0) is
-  0.756; use the holdout column for any claim about unseen code.
+  0.756; use the holdout column, once re-measured for the release, for any
+  claim about unseen code.
 - **Python findings are taint-proven, and a proven flow blocks.** Python does
   not need Semgrep.
 - **JavaScript/TypeScript, Java and Go need Semgrep.** Their taint rules report
@@ -669,6 +676,13 @@ findings on the way out but preserves per-endpoint detail in
 `affected_endpoints[]`, which Track 4's scorer re-expands.
 
 ### Stage 4f — Performance profile
+
+> **Pending re-measurement.** This profile was taken on 2026-05-13, before the
+> secrets scanner read every text file in streaming windows, before textscan,
+> secrets and Semgrep scoped their walks by evidence, and before the Semgrep stage
+> ran inside a CPU, memory and wall budget with retries (`CHANGELOG.md`,
+> `[Unreleased]`, Security). Its timings and peak-RSS figures describe the engine
+> of that date, not this release, and have not been re-measured.
 
 Each target was scanned **3 cold + 3 warm times** (cold = clear
 `~/.fendix/cache` before scan; warm = preserve). Wall-clock measured

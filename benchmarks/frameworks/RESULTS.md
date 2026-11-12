@@ -248,8 +248,9 @@ Regex-tier findings never reach the corroboration needed to block, by design. Fo
 - At v3.6.3, `docs/security-catalog-contract.json` lists 85 checks.
 - It omits the Python engine's own rules, which produce most Python detections: `PY_SQL_INJECTION`, `PY_SSRF`, `PY_PATH_TRAVERSAL`, `PY_OPEN_REDIRECT`, `PY_XSS_HTML_SINK`, `PY_WEAK_CRYPTO_PASSWORD`, `PY_JWT_WEAK` and others.
 - It also omits the four JS pattern checks.
-- Closed after v3.6.3: the catalog lists the Python engine's AST checks and its four JS pattern checks, 105 checks in all. That counts the 16 AST checks it first listed, `python.ast/PY_SSTI` added since, and the removal of `flask-missing-login-required`. With the Semgrep rule `python-random-token-assignment` added since, it lists 106. They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
-- Closed after v3.6.3 for the new packs too: the JavaScript/TypeScript, Java and Go Semgrep packs add 51 `semgrep` checks (17, 15 and 19), so the catalog now lists 157.
+- Closed after v3.6.3: the catalog lists the Python engine's AST checks and its four JS pattern checks: 21 `python-engine/injection` checks (17 `python.ast/*`, `python.ast/PY_SSTI` included, and the four `SEC-JS_*`). They are listed under the `rule_id` their findings carry, for example `python.ast/PY_SQL_INJECTION` and `SEC-JS_SQL_TEMPLATE`. The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. See `CHANGELOG.md`, `[Unreleased]`.
+- Closed after v3.6.3 for the new packs too: the JavaScript/TypeScript, Java and Go Semgrep packs add 51 `semgrep` checks (17, 15 and 19).
+- The catalog's size is `jq '.checks | length' docs/security-catalog-contract.json`, one check per `rule_id`, generated from the engine's registries; see "The security catalog count" in `CHANGELOG.md`, `[Unreleased]`, Security. An earlier version of this list gave running totals of 105, 106 and 157; the last missed `JAVA_WEAK_HASH_PASSWORD`.
 
 ## Speed
 

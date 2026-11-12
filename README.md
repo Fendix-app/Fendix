@@ -73,7 +73,9 @@ Recall by language, on the development corpus and on the blind holdout (a held-o
 
 Where each column was measured: the dev columns are recomputed from `benchmarks/frameworks/baseline.json`, which `make parity` reproduced at commit `8b78364` on Semgrep 1.182.1; the blind-holdout column was measured at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins); the real-world precision column was measured at commit `6901cf7` on Semgrep 1.141.0.
 
-Holdout recall is lower than dev recall for every language, and the drop exceeds the 0.10 limit in all four, so the development corpus overstates recall on code the rules have not seen. Quote the holdout column; the dev columns are scoped to the development corpus and are not a claim about arbitrary code. See [docs/accuracy.md](docs/accuracy.md) and [BENCHMARKS.md](BENCHMARKS.md).
+**Pending re-measurement.** The blind-holdout and real-world columns predate this release's detection changes (including the security fixes in `CHANGELOG.md`, `[Unreleased]`, Security) and its Semgrep 1.182.1. They are kept as measured at the commits named above and are pending re-measurement at the release commit; until then they describe those commits, not this release.
+
+Holdout recall is lower than dev recall for every language, and the drop exceeds the 0.10 limit in all four, so the development corpus overstates recall on code the rules have not seen. Quote the holdout column once it is re-measured for the release; the dev columns are scoped to the development corpus and are not a claim about arbitrary code. See [docs/accuracy.md](docs/accuracy.md) and [BENCHMARKS.md](BENCHMARKS.md).
 
 ---
 
@@ -233,7 +235,7 @@ chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 
 ### Build from Source
 
-Requires Go 1.21+ and Python 3.9+.
+Requires Go 1.21+ and Python 3.9+. The Python engine parses the scanned code with the interpreter it runs on: below 3.9 it reports every check failed and exits 2, and an interpreter older than 3.14 reports a file in newer syntax as lost evaluation rather than as clean.
 
 ```bash
 git clone https://github.com/Fendix-app/Fendix.git
@@ -317,6 +319,27 @@ auto-enables the Python AST/spec/deps phase. A standalone release without a
 resolvable Python tree records that phase as skipped; the official container
 supplies the version-matched tree.
 
+**What a white-box scan says it did not read.** A scan never reports `ok` for
+an analyzer that left in-scope source unread. A file over the analyzer's size
+cap, one it cannot read, one Semgrep cannot parse and one that the Python
+interpreter cannot parse (a `match` statement under Python 3.9, for example) make
+that analyzer `failed` in `metadata.scanner_status`, with the files named, the
+findings from the rest of the tree kept, and the scan's coverage incomplete
+(`--fail-on-scanner-error` exits 2; the GitHub Action with `require-analyzers`
+fails). A directory or file is left out of scope only on evidence read from it
+(an installed-package tree, a virtualenv, a minified or vendored-library
+bundle, a generated file with its generator header, a lockfile), never because
+of its name, and everything left out is listed with its reason: in the
+analyzer's `detail` after `declared out of scope, not scanned:` and in full in
+`metadata.coverage.limitations`. A `// nosemgrep` comment removes a Semgrep
+result only visibly: the result is listed. A source file Semgrep cannot read as JavaScript, such as a Vue
+single-file component (`.vue`), is lost evaluation too. See
+[`docs/checks/semgrep.md`](docs/checks/semgrep.md),
+[`docs/checks/secrets.md`](docs/checks/secrets.md) and
+[`docs/schema.md`](docs/schema.md). The Semgrep stage runs inside a wall,
+CPU and memory budget derived from the container, and a file that timed out is
+re-run alone before it is recorded lost.
+
 ### Hybrid scan (maximum coverage)
 
 Run both engines and cross-correlate findings for highest confidence.
@@ -332,6 +355,7 @@ fendix scan \
 
 When the black-box scanner and static analyzer both identify the same vulnerability, Fendix merges them into a single `correlated` finding with elevated confidence.
 
+**Active probes and coverage.** With `--enable-active`, a probe the target did not answer is not an evaluation. Each probe is attributed from evidence about what happened on the wire (never from the error type alone) to the scanner, the target or an unknown origin, and the report counts them in `metadata.coverage.active_probes` (`attempted`, `evaluated`, `inconclusive`, `unknown_origin`, `scanner_failed`, with the reasons and the checks and endpoints not evaluated). A target that resets, stalls or rate-limits a probe leaves it `inconclusive`; that is not a scanner gap and `active-probes` stays `ok`, but it is never evidence that the endpoint is safe, fixed or resolved. A scanner-side or unknown-origin failure makes `active-probes` `failed`. A 429, 502, 503 or 504, a reset after the connection or a timeout on an accepted connection is retried twice (after 1 s, then 2 s) within the scan's deadline and request budget. `coverage.configured_complete` is never proof that every probe was evaluated: read `active_probes` beside it. See [`docs/schema.md`](docs/schema.md).
 ### Import findings from other scanners
 
 Normalize SARIF 2.1.0 from CodeQL, Semgrep, Trivy, or another scanner and run
@@ -453,7 +477,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix scan` | Run a security scan against an API, source code, or both |
 | `fendix import <file.sarif>...` | Normalize and gate on third-party SARIF 2.1.0 findings |
 | `fendix report` | Re-render a saved JSON findings file to another format |
-| `fendix verify <id>` | Re-run a single finding by ID to verify it still exists |
+| `fendix verify <id>` | Re-test one finding from a saved baseline: `resolved` (exit 0) for a secrets-scanner finding only when its credential was searched for across `--code` (text and binary files, pruned directories, archives, several encodings) and found nowhere; `unknown` (exit 2) for every other file-anchored finding and for every active-probe finding, whatever the endpoint now returns |
 | `fendix demo` | Spin up OWASP Juice Shop in Docker and scan it — a real report in <60s |
 | `fendix init` | Generate CI workflow + `.fendix.yaml` + `.fendix-ignore` starters |
 | `fendix hook` | Manage the git pre-commit hook (`install` / `status` / `uninstall`) |

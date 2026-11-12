@@ -14,11 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DB_CONNECTION_STRING` gains a second shape under the same rule id (no
   existing fingerprint moves): `jdbc:postgresql://h/app?user=u&password=...`
   and `jdbc:sqlserver://h:1433;databaseName=a;user=u;password=...`. Evidence
-  keeps the URL readable and redacts the password only. An interpolated
+  keeps the URL readable and redacts the password only. As first written the
+  redaction stopped at the first `;`, `&`, quote or space, so the rest of a
+  braced, quoted or spaced password stayed in evidence and SARIF; it now covers
+  the whole value (see "Connection-string passwords are redacted to the end of
+  their property" under Security). An interpolated
   `password=${DB_PASSWORD}` does not fire, and a placeholder such as
   `password=changeme` is reported and marked a placeholder, as for any other
-  secret. Files are scanned by the scanner's existing extension list, which
-  does not include `.properties`.
+  secret. As first written the scanner read only files whose extension was on
+  a list that did not include `.properties`; it now reads every text file, so
+  a `.properties` file is scanned (see "The secrets scanner reads every text
+  file and every line" under Security).
 - **Java password hashing is reported apart from general MD5 use.** A new
   textscan rule `JAVA_WEAK_HASH_PASSWORD` (CWE-916, `crypto`, HIGH) fires when
   a password-named value (`password`, `userPassword`, `pwd`, `passphrase`) is
@@ -35,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JavaScript/TypeScript pattern checks (`SEC-JS_EVAL`, `SEC-JS_INNER_HTML`,
   `SEC-JS_DOCUMENT_WRITE`, `SEC-JS_SQL_TEMPLATE`), under the
   `python-engine/injection` analyzer: 20 checks more than the 85 of v3.6.4.
-  The engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. As
+  Later entries add more; the catalog's size at this release, and how it is
+  counted, is under "The security catalog count" in Security below. The
+  engine's spec-parser checks (`SEC-SPEC-*`) are not catalogued yet. As
   for every other analyzer, each check's `id` is the `rule_id` its findings
   carry, and its `finding_id` is the finding's own id
   (`SEC-PY_SQL_INJECTION`, `SEC-JS_SQL_TEMPLATE`).
@@ -153,10 +161,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`constr(pattern=...)`, `Path(pattern=...)`, a Django regex group), a
     pydantic model, an Enum imported from another module, an unannotated
     parameter, and the `path` converter.
-  - **Sanitisers apply as they do to a `request.args` value.** A membership
-    guard, a `urlparse(...).netloc` allowlist, path containment, escaping or an
-    allowlist lookup leaves the finding unreported or unproven exactly as it
-    would for a value read from the request.
+  - **Sanitisers apply as they do to a `request.args` value.** A sanitiser
+    leaves the finding unreported or unproven exactly as it would for a value
+    read from the request, and only for the sink class it protects: escaping
+    for HTML sinks, a constant `urlparse(...).netloc` allowlist for a whole
+    URL, path containment for path sinks, `shlex.quote` for shell sinks; a
+    constant allowlist lookup or membership guard for any class. As first
+    written any of them counted for every sink, so `html.escape` or `quote`
+    hid SSRF and open redirect, and `basename` hid command injection (see
+    "Python sanitisers count only for the sink they protect" under Security).
+  - **Route parameters and safe downloads.** With route parameters as
+    sources, Flask's `send_from_directory(<constant dir>, <path:filename>)`
+    and joins whose request part is reduced by `basename` or
+    `secure_filename` were proven and blocked, though Werkzeug's `safe_join`
+    and the reduction contain them. They no longer are (see "Safe Python
+    download idioms no longer block" under Security).
   - **Same-file helpers.** A handler that passes its parameter to a helper in
     the same file proves the helper's sink, through the one-hop check. The
     chain starts at the handler's `def` line, then the call. Caller-side
@@ -203,7 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     for SQL injection, command injection and SSRF, its `direct` and
     `indirect` path-traversal cases and its `alt_api` XSS case now block, and
     its `alt_api` path-traversal case is detected and blocks. FastAPI blocks on
-    17 of 36 vulnerable cases, up from 4. No safe case is flagged or blocks.
+    17 of 36 vulnerable cases, up from 4. No development-corpus safe case is flagged or blocks.
 - **Python HTML responses are now XSS sinks.** `HttpResponse(f"<h1>{name}</h1>")`
   writes request input into a page with no template, so nothing escapes it,
   and it was not reported. The engine now reports request text reaching the
@@ -363,7 +382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - a media type passed to `HTMLResponse`, which is ignored.
   - **Framework parity:** the Django, Flask and FastAPI `direct` and
     `indirect` XSS cases are now detected and block, and their `cross_file`
-    cases are detected and warn. No safe case is flagged. The Python
+    cases are detected and warn. No development-corpus safe case is flagged. The Python
     frameworks detect 93 of 108 vulnerable cases, up from 84, and block on
     64, up from 58.
 - **A string a Flask view returns is now an XSS sink.** Flask sends a `str` a
@@ -574,8 +593,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     appear alongside them. The new findings are new. Their sink names the
     constructor and the source, as in `jinja2.Template(template_src)` or
     `jinja2.Environment.from_string(src)`, whatever the import style.
-  - **Catalog.** The security catalog lists `python.ast/PY_SSTI`, 105 checks
-    in all.
+  - **Catalog.** The security catalog lists `python.ast/PY_SSTI`. (This entry
+    used to give a running total of 105 checks. That total was never the
+    release's; see "The security catalog count" under Security.)
   - **Not covered:**
     - Flask's `app.jinja_env.from_string(...)`, Starlette's and FastAPI's
       `Jinja2Templates(...).env.from_string(...)`, and Django's
@@ -584,7 +604,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       file.
   - **Framework parity:** the Django and FastAPI `direct` and `indirect` SSTI
     cases are now detected and block. Flask's are still found by
-    `render_template_string` and block, as before. No safe case is flagged.
+    `render_template_string` and block, as before. No development-corpus safe case is flagged.
     The Python frameworks detect 97 of 108 vulnerable cases, up from 93, and
     block on 68, up from 64: Django on 24, FastAPI on 21 and Flask on 23.
 
@@ -658,7 +678,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `JSONResponse`.
   - **Framework parity:** FastAPI's `direct`, `indirect`, `cross_file` and
     `alt_api` open-redirect cases and Flask's `alt_api` case are now
-    detected. All but FastAPI's `cross_file` case block. No safe case is
+    detected. All but FastAPI's `cross_file` case block. No development-corpus safe case is
     flagged. The Python frameworks detect 102 of 108 vulnerable cases, up
     from 97, and block on 72, up from 68: Django, FastAPI and Flask each block
     on 24.
@@ -718,8 +738,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     confidence, the same as `python-random-for-token-generation`. Without
     corroboration its findings warn.
   - **Identity.** Its findings are new, with a new SARIF `ruleId`,
-    `python-random-token-assignment`. With this rule the pack had 23 rules
-    and the security catalog 106 checks; later entries add more.
+    `python-random-token-assignment`. With this rule the Python pack has 23
+    rules. For the catalog's size at this release see "The security catalog
+    count" under Security.
 
 - **A Python sink in a helper is now proven when a view in another module
   passes it request input.** The one-hop helper check followed a helper's
@@ -743,10 +764,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       everywhere else, so a FastAPI `int` or `Depends(...)` parameter is not
       one.
     - The caller-side sanitisers of the same-file hop apply in the caller's
-      file: a membership guard, a `urlparse(...).netloc` allowlist, path
-      containment, escaping, an allowlist lookup, `url_for(...)` or
-      `reverse(...)`, or a URL with a fixed scheme and host. Any of them
-      leaves the helper's finding unproven.
+      file, each only for the helper sink class it protects (see "Python
+      sanitisers count only for the sink they protect" under Security): a
+      constant membership guard or allowlist lookup for any class; escaping
+      for an HTML sink; a constant `urlparse(...).netloc` allowlist or a URL
+      with a fixed scheme and host for a URL sink; path containment for a
+      path sink; `shlex.quote` for a shell sink; `url_for(...)` or
+      `reverse(...)` for HTML, URL and path sinks. Such a sanitiser leaves the
+      helper's finding unproven. As first written any of them did, whatever
+      the helper's sink.
     - A template built from request input (`Template(request.GET["t"])`)
       passed to a helper that renders it into an HTML response does not prove
       the XSS finding, exactly as in one file: that page is reported as
@@ -822,7 +848,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       16.7 s and 99 MB now.
   - **Framework parity:** in Django, Flask and FastAPI, the `cross_file`
     cases for SQL injection, command injection, SSRF, path traversal, open
-    redirect and XSS now block. They warned before. No safe case is flagged
+    redirect and XSS now block. They warned before. No development-corpus safe case is flagged
     or blocks. The Python frameworks block on 102 of 108 vulnerable cases,
     up from 84.
 
@@ -845,8 +871,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **When a language is enabled.** Only when its taint pack reaches
     precision of at least 0.90 on the framework-parity development set,
     within the noise budget, and precision of at least 0.80 on at least 10
-    triaged findings of a blind real-world evaluation. The release gate
-    checks holdout precision. ADR-011 records the decision and the evidence
+    triaged findings of a blind real-world evaluation. (This entry used to
+    say the release gate checks holdout precision. It does not: the release
+    workflow's holdout job compares holdout recall with development recall
+    only, does not gate the release, and passes without measuring when its
+    deploy key is absent.) ADR-011 records the decision and the evidence
     for each language. No language is enabled yet.
   - **What a taint finding counts for.** Its reachability adds +10 to the
     confidence score, counts as an independent corroborating signal, and
@@ -1219,6 +1248,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A probe the target did not answer is inconclusive, not an evaluation, and
+  the report says so beside the scan-wide verdict.** Before, `active-probes`
+  was `ok` with no detail whenever every probe got any HTTP response (a 429, a
+  503 or a gateway timeout counted as evaluated), `ok` with "N of M probe
+  requests received no HTTP response" for some, and `failed/network_error` only
+  when none did, so a target could steer the verdict by how it failed. Now
+  every probe is attributed from evidence about what happened on the wire (the
+  connection, the request write, TLS, the scan's own contexts, a recorded
+  response from the same host), never from the Go error type alone, to one of
+  three origins. `scanner`: a panic, the scan's own deadline or cancellation,
+  local resource exhaustion, a proxy or request-construction failure, a probe
+  the request budget or egress guard never let leave. `target`: a reset, close
+  or stall after the connection was established, a TLS alert from the peer,
+  429/502/503/504 after the retries, a malformed or broken response, and a
+  connect timeout or refusal when another request to the same host got an
+  answer within 30 s. `unknown`: everything else (DNS failure, a connect
+  timeout or refusal when the host never answered anything, network
+  unreachable, a TLS handshake that failed with no alert, a probe recorded with
+  no response and no evidence). `active-probes` is `failed/execution_error`
+  when any probe is `scanner` or `unknown` (fail-closed: neither is an
+  evaluation, and neither is blamed on the target) and `ok` otherwise, even when
+  every non-answer is the target's; its detail always starts with
+  `probe evaluation: A attempted, E evaluated, I inconclusive (target), U
+  unknown-origin, F scanner-failed` (on a failed entry after `lost evaluation:
+  N probe(s) not evaluated (U unknown-origin, F scanner-failed)`), followed by
+  the non-zero reasons of each origin in a fixed order. The complete account is
+  the new `metadata.coverage.active_probes` (`attempted`, `evaluated`,
+  `inconclusive`, `unknown_origin`, `scanner_failed`, `reasons` as
+  `{origin: {reason: count}}`, `not_evaluated_checks` capped at 200 with
+  `truncated`), additive in `docs/schema.json` and
+  `docs/reporting-contract.json`, no `schema_version` change. Findings are
+  always kept. A scan-wide `configured_complete` is never proof that every
+  probe was evaluated; read `active_probes` beside it. Two measured
+  consequences. A target that resets every probe after the connection is
+  established gives `ok`, `22 attempted, 0 evaluated, 22 inconclusive (target)`
+  and `configured_complete` true: the engine does not turn an all-inconclusive
+  run into a gap, so a consumer that must refuse such a scan reads `evaluated`.
+  And an error while the connection is still being made (before it is
+  established) that is not a timeout, a refusal, a DNS or a TLS failure is
+  `unknown` / `unclassified`, which fails the entry: against a local Python
+  test server that answered 503 to every path but the index and listened with
+  the default backlog of 5, three of twelve scans recorded one such probe among
+  23 to 25 (`xss` on `GET /item` in two, `openredirect` on it in the third) and read
+  `failed`,
+  the others `ok` with none. Nothing the engine records settles whose fault
+  such an error is (a target at its connection limit and a scanner fault look
+  the same from here), which is why the origin is `unknown` and not the
+  target's; whether a real network produces it is unmeasured.
+- **Retries are bounded and deterministic.** A 429, 502, 503 or 504, a reset
+  after the connection was established, or a timeout on an accepted connection
+  is retried up to twice after 1 s then 2 s (a `Retry-After` is honoured, capped
+  at 5 s). A retry is never started when the context is cancelled or its
+  deadline (the per-check deadline or `--max-duration`) is not further away than
+  the pause, when the per-endpoint probe cap (`--max-probes-per-endpoint`,
+  which retries now share) or the `--max-requests` budget has no room, when the
+  scan-wide allowance of 200 retries is spent, or when the request body cannot
+  be replayed; the probe then keeps its last classification. No new flag.
+- **`fendix verify` never resolves an active-probe finding.** A gated or
+  removed endpoint (401/403/404/410) was `resolved` ("attack surface no longer
+  reachable") and a consented re-probe without the recorded marker was
+  `resolved` ("presumed resolved"). Both are now `unknown`, with a reason that
+  names what was observed (`active-probe endpoint now returns HTTP 404; a
+  reachability change is not proof of remediation (no validated probe-specific
+  verification contract exists)`); 429/5xx, a timeout, a reset and a request
+  that failed are `unknown` too. `still-present` remains only when the recorded
+  payload marker reproduces, and the marker is read from the finding's evidence
+  best-effort (a reflected `<script>...</script>`), so for most active-probe
+  findings the answer is `unknown`. The
+  same holds for a correlated finding whose blackbox half is an active-probe
+  finding. The active-probe categories the checks actually stamp (`redirect`,
+  `host_header`, `method_tamper`) are recognised alongside the hyphenated ones.
+  No probe-specific verification contract has been independently validated, so
+  none returns `resolved`.
+
 - **JavaScript, TypeScript, Java and Go taint findings are reported as
   warnings, not blocking.** `semgrep.ReachabilityLanguages` is empty (ADR-011,
   ruling R-pf81), so a match of one of these packs' taint rules
@@ -1253,7 +1356,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       cases, the secrets and template-literal SQL), recall 88.9% (96 of 108).
     - Java: block recall 8.3% (3 of 36, the secrets), recall 97.2% (35 of 36).
     - Go: block recall 11.1% (8 of 72, the secrets), recall 100% (72 of 72).
-    - No safe case newly blocks.
+    - No development-corpus safe case newly blocks.
   - **Not enabled again until a pack clears the real-world gate.** A
     language is added to the map only with precision of at least 0.80 on at
     least 10 triaged real-world findings, and the corpus gate. The mechanism
@@ -1281,7 +1384,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Framework parity.** The `direct` and `indirect` weak-random-token
     cases of Django, Flask and FastAPI are detected. They were missed in all
     three: `create_api_key` and `_generate_api_key` call `random.choices`.
-    They warn, and the safe cases stay clean. The Python frameworks detect
+    They warn, and the development-corpus safe cases stay clean. The Python frameworks detect
     all 108 vulnerable cases, up from 102. They still block on 72.
 
 - **Python weak password hashing and unverified JWT decoding are now
@@ -1328,7 +1431,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       handler's own file, so it is bound.
   - **Framework parity.** In Django, Flask and FastAPI, the `direct` and
     `indirect` weak-password-hash and JWT-no-verify cases now block. They
-    warned before. No safe case is flagged. The Python frameworks block on
+    warned before. No development-corpus safe case is flagged. The Python frameworks block on
     84 of 108 vulnerable cases, up from 72.
 
 - **A Flask route without authentication now gets one missing-auth finding
@@ -1371,6 +1474,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     analyzers are unaffected.
   - The framework parity gate shows no case change. The corpus has no such
     directory.
+  - **Superseded.** A directory or file is no longer left out of Semgrep's
+    scope by its name. `node_modules/`, `dist/`, `build/`, `.next/`,
+    `target/`, `vendor/`, `*.min.js` and the Python environment names are
+    scanned unless the directory or the file itself carries evidence that it
+    is installed, built or minified code, and every exclusion is listed with
+    its reason. A project's own code in a directory called `vendor/` or
+    `build/` is now scanned. See "Out of scope is decided by evidence, never
+    by a name" under Security.
 
 - **Semgrep's deadline is 300 seconds, up from 120, a rule may run for 30
   seconds on one file, up from 5, and a rule that times out is reported.**
@@ -1381,20 +1492,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     could use up the whole deadline, and a run past the deadline fails with
     no Semgrep findings at all. Semgrep's `--timeout-threshold` (3) still
     applies: after three rules time out on one file, it skips the remaining
-    rules on that file.
-  - **Timeouts are no longer silent.** Semgrep lists each timed-out rule
-    and file in its output's `errors`, which Fendix used to ignore. Each one
-    is now logged with the rule and the file. The run is still `ok`, as in
-    v3.7.0 and by Semgrep's own contract, since the rule lost its matches in
-    that file only, and the `semgrep` entry's `detail` now names the
-    timed-out rules and files (v3.7.0 gave only the count). The findings the
-    run did produce are kept. A run that is killed or does not load a rule is
-    still `failed`.
+    rules on that file, and that file's skipped rules are lost evaluation too.
+  - **Timeouts are no longer silent, and a run that lost evaluation is
+    `failed`.** Semgrep lists each timed-out rule and file in its output's
+    `errors`, which Fendix used to ignore. Each one is now logged with the
+    rule and the file. As first written this entry kept such a run `ok`, with
+    a `detail` naming the timed-out rules and files, so coverage read
+    complete although those rules' matches were missing. That is reversed:
+    a run in which any selected rule was not evaluated on an in-scope file is
+    recorded `semgrep` `failed`, reason `timeout` or `execution_error`, with
+    a detail that counts what was lost (see "A Semgrep run that lost rule
+    evaluation is recorded failed" under Security). The findings the run did
+    produce are kept. A run that is killed or does not load a rule is still
+    `failed`.
   - **A malformed `errors` entry is skipped.** Each entry is decoded on its
     own, and an `errors` field that is not a list is ignored, so the results
     beside them are always kept.
   - **Deadline.** The 300-second deadline bounds the whole run, which
-    executes every bundled pack at once.
+    executes every bundled pack at once. As first written it was one process
+    with one deadline for the whole tree. The 300 seconds are now one budget
+    for the whole Semgrep stage, spent across per-language invocations and
+    retries, and Semgrep also gets `--jobs` and `--max-memory` sized for the
+    container (see "Semgrep runs inside a bounded budget" under Security).
   - On the parity corpus `make parity` took 552 seconds, against 567
     before this change, and no scan took longer than 1.3 seconds.
 
@@ -1428,8 +1547,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--dataflow-traces` (0.107.0), `--timeout` (0.17.0), `--exclude` (0.12.0),
   logging a warning and naming the dropped options in the Semgrep
   `scanner_status` detail (`semgrep 1.45.0: dropped --project-root (needs
-  1.111.0)`; the status stays `ok`). An unreadable version is run with every
-  option. Documented
+  1.111.0)`). As first written the status stayed `ok` for every dropped
+  option. Without `--project-root` the packs' path filters are matched
+  against the enclosing git root, so files can be excluded with no error;
+  dropping it is now recorded `failed` (`execution_error`), with the note
+  `files may be skipped: the packs' path filters need --project-root`.
+  Dropping `--dataflow-traces`, `--timeout` or `--exclude` loses no
+  detection and stays `ok` with the note. An unreadable version is run with
+  every option.
+  - **The version probe no longer stalls an offline scan.** As first
+    written `semgrep --version` ran with Semgrep's version check on, so
+    offline it waited for semgrep.dev until a 30-second cap, inside the
+    run's own deadline, and a failed read was not remembered, so every scan
+    paid it again. The probe now runs with `SEMGREP_ENABLE_VERSION_CHECK=0`
+    and `SEMGREP_SEND_METRICS=off`, is bounded at 10 seconds, runs before
+    the run's deadline starts, and a failed probe is remembered per binary
+    for the process (one cut short by a cancelled scan is not). An unknown
+    version still gets every option. Documented
   in `docs/checks/semgrep.md`; the docs also name `--project-root` in the
   command, and `ADR-011` gives the 300 s run timeout.
 
@@ -1444,7 +1578,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frameworks. Each place that quotes the blind holdout (commit `e03655a`) or
   the real-world precision (commit `6901cf7`, Semgrep 1.141.0) now names the
   commit and Semgrep version it was measured at. The holdout and real-world
-  figures are unchanged.
+  figures were not re-measured: they describe those older commits and
+  Semgrep 1.141.0, not this release, and are pending re-measurement at the
+  release commit (see "Published accuracy figures are pending
+  re-measurement" under Security).
 
 - **The Go taint rules keep their `ok` cases clean on Semgrep 1.182.1, the
   version Fendix ships.** The Go pack was written on Semgrep 1.141.0. Semgrep
@@ -1807,16 +1944,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     function itself, or at module level for a call made there. An assignment
     in a nested function, lambda or class does not count for the function
     around it.
-  - **Caller-side sanitisers still count.** A caller that passes the value
-    through a guard or sanitiser that a sink in the same function would honour
-    does not prove the helper's finding, whichever sink the helper holds:
-    - an `if value not in ALLOWED: return` membership guard;
-    - a `urlparse(value).netloc` allowlist guard;
-    - a resolved path checked against its base directory, or `basename`;
-    - escaping, including an f-string whose every value is escaped;
-    - an allowlist lookup (`HOSTS.get(value)`);
-    - `url_for(...)` or `reverse(...)`;
-    - a URL with a fixed scheme and host (`"https://api.example.com/" + value`).
+  - **Caller-side sanitisers still count, for the sink they protect.** A
+    caller that passes the value through a guard or sanitiser that the
+    helper's own sink would honour inline does not prove the helper's
+    finding. Each counts only for its sink class (corrected; as first written
+    this entry said "whichever sink the helper holds", and the engine did
+    that: see "Python sanitisers count only for the sink they protect" under
+    Security):
+    - an `if value not in ALLOWED: return` membership guard over constants:
+      any sink;
+    - a `urlparse(value).netloc` allowlist guard over constant hosts: a URL
+      sink that takes the whole value;
+    - a resolved path checked against its base directory, or `basename`: a
+      path sink;
+    - escaping, including an f-string whose every value is escaped: an HTML
+      sink;
+    - `shlex.quote`: a shell sink;
+    - an allowlist lookup (`HOSTS.get(value)`) over constants: any sink;
+    - `url_for(...)` or `reverse(...)`: HTML, URL and path sinks;
+    - a URL with a fixed scheme and host (`"https://api.example.com/" + value`):
+      a URL sink.
 
     The guard must come before the call, as it must come before a sink. This
     applies to a request expression passed inline too, which proved before:
@@ -1834,7 +1981,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the request, a `Pinger.handle(self, host)` sink was proven reachable.
   - **Framework parity:** the Django and Flask `indirect` cases for SQL
     injection, command injection, SSRF, path traversal and open redirect, and
-    Flask's `ssti` `indirect` case, now block. No safe case blocks.
+    Flask's `ssti` `indirect` case, now block. No development-corpus safe case blocks.
 - **A Python file is no longer skipped when a variable is rebound from
   itself.** `url += "/x"` on a parameter binds `url` to `url + "/x"`,
   `desc = "<p>" + desc + "</p>"` binds `desc` to an expression that reads
@@ -1870,7 +2017,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   size.** A `secrets` finding in a file over 1 MiB was reported `resolved`, and
   one under `node_modules/`, `vendor/`, `dist/` or `build/` was judged by a
   re-scan rooted at its own directory instead of the scan root. Both are now
-  `unknown`, with the skip named.
+  `unknown`, with the skip named. (The secrets scanner now reads files up to
+  128 MiB and prunes a directory only on evidence, not by name; what `verify`
+  answers is under "`fendix verify` says `resolved` only after it searched for
+  the credential itself" in Security.)
+- **These three entries did not close the false `resolved`.** Every other
+  `secrets`-category finding was still re-tested by the secrets scanner and
+  matched by exact title, so a textscan or Python-engine finding the secrets
+  scanner never produces (`GO_HARDCODED_AWS_KEY`, `JS_HARDCODED_AWS_KEY`,
+  `GO_WEAK_HASH_PASSWORD`, `python.ast/PY_WEAK_CRYPTO_PASSWORD`) was
+  reported `resolved`, exit 0, on unchanged code. That is fixed: see "`fendix
+  verify` re-tests a secret only with the scanner that produced it" under
+  Security.
 
 - **The Action says enforcement was off in every outcome.** With
   `require-analyzers: none`, the gate warned "Fendix coverage not enforced"
@@ -1888,6 +2046,845 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gap and is not changed by `--require-analyzers`, and a test pins it. The
   gate now words it "complete for the analyzers configured to run, but
   required not delivered (semgrep)", in its message and its job summary.
+
+### Security
+
+These entries come from a security review of the changes above. Each one
+either fixes a defect those changes introduced or exposed, or corrects a claim
+made above. They take precedence over the entries above where the two differ.
+
+- **A Semgrep run that lost rule evaluation is recorded `failed`.** A
+  per-rule timeout, a rule skipped by `--timeout-threshold`, a taint fixpoint
+  timeout, a per-file timeout, out of memory or stack overflow, an internal
+  matching error, too many matches, rules Semgrep reports as skipped, and a
+  dropped `--project-root` all mean that some selected rule was not evaluated
+  on some in-scope file. That rule's findings are missing there, but the run
+  was recorded `semgrep` `ok`, so coverage read complete and a scan with
+  nothing else to report passed. Semgrep also reports a taint fixpoint
+  timeout only in its `--time` profile, which Fendix did not request, so
+  JavaScript/TypeScript and Go taint findings in a large file could vanish
+  with no trace at all.
+  - **Now:** Semgrep always runs with `--time`, and the engine reads the
+    profile's `fixpoint_timeouts`. A run that lost evaluation is `failed`,
+    with reason `timeout` when every loss is a timeout (rule, threshold,
+    fixpoint or interfile timeout) and `execution_error` otherwise. Its
+    detail starts `lost evaluation:` and counts what was lost (`<N> rule
+    timeouts on <F> files`, `every other rule skipped on <F> files after 3
+    rule timeouts`, `<N> taint fixpoint timeouts on <F> files`, `<N> per-file
+    errors (<type> <n>, ...)`, `<N> rules skipped by semgrep`), then names the
+    first files and rules. Findings the run did produce are kept. A Semgrep
+    whose profile has no fixpoint list is `failed` (`execution_error`),
+    because a fixpoint timeout would be silent.
+  - **Parse problems, as first written, and reversed.** As first written a
+    file that only partly parsed (a syntax, lexical or partial-parsing
+    problem) kept the run `ok` with the problem count in its detail. A file Semgrep
+    cannot parse at all (`Syntax error`, `Lexical error`, `Other syntax
+    error`, `AST builder error`) is now lost evaluation, and a partial parse
+    stays `ok` only when the lines Semgrep skipped are reported and few; see
+    "A file that does not parse, and a file Semgrep did not read, are lost
+    evaluation" below.
+  - **Effect.** More scans now record `semgrep` `failed`: the blind
+    real-world evaluation saw rule timeouts in 11 of 70 repositories. Such a
+    scan's coverage is incomplete, `--fail-on-scanner-error` exits 2 on it,
+    and a consumer that treats `failed` as a coverage gap (the hosted backend
+    does) treats it as one. Fixpoint timeouts depend on load, so the same
+    file can lose its taint matches on one run and not the next; the run
+    that lost them now says so. A host Semgrep older than 1.111.0 (no
+    `--project-root`) is now always `failed`; upgrading Semgrep is the fix.
+    As first written, files Semgrep skips for size (`--max-target-bytes`)
+    were not reported as lost; they now are (see the entry named above).
+  - The scanner-status vocabulary is unchanged: no new state or reason.
+- **The Java Semgrep packs cost less on a large class (partial).** The
+  guards and the one-hop helper patterns shared by the Java taint and shape
+  rules in `java-injection.yaml` and `java-web.yaml` were restructured
+  without changing rule ids, messages or metadata. Findings were identical on
+  every measured target, the rule tests pass, and the Spring parity gate shows
+  no case change. On a generated 3,000-line controller the Java packs took
+  41 to 46% less Semgrep match time. They are still superlinear: a 7,400-line
+  Spring class still loses all its Semgrep findings to three rule timeouts,
+  which is now recorded `semgrep` `failed` (`timeout`), as above.
+- **The JavaScript and TypeScript packs match fewer bare patterns (R-008, part
+  1).** Semgrep matches a bare metavariable pattern against every expression of
+  a file, and the sanitizer items of four JavaScript rules each did it once. 16
+  such items were merged into 4, one per rule (`js-ssrf-taint` 5 to 1,
+  `js-open-redirect-taint` 6 to 1, `js-path-traversal-taint` 3 to 1,
+  `js-sqli-taint` 2 to 1), as nested `patterns` alternatives, in
+  `javascript-web.yaml` and `javascript-injection.yaml`. Rule ids, messages and
+  metadata are unchanged (`docs/security-catalog-contract.json` is byte for byte
+  the same, 158 checks), and the rule tests pass (`semgrep --test` on Semgrep
+  1.182.1: 51 of 51). New fixtures,
+  `ruletests/javascript-web.merged-sanitizers.ts` and
+  `ruletests/javascript-injection.merged-sanitizers.ts`, hold one handler per
+  merged alternative, so dropping an alternative makes its handler a reported
+  line; guard shapes the rules still report with this instantiation are left
+  out of them on purpose, so they freeze no behaviour nobody chose, and two
+  `startsWith` families of `js-path-traversal-taint` are not exercised by any
+  fixture (the rule tests and the framework corpus did not either). Match time
+  falls on large JavaScript files; the figures are in the work notes of that
+  round and are not quoted here. **Not fixed, because it would weaken
+  detection:** the one-hop helper patterns of the seven Java taint rules (a
+  very large Java class can still cost close to the 30-second per-rule bound
+  for `java-open_redirect-taint`, and the retry above is what keeps its
+  verdict stable), and the Go pack, whose sanitizer items carry dozens of negated
+  conjuncts and were not shown equivalent when merged.
+- **A file that does not parse, and a file Semgrep did not read, are lost
+  evaluation.** Semgrep's own JSON names the files it evaluated
+  (`paths.scanned`) and nothing about the ones it did not. A file over
+  `--max-target-bytes`, one it could not read, one it could not parse and one a
+  `.semgrepignore` named all vanished with the run exit 0 and `semgrep` `ok`,
+  and every finding in them missing.
+  - **Now:** the engine lists the in-scope files Semgrep was meant to evaluate
+    (every regular file under `--code`, or every changed file of a `--diff`
+    scan, with an extension of the packs' languages in any letter case: `.py`,
+    `.pyi`, `.js`, `.jsx`, `.cjs`, `.mjs`, `.ts`, `.tsx`, `.java`, `.go`, and
+    the four Semgrep does not select, `.cts`, `.mts`, `.es6`, `.vue`) and
+    compares the list with `paths.scanned`. A file over 1048576 bytes, one
+    that cannot be opened, a directory that cannot be listed and one absent
+    from `paths.scanned` are lost evaluation: `semgrep` is `failed`,
+    `execution_error`, the findings of the rest of the run are kept, and the
+    detail names the files: `lost evaluation: 3 in-scope files not read: 1
+    over 1048576 bytes (big/huge.js), 1 unreadable (a.py), 1 not evaluated by
+    semgrep (c.js)`. A document with no `paths.scanned` list loses every file
+    it was meant to evaluate.
+  - **A file Semgrep cannot parse is a gap.** An error of type `Syntax error`,
+    `Lexical error`, `Other syntax error` or `AST builder error` (and the
+    constructor spellings `ParseError`, `LexicalError`, `OtherParseError`,
+    `AstBuilderError`) means Semgrep ran no rule on that file. It is listed as
+    `<k> not parsed by semgrep (<path>)` in the same segment, whatever
+    Semgrep's exit code says. As first written such a file left the run `ok`.
+  - **A partial parse stays `ok` only when what was skipped is known and
+    small, and never when it is the whole file.** Semgrep reports
+    `PartialParsing` with the line spans it skipped. The run stays `ok` when
+    every span is reported and the skipped lines are at most the larger of 3
+    and 5% of the file's lines, and always fewer than all of them (the
+    allowance is `min(max(3, 5%), lines - 1)`); the detail then says which
+    lines: `partial parse, 2 files with skipped lines: a.py 4, b.js 10-12`
+    (`1 file` for one). A partial parse with no span, with more lines skipped,
+    or that skipped every line of the file is lost evaluation like a
+    whole-file failure: `not parsed by semgrep (<path>)`. As first written, a
+    file of three lines or fewer that Semgrep skipped whole read `ok`
+    (measured with a two-line `tiny.js`).
+  - **`.semgrepignore` and Semgrep's default ignore list no longer decide
+    what is scanned.** Without it, the scanned repository chose which of its
+    own files Semgrep skipped, and when the tree had no `.semgrepignore` at
+    its root Semgrep applied its built-in list, which drops `tests/` and
+    `test/` at any depth and `*.min.js`. Semgrep is now run with
+    `--x-ignore-semgrepignore-files`, so a Python `tests/` directory is
+    scanned (the Python rules carry no path filter) and a `.semgrepignore`
+    hides nothing. A host Semgrep older than 1.96.0 has no such option: the run
+    is `failed`, `execution_error`, with the note `Semgrep's default ignore
+    list and the tree's .semgrepignore files apply`. A source file of a pack
+    language whose extension Semgrep does not select (`.cts`, `.mts`, `.es6`,
+    `.vue`, or a selected extension in another case, such as `APP.JS` or
+    `Server.Py`) is in scope and is not declared out of scope by its name: it
+    is handed to Semgrep by name in an extensions pass (one invocation per
+    language group, with that group's rules and `--scan-unknown-extensions`)
+    and evaluated like any other file. Semgrep cannot parse a `.vue`
+    single-file component as JavaScript, so a `.vue` file always ends as lost
+    evaluation, `not evaluated by semgrep`: a repository with Vue components
+    reads `semgrep` `failed` (`execution_error`), because their script was not
+    analysed. A file the extensions pass does not report is lost evaluation
+    too, and a pass that does not finish in the stage budget names `extensions
+    <group> <n> files` among what was not evaluated.
+  - **The same rule for the other analyzers.** The secrets scanner, textscan
+    and the Python engine's injection check record an in-scope file they did
+    not read (over their size cap, unreadable, or not text) as lost evaluation
+    too, each `failed`, `execution_error`, with the files named; see "The
+    secrets scanner reads every text file and every line" and "The Python
+    engine" below for what each reads.
+  - **Effect.** More scans now record `semgrep`, `secrets`, `textscan` or
+    `python-engine/injection` `failed`: a repository with a file over 1 MiB, a
+    file Semgrep cannot parse, or a source file it cannot read. Such a scan's
+    coverage is incomplete, `--fail-on-scanner-error` exits 2 on it, the
+    GitHub Action with `require-analyzers: semgrep` fails it, and a consumer
+    that treats `failed` as a gap (the hosted backend does) reads it as one.
+    More findings appear too: files that were hidden by name or by a
+    `.semgrepignore` are scanned.
+- **Out of scope is decided by evidence, never by a name (D6').** A file or
+  directory is left out of an analyzer's scope only when the file or directory
+  itself shows it is not the project's own code. Everything else is in scope,
+  and every exclusion is listed with its reason.
+  - **Directories** are left out when a marker file proves a tool wrote them:
+    `installed npm packages` (a `node_modules/` with `.package-lock.json`,
+    `.yarn-integrity` or `.modules.yaml`, or a `node_modules/<pkg>` whose
+    `package.json` names exactly that package and a version),
+    `python virtualenv` (`pyvenv.cfg`, or `conda-meta/history`, under any
+    directory name), `installed python packages` (a `site-packages` or
+    `dist-packages` with a `*.dist-info` holding `RECORD` and `METADATA`),
+    `go vendor tree` (`vendor/modules.txt`), `composer vendor tree`
+    (`vendor/composer/installed.json` and `autoload.php`), `cargo build output`
+    (`target/CACHEDIR.TAG` with Cargo's signature), `maven build output`
+    (`target/` beside a `pom.xml`, with `maven-status`, `maven-archiver` or
+    `surefire-reports`), `gradle build output`, `next.js build output`
+    (`.next/BUILD_ID` and `build-manifest.json`), `npm cache` (`.npm/_cacache`)
+    and `setuptools build output`. A directory that is merely called
+    `node_modules`, `vendor`, `dist`, `build`, `target`, `.next`, `.venv`,
+    `venv`, `.tox` or `__pycache__` is walked, and its files are classified one
+    by one. `.git/` is skipped without being listed, as it holds no source.
+  - **Files** are left out only on content read from them: `lockfile` (a
+    package manager's exact lockfile name and content that parses as that
+    format), `source map` (a `*.map` file that is a version-3 source map),
+    `minified` (JavaScript, TypeScript or CSS in which at least 90% of the
+    bytes lie in lines over 250 bytes, those lines hold at least 1024 bytes,
+    at least one byte in twenty of them is `;`, `{`, `}`, `(`, `)` or `=`, and
+    at most 40 other lines are non-blank, measured on the first 64 KiB),
+    `vendored library` (all three of: a leading comment whose subject is a
+    known library with a version, such as `jQuery v3.6.0`; the library's own
+    identifier at least three times in the 64 KiB after the banner; and a size
+    of at least 8 KiB with no HTTP request read and no `express`, `koa`,
+    `fastify`, `http` or `child_process` imported; a header that only mentions
+    a library, or any `/*!` banner with a version, is not that),
+    `generator header`
+    (`// Code generated ... DO NOT EDIT.`, `@generated`, the protocol buffer
+    compiler's header, "do not edit" beside "generated", "Generated by <tool>
+    <version>", in the first 25 lines, comment lines only) and `compiled
+    output` (a trailing `sourceMappingURL` comment or a webpack bootstrap). A
+    file called `app.min.js` that is ordinary source, or a `package-lock.json`
+    that is not a lockfile, is scanned. A file with no such evidence is
+    uncertain, and an uncertain file is in scope.
+  - **Where each applies.** Semgrep is told to skip a directory with evidence,
+    and a JavaScript or TypeScript file under the size cap that is `minified`
+    or a `vendored library`, with one anchored `--exclude` each (at most 1000;
+    a path past that is scanned). A generated or compiled file under the cap
+    is still scanned, so that excluding more than before never weakens
+    detection. A file over the size cap with any such evidence is declared out
+    of scope instead of lost. The secrets scanner and textscan prune only
+    directories with evidence, and classify a file only when it is over their
+    cap. A symbolic link is never followed. Semgrep lists every link to a
+    directory or to a source file of a pack language as `symbolic link`; the
+    secrets scanner and textscan list a link whose target is outside the scan
+    root (a link whose target is inside is reached directly, a dangling one has
+    nothing to read).
+  - **Test and fixture paths are in scope.** The JavaScript, TypeScript, Java
+    and Go packs carry a `paths.exclude` on every rule (`**/tests/**`,
+    `*.test.*`, `*_test.go`, `**/src/test/**`, `**/mock/**`, ...), which made
+    every rule of those languages skip such a file, so a SQL injection in
+    `lib/mock/server.js` or `api/e2e/handler.js` was never evaluated and the
+    scan read complete; a first version of this entry listed those files as
+    `test/fixture path`. A name is not evidence, so the engine now removes
+    every rule's `paths.exclude` from the packs it extracts for a run
+    (`paths.include`, which narrows a rule to where it applies, is kept; the
+    embedded packs and the rule tests are unchanged) and no file is left out
+    for its path. A finding there is reported like any other Semgrep finding
+    (measured: a SQL injection under `tests/` is a `semgrep_shim` `WARN` at
+    severity `HIGH`, which never blocks without corroboration), not hidden.
+    Evaluating those files costs run time.
+  - **Listed, never silent.** The `ok` detail of the analyzer carries a segment
+    that starts with the exact words `declared out of scope, not scanned:`,
+    for example `declared out of scope, not scanned: minified 1
+    (lib/app.min.js), installed npm packages 1 (node_modules/), symbolic link 1
+    (src/linkdir/)` (measured), and the complete list is in
+    `metadata.coverage.limitations` (see the next entry). In a `--diff` scan
+    Semgrep lists a changed file under such a directory or reached through a
+    link too, and so do the secrets scanner and textscan (a changed file under
+    such a directory is recorded as the directory and its reason, `installed
+    npm packages 1 (node_modules/)`, as a full scan records it; as first
+    written they skipped it unlisted).
+  - **Supersedes** the name-based lists this release first shipped:
+    `node_modules/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`,
+    `*.min.js`, `*.min.css`, `*.map` and lockfiles by name, `.venv/`, `venv/`,
+    `.env/`, `.tox/`, `.npm/`, `.yarn/`, and `__pycache__/`. What a name used
+    to leave out is scanned unless its content shows it is not the project's
+    own code; the one thing that can now be left out and was not before is a
+    minified bundle or a known vendored library that is not named like one,
+    recognised by its content and listed.
+- **A scanner status detail is segments, loss first, and never cut mid-list
+  (C1, C2).** The detail of a `scanner_status` entry the engine composes is
+  segments joined by `; `: the segments that say evaluation was lost first
+  (`lost evaluation: ...`), then notes, then the declared exclusions, which
+  start `declared out of scope, not scanned:`. A consumer reads loss patterns
+  outside that segment only, so a file named like a loss message cannot change
+  a verdict. Every file name the engine puts in a detail is sanitised: `;`,
+  `…`, control characters, line and paragraph separators and bidirectional
+  controls become `?`, and a name is cut to 80 bytes. In a segment a consumer
+  does read, the characters a loss pattern is built from (space, `,`, `:`,
+  `(`, `)`, quotes) are replaced too. A listing names as many entries as the
+  240-byte budget allows and ends `and N more (see report metadata)`; when
+  even the counts do not fit, whole trailing segments are dropped and `N` is
+  the number of segments dropped (not of files). The same composition writes
+  the `active-probes` detail. The complete lists are written to `metadata.coverage.limitations`,
+  one or more entries per kind, each at most 240 bytes and starting with the
+  analyzer's name (`semgrep: lost evaluation, not parsed by semgrep:
+  src/big.js`, `secrets: declared out of scope, not scanned: installed npm
+  packages: node_modules/`, `semgrep: partial parse, skipped lines: a.py 4`),
+  and capped at 400 entries (the last then says `and N more entries not listed
+  (limit 400)`). So `coverage.limitations` now also carries these lists, not
+  only a note for each `unsupported` entry; `configured_complete` and `gaps`
+  are computed from `state` and `reason` as before. Two limits. A `failed`
+  entry composed from an error value (a fatal Semgrep run, a stage timeout,
+  rule errors) can still end in `…` at 240 bytes, which is harmless because it
+  is `failed` already. And the Python engine builds its own detail within the
+  same budget (it never cuts a segment, keeps the marker and the kind down to
+  its worst case of 207 bytes) and carries the complete lists in an additive
+  `scope` field of its protocol status line (`{"lost": [[path, reason]],
+  "declared": [[path, reason]], "truncated": bool}`); the Go side copies them
+  into `metadata.coverage.limitations` as `python-engine/<check>: lost
+  evaluation, not fully analysed: <path> (<reason>), ...` and
+  `python-engine/<check>: declared out of scope, not scanned: <path>
+  (<reason>), ...` (measured), and adds `python-engine/<check>: the lists above
+  stop at the check's own cap; more were not listed` when the check cut them.
+- **`nosemgrep` suppressions are reported, not silent.** Semgrep drops a result
+  whose line carries a `// nosemgrep` comment and says nothing, so anyone who
+  can commit a comment could remove a finding from a scan unseen. Semgrep now
+  runs with `--disable-nosem` and the engine applies the comment itself. A
+  result is suppressed when `nosem` or `nosemgrep` is a whole token (a blank
+  before it, any case; `nosemantic`, `nosem-x` and `nosem_x` are not it) inside
+  a real comment of the file's language (`#` for Python; `//` and `/* */` for
+  JavaScript, TypeScript, Java and Go), found with string literals skipped, on
+  the first line of the match after the match starts or on a line before it
+  that is only a comment starting with the token. The token may be followed by
+  `:` or `=` and a comma-separated list of rule ids; a listed id suppresses
+  the rule it equals or ends, at a dot, with, and a bare `nosemgrep`
+  suppresses every rule. Semgrep itself matches ` nosem` anywhere on the line,
+  inside a string literal and as a word prefix included, so a line such as
+  `"SELECT nosemantic ..." + x` could hide a finding unseen; the engine's
+  reading is a subset of Semgrep's, so where Semgrep would suppress a result
+  and the engine cannot be sure, the result is kept as a finding. Each suppressed result is removed from the findings and
+  listed in the Semgrep detail, `nosemgrep suppressed 2 results (js-sqli-taint
+  routes.js:12, ...)`, and in full in `metadata.coverage.limitations`
+  (`semgrep: nosemgrep suppressed: python-yaml-load-unsafe app.py:10`). It
+  affects Semgrep results only: the comment is not read for the other
+  analyzers (measured: the Python engine's `PY_YAML_UNSAFE_LOAD` still blocked
+  a line whose Semgrep result a `nosemgrep` suppressed).
+- **Semgrep runs inside a bounded budget (R-008, part 2).** Semgrep used to run
+  with defaults sized from the host: `--jobs` from the core count the kernel
+  reports (nine threads on two CPUs inside a container), no `--max-memory`
+  (the kernel's out-of-memory killer ended Semgrep whole, with no JSON and so
+  no finding), and one 300-second deadline for the whole tree. It now runs
+  with `--jobs` and `--max-memory` derived from the container's cgroup limits
+  (`--jobs` is 0.85 of the CPU allowance, rounded, at least 1; `--max-memory`
+  is 90% of (the memory budget less 384 MiB), at least 256 MiB; with no cgroup
+  limit the budget is half the host's memory), logged at INFO, for example
+  `semgrep: stage budget budget="jobs=2 max-memory=1004MiB wall=5m0s (cgroup
+  v2, cpu quota 2.00, memory limit 1500 MiB)"`. The 300-second wall budget is
+  for the whole stage, shrunk to leave 90 seconds of the run's own remaining
+  time when the run has a deadline. A tree with files in at least two language groups
+  (python, javascript and typescript, java, go) and at least 4 MiB of in-scope
+  source is run as one invocation per group, cheapest first, with static
+  deadlines, so a group that reaches its deadline loses only its own findings.
+  A small or single-language tree is one invocation, as before. Source files
+  Semgrep does not select by extension (`APP.JS`, `.mts`, `.vue`) are run in a
+  further pass, one invocation per language group, inside the same budget.
+  - **A file that lost evaluation to time is re-run alone.** Files that hit a
+    rule timeout, the three-timeout threshold, a taint fixpoint timeout or an
+    interfile timeout in the first pass are re-run one at a time with
+    `--jobs 1` and a per-rule timeout of twice the first pass plus one second
+    per 32 KiB of the file (capped at 8 times), at most 12 files, in a
+    deterministic order, inside what is left of the stage budget. A retry
+    resolves a file only when its document reports the file as scanned, has a
+    `fixpoint_timeouts` list and carries no time-class or other
+    lost-evaluation entry for the file; a re-run that lost it to memory or to
+    a parse failure resolves nothing, and its findings are kept either way.
+    Every retry is recorded in `metadata.coverage.limitations`: `semgrep:
+    retried alone after losing evaluation to time in the first pass: a.js
+    (resolved, evaluated in full when run alone), b.js (still lost: timed out
+    again)`. This answers a verdict that depended on host speed: a pair that
+    took 23 seconds alone and 31 on a busy host used to read `ok` on one run
+    and `failed` on the next.
+  - **A stage that reaches its budget says so.** The detail is one segment,
+    never cut: `semgrep: timed out after 1m0s; not evaluated: java 3 files`,
+    `failed`, reason `timeout`, with the finished groups' findings kept.
+  - **A timed-out Semgrep is killed whole.** Killing it used to stop only its
+    Python wrapper and leave `semgrep-core` running, which kept using CPU and
+    memory for the next analyzer and the next scan. The whole process tree is
+    now killed, and it stays in the engine's own process group, so a caller
+    that ends a timed-out engine by process group still ends it.
+  - **Settings.** `FENDIX_SEMGREP_JOBS` (1 to 256), `FENDIX_SEMGREP_MAX_MEMORY_MIB`
+    (0 for none, else at least 256), `FENDIX_SEMGREP_BUDGET_SECONDS` (30 to
+    3600) and `FENDIX_SEMGREP_SPLIT_BYTES` (-1 never splits) override the
+    derived values; an unusable value is ignored with a warning, never turned
+    into an unbounded run. `models.ScanConfig` has `SemgrepJobs`,
+    `SemgrepMaxMemoryMiB` and `SemgrepWallBudget`; there is no command-line
+    flag for them. A service that builds each engine child's environment by
+    default-deny never passes the variables on.
+  - **What this does not solve.** A pair that costs more than the retry bound
+    (about 60 to 90 seconds alone on two CPUs) still reads `failed`, `timeout`;
+    one near that bound can still differ between runs, because Semgrep's time
+    bounds are wall-clock and its taint fixpoint budget is internal. More than
+    12 files to retry, or a stage budget that is spent, leaves the rest `failed`
+    and named. A group killed at its deadline loses all its findings, because
+    Semgrep prints its JSON once, and Semgrep's per-rule timeout is not
+    preemptive inside one pattern evaluation, so a single file that it
+    evaluates extremely slowly can hold its whole invocation to the stage
+    deadline. Measured with the 461 KB emscripten output `openjpeg_nowasm_fallback.js`
+    from a pdf.js build: as it is, it is classified `minified` and declared out
+    of scope (`declared out of scope, not scanned: minified 1`); given thirty
+    ordinary functions above it, so that it is not minified, a stage budget of
+    120 s ran 121 s and recorded `semgrep` `failed`, `timeout`, `semgrep: timed
+    out after 2m0s`, with no Semgrep finding. No rule edit makes such a file
+    finish, and isolating the JavaScript group file by file under a kill
+    deadline is not implemented. The production CPU quota and memory limit
+    were not measured. The completion rate and wall times of the round-4
+    benchmark are in the work notes of that round, were measured on a work
+    tree, and are pending re-measurement at the release commit; none is quoted
+    here.
+- **`fendix verify` re-tests a secret only with the scanner that produced
+  it.** It sent every `secrets`-category finding to the secrets scanner and
+  matched by exact title. Findings of textscan (`GO_HARDCODED_AWS_KEY`,
+  `JS_HARDCODED_AWS_KEY`, `GO_WEAK_HASH_PASSWORD`) and of the Python engine
+  (`python.ast/PY_WEAK_CRYPTO_PASSWORD`) carry titles the secrets scanner
+  never emits, so on unchanged code they were reported `resolved`, exit 0.
+  - **Now:** the secrets scanner re-tests a finding only when its `rule_id`
+    is `secrets/<pattern>` for a pattern the scanner has, it carries no
+    `source_tier`, and it is a white-box finding. Every other finding is
+    `unknown` (exit 2), with a reason that names the producing rule and tier.
+    That includes textscan and Python-engine findings, imported SARIF, and a
+    baseline row with no `rule_id`.
+  - **The re-test began by reading exactly the finding's file**, through the
+    same containment as a scan: `still-present` when the rule still fires in
+    that file, `resolved` when the whole file was read and it no longer fires
+    there, `unknown` when the file could not be read completely. That was not
+    enough for `resolved`, because a credential moved to another file, or
+    rewritten so that no rule matches it, left the file clean. `resolved` now
+    also needs a search of the whole tree for the credential itself; see
+    "`fendix verify` says `resolved` only after it searched for the
+    credential itself" below.
+  - **Exit codes are unchanged** (`resolved` 0, `still-present` 1, `unknown`
+    and `not-found-in-baseline` 2), and so are the JSON fields. Only the
+    `reason` text is new. Textscan and Python-engine `secrets` findings can
+    no longer be verified as fixed by `fendix verify`; a real re-test of
+    those analyzers is not implemented.
+- **The secrets scanner reads every text file and every line.** It read only
+  files whose extension was on a list, so a credential in a `Dockerfile`, an
+  extension-less `credentials` file or a `.properties` file was never looked
+  at; it skipped every JavaScript or TypeScript line over 500 characters, so a
+  hand-written or minified-looking line holding a key was never read, with
+  `secrets` `ok`; it read at most 1 MiB; and it skipped directories called
+  `node_modules`, `vendor`, `dist`, `build`, `.venv`, `venv`, `.tox` and
+  `__pycache__` by name.
+  - **Now:** it reads every regular file that is text: a file is left unread
+    only by a known binary extension (images, fonts, archives and packages,
+    compiled code, media, documents and databases, and key stores such as
+    `.jks`, `.p12`, `.pfx`) or because a NUL byte in its first 8000 bytes
+    proves it binary, and an extension on the source list (`.py`, `.js`,
+    `.json`, `.yaml`, `.env`, ...) is never ruled binary by a NUL byte. Those
+    two kinds are not listed. Files stream in 64 KiB windows, so memory is
+    bounded whatever the file or line length and no line is skipped. A window
+    is `[1 KiB of context][owned region][4 KiB lookahead]`: a match belongs to
+    the window in which it starts, the lookahead lets a match that crosses the
+    boundary be seen whole, and the context keeps a credential glued to a token
+    before it (`key=AKIA...`, `x` + key) from being missed at a boundary. As
+    first written the next window blanked the token it started inside, so a
+    credential glued to a token across the boundary of a line over 64 KiB was
+    found by no window; the windowed result is now tested equal to the
+    whole-line result at every offset. A UTF-16 file is decoded, with a byte
+    order mark or without one (a file whose NUL bytes fall almost only on one
+    byte parity is read as UTF-16 of that endianness). The size cap is
+    128 MiB; a file over it is lost evaluation, not a skip.
+  - **What it does not read, stated exactly.** Files of a known binary
+    extension; a file that a NUL byte proves binary and that is not UTF-16
+    text (unless its extension is a source extension; UTF-32 text is one such
+    file, and nothing is recorded for it); a file over 128 MiB (lost
+    evaluation, named); a symbolic link, whose target outside the root is
+    listed as `symbolic link` and is never read; a directory with evidence of
+    being installed or built output (see "Out of scope is decided by
+    evidence"); and `.git/`. It does not read the inside of an archive, and a
+    credential encoded or split over variables is not matched by any
+    pattern.
+  - **Effect.** More files are read, so more findings appear (a Dockerfile
+    `ENV`, a `.properties` value, a long minified-looking line), and a scan of
+    a repository with a file over 128 MiB reads `failed`.
+- **`fendix verify` says `resolved` only after it searched for the credential
+  itself.** A secrets finding was re-tested by running the secrets scanner on
+  the finding's file, so moving the credential to a `Dockerfile`, a
+  `.properties` file or an extension-less file, or rewriting it
+  (`os.environ.get("DB_PASSWORD", "<literal>")`, `"abc" + "def"`, a backslash
+  escape), left the file clean and read `resolved`, exit 0.
+  - **Now:** the baseline evidence of a secrets finding carries a marker,
+    `[REDACTED len=22 sha256:0a8636d8...]`: the credential's byte length and
+    the first 4 bytes of its SHA-256. Before it answers `resolved`, verify
+    searches the tree under `--code` for a value with that length and digest.
+    A candidate starts at any byte that can start a value (the scanner reports
+    a credential glued to the letters before it, so the search does too). The
+    search reads every file, text or binary (a binary file as raw bytes, and
+    with its NUL bytes removed for UTF-16 inside it), the directories a scan
+    prunes (`node_modules/`, virtual environments, build output), and the
+    contents of gzip, bzip2, zip (jar, war, whl, apk, docx, ...) and tar files,
+    recognised by their first bytes and not their name, to a depth of 4 and
+    within a size bound. It finds the value as written; with adjacent string
+    literals, array elements (`["ab", "cd"]`), `.concat(` and line
+    continuations joined; with `\" \' \\ \/ \xHH \uXXXX \u{X} \UXXXXXXXX
+    \NNN` escapes and `%XX` undone; and as a base64 (standard or URL alphabet)
+    or hex run decoded. A git object store is not searched, and is counted.
+  - **A second guard.** Before any `resolved`, verify also runs the secrets
+    scanner over the whole tree: a sighting with the baseline's marker
+    anywhere is `still-present`, so verify is at least as permissive as the
+    scanner. As first written the search missed a value glued to a letter, a
+    value in an array join, a base64 or binary copy, a gzip or jar, a copy in
+    `node_modules/` or a virtualenv, and UTF-16 without a byte order mark, each
+    of which read `resolved`.
+  - **The answers.** `still-present` when the rule still fires in the file or
+    the value is found anywhere under `--code`, with the places in the reason:
+    `the same credential ([REDACTED len=22 sha256:0a8636d8...]) is still
+    committed: found at Dockerfile:2 (as written). It is no longer reported by
+    secrets/HARDCODED_PASSWORD in settings.py, but moving or reshaping a secret
+    does not remove it from the repository.` (`found at enc.txt:1
+    (base64-decoded)`, `found at x.zip!a.txt:1 (as written)`). `resolved` only
+    when the whole file was re-read, the rule fires there no more and the value
+    was found nowhere, and the reason says what was searched and what was not:
+    `... searched 3 text files (251.5 KB) and 1 binary files as raw bytes under
+    --code, including directories a scan prunes, for the value as written, with
+    adjacent string literals and line continuations joined, backslash escapes
+    and %XX undone, and base64 and hex runs decoded; not covered: a value built
+    at run time or split over variables, reversed or encrypted, a compressed
+    stream inside a binary format, an archive in a format that cannot be
+    decoded, and version-control history`. `unknown` (exit 2) when any of that
+    could not be established: a file that no longer exists (`missing or
+    inaccessible source is not proof of remediation`), a file or directory under
+    `--code` that could not be read or was over the read cap, an archive in a
+    format it cannot decode (xz, zstd, 7z, rar, lz4, an encrypted or corrupt
+    gzip or zip), a decompressed size over its bound, a credential longer than
+    3 KiB, or a baseline without the marker (a non-primary occurrence of a
+    group, a signature-only rule, an older baseline), which needs a rule that
+    matches the credential's own token shape and fires nowhere under `--code`,
+    else `unknown`.
+  - **What `resolved` does not cover.** A value built at run time or split over
+    variables, reversed, shifted or encrypted, a list of character codes, a
+    compressed stream inside another format (a PNG, a PDF, a font), and a
+    value that exists only in version-control history. A binary file is
+    searched as raw bytes only and does not by itself make the answer
+    `unknown`. `resolved` says what was searched, not that no copy exists.
+  - **Still unknown, never resolved:** every file-anchored finding that is not
+    from the secrets scanner (Semgrep, textscan, the Python engine, imported
+    SARIF). The re-tests of a URL-anchored finding and of a dependency finding
+    are separate and unchanged. Exit codes are unchanged: `resolved` 0,
+    `still-present` 1, `unknown` and `not-found-in-baseline` 2, and no other
+    status exits 0. A search reads far more than a re-read, and a group of
+    many moved occurrences runs one search for each distinct marker set.
+- **The secrets scanner no longer follows symlinks.** Its full walk read a
+  symlinked file's target and checked the size limit on the link, so a
+  repository link such as `.env -> /proc/1/environ` put the target's text
+  into finding evidence, and a link to `/dev/zero` exhausted memory. The
+  `--diff` path read a symlinked leaf the same way. The scanner now reads
+  regular files only, through one `os.Root` opened on the scan root, and
+  checks the size limit on the bytes it reads. A link inside the repository
+  is reported once, at its target's path; a link out of the repository
+  produces no finding and is listed as declared out of scope (`symbolic
+  link`), so it is not silent. The hosted backend's clones also stop materialising
+  symlinks, as a separate backend change.
+- **Connection-string passwords are redacted to the end of their
+  property.** The `DB_CONNECTION_STRING` redaction stopped at the first `;`,
+  `&`, quote, space or `@`, so the rest of a SQL Server `{braced;}` value, a
+  quoted or spaced password, a password holding `@`, or a second `password=`
+  in the same URL stayed in evidence and SARIF as plaintext. Redaction now
+  covers the whole value: URL userinfo to the authority's last `@`, a braced
+  value to its closing `}` (`}}` is an escaped brace), and any other value to
+  the next `;` or `&` that starts another `key=` property, to its literal's
+  closing quote, or to the end of the line. Every `password=` property is
+  redacted. Detection, rule id, identifier and fingerprint are unchanged;
+  only the length and hash in the redaction marker differ. As first written
+  the scanner did not read `.properties` files; it now reads every text file.
+- **A Python URL host allowlist guard counts only for the value it
+  checked.** The `urlparse(url).netloc` allowlist guard was matched by the
+  variable's name, so rebinding the URL after the guard, a parse of an
+  earlier value of the name, or an allowlist holding request data hid SSRF
+  and open-redirect findings. A guard now counts only when the parse is the
+  sole binding of its name, placed before the guard, nothing rebinds the
+  guarded name after the parse anywhere in the function, and the allowlist
+  holds only non-empty string constants (a named allowlist is bound once in
+  the module and never mutated). The membership guard (`if x not in
+  ALLOWED: abort()`) follows the same rules: constant members, no rebind
+  after the guard. A module
+  that binds an allowlist name twice loses the guard's suppression, which can
+  add a finding, never hide one.
+- **Python sanitisers count only for the sink they protect.** A sanitiser was
+  honoured for every sink class, both inline (`html.escape` or `quote` around
+  a URL) and in the caller of a one-hop helper (`basename`, `html.escape` or
+  a netloc guard before a helper that runs a shell command). So
+  `requests.get(html.escape(url))`, `redirect(quote(target))` and a
+  `basename`-reduced value reaching `os.system` through a helper were not
+  proven, and did not block. Each taint chain now carries its sink's class,
+  and only that class's sanitisers apply; the classes are listed under "A
+  Python sink in a helper function is now proven reachable when the caller
+  assigns the request value before passing it" and "A Python sink in a helper is now proven when
+  a view in another module passes it request input" above.
+  A netloc guard or a fixed authority does not protect a URL the value is
+  only part of (`"https://" + host`). Because escaping no longer protects a
+  redirect, a redirect to a literal same-origin path or a fixed
+  `https://host/` prefix (`"/search?q=" + quote(q)`) is treated as safe; `/`
+  alone and `/\` do not count. Findings this restores are new.
+- **Safe Python download idioms no longer block.** Flask's
+  `send_from_directory(<constant dir>, <request filename>)` was a proven path
+  traversal, though Werkzeug's `safe_join` contains the filename, and
+  `os.path.join(BASE, basename(name))` (or `secure_filename`) was too. With
+  route parameters as sources this blocked the documented Flask idiom.
+  `send_from_directory` is now judged on its directory: a constant or trusted
+  directory is not a sink, and a request-controlled one is proven. A join
+  (`os.path.join`, `Path(...) / x`, `.joinpath`) is contained when every part
+  is a constant, a trusted base, or reduced to one path component on every
+  path to it. A partly contained join is traced through its uncontained
+  parts only.
+  - **Identity.** A `send_from_directory` finding's sink now names the
+    directory argument, not the filename, so a finding for a
+    request-controlled directory has a new fingerprint once.
+  - **Still blocking (false positives, not fixed):** a path guarded by
+    `any(p.startswith(root + os.sep) ...)`.
+  - **Test replaced.** `python/tests/test_ast_analyzer.py`'s
+    `test_send_from_directory_uses_second_arg` asserted this false positive
+    (a constant directory with a request filename had to be a proven path
+    traversal). It is replaced by
+    `test_send_from_directory_constant_dir_request_name_not_proven` and
+    `test_send_from_directory_request_dir_is_proven`.
+- **A Python guard counts only for the value it tested.** A guard on a
+  name is a statement about the value the name held when the guard ran:
+  `if ".." in name or os.path.isabs(name): abort(400)`, then `name =
+  unquote(name)` or `name = "/" + name`, then `open(name)` read as guarded, so
+  a decode or a concatenation after a traversal guard hid a path traversal.
+  The guards were checked by name and by per-guard rebind rules. One rule now
+  governs the traversal guard, the membership allowlist guard, the URL-host
+  allowlist guard and the resolved-path containment guard: a guard protects a
+  use only if every definition of the name that can supply the use also
+  reached the guard (`python/analyzers/reaching_defs.py`, a forward dataflow
+  over the function). Where control flow is uncertain (an exception leaving a
+  `try` or `with`, a loop that may run again, a short-circuit operand that may
+  not run) the pass adds definitions, which can only invalidate a guard. A name
+  the function declares `global` or `nonlocal`, or a free name, is volatile,
+  and no guard on it is proven. A call that rebinds a name through `exec`,
+  `globals()` or `locals()`, and a nested function or lambda that reads the
+  name, are not modelled. This can add findings, never hide one.
+  - **A guard must provably end control flow.** The rejecting branch counts
+    only when it ends in `return` or `raise`, in an `if`/`else` whose both
+    branches end, or in a call that never returns: `sys.exit`, `os._exit`,
+    `os.abort`, and `abort` of flask, werkzeug, quart or bottle resolved
+    through the file's imports (aliases and `from m import *` included); the
+    `exit` and `quit` builtins when nothing in the file rebinds, defines or
+    imports them; or a function the file defines once, undecorated, not async,
+    not a generator, with no `return`, whose body ends on every path (three
+    levels deep). A call counted by its name alone (`log.abort()`, `log.exit()`,
+    a local `abort` that only prints) used to count, and hid a path traversal.
+    A free `abort` with no import is not proven, so a guard written that way
+    now reports, which is the safe side. A sink written inside the guard's own
+    rejecting body is never covered by it; one in the `else` or after is.
+  - **A guard follows the value, not the name.** A tuple assignment takes its
+    right-hand names at the binding in effect before the statement (`name,
+    other = other, name` used to leave a sink after the swap hidden), and
+    rebinding a name first freezes every earlier binding that reads it (`name
+    = request.args['f']; base = name; name = 'x'; open(base)` reported nothing
+    before; this is a general false negative the swap case exposed, present in
+    the previous release), bounded to 400 bindings per scope and 400 nodes per
+    value. A name that has no binding and is not a route parameter (a plain
+    helper parameter) is still resolved lazily, as before. A swap that moves a
+    guarded value (`name, other = other, name; open(other)`) reports, a false
+    positive.
+- **The Python engine reports what it did not analyse (D6', D1', DE-03).**
+  - **A file the interpreter cannot parse is lost evaluation.** The engine
+    parses `.py` files with the running interpreter and dropped a file on
+    `SyntaxError`. A `match` statement under Python 3.9 is valid Python the
+    interpreter is too old for: on a macOS `python3` a Flask route with a
+    `match` and `subprocess.call(cmd, shell=True)` read `python-engine/injection`
+    `ok`, no finding, exit 0, while 3.11 blocked it. The check is now `failed`,
+    `execution_error`, and the detail says which it is: `lost evaluation: 1
+    in-scope file not fully analysed: app.py (parse: python 3.9.6 too old for
+    line 8 (invalid syntax))`, `(parse: python 3.9.6 may be too old, error at
+    line N (<msg>))` when the interpreter is older than 3.14 and the error line
+    does not look like newer syntax, `(parse: syntax error at line 3 (invalid
+    syntax))` for a file that does not parse on any Python 3, or `(parse: not
+    valid source text (null byte))`. The findings of every other file are kept.
+  - **Interpreter floor.** Below Python 3.9 the engine reports every requested
+    check `failed`, `execution_error`, with `python 3.8.10 is below the 3.9
+    floor the engine runs on: nothing was analysed (install Python 3.9+ or use
+    the engine image)`, and exits 2. Between 3.9 and 3.14 it logs that a file
+    in newer syntax is reported as lost evaluation, not as clean. The hosted
+    image runs Python 3.14.5.
+  - **The same lost-evaluation rule** covers a source file over 1 MB that
+    nothing in it shows to be generated (`skipped: over the 1 MB size cap (<n>
+    bytes)`), a file or directory that cannot be read, a parse that exhausts
+    the recursion limit or memory, and a project call index that could not be
+    built. The check finishes the whole tree first, so every finding of every
+    other file is kept.
+  - **Scope by evidence, as above.** The engine no longer skips `node_modules`,
+    `vendor`, `dist`, `build`, `venv`, `.tox` and `__pycache__` by name, nor
+    `*.min.js`, nor any JavaScript line over 500 characters. It leaves out a
+    virtual environment (`pyvenv.cfg`), installed Python packages (named by a
+    `dist-info` `RECORD`), installed npm packages (a `package.json` with a name
+    and a version under `node_modules`), `.git` (with a `HEAD`), and a
+    JavaScript file whose content is minified or a known vendored library, by
+    the same rules, constants and order as the Go classifier
+    (`python/analyzers/scope_evidence.py` mirrors `go/internal/scope`; a change
+    to one needs the same change in the other, and shared cases pin them). An
+    earlier version used weaker evidence than Go's: a bare `DO NOT EDIT` in a
+    string, a `/*!` or `// React 18.2` banner, and a different measure of
+    minification, so a first-party file such as a handler with `eval(...)` could
+    be declared out of scope by Python and scanned by Go. Under the 1 MB cap
+    only minified and vendored evidence leaves a file out; a generator header
+    or compiled output leaves out only a JavaScript or Python file over the
+    cap. Each is listed with a reason that carries no repository text:
+    `declared out of scope, not scanned: 1 path: lib/app.min.js (minified: 100%
+    of bytes on lines over 250, 23% syntax)` (measured; `vendored library:
+    jquery`, `generated: generator header` and `compiled output: ...` are the
+    others). A symbolic link is not followed and is listed as `symlink, not
+    followed`.
+  - **Letter case and extensions.** `.py`, `.js`, `.jsx`, `.ts` and `.tsx` are
+    matched without regard to case (`Server.Py`, `APP.JS` were skipped without
+    a trace), and `.mjs`, `.cjs`, `.mts` and `.cts` are scanned.
+  - **Decoding.** A UTF-8 byte order mark and a PEP 263 coding declaration are
+    honoured, so a BOM file is parsed instead of dropped.
+- **"No safe case blocks" is a statement about the development corpus.**
+  Every such statement above, and the precision of 1.000 quoted for the
+  development corpus, describes the framework-parity development corpus the
+  rules were tuned on; those statements now say so. On independently written
+  safe handlers the review found blocking false positives on an `int()` cast,
+  a literal-dict allowlist, `basename`, `shlex.quote` and `parseInt` (4 of 11
+  Python handlers, 1 of 10 JavaScript). The entries above change how
+  `basename` and `shlex.quote` are honoured in Python; that independent set
+  was not re-run against them, so whether those false positives are gone is
+  unverified. Holdout precision has never been measured.
+- **The Python baseline recall is 0.769.** The base engine (v3.7.0) and
+  v3.6.3 detect 83 of 108 Python vulnerable cases of the development corpus,
+  recall 0.769 (`benchmarks/frameworks/results/v3.6.3-corpus-v2.json`). A
+  "before" figure of 0.756 quoted for this work is the Python blind-holdout
+  recall, not the baseline. The intermediate counts in the entries above
+  were recorded when each change was made and were not re-measured.
+- **The security catalog count.** `docs/security-catalog-contract.json` is
+  generated from the engine's rule registries (`go run ./cmd/catalog-contract
+  -out ../docs/security-catalog-contract.json` from `go/`; a test in
+  `go/internal/catalog` fails when it is stale). One check is one catalog
+  `id`. Counted that way the catalog has 158 checks, against 85 in v3.7.0:
+  74 added and `flask-missing-login-required` removed. The running totals
+  given above (105 and 106), and 157 in `benchmarks/frameworks/RESULTS.md`,
+  were never the release's. Each figure below was measured on this tree and
+  is reproduced by the command after it, run from the repository root with
+  `C=docs/security-catalog-contract.json`.
+  - **Unique checks: 158**, all ids distinct; v3.7.0 had 85.
+
+    ```sh
+    jq '.checks | length' "$C"
+    jq '[.checks[].id] | unique | length' "$C"
+    git show v3.7.0:docs/security-catalog-contract.json | jq '.checks | length'
+    ```
+
+  - **By analyzer:** `semgrep` 74, `textscan` 30, `python-engine/injection`
+    21 (17 `python.ast/*` and four `SEC-JS_*`), `secrets` 18, `dast` 15.
+
+    ```sh
+    jq -r '.checks | group_by(.analyzer)[] | "\(.[0].analyzer) \(length)"' "$C"
+    ```
+
+  - **Added:** 52 Semgrep rules (51 JavaScript/TypeScript, Java and Go, and
+    `python-random-token-assignment`), the 21 `python-engine/injection`
+    checks and `JAVA_WEAK_HASH_PASSWORD`. Removed:
+    `flask-missing-login-required`.
+
+    ```sh
+    git show v3.7.0:docs/security-catalog-contract.json > /tmp/old.json
+    jq -n --slurpfile a /tmp/old.json --slurpfile b "$C" \
+      '{added: ([$b[0].checks[].id] - [$a[0].checks[].id] | length),
+        removed: ([$a[0].checks[].id] - [$b[0].checks[].id])}'
+    ```
+
+  - **Rules.** A Semgrep check is one YAML rule: 74 rules in
+    `go/internal/scanner/semgrep/rules/`, one catalog check each (23 Python,
+    17 JavaScript/TypeScript, 15 Java, 19 Go). 29 are taint-mode, and all 29
+    declare `fendix_reachability: taint`. For the other analyzers one
+    registry entry (a textscan rule, a secrets pattern, a DAST check, a
+    Python-engine check) is one check, so there rules and checks are the
+    same count.
+
+    ```sh
+    cat go/internal/scanner/semgrep/rules/*.yaml | grep -c '^  - id:'
+    jq -r '.checks[] | select(.analyzer == "semgrep") | .applicability | join(",")' "$C" | sort | uniq -c
+    cat go/internal/scanner/semgrep/rules/*.yaml | grep -c '^    mode: taint'
+    cat go/internal/scanner/semgrep/rules/*.yaml | grep -c 'fendix_reachability: taint'
+    ```
+
+  - **Variants are not counted as checks.** Pattern alternatives inside a
+    rule (`pattern-either` branches, the one-hop helper forms of a Java
+    taint rule) belong to that rule and add nothing to the count; no figure
+    is given for them. 21 Semgrep rules are `-sink` variants: each reports
+    the sink shape of the vulnerability its `-taint` partner (the same id
+    stem) reports with a proven in-function flow. They have their own ids
+    and findings, so they are counted; the 50 `-taint` and `-sink` rules
+    share 29 stems, and counting each pair once would leave 53 Semgrep
+    detections instead of 74.
+
+    ```sh
+    jq '[.checks[].id | select(endswith("-sink"))] | length' "$C"
+    jq '[.checks[].id | select(test("-(taint|sink)$"))] | length' "$C"
+    jq '[.checks[].id | select(test("-(taint|sink)$")) | sub("-(taint|sink)$"; "")] | unique | length' "$C"
+    ```
+
+  - **Framework-specific detections: 5.** Only five checks match one
+    framework's API and name it in their id, all Python Semgrep rules:
+    `django-view-missing-login-required`, `django-orm-raw-sql`,
+    `fastapi-route-missing-auth-dependency`, `flask-route-no-auth-decorator`
+    and `flask-render-template-string-injection`. Every other check applies
+    to a language. The JavaScript/TypeScript, Java and Go taint rules carry
+    framework-specific sources (Express, NestJS and Next.js; Spring;
+    net/http and Gin) inside language-wide rules. The contract has no
+    framework field, so per-framework detection is not a catalog count; it
+    is measured per framework by the parity corpus, nine framework
+    directories under `benchmarks/frameworks/`.
+
+    ```sh
+    jq -r '.checks[].id | select(test("^(django|flask|fastapi|express|nestjs|nextjs|spring|gin)-"))' "$C"
+    jq -c '[.checks[] | keys[]] | unique' "$C"
+    ls -d benchmarks/frameworks/*/ | grep -vc results
+    ```
+
+  - **Enabled: 158; disabled: none.** Every check has `availability`
+    `stable`: the generator sets that value for every entry
+    (`go/internal/catalog/security.go`, `python_engine.go`), so the contract
+    cannot mark a check disabled or preview. There is no per-check off
+    switch, and Semgrep is given the whole embedded rules directory, so all
+    74 rules run whenever Semgrep runs (it is `skipped`,
+    `dependency_missing`, when it is not installed). What differs is when a
+    check runs: 149 are `passive`; of the 15 DAST checks, 7 are `active` and
+    run only with `--enable-active`, 1 (`auth`) needs credentials and 1
+    (`idor`, `multiuser`) needs two users. Each check runs only against its
+    `applicability` (`url` for DAST, a language or `code` for the rest). The
+    YAML under `python/rules/` is read by no code and is not in the catalog.
+    The reachable taint tier is off for every language
+    (`semgrep.ReachabilityLanguages` is empty): the 29 taint rules run, and
+    their findings are `semgrep_shim`.
+
+    ```sh
+    jq -r '.checks | group_by(.availability)[] | "\(.[0].availability) \(length)"' "$C"
+    jq -r '.checks | group_by(.execution_mode)[] | "\(.[0].execution_mode) \(length)"' "$C"
+    (cd go && go test -count=1 -run 'TestNoLanguageClearsTheRealWorldGate' ./internal/scanner/semgrep/)
+    ```
+
+  - **Warn-only and blocking are not properties of a check.** The contract
+    has no such field (the `keys` command above). Whether a finding blocks
+    is decided per finding, from its confidence band and `--fail-on`. A
+    Semgrep finding scores 40 (MEDIUM: base 35, static evidence +10, Semgrep
+    tier −5), and under default confidence gating a MEDIUM finding blocks
+    only with an independent corroborating signal, so none of the 74
+    Semgrep checks blocks on its own; with `--enforce-confidence=false`
+    (severity only) a finding at or above the threshold blocks whatever its
+    analyzer. Measured on this tree, a scan of `benchmarks/frameworks` with
+    Semgrep 1.182.1 (`fendix scan --code benchmarks/frameworks --format json
+    --offline --fail-on high --output r.json`, `semgrep` recorded `ok`) gave
+    118 findings: 91 `semgrep_shim` findings from 44 of the 74 Semgrep rules,
+    all WARN; 9 textscan (`native_go`), all WARN; 16 Python-engine
+    (`tree_sitter_sidecar`), 11 BLOCK; and 2 with no tier
+    (`secrets/DB_CONNECTION_STRING`, `SEC-JS_SQL_TEMPLATE`), both BLOCK.
+    Which of the 84 checks outside Semgrep can block is decided per finding
+    and is not counted.
+
+    ```sh
+    (cd go && go test -count=1 -run 'TestNoBlockWithoutCorroboration|TestSemgrepTaint' ./internal/decision/)
+    (cd go && go test -count=1 -run 'TestSemgrepTierPenalty' ./internal/confidence/)
+    jq -r '.findings[] | "\(.source_tier // "none") \(.status)"' r.json | sort | uniq -c
+    jq '[.findings[] | select(.source_tier == "semgrep_shim") | .rule_id] | unique | length' r.json
+    ```
+
+  - The contract's `engine_version` reads `v3.7.0` (`StableEngineVersion`
+    in `go/internal/catalog`) until it is bumped for this release.
+- **Published accuracy figures are pending re-measurement.** The blind
+  holdout recall (measured at commit `e03655a`) and the real-world blocking
+  precision (commit `6901cf7`), both on Semgrep 1.141.0, describe neither
+  this release's Semgrep (1.182.1) nor the detection changes above,
+  including this section's. They are kept as measured, labelled with their
+  commit, and are to be re-measured at the release commit before they are
+  quoted for it. The release workflow's holdout job compares recall only,
+  does not gate the release, and passes without measuring when its deploy key
+  is absent, so a release run is not evidence that they were re-measured.
+  Four open-redirect cases the development corpus labels safe (net/http,
+  Gin, Next.js and Spring) can be bypassed with a tab or newline in the
+  target, so the development figures for open redirect in those frameworks
+  are scored against those labels. After this section's changes the parity
+  gate was re-run for Django, Flask, FastAPI and Spring (no case change);
+  Express, NestJS, Next.js, net/http and Gin were not re-run.
 
 
 ## [3.7.0] - 2026-10-25

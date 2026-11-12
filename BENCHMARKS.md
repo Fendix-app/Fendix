@@ -301,7 +301,8 @@ and the report is
 - **Development corpus:** the rules may be tuned against it, so its figures
   are scoped to it.
 - **Blind holdout:** labelled cases written by authors who never saw the
-  rules. Public accuracy numbers come from this set.
+  rules. Public accuracy numbers come from this set, once it is re-measured
+  for the release (see below).
 
 | Language | Dev recall | Dev block recall | Blind holdout recall | Real-world blocking precision |
 |---|---|---|---|---|
@@ -316,6 +317,12 @@ and the report is
   at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins). The
   real-world precision column was measured at commit `6901cf7` on Semgrep
   1.141.0.
+- **Pending re-measurement.** The blind-holdout and real-world columns predate
+  this release's detection changes (including the security fixes in
+  `CHANGELOG.md`, `[Unreleased]`, Security) and its Semgrep 1.182.1. They are
+  kept as measured at the commits named above and are pending re-measurement
+  at the release commit; until then they describe those commits, not this
+  release.
 - **Caveat: holdout recall is lower than dev recall for every language, and
   the drop exceeds the 0.10 limit in all four.** The development corpus
   overstates recall on code the rules have not seen.
@@ -341,6 +348,8 @@ and the report is
 | **OWASP Benchmark** (recall/precision) | It is a **Java** application scored on deep, sanitizer-aware, interprocedural taint. v0.27 ships Java **regex** SAST (line-local) — real coverage, but a regex matcher scores ≈ 0 on the FP-penalized Youden metric (half the cases are sanitized FP twins). The target **loud-SKIPs in both `Scan()` and `Run()`** (`go/internal/benchmark/targets/owasp.go`). | v0.28+ (deep Java taint engine + labeled corpus) |
 | Competitor head-to-head (Semgrep/ZAP/Bandit) | No published shared-corpus methodology exists; implied superiority without one violates Rule 5. | post-v0.26 |
 | Correlation-specific FP reduction | No harness yet isolates the with/without-correlation effect; claims are stated as mechanism, not measured reduction. | post-v0.26 |
+| Semgrep stage completion rate, wall time and peak memory under the CPU, memory and wall budget (R-008) | The budget (`--jobs` and `--max-memory` from the container's limits, a 300 s stage wall, per-language groups, a retry of a file that timed out) was measured on a work tree in the engine image on a handful of repositories. Those runs predate the release commit, were not repeated on the 70-repository real-world set, and used no production-shaped host, so no completion rate, wall time or memory figure is published. A pair that costs more than the retry bound still ends `failed` / `timeout`. | At the release commit, on the real-world set, with the production CPU quota and memory limit |
+| Share of active probes recorded `inconclusive`, `unknown_origin` or `scanner_failed` on real targets (`metadata.coverage.active_probes`) | Observed only against local test servers (a healthy target, a target that reset every probe, a target that answered 503 to every path), where the classification and its retries behaved as documented. No rate on real targets is published, and how often an unknown-origin probe fails `active-probes` on a real network is unmeasured. | A run of `--enable-active` scans against real staging targets |
 | Real-code precision / FP-rate (**public CI tier**) | v1.1 shipped the seed tier (§5, TWISCOPE — private, not CI-gated). The public pinned-SHA tier is wired but the committed corpus is still seed-only; DAST precision stays a lower bound until public labels land. | v1.1+ public labels |
 
 ---

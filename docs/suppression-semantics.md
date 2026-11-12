@@ -271,12 +271,24 @@ applies wherever an identity leaves the engine.
 | --- | --- |
 | SARIF (`--format sarif`, GitHub Code Scanning) | one result per occurrence. `partialFingerprints["fendix/v2"]` is that occurrence's fingerprint, so an alert dismissal applies to one occurrence. `properties.finding_id` and `occurrence_count` name the presentation group. |
 | `fendix jira` | one `fendix-fp:<fingerprint>` label per occurrence. A finding is up to date only when every occurrence is on an issue. |
-| `fendix verify` | re-tests each occurrence. A grouped finding is `resolved` only when every occurrence is. |
+| `fendix verify` | re-tests each occurrence. A grouped finding is `resolved` only when every occurrence is. An occurrence is re-tested only if the secrets scanner produced it; it is `resolved` only after a search of the whole tree (text and binary files, pruned directories, archives) for the credential itself, in the forms listed in the reason, found nothing, and every other analyzer's file-anchored occurrence is `unknown` (exit 2); an active-probe occurrence is never `resolved`; see [`checks/secrets.md`](checks/secrets.md). |
 | Fendix Cloud issues | each issue covers a set of occurrences. An issue with a human verdict or a governance enrollment never takes on a new occurrence; the new occurrence opens its own issue. |
 
 The finding-level `fingerprint` and `id` remain useful for display, but
 neither is an identity for anything that suppresses, dismisses, tracks or
 proves something.
+
+## Suppressions that live in the scanned repository
+
+A suppression the repository carries is a control the repository's authors
+write. The engine honours the ones below and never lets one hide a finding
+without a trace.
+
+| Suppression | Behaviour |
+| --- | --- |
+| `// nosemgrep`, `# nosemgrep: <rule id>` | Semgrep removes the result and says nothing, so the engine runs Semgrep with `--disable-nosem` and applies the comment itself, for Semgrep results only. A result is removed from the findings when `nosem` or `nosemgrep` is a whole token (a blank before it, any case; `nosemantic`, `nosem-x` and `nosem_x` are not it) inside a real comment of the file's language (`#` for Python; `//` and `/* */` for JavaScript, TypeScript, Java and Go), found with string literals skipped, on the first line of the match after the match starts, or on the line before it when that line is only a comment starting with the token. The token may be followed by `:` or `=` and a comma-separated list of rule ids. Semgrep itself matches ` nosem` anywhere on the line, a string literal and a word prefix included, which is why the engine's reading is narrower. A listed id suppresses the rule it equals or ends, at a dot, with; a bare `nosemgrep` suppresses every rule. Where the engine cannot be sure Semgrep would suppress, the result stays a finding. Every suppressed result is listed in the Semgrep `scanner_status` detail (`nosemgrep suppressed 2 results (js-sqli-taint routes.js:12, ...)`) and in full in `metadata.coverage.limitations` (`semgrep: nosemgrep suppressed: python-yaml-load-unsafe app.py:10`). The comment is not read for the other analyzers. |
+| `.semgrepignore` | Not honoured. Semgrep is run with `--x-ignore-semgrepignore-files`, so neither the repository's `.semgrepignore` files nor Semgrep's built-in default ignore list (which drops `tests/`, `test/` and `*.min.js`) decide what is scanned. What is left out of scope is decided by evidence in the file or directory and is always listed; see [`checks/semgrep.md`](checks/semgrep.md). |
+| `.fendix-ignore`, `--baseline` | As described above; they act on findings, not on what is scanned. |
 
 ## Related
 

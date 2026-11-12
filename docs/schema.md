@@ -113,8 +113,66 @@ etc.) record when a field first appeared, not a support commitment.
 | `name` | string | yes | Registry identity (list above). |
 | `state` | string enum | yes | `ok`, `skipped`, `failed`. |
 | `reason` | string enum | when `state` ≠ `ok` | Skip reasons: `not_applicable`, `diff_unchanged`, `disabled_by_flag`, `disabled_offline`, `dependency_missing`, `unsupported_target`. Fail reasons: `network_error`, `timeout`, `execution_error`, `malformed_output`, `truncated_output`, `input_error`, `no_endpoints`. Closed set. |
-| `detail` | string | no | Short human-readable excerpt. Never used for classification. |
+| `detail` | string | no | Short human-readable text, at most 240 bytes. The engine derives `state`, `reason`, `coverage.gaps` and `configured_complete` from `state` and `reason`, never from `detail`. A consumer that reads `detail` for more must follow "Detail grammar" below: an `ok` entry can carry notes, an excerpt of what was skipped, and a partial parse that loses lines. |
 | `attempts` | integer ≥ 2 | no | Present when the analyzer was retried in process (one retry, `network_error`/`timeout` on the dependency scanners only). `state`/`reason` describe the final attempt. |
+
+#### Detail grammar
+
+A detail the engine composes for `secrets`, `textscan`, `semgrep`,
+`python-engine/injection` and `active-probes` is segments joined by `; `, in this order: the segments
+that say evaluation was lost (they start `lost evaluation:`), then notes, then
+the declared exclusions, which start with the exact words `declared out of scope,
+not scanned:`. Everything after that marker up to the next `; ` is a list of
+paths the engine left out on purpose, with the reason for each
+(`minified 1 (lib/jquery.min.js), installed npm packages 1 (node_modules/)`); a
+reader must not look for loss wording inside it. Every file name in a detail is
+sanitised: `;`, `…`, control characters, line and paragraph separators and
+bidirectional controls become `?`, and a name is cut to 80 bytes. A listing
+names as many entries as the 240-byte budget leaves room for and ends `and <N>
+more (see report metadata)`, and no segment is cut in the middle: when the
+budget is spent, whole trailing segments are dropped and `N` counts the
+segments dropped, not files. The complete
+lists are in `coverage.limitations` (below). A `failed` entry built from an error
+value (a fatal run, a stage timeout, rule errors) may still end in `…` at 240
+bytes; a reader that treats a `…` on an `ok` entry as a sign that text was lost
+is right to, because the engine does not cut an `ok` detail.
+
+An `ok` entry can still say something the reader should see. `semgrep` `ok`
+carries, for example, `partial parse, 2 files with skipped lines: a.py 4, b.js
+10-12` (Semgrep parsed those files except the named lines; the allowance is the
+larger of 3 lines and 5% of the file, and always fewer than all of its lines: a
+file Semgrep skipped whole is lost evaluation, `not parsed by semgrep`; `1 file`
+for one), `nosemgrep suppressed 2 results
+(js-sqli-taint routes.js:12, ...)`, a dropped option that changes nothing that
+is matched, and the declared exclusions. `configured_complete` does not count
+those. See [`checks/semgrep.md`](checks/semgrep.md).
+
+The `active-probes` detail has its own grammar (`go/internal/engine/probestatus.go`),
+composed within the same 240 bytes. Its first segment on an `ok` entry is always
+`probe evaluation: <A> attempted, <E> evaluated, <I> inconclusive (target), <U>
+unknown-origin, <F> scanner-failed`; when `I` is above zero a second segment
+`inconclusive probes (target did not answer): timeout 3, connection_reset 1` lists
+the non-zero target reasons in the fixed order `timeout`, `connection_reset`,
+`connection_refused`, `tls_error`, `rate_limited`, `service_unavailable`,
+`other_transport`. A `failed` entry (`execution_error`) starts with the loss
+segment, `lost evaluation: <U+F> probe(s) not evaluated (<U> unknown-origin, <F>
+scanner-failed)`, then the counts segment, then, if they fit,
+`unknown-origin probes (not evaluated): dns_failure 2` and `scanner-failed probes
+(not evaluated): not_sent 1` (reasons `dns_failure`, `timeout`,
+`connection_refused`, `network_unreachable`, `tls_handshake`, `unclassified` for
+unknown; `internal_error`, `scan_deadline`, `scan_cancelled`,
+`resource_exhausted`, `proxy_failure`, `request_construction`, `not_sent` for the
+scanner). A pass-level cause comes first and keeps its reason (`failed/timeout`:
+`--max-duration elapsed before the probe pass completed`; `failed/execution_error`:
+`--max-requests exhausted: <N> requests refused before the probe pass completed`).
+A segment that does not fit is dropped whole and the detail ends `and <N> more (see
+report metadata)`; the complete account is `coverage.active_probes`. An `ok`
+`active-probes` entry always carries a detail, and `configured_complete` is never
+proof that every probe was evaluated: read `coverage.active_probes` beside it. The
+engine does not turn an all-inconclusive run into a gap (measured against a target
+that reset every probe after the connection: `ok`, `22 attempted, 0 evaluated, 22
+inconclusive (target)`, `configured_complete` true); a consumer that must refuse
+such a scan has to read `evaluated`.
 
 Lifecycle classes, derived from `(state, reason)`: `ok`; `not_applicable` (`not_applicable`, `diff_unchanged`); `disabled` (`disabled_by_flag`, `disabled_offline`); `unavailable` (`dependency_missing`); `unsupported` (`unsupported_target`); `failed` (any fail reason). Only `unavailable` and `failed` are engine gaps: the analyzer was configured to run and did not deliver. `disabled` and `unsupported` are visible, intentional or structural, and never a gap on their own.
 
@@ -130,7 +188,8 @@ Lifecycle classes, derived from `(state, reason)`: `ok`; `not_applicable` (`not_
 | `strict` | boolean | The run used `--fail-on-coverage-gap` or `--require-analyzers`. |
 | `configured_complete` | boolean | `true` iff no entry is `unavailable` or `failed`. Not changed by `--require-analyzers`. |
 | `gaps` | array of string | Names of `unavailable` or `failed` entries. |
-| `limitations` | array of string | `"<name>: <detail>"` for every `unsupported` entry, or just `"<name>"` when that entry's `detail` is empty. |
+| `limitations` | array of string | `"<name>: <detail>"` for every `unsupported` entry, or just `"<name>"` when that entry's `detail` is empty; and, from this release, the complete lists behind the 240-byte details: one or more entries per kind, each starting with the analyzer's name and at most 240 bytes (`"semgrep: lost evaluation, not parsed by semgrep: src/big.js"`, `"secrets: declared out of scope, not scanned: installed npm packages: node_modules/"`, `"semgrep: partial parse, skipped lines: a.py 4"`, `"semgrep: nosemgrep suppressed: python-yaml-load-unsafe app.py:10"`, `"semgrep: retried alone after losing evaluation to time in the first pass: a.js (resolved, evaluated in full when run alone)"`), capped at 400 of them (the last then reads `and <N> more entries not listed (limit 400)`). An entry that starts `<analyzer>: lost evaluation` names files the analyzer did not evaluate; every other entry is a note. The `python-engine/<check>` lists are written the same way (`python-engine/injection: lost evaluation, not fully analysed: big.js (skipped: over the 1 MB size cap (1100007 bytes)), ...`, `python-engine/injection: declared out of scope, not scanned: lib/app.min.js (minified: ...)`), and a check that cut its own list adds `python-engine/<check>: the lists above stop at the check's own cap; more were not listed`. |
+| `active_probes` | `ActiveProbeCoverage` | Present whenever `--enable-active` was set; absent otherwise. Accounts for every active probe sent: `attempted` (= `evaluated` + `inconclusive` + `unknown_origin` + `scanner_failed`), `evaluated` (a response came back and the check judged it), `inconclusive` (confirmed target-side non-answer: not an evaluation, never evidence that anything is absent, safe or fixed, and not a scanner gap), `unknown_origin` and `scanner_failed` (not evaluated; a gap for `active-probes`), `reasons` as `{origin: {reason: count}}` with origins `target`, `unknown`, `scanner` and only non-zero keys, `not_evaluated_checks` (one entry per distinct check, endpoint, origin and reason: `{check, endpoint, origin, reason, evidence}`; `check` is the rule-id family the probe can produce, `injection`, `xss`, `ssrf`, `openredirect`, `hostheader`, `graphql` or `methodtamper`; `endpoint` is `METHOD /path`; `evidence` a fixed phrase, never raw error text) capped at 200 with `truncated: true` when cut, the counts staying complete. A pair absent from the list was evaluated only when `truncated` is false. Additive: no `schema_version` change. |
 | `required_analyzers` | array of string | The `--require-analyzers` list; empty when none. |
 | `required_gaps` | array of string | Required names not `ok` or `not_applicable`. An explicit requirement is stricter than `configured_complete`: `disabled` and `unsupported` do not satisfy it. |
 | `retried` | array of string | Entries with `attempts > 1`. |

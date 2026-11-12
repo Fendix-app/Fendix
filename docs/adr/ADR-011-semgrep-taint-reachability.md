@@ -295,3 +295,30 @@ scanned repositories are in
 [`benchmarks/frameworks/REALWORLD.md`](../../benchmarks/frameworks/REALWORLD.md).
 The corpus gate is unchanged. A language is enabled again only when its
 pack, fixed for these causes, clears both gates on a new evaluation.
+
+## Amendment (2026-11-10): no gate checks holdout precision
+
+This amendment corrects two statements above and leaves the decision
+unchanged. The Decision section says "The release gate checks holdout
+precision", and Enabled languages says "Holdout precision is checked by the
+controller after the packs are integrated, and may disable a language".
+Neither holds for the repository as it stands:
+
+- The only job that reads the holdout corpus is `parity-holdout` in
+  `.github/workflows/release.yml`. It runs `benchmarks/frameworks/run_parity.py
+  --compare-recall-to benchmarks/frameworks/baseline.json --max-recall-drop
+  0.10`, which compares each language family's holdout **recall** with its
+  development recall and fails on a drop of more than ten points. It measures
+  no precision.
+- That job does not gate the release: the `release` job `needs:` only
+  `enforce-signing`. It also reports "holdout not configured" and passes
+  without measuring anything when `secrets.PARITY_HOLDOUT_DEPLOY_KEY` is empty
+  or absent.
+- No holdout precision figure is published. The accuracy tables in
+  `README.md`, `BENCHMARKS.md` and `docs/accuracy.md` give blind-holdout
+  recall only, and no check in the tree reads a holdout precision.
+
+So a language's enablement rests on the development-set precision gate
+(R-D1) and the real-world gate (R-pf81) alone. A green release run is not
+evidence that holdout precision was measured. Both gates still have to clear
+before a language is added to `ReachabilityLanguages`, and none is enabled.

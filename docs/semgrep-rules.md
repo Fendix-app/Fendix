@@ -27,19 +27,34 @@ The Semgrep runner lives at
 2. Extracts the embedded `//go:embed rules/*.yaml` pack to a per-process
    temp directory on the first scan call.
 3. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet
-   --dataflow-traces --timeout 30 --project-root <code_path>
-   --exclude node_modules --exclude dist
-   --exclude build --exclude .next --exclude target --exclude vendor
-   --exclude '*.min.js' <code_path>`, with a 300-second deadline on the
-   whole run. A run that exceeds the deadline fails, and the scan has no
-   Semgrep findings. A host Semgrep older than the release that added an
-   option is run without it (`--project-root` before 1.111.0,
-   `--dataflow-traces` before 0.107.0, `--timeout` before 0.17.0,
-   `--exclude` before 0.12.0): Fendix reads `semgrep --version` once, logs a
-   warning, and a run is not failed by an unknown option.
+   --disable-version-check --time --max-target-bytes 1048576 --disable-nosem
+   --dataflow-traces --timeout 30 --jobs <n> --max-memory <MiB>
+   --project-root <code_path> --x-ignore-semgrepignore-files
+   [--exclude /<path> ...] [--include <changed file> ...] <code_path>`,
+   inside a wall budget of 300 seconds for the whole stage. The options, the
+   budget, the per-language split and the retry of a file that timed out are
+   described in [`checks/semgrep.md`](./checks/semgrep.md), which is the
+   authority if the two differ. A host Semgrep older than the release that
+   added an option is run without it (`--project-root` before 1.111.0,
+   `--x-ignore-semgrepignore-files` before 1.96.0, `--dataflow-traces` before
+   0.107.0, `--timeout` before 0.17.0, `--jobs` and `--max-memory` before
+   1.0.0, `--exclude` before 0.12.0): Fendix reads `semgrep --version` once per
+   binary and logs a warning, so a run is not failed by an unknown option.
+   Without `--project-root` the packs' path filters are matched against the
+   enclosing git root and files can be excluded with no error, and without
+   `--x-ignore-semgrepignore-files` the scanned repository's own
+   `.semgrepignore` decides what is scanned, so a run that had to drop either
+   is recorded `failed` (`execution_error`); dropping any of the others loses
+   no detection and leaves the run `ok`, with a note in its detail. The version
+   probe runs with `SEMGREP_ENABLE_VERSION_CHECK=0` and
+   `SEMGREP_SEND_METRICS=off`, so it makes no network call, is bounded at 10
+   seconds, runs before the deadline starts, and a probe that fails is not
+   repeated for that binary in the same process. An unreadable version is run
+   with every option.
 4. Parses the JSON output and maps each result to a Fendix `Finding` via
    `resolveSeverity`, `resolveConfidence`, `resolveCategory`,
-   `resolveCWE`.
+   `resolveCWE`. A result whose line carries a `nosemgrep` comment is removed
+   and reported, never dropped silently (see `checks/semgrep.md`).
 
 `<rules_dir>` is the temp extraction of
 [`go/internal/scanner/semgrep/rules/`](../go/internal/scanner/semgrep/rules/);
@@ -50,27 +65,62 @@ seconds on one file. Semgrep's default, 5 seconds, can cut a taint rule off
 on a large file, and no bound at all would let one pathological file use up
 the whole deadline. When a rule hits the bound, Semgrep skips that rule on
 that file, keeps going, and lists the pair in its output's `errors` as a
-`Timeout`. Fendix logs each one with the rule and the file, keeps the
-findings the run did produce, and leaves the `semgrep` entry in
-`scanner_status` `ok`, as Semgrep itself calls the run successful, with a
-detail naming the rules and files whose matches are missing. Only the
-whole run's 300 s deadline is `failed` with reason `timeout`. Semgrep's `--timeout-threshold` (3 by default) also
-applies: after three rules time out on one file, it skips the remaining
-rules on that file.
+`Timeout`. Semgrep's `--timeout-threshold` (3 by default) also applies:
+after three rules time out on one file, it skips the remaining rules on that
+file. A taint rule can also run out of its fixpoint budget on one function,
+which Semgrep reports only in the `--time` profile
+(`time.fixpoint_timeouts`), which is why Fendix always passes `--time`. A file
+that lost evaluation to time is re-run alone, with a larger per-rule timeout,
+before it is recorded lost (see `checks/semgrep.md`, "Retrying a file that lost
+evaluation to time").
 
-**Build output and vendored code are not scanned.** The `--exclude`
-patterns skip `node_modules/`, `dist/`, `build/`, `.next/`, `target/` and
-`vendor/` at any depth, and every `*.min.js` file, for every language.
-`dist/` and `build/` are also where Python packaging writes its output.
-A directory of the project's own source that has one of these names, such
-as a Python package called `build` or `vendor`, is skipped too. textscan
-skips the same directories, and the secrets scanner all of them but
-`.next/` and `target/`. The patterns match paths relative to the scanned
-directory: a repository checked out under `/srv/build/` is scanned, and so
-is a file named `build.py`. A `--diff` scan that changes only files under these
-directories gets no Semgrep findings from them. Semgrep skips most of
-these directories by itself, but only in a project that has no
-`.semgrepignore` of its own, and never `.next/` or `target/`.
+**A run that lost rule evaluation is `failed`.** Any of these means a
+selected rule was not evaluated on an in-scope file, so its findings there
+are missing: a per-rule timeout, rules skipped after the threshold, a taint
+fixpoint timeout, an interfile timeout, a per-file out of memory, stack
+overflow, internal matching error or too many matches, rules Semgrep lists
+as skipped, a profile with no fixpoint list, a dropped `--project-root` or
+`--x-ignore-semgrepignore-files`, a file Semgrep could not parse at all
+(`Syntax error`, `Lexical error`, `Other syntax error`, `AST builder error`),
+a partial parse that skipped more than a few lines, and an in-scope file that
+was over the size cap, unreadable or not in Semgrep's `paths.scanned`.
+Fendix logs each one, keeps the findings the run did produce, and records
+the `semgrep` entry in `scanner_status` as `failed`: reason `timeout` when
+every loss is a timeout, `execution_error` otherwise. The detail starts
+with `lost evaluation:` and the counts (for example `lost evaluation: 3 rule
+timeouts on 1 file, every other rule skipped on 1 file after 3 rule
+timeouts`), then names the first files and rules. Coverage is therefore
+incomplete, and `--fail-on-scanner-error` exits 2. A file that only partly
+parses, with the skipped lines reported, at most the larger of 3 and 5% of
+the file's lines and never all of them, leaves the run `ok`, with the skipped
+lines named in its detail. A stage that reaches its 300 s wall budget is `failed` with reason
+`timeout`; with one invocation it has no Semgrep findings, and with one per
+language group the groups that finished keep theirs.
+
+**What is not scanned is decided by evidence, and listed.** The engine no
+longer excludes `node_modules/`, `dist/`, `build/`, `.next/`, `target/`,
+`vendor/` or `*.min.js` by name. A directory is skipped when it holds the
+markers of installed or built code (a `node_modules/` with `.package-lock.json`,
+a directory with `pyvenv.cfg`, a Cargo `target/`, and so on), and a JavaScript
+or TypeScript file is skipped when its content is minified or is a known
+vendored library (a banner naming the library and a version, the library's own
+identifier in the body, and a library's size; a header that merely mentions a
+library does not count); a project's own code in a directory called `vendor/`
+or `build/` is scanned. The Semgrep run does not read the repository's
+`.semgrepignore` files or Semgrep's built-in default ignore list, so a Python
+`tests/` directory is scanned. The JavaScript, TypeScript, Java and Go packs
+carry a `paths: exclude:` list on every rule (test, mock and fixture paths,
+described under each pack below); the engine removes those lists from the
+packs it extracts for a run (decision D6', `rulepaths.go`), so in a scan a test
+or fixture file is evaluated like any other file and no source file is left out
+for its path. The embedded pack and the rule tests keep the lists, and a
+standalone `semgrep --config` of the pack directory still applies them. A
+source file whose extension Semgrep does not select (`APP.JS`, `.mts`, `.cts`,
+`.es6`) is evaluated in an extensions pass; a `.vue` file cannot be and is lost
+evaluation. Every path left out is named, with its reason, in the `ok` detail
+and in full in `metadata.coverage.limitations`. See `checks/semgrep.md`, "Scope
+(decisions D6 and D6')", for the evidence, the reasons and the
+`--diff` behaviour.
 
 > **Install Semgrep for full coverage.** Without it, only the
 > [AST analyzer](./checks/ast-analyzer.md) and
@@ -207,14 +257,17 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
   report: that is a known false-positive class (the call result is
   tainted because taint does not follow a return), so write the helper as
   a single `return` or check the value before building the query.
-- **Test code.** Every Java rule carries the same `paths: exclude:` list:
-  `**/src/test/**`, `**/src/integrationTest/**`, `**/src/testFixtures/**`,
-  `**/src/it/**`, `*Test.java`, `*Tests.java`, `*IT.java`, `**/mock/**`,
-  `**/mocks/**`, `**/fake/**` and `**/fakes/**`. Semgrep matches them below
-  the scan root, so a checkout under such a directory is still scanned.
-  `TestJavaRulesShareTheTestPathExcludes` keeps the copies equal and
-  `TestJavaTestAndMockCodeIsNotScanned` runs Semgrep over a tree with every
-  location.
+- **Test code.** Every Java rule in the embedded pack carries the same
+  `paths: exclude:` list: `**/src/test/**`, `**/src/integrationTest/**`,
+  `**/src/testFixtures/**`, `**/src/it/**`, `*Test.java`, `*Tests.java`,
+  `*IT.java`, `**/mock/**`, `**/mocks/**`, `**/fake/**` and `**/fakes/**`.
+  Semgrep matches them below the scan root, so a checkout under such a
+  directory is still scanned. `TestJavaRulesShareTheTestPathExcludes` keeps the
+  copies equal and `TestJavaTestAndMockCodeIsNotScanned` runs Semgrep over a
+  tree with every location, against the embedded pack. A scan does not use
+  these lists: the engine strips them when it extracts the pack (decision D6',
+  see above), so Java test and mock code is evaluated in a scan and a finding
+  there is reported like any other Semgrep finding, not hidden.
 - **Shape rules** cover a sink in another class: a non-private method
   whose own `String` parameter is concatenated into SQL or HTML, is the
   URL of a request or a redirect, or is a file name joined to a directory.
@@ -225,8 +278,10 @@ rules (`java-sqli-sink`, `java-xss-sink`, `java-ssrf-sink`,
 - **Java is not enabled in the taint gate** (`ReachabilityLanguages` is
   empty, ADR-011, ruling R-pf81): a Java taint match is a `semgrep_shim`
   finding, reported as a warning and never blocking. A blind evaluation on 70
-  production repositories measured the Java taint tier at precision 0.111
-  (1 true positive in 10 findings), against the 0.80 required. A shape rule's
+  production repositories (at commit `6901cf7`, Semgrep 1.141.0) measured
+  the Java taint tier at precision 0.111 (1 true positive in 10 findings),
+  against the 0.80 required; that figure is pending re-measurement at the
+  release commit. A shape rule's
   finding warns too.
 - Semgrep cannot share a block between rules, so the request sources are
   repeated in every taint rule of `java-injection.yaml` and
@@ -309,8 +364,11 @@ function:
 | `js-jwt-no-verify-taint` | `jwt.decode(token)` of a request token, and `decode(token, { complete: true })` when its `payload` is read | `jwt.verify`; reading only the header of a complete decode, or decoding to choose a key that `jwt.verify` then checks |
 | `js-weak-random-token-taint` | `Math.random()` output assigned to a variable, property or key whose last name segment is a token word, optionally followed by `Id`, `Value`, `Hash`, `Str` or `String` (`resetToken`, `sessionId`, `apiKey`, `otp`, `csrfToken`, `RESET_TOKEN`), or returned by a function named that way | `crypto.randomBytes`, `randomUUID`, `getRandomValues`; `Math.random()` for jitter or shuffling, even when the name starts with a token word (`resetDelayMs`, `sessionTimeout`, `tokenRefreshJitter`) |
 
-**Test code.** No rule of the pack reports in test, mock or fixture code:
-every rule has `paths: exclude:` for `**/__tests__/**`, `**/__mocks__/**`,
+**Test code.** In the embedded pack no rule reports in test, mock or fixture
+code (a scan does not use these filters: the engine strips them when it
+extracts the pack, decision D6', so a scan evaluates such files and a finding
+there is reported like any other Semgrep finding, not hidden): every rule has
+`paths: exclude:` for `**/__tests__/**`, `**/__mocks__/**`,
 `**/__fixtures__/**`, `**/mocks/**`, `**/mock/**`, `**/fixtures/**`,
 `**/test/**`, `**/tests/**`, `**/spec/**`, `**/e2e/**`, `**/cypress/**`,
 `*.test.*`, `*.spec.*`, `*.e2e-spec.*` and `*.cy.*`. Semgrep matches them
@@ -334,7 +392,8 @@ TypeScript are not enabled. The pack's precision on the framework-parity
 development set is 0.97, and it adds no finding to the clean
 `node-express-realworld` application, but a blind evaluation on 70 fresh
 production repositories (at commit `6901cf7`, Semgrep 1.141.0) measured its taint tier at precision 0.077 (1 true
-positive in 13 findings), against the 0.80 required (ruling R-pf81). A taint
+positive in 13 findings), against the 0.80 required (ruling R-pf81); that
+figure is pending re-measurement at the release commit. A taint
 finding is therefore a `semgrep_shim` finding, like a shape finding: reported
 as a warning, never blocking. The `fendix_severity` of `js-sqli-taint`,
 `js-cmdi-taint` and `js-ssti-taint` is `HIGH` and the others' `MEDIUM`. If the
@@ -362,14 +421,19 @@ gorilla/mux, chi and Gin. They hold nine taint rules
   formatted into a SQL value, a shell command line, an HTML response, an
   outbound URL, a joined file path or a redirect target, for callers in other
   files. They prove no flow, so they never count as reachable.
-- **Test code.** No Go rule reports in `*_test.go` files or in `testdata`,
-  `testhelpers`, `testutil`, `testutils`, `testing`, `test` and `tests`
-  directories, matched below the scan root.
+- **Test code.** In the embedded pack no Go rule reports in `*_test.go` files
+  or in `testdata`, `testhelpers`, `testutil`, `testutils`, `testing`, `test`
+  and `tests` directories, matched below the scan root. A scan does not use
+  these filters: the engine strips them when it extracts the pack (decision
+  D6', see above), so such files are evaluated and a finding there is reported
+  like any other Semgrep finding, not hidden.
 - **Go is not enabled in the taint gate** (`ReachabilityLanguages` is empty,
   ADR-011, ruling R-pf81): a Go taint match is a `semgrep_shim` finding,
   reported as a warning and never blocking. A blind evaluation on 70
-  production repositories measured the Go taint tier at precision 0.091
-  (1 true positive in 11 findings), against the 0.80 required. A shape rule's
+  production repositories (at commit `6901cf7`, Semgrep 1.141.0) measured
+  the Go taint tier at precision 0.091 (1 true positive in 11 findings),
+  against the 0.80 required; that figure is pending re-measurement at the
+  release commit. A shape rule's
   finding and `go-weak-random-token` warn too.
 - Semgrep cannot share a block between rules, so the request sources and
   sanitisers are repeated in every taint rule; `TestGoTaintRulesShareTheirBlocks`
