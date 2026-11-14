@@ -79,6 +79,14 @@ def _read_capped(path: Path) -> str | None:
     caller treats both as "no manifest to scan".
     """
     try:
+        if not path.is_file():
+            # A named pipe or a device (once links are followed) would block the
+            # read for a writer that never comes (round 5, redteam5-11).
+            print(
+                f"[fendix-engine] deps: skipping {path.name} — not a regular file",
+                file=sys.stderr,
+            )
+            return None
         if path.stat().st_size > _MAX_MANIFEST_BYTES:
             print(
                 f"[fendix-engine] deps: skipping {path.name} — exceeds "

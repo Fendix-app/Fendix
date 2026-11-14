@@ -95,7 +95,7 @@ from analyzers.ast_analyzer import (
     _same_scope_nodes,
 )
 from analyzers.route_extractor import _ImportScope, _module_name
-from analyzers.scope_evidence import SourceWalk
+from analyzers.scope_evidence import SourceWalk, is_regular_file
 
 # Total source size of the parsed modules kept for `_analyze_python` to reuse;
 # past it, a file is parsed again when it is analysed. A parsed module takes
@@ -694,8 +694,9 @@ def _span(node: ast.AST) -> Span:
 
 def _python_files(root: Path, walk: SourceWalk | None = None) -> Iterator[tuple[Path, str]]:
     """`(path, rel)` of every file the analyzer would analyse as Python: the
-    same walk as `ASTAnalyzer.run` (`SourceWalk`, so what D6' evidence leaves
-    out of scope is left out here too), without symlinked or oversized files.
+    same walk as `ASTAnalyzer.run` (`SourceWalk`, so what it leaves out of
+    scope is left out here too), without symlinked, non-regular or oversized
+    files.
     The walk in `ASTAnalyzer.run` reports an oversized or unreadable one
     (D6), so the index skips it without a record of its own.
     Sorted, so the first proving caller does not depend on the order the
@@ -706,7 +707,7 @@ def _python_files(root: Path, walk: SourceWalk | None = None) -> Iterator[tuple[
                 continue
             path = Path(dirpath) / fname
             try:
-                if path.is_symlink() or path.stat().st_size > _MAX_FILE_BYTES:
+                if not is_regular_file(path) or path.stat().st_size > _MAX_FILE_BYTES:
                     continue
             except OSError:
                 continue

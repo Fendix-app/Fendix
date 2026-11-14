@@ -95,6 +95,7 @@ class ReachingDefs:
         self._exc: list[set] = []
         self._loops: list[_Loop] = []
         self._shadow = 0
+        self._lazy = 0
         self.volatile = self._declared_shared(func, name)
         self._block(getattr(func, "body", []), frozenset({ENTRY}))
         if not self._positions and not self._is_parameter(func, name):
@@ -133,10 +134,15 @@ class ReachingDefs:
 
     @staticmethod
     def _declared_shared(func: ast.AST, name: str) -> bool:
-        for node in ast.walk(func):
-            if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
-                return True
-        return False
+        # One walk per function, not per name: the set is kept on the node.
+        shared = func.__dict__.get("_fendix_shared_names")
+        if shared is None:
+            shared = set()
+            for node in ast.walk(func):
+                if isinstance(node, (ast.Global, ast.Nonlocal)):
+                    shared.update(node.names)
+            func.__dict__["_fendix_shared_names"] = shared
+        return name in shared
 
     # ---- definitions --------------------------------------------------
 
@@ -151,6 +157,12 @@ class ReachingDefs:
         return new
 
     def _load(self, node: ast.Name, state: frozenset) -> None:
+        if self._lazy:
+            # A read that runs when the value is consumed, not here (a
+            # generator expression's body): the state at this point is not the
+            # state the read sees, so none is recorded and `defs_at` answers
+            # None, the conservative "any later definition may reach it".
+            return
         key = id(node)
         self._at[key] = self._at.get(key, _EMPTY) | state
 
@@ -197,7 +209,14 @@ class ReachingDefs:
     def _comprehension(self, node: ast.AST, state: frozenset) -> frozenset:
         """A comprehension may run its body zero times. If one of its `for`
         targets is the tracked name, reads inside it are that variable, not
-        ours (a walrus inside still binds ours)."""
+        ours (a walrus inside still binds ours).
+
+        A list, set or dict comprehension runs where it is written. A GENERATOR
+        expression runs when it is consumed: only its first iterable is
+        evaluated here, and the rest (its conditions, its other iterables and
+        its element) reads the name as it is then (C4B-22): `g = (open(name)
+        for _ in x); name = request.args['g']; next(g)` opens the new `name`,
+        so a guard written before the generator does not cover it."""
         binds = any(
             isinstance(n, ast.Name) and n.id == self.name and isinstance(n.ctx, ast.Store)
             for gen in node.generators
@@ -207,8 +226,11 @@ class ReachingDefs:
         generators = node.generators
         # The first iterable is evaluated in the enclosing scope.
         state = self._expr(generators[0].iter, state)
+        lazy = isinstance(node, ast.GeneratorExp)
         if binds:
             self._shadow += 1
+        if lazy:
+            self._lazy += 1
         try:
             for index, gen in enumerate(generators):
                 if index:
@@ -221,6 +243,8 @@ class ReachingDefs:
             else:
                 state = self._expr(node.elt, state)
         finally:
+            if lazy:
+                self._lazy -= 1
             if binds:
                 self._shadow -= 1
         return _join(before, state)

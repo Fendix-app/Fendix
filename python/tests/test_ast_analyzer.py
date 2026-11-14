@@ -2165,13 +2165,17 @@ class TestEdgeCases:
             (nm / "index.js").write_text("eval(userInput);\n")
             assert [f["id"] for f in _collect(tmpdir)] == ["SEC-JS_EVAL"]
 
-    def test_installed_npm_package_with_name_and_version_is_skipped(self) -> None:
+    def test_installed_npm_package_with_name_and_version_is_scanned(self) -> None:
+        # Round 5 (D5-2): a `package.json` with a name and version is text anyone
+        # can write, so it is not evidence that a tree is installed code and no
+        # longer takes it out of scope (it used to, and hid the code). Pinned in
+        # `test_rem_py5_scope.py`.
         with tempfile.TemporaryDirectory() as tmpdir:
             nm = Path(tmpdir, "node_modules", "lib")
             nm.mkdir(parents=True)
             (nm / "package.json").write_text('{"name": "lib", "version": "1.0.0"}')
             (nm / "index.js").write_text("eval(userInput);\n")
-            assert _collect(tmpdir) == []
+            assert [f["id"] for f in _collect(tmpdir)] == ["SEC-JS_EVAL"]
 
     def test_self_referencing_binding_does_not_skip_the_file(
         self, capsys: pytest.CaptureFixture[str]

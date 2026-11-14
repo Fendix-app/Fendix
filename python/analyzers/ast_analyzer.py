@@ -25,17 +25,23 @@ from typing import Callable, Iterator, Literal, Mapping
 
 from analyzers import status_detail
 from analyzers.interpreter import syntax_reason
-from analyzers.reaching_defs import ReachingDefs
-from analyzers.scope_evidence import SourceWalk, file_evidence, generated_marker
+from analyzers.reaching_defs import ENTRY, ReachingDefs
+from analyzers.scope_evidence import (
+    SYMLINK_REASON,
+    NotRegularFile,
+    SourceWalk,
+    is_regular_file,
+    read_regular,
+)
 
 _MAX_FILE_BYTES = 1_048_576  # 1 MB
 
-# What the analyzer leaves out of its scope is decided by evidence, never by a
-# directory or file name alone (D6'; `analyzers/scope_evidence.py`): a virtual
-# environment, installed packages, Git metadata, a generated, minified or
-# vendored-library file. Everything left out on purpose is recorded with its
-# reason and reported by name in the injection check's status detail
-# (`ASTAnalyzer.scope_note`); a symlink is not followed, and said so (F-L12).
+# What the analyzer leaves out of its scope (D5-2; `analyzers/scope_evidence.py`):
+# a symlink, which is not followed and is said so (F-L12), and the Git metadata
+# directory at the scan root when its layout is real. Nothing is left out for a
+# file or directory name, a banner or header, minification or any other look of
+# the code: every in-scope source file at or below the size cap is analysed, and
+# one the analyzer could not read is recorded as lost evaluation with its reason.
 # Compared in lower case (D6'): `APP.JS` and `Server.Py` are source files too; a
 # file's letter case is a name, not evidence that it is not code.
 _SOURCE_SUFFIXES_JS = frozenset({".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts"})
@@ -49,7 +55,7 @@ def _read_python_source(path: Path) -> str:
     decode are replaced, as before, so a stray byte in a comment never loses
     the file; line endings are translated as `read_text` did. Raises OSError
     when the file cannot be read."""
-    data = path.read_bytes()
+    data = read_regular(path)
     try:
         encoding, _lines = tokenize.detect_encoding(io.BytesIO(data).readline)
     except SyntaxError:
@@ -64,29 +70,10 @@ def _read_python_source(path: Path) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _read_head(path: Path, limit: int = _MAX_FILE_BYTES) -> str:
-    """The first `limit` bytes of `path` as text, for the evidence that says a
-    file too large to analyse is generated. An unreadable file has none."""
-    try:
-        with open(path, "rb") as handle:
-            return handle.read(limit).decode("utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
-def _read_tail(path: Path, size: int, limit: int = 2048) -> str:
-    """The last `limit` bytes of `path` (of `size` bytes) as text: where a
-    compiler writes its `//# sourceMappingURL=` comment."""
-    try:
-        with open(path, "rb") as handle:
-            handle.seek(max(0, size - limit))
-            return handle.read(limit).decode("utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
 def _os_error_reason(exc: OSError) -> str:
     """A short reason naming why a path could not be read."""
+    if isinstance(exc, NotRegularFile):
+        return _NOT_REGULAR_REASON
     return f"unreadable: {type(exc).__name__}"
 
 # Hard cap on taint-chain hops (F-H5b). A crafted "assignment bomb" — a long
@@ -110,6 +97,11 @@ _SCOPE_NODES = (
     ast.DictComp,
     ast.GeneratorExp,
 )
+
+# C4B-23 bounds: how many names of one function are checked for a tainted path
+# a last binding hides, and how many lost-evaluation notes one file lists.
+_MAX_AMBIGUITY_NAMES = 200
+_MAX_AMBIGUITY_NOTES = 20
 
 # Sentinel distinguishing "this sink never depends on dataflow" from "this sink
 # tried to prove dataflow and failed". _emit_finding cannot tell those apart
@@ -193,14 +185,17 @@ def _js_module_string_constants(source: str) -> set[str]:
     }
 
 
-def _js_template_only_constants(line: str, source: str) -> bool:
+def _js_template_only_constants(
+    line: str, source: str, consts: set[str] | None = None
+) -> bool:
     """True when every ``${...}`` of the SQL template on ``line`` is a bare
     identifier that ``source`` declares as a module-level constant string.
 
     Such a template cannot carry user input. A call, a member access, an
     expression, an undeclared name or a ``let``/``var`` keeps the finding.
     """
-    consts = _js_module_string_constants(source)
+    if consts is None:
+        consts = _js_module_string_constants(source)
     checked = False
     for match in re.finditer(r"(?<![\w$.)\]])`([^`]*)(?:`|$)", line):
         body = match.group(1)
@@ -229,8 +224,9 @@ class AnalysisIncomplete(RuntimeError):
     from a scan that said it was complete.
 
     An in-scope source file that was never analysed is lost evaluation too
-    (D6): one over the 1 MB size cap (`_MAX_FILE_BYTES`) that nothing in it
-    shows to be generated, a file or directory that cannot be read, and a
+    (D6, D5-2): one over the 1 MB size cap (`_MAX_FILE_BYTES`), whatever its
+    header says, a file that is not a regular file, a file or directory that
+    cannot be read, and a
     file the interpreter cannot parse (D1', DE-03). A SyntaxError is not "code
     the server does not run": a `match` statement under Python 3.9 is valid
     Python the interpreter is too old for, and dropping it hid a proven
@@ -279,8 +275,8 @@ class ASTAnalyzer:
         # walk is done (redteam-py-01).
         self.incomplete_files: list[tuple[str, str]] = []
         # (rel, why) for every path left out of scope on purpose during `run`:
-        # what `analyzers/scope_evidence.py` shows is not the project's own
-        # code, and symlinks (D6'). Listed by `scope_note`.
+        # symlinks that are not followed (`analyzers/scope_evidence.py`, D5-2).
+        # Listed by `scope_note`.
         self.excluded: list[tuple[str, str]] = []
         # (path, rel) of every Python file the route pass read, for
         # `_ProjectMentions`.
@@ -358,11 +354,17 @@ class ASTAnalyzer:
                     if fpath.is_symlink():
                         # Not followed, and said so (D6).
                         if source_file:
-                            self.excluded.append((rel, "symlink, not followed"))
+                            self.excluded.append((rel, SYMLINK_REASON))
                         continue
                 except OSError as exc:
                     if source_file:
                         self._record_incomplete(rel, _os_error_reason(exc))
+                    continue
+                if source_file and not is_regular_file(fpath):
+                    # A named pipe, socket or device with a source name: opening
+                    # it can block the scan forever, and it holds no source the
+                    # engine can read. In scope and never analysed (D5-2).
+                    self._record_incomplete(rel, _NOT_REGULAR_REASON)
                     continue
 
                 if suffix == ".py":
@@ -371,7 +373,6 @@ class ASTAnalyzer:
                 elif suffix in _SOURCE_SUFFIXES_JS:
                     self.file_stats["javascript"] += 1
                     self._analyze_js_heuristic(fpath, rel, emit_fn)
-        walk.finish()
         self.excluded = walk.declared + self.excluded
         for rel, reason in walk.lost:
             self._record_incomplete(rel, reason)
@@ -408,8 +409,9 @@ class ASTAnalyzer:
                 fpath = Path(dirpath) / fname
                 rel = str(fpath.relative_to(root))
                 try:
-                    if fpath.is_symlink() or fpath.stat().st_size > _MAX_FILE_BYTES:
-                        # Reported by the main walk (`_analyze_python`, D6).
+                    if not is_regular_file(fpath) or fpath.stat().st_size > _MAX_FILE_BYTES:
+                        # A link, a named pipe, an oversized file: reported by
+                        # the main walk (`run`, `_analyze_python`, D6).
                         continue
                     src = _read_python_source(fpath)
                 except OSError as exc:
@@ -480,16 +482,9 @@ class ASTAnalyzer:
             try:
                 size = filepath.stat().st_size
                 if size > _MAX_FILE_BYTES:
-                    # Too large to read: out of scope only when its own
-                    # header says a generator wrote it, else an in-scope
-                    # source file that was never analysed (D6, D6').
-                    marker = generated_marker(_read_head(filepath))
-                    if marker:
-                        self.excluded.append(
-                            (rel, f"generated: {marker}, over the 1 MB cap")
-                        )
-                    else:
-                        self._record_incomplete(rel, _size_reason(size))
+                    # Too large to read: an in-scope source file that was never
+                    # analysed, whatever its header says (D6, D5-2).
+                    self._record_incomplete(rel, _size_reason(size))
                     return
                 source = _read_python_source(filepath)
             except OSError as exc:
@@ -534,6 +529,8 @@ class ASTAnalyzer:
         # (redteam-py-01).
         try:
             visitor.visit(tree)
+            for reason in visitor.lost_evaluation:
+                self._record_incomplete(rel, reason)
         except RecursionError as exc:
             print(
                 f"[fendix-engine] ast_analyzer: recursion limit hit on {rel}; "
@@ -557,47 +554,40 @@ class ASTAnalyzer:
     ) -> None:
         """Apply regex heuristics to a JavaScript/TypeScript file.
 
-        A file is left out of scope only when its content shows it is not the
-        project's own code (`file_evidence`: a generator header, a well-known
-        library's banner, or measured minification), and is then listed by
-        name (`scope_note`). It is never skipped for its name, and no line is
-        skipped for its length: a hand-written line of 900 characters is
-        scanned like any other (D6'). Any file over the size cap that nothing
-        in it shows to be generated, or one that cannot be read, is an
-        in-scope source file that was never checked (D6)."""
+        Every in-scope file at or below the size cap is scanned, minified,
+        vendored and generated code included: nothing in a file's name, banner,
+        header or shape takes it out of scope, and no line is skipped for its
+        length (D5-2). A file over the size cap, or one that cannot be read, is
+        an in-scope source file that was never checked (D6)."""
         try:
             size = filepath.stat().st_size
             if size > _MAX_FILE_BYTES:
-                why = file_evidence(
-                    _read_head(filepath, 65536),
-                    size=size,
-                    tail=_read_tail(filepath, size),
-                )
-                if why:
-                    self.excluded.append((rel, f"{why}, over the 1 MB cap"))
-                else:
-                    self._record_incomplete(rel, _size_reason(size))
+                self._record_incomplete(rel, _size_reason(size))
                 return
-            source = filepath.read_text(encoding="utf-8", errors="replace")
+            source = (
+                read_regular(filepath)
+                .decode("utf-8", errors="replace")
+                .replace("\r\n", "\n")
+                .replace("\r", "\n")
+            )
         except OSError as exc:
             self._record_incomplete(rel, _os_error_reason(exc))
             return
 
-        # Within the cap only minified and vendored evidence leaves a file
-        # out, as in the Go analysers: a generated file is still scanned.
-        why = file_evidence(source, size=size, under_cap=True)
-        if why:
-            self.excluded.append((rel, why))
-            return
-
         lines = source.splitlines()
+        # The module-level string constants of the file, read once: every
+        # SQL-template line asks, and a megabyte of such lines (a minified or
+        # generated file is scanned like any other, D5-2) would otherwise read
+        # the whole file once per line.
+        constants: set[str] | None = None
         for lineno, line in enumerate(lines, start=1):
             for pat_id, title, pattern, severity, confidence, cwe in _JS_PATTERNS:
                 if pattern.search(line):
-                    if pat_id == "JS_SQL_TEMPLATE" and _js_template_only_constants(
-                        line, source
-                    ):
-                        continue
+                    if pat_id == "JS_SQL_TEMPLATE":
+                        if constants is None:
+                            constants = _js_module_string_constants(source)
+                        if _js_template_only_constants(line, source, constants):
+                            continue
                     emit_fn(
                         {
                             "id": f"SEC-{pat_id}",
@@ -684,6 +674,9 @@ class _ProjectMentions:
         return bool(reached - {rel})
 
 
+_NOT_REGULAR_REASON = "unreadable: not a regular file"
+
+
 def _size_reason(size: int) -> str:
     """The reason for an in-scope source file skipped for size (D6)."""
     return f"skipped: over the 1 MB size cap ({size} bytes)"
@@ -728,6 +721,32 @@ def _file_visitor(
     return visitor
 
 
+class _Scope(dict):
+    """The bindings of one scope (name -> the value last bound to it, in source
+    order). It notes the keys that are read while a call is being checked
+    (`_PythonSecurityVisitor.visit_Call`): a sink check that resolved a name
+    consulted its binding, and C4B-23 asks whether that binding was the only one
+    that could reach the sink."""
+
+    __slots__ = ("_visitor",)
+
+    def __init__(self, visitor: "_PythonSecurityVisitor") -> None:
+        super().__init__()
+        self._visitor = visitor
+
+    def __getitem__(self, key):
+        reads = self._visitor._binding_reads
+        if reads is not None:
+            reads.add(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        reads = self._visitor._binding_reads
+        if reads is not None and key in self:
+            reads.add(key)
+        return super().get(key, default)
+
+
 class _PythonSecurityVisitor(ast.NodeVisitor):
     """AST visitor that emits findings for dangerous Python patterns."""
 
@@ -751,7 +770,18 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # scope; each FunctionDef pushes a new scope. Used by `_is_sql_injection`
         # to resolve `cursor.execute(name)` to the value `name` was assigned —
         # closes the multi-step string-concat SQLi gap (TASK-087).
-        self._scopes: list[dict[str, ast.AST]] = [{}]
+        self._scopes: list[dict[str, ast.AST]] = [_Scope(self)]
+        # C4B-23: the names a call's own checks read from `_scopes` while it is
+        # checked (None outside a call), the findings emitted so far, and the
+        # lost evaluation the file's analysis records (`lost_evaluation`).
+        self._binding_reads: set[str] | None = None
+        self._emitted = 0
+        self._lost_listed: list[str] = []
+        self._lost_essential: list[str] = []
+        self._definition_values_cache: dict[int, tuple[ast.AST, dict, dict, dict]] = {}
+        self._input_functions: dict[int, tuple[ast.AST, bool]] = {}
+        self._ambiguity_names: dict[int, set[str]] = {}
+        self._lost_overflow = 0
         # Stack of enclosing FunctionDef nodes — used by the whitelist-
         # sanitiser scan to find membership guards earlier in the same
         # function body. Top of stack is the innermost function being
@@ -814,9 +844,10 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # `from pickle import loads as pl; pl(x)` resolve back to os.system /
         # pickle.loads despite the call being a bare ast.Name (audit #8-13).
         self._from_imports: dict[str, tuple[str, str]] = {}
-        # The modules of `from <module> import *`, which can supply any name
-        # that module defines (`_star_imported_never_returns`).
-        self._star_imports: list[str] = []
+        # Every `from <module> import *` in the file, as the module written
+        # (a relative one keeps its leading dots), collected once from the
+        # whole module on first need (`_star_import_modules`).
+        self._star_import_cache: tuple[str, ...] | None = None
         # `os.path.join(...)` calls written as the direct argument of a path
         # resolution (`realpath(join(...))`, `Path(join(...)).resolve()`),
         # mapped to that resolving call. `_note_resolved_join` records them
@@ -1008,6 +1039,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 bind_route_in_other_file or self._route_is_in_this_file(route)
             ):
                 finding["route"] = route.as_dict()
+        self._emitted += 1
         self._emit(finding)
 
     def _route_is_in_this_file(self, route) -> bool:
@@ -3675,12 +3707,40 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return self._local_function_never_returns(fn.id, _depth + 1)
         return False
 
+    def _star_import_modules(self) -> tuple[str, ...]:
+        """The module of every `from <module> import *` anywhere in the file,
+        in the order written; a relative import keeps its dots (`.flask`), so
+        it can never be mistaken for the installed module of that name. Read
+        from the whole module, not from the imports the walk has reached: an
+        import written below the view still runs before the view is called."""
+        if self._star_import_cache is None:
+            root = self._module_root
+            found: list[tuple[int, int, str]] = []
+            if root is not None:
+                for n in ast.walk(root):
+                    if isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names):
+                        found.append(
+                            (n.lineno, n.col_offset, "." * n.level + (n.module or ""))
+                        )
+            self._star_import_cache = tuple(m for _l, _c, m in sorted(found))
+        return self._star_import_cache
+
     def _star_imported_never_returns(self, fn: ast.Name) -> bool:
         """True for a bare name that `from <module> import *` can only have
         supplied from a module whose function of that name never returns
         (`from flask import *` then `abort(400)`), when nothing else in the
-        file defines or rebinds the name."""
-        if not any(f"{m}.{fn.id}" in _NEVER_RETURNING_CALLS for m in self._star_imports):
+        file defines or rebinds the name.
+
+        Every star import binds the name, and the last one to run wins, so the
+        proof needs every star import in the file to be of a module known to
+        supply the never-returning function: a single such import, or several
+        that all do. One import of a module the engine does not know (or of a
+        project module, which any relative import is) may define a returning
+        function of the same name (review item 3)."""
+        modules = self._star_import_modules()
+        if not modules or not all(
+            f"{m}.{fn.id}" in _NEVER_RETURNING_CALLS for m in modules
+        ):
             return False
         return (
             fn.id not in self._file_defined_names()
@@ -3889,6 +3949,22 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         return False
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+        """Check a call against every sink rule (`_check_call`) and visit what
+        it contains. When the call's own checks read the binding of a name and
+        reported nothing, ask whether a path the last binding hides would have
+        made it a finding (`_note_ambiguous_bindings`, C4B-23)."""
+        outer_reads = self._binding_reads
+        before = self._emitted
+        self._binding_reads = set()
+        try:
+            self._check_call(node)
+        finally:
+            reads, self._binding_reads = self._binding_reads, outer_reads
+        if self._emitted == before and reads:
+            self._note_ambiguous_bindings(node, reads)
+        self.generic_visit(node)
+
+    def _check_call(self, node: ast.Call) -> None:
         """Detect dangerous function calls."""
         self._note_resolved_join(node)
         # eval() / exec(), and library code-eval sinks (PIL.ImageMath.eval,
@@ -4555,7 +4631,275 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         if location is not None and self._redirect_value_is_dynamic(location, node.lineno):
             self._report_location_redirect(location, node.lineno)
 
-        self.generic_visit(node)
+    # ------------------------------------------------------------------
+    # C4B-23: a name tainted on one path and rebound on another
+    # ------------------------------------------------------------------
+
+    def _definitions(self, func: ast.AST) -> tuple[dict, dict, dict]:
+        """`(values, counts, by_name)` for the names `func` binds in its own
+        scope.
+        `values` maps a definition node (the nodes `ReachingDefs` returns) to
+        the expression that supplies its value: the right side of an
+        assignment, the iterable of a `for`, the context manager of a `with`,
+        a walrus's value; a definition with no value of its own (an import, a
+        `def`, an `except ... as`) is absent. `counts` maps a name to how many
+        times the scope binds it, so a name bound once can be left out of the
+        reaching-definition analysis, and `by_name` maps it to the values it is
+        bound to. One pass, kept per function."""
+        cached = self._definition_values_cache.get(id(func))
+        if cached is not None and cached[0] is func:
+            return cached[1], cached[2], cached[3]
+        values: dict = {}
+        counts: dict[str, int] = {}
+        by_name: dict[str, list] = {}
+
+        def bind(target: ast.AST, value: ast.AST) -> None:
+            for n in ast.walk(target):
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                    values[id(n)] = value
+                    by_name.setdefault(n.id, []).append(value)
+
+        def count(name: str) -> None:
+            counts[name] = counts.get(name, 0) + 1
+
+        for stmt in getattr(func, "body", []):
+            for n in _same_scope_nodes(stmt):
+                if isinstance(n, ast.Name):
+                    if not isinstance(n.ctx, ast.Load):
+                        count(n.id)
+                elif isinstance(n, ast.Assign):
+                    for t in n.targets:
+                        bind(t, n.value)
+                elif isinstance(n, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+                    if n.value is not None:
+                        bind(n.target, n.value)
+                elif isinstance(n, (ast.For, ast.AsyncFor)):
+                    bind(n.target, n.iter)
+                elif isinstance(n, (ast.With, ast.AsyncWith)):
+                    for item in n.items:
+                        if item.optional_vars is not None:
+                            bind(item.optional_vars, item.context_expr)
+                elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    count(n.name)
+                elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                    for alias in n.names:
+                        count((alias.asname or alias.name.split(".")[0]))
+                elif isinstance(n, ast.ExceptHandler) and n.name:
+                    count(n.name)
+                else:
+                    # `match` captures (`MatchAs`, `MatchStar`, `MatchMapping`).
+                    for attr in ("name", "rest"):
+                        captured = getattr(n, attr, None)
+                        if isinstance(captured, str) and type(n).__name__.startswith("Match"):
+                            count(captured)
+        self._definition_values_cache[id(func)] = (func, values, counts, by_name)
+        return values, counts, by_name
+
+    def _function_can_hold_input(self, func: ast.AST) -> bool:
+        """False when `func` can hold no request input at all: it reads none
+        (`_is_request_input_node`, anywhere in it) and takes none as a route
+        parameter. Nothing in it is then tainted on any path, so there is nothing
+        for a last binding to hide. Cached per function."""
+        cached = self._input_functions.get(id(func))
+        if cached is None or cached[0] is not func:
+            holds = bool(self._route_param_sources(func)) or any(
+                _is_request_input_node(n) for n in ast.walk(func)
+            )
+            cached = (func, holds)
+            self._input_functions[id(func)] = cached
+        return cached[1]
+
+    def _carries_request_input(self, expr: ast.AST | None) -> bool:
+        """True when `expr` is request input or traces back to it through the
+        bindings in scope or to a request-carrying route parameter. The trace
+        stays inside this function: no caller is searched, so a helper's
+        parameter is not request input here (C4B-23 asks about what a
+        definition in THIS function carries)."""
+        if expr is None:
+            return False
+        if self._is_source(expr):
+            return True
+
+        def route_param(name: str, _extra, _depth: int) -> list[dict] | None:
+            return [] if self._name_is_route_param_source(name) else None
+
+        return (
+            self._trace_names(expr, self._scope_binding, frozenset(), 0, None, route_param)
+            is not None
+        )
+
+    def _reads_lazily(self, node: ast.AST, func: ast.AST) -> bool:
+        """True when the read `node` runs when a lambda or generator expression
+        is consumed, not where it is written: inside a lambda, or inside a
+        generator expression other than its first iterable."""
+        child, parent = node, self._parent_of(node)
+        while parent is not None and parent is not func:
+            if isinstance(parent, ast.Lambda):
+                return True
+            if isinstance(parent, ast.GeneratorExp) and not (
+                parent.generators and child is parent.generators[0].iter
+            ):
+                return True
+            child, parent = parent, self._parent_of(parent)
+        return False
+
+    def _would_report_with(self, call: ast.Call, name: str, alternative) -> bool:
+        """True when `call` would be reported if `name` were bound to
+        `alternative` (an expression; None for the value the function was
+        entered with, which a route parameter takes from the request) where the
+        checks read it. The sink rules run again with the findings collected, not
+        emitted, and the binding put back."""
+        scope = next((sc for sc in reversed(self._scopes) if dict.__contains__(sc, name)), None)
+        if scope is None:
+            return False
+        held = dict.__getitem__(scope, name)
+        saved = self._emit, self._emitted, self._binding_reads
+        hits: list = []
+        self._emit, self._binding_reads = hits.append, None
+        try:
+            if alternative is None:
+                dict.__delitem__(scope, name)
+            else:
+                dict.__setitem__(scope, name, alternative)
+            self._check_call(call)
+        finally:
+            dict.__setitem__(scope, name, held)
+            self._emit, self._emitted, self._binding_reads = saved
+        return bool(hits)
+
+    def _note_ambiguous_bindings(self, call: ast.Call, reads: set[str]) -> None:
+        """A call's checks resolved `reads` from the bindings in scope, and no
+        finding was reported. The engine reads a name's last binding in source
+        order, so a name that is request input on one path (an `if` arm, a
+        `try` body, a parameter, a later rebind a lazy body sees) and rebound
+        to something else on another is resolved to the one that hides the
+        input. When a definition that reaches the use carries request input, the
+        binding the checks used does not, and the call WOULD be reported with
+        that definition in its place, the evaluation is lost: it is recorded
+        (`lost_evaluation`; `_analyze_python` raises `AnalysisIncomplete`)
+        instead of read as clean (C4B-23, and C4B-22 for a lazy body whose guard
+        no longer holds).
+
+        Bounded: a few hundred reads and four hops through the values."""
+        if not self._func_stack:
+            return
+        func = self._func_stack[-1]
+        if not self._function_can_hold_input(func):
+            return
+        values, counts, by_name = self._definitions(func)
+        names = {r for r in reads if counts.get(r)}
+        if not names:
+            return
+        todo: deque[tuple[ast.Name, int]] = deque(
+            (n, 0)
+            for n in ast.walk(call)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in names
+        )
+        seen: set[int] = set()
+        budget = 300
+        while todo and budget > 0:
+            node, hops = todo.popleft()
+            if id(node) in seen:
+                continue
+            seen.add(id(node))
+            budget -= 1
+            name = node.id
+            bound = counts.get(name, 0)
+            if bound == 0:
+                continue
+            lazy = self._reads_lazily(node, func)
+            if bound == 1 and not lazy and not ReachingDefs._is_parameter(func, name):
+                # Bound once and read where it is written: one definition
+                # reaches it, so nothing here is ambiguous; follow its value.
+                follow = by_name.get(name, ())
+            else:
+                analysed = self._ambiguity_names.setdefault(id(func), set())
+                if name not in analysed:
+                    if len(analysed) >= _MAX_AMBIGUITY_NAMES:
+                        # Past the bound the reaching definitions are not
+                        # computed: not read as clean either.
+                        self._note_lost(
+                            f"ambiguous bindings not analysed: over {_MAX_AMBIGUITY_NAMES} "
+                            f"names (function at line {func.lineno})",
+                            essential=True,
+                        )
+                        return
+                    analysed.add(name)
+                rd = self._reaching_defs(name)
+                if rd is None or rd.volatile:
+                    continue
+                reaching = rd.defs_at(node)
+                if reaching is None:
+                    if not lazy:
+                        continue
+                    # Run when consumed: any definition of the name may reach it.
+                    reaching = frozenset(rd.definitions) | {ENTRY}
+                if len(reaching) > 1 and self._lost_to_last_binding(call, name, reaching, values):
+                    self._note_lost(f"ambiguous binding: {name} (line {call.lineno})")
+                    return
+                follow = [values[id(d)] for d in reaching if d is not ENTRY and id(d) in values]
+            if hops < 4:
+                for value in follow:
+                    todo.extend(
+                        (n, hops + 1)
+                        for n in ast.walk(value)
+                        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                    )
+
+    def _note_lost(self, reason: str, *, essential: bool = False) -> None:
+        """Record one lost-evaluation reason for the file. At most
+        `_MAX_AMBIGUITY_NOTES` are listed; the rest are counted in one more
+        note, so a file of thousands of ambiguous bindings reports its size, not
+        thousands of lines. An `essential` reason (the analysis ran out of its
+        bound) is always kept."""
+        if essential:
+            if reason not in self._lost_essential:
+                self._lost_essential.append(reason)
+        elif reason in self._lost_listed:
+            return
+        elif len(self._lost_listed) < _MAX_AMBIGUITY_NOTES:
+            self._lost_listed.append(reason)
+        else:
+            self._lost_overflow += 1
+
+    @property
+    def lost_evaluation(self) -> list[str]:
+        """The lost-evaluation reasons this file's checks recorded
+        (`_note_ambiguous_bindings`); `_analyze_python` raises
+        `AnalysisIncomplete` for them."""
+        more = (
+            [f"ambiguous bindings: {self._lost_overflow} more not listed"]
+            if self._lost_overflow
+            else []
+        )
+        return [*self._lost_listed, *more, *self._lost_essential]
+
+    def _lost_to_last_binding(
+        self, call: ast.Call, name: str, reaching: frozenset, values: dict
+    ) -> bool:
+        """True when a definition of `name` in `reaching` carries request input,
+        the binding the checks used (the last one in source order) does not, and
+        `call` would be reported with that definition in its place."""
+        tainted: list = []
+        for d in reaching:
+            if d is ENTRY:
+                if self._name_is_route_param_source(name):
+                    tainted.append(None)
+            else:
+                alternative = values.get(id(d))
+                if alternative is not None and self._carries_request_input(alternative):
+                    tainted.append(alternative)
+        if not tainted:
+            return False
+        last = self._scope_binding(name)
+        last_tainted = (
+            self._name_is_route_param_source(name)
+            if last is None
+            else self._carries_request_input(last)
+        )
+        if last_tainted:
+            return False
+        return any(self._would_report_with(call, name, alt) for alt in tainted)
 
     def _is_jwt_misuse(self, node: ast.Call) -> bool:
         """True for jwt.decode(...) with verify=False, or with no explicit
@@ -4715,7 +5059,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
         """Push a new scope for assignment tracking, recurse, then pop."""
-        self._scopes.append({})
+        self._scopes.append(_Scope(self))
         self._func_stack.append(node)
         self.generic_visit(node)
         self._func_stack.pop()
@@ -4885,7 +5229,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
         """Push a scope for the class body so class-level assignments don't
         leak into module scope and falsely shadow handler-local names (#17)."""
-        self._scopes.append({})
+        self._scopes.append(_Scope(self))
         self.generic_visit(node)
         self._scopes.pop()
 
@@ -4928,8 +5272,6 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         module = node.module or ""
         for alias in node.names:
             local_name = alias.asname or alias.name
-            if alias.name == "*":
-                self._star_imports.append(module)
             self._from_imports[local_name] = (module, alias.name)
         self.generic_visit(node)
 

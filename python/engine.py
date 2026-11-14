@@ -132,8 +132,9 @@ def _injection_support(stats: dict) -> StatusTuple:
     a detail noting the JS files got pattern checks only.
 
     `stats["excluded"]` (ASTAnalyzer.excluded) is what the analyzer left out
-    of scope on purpose, each path with the evidence that says it is not the
-    project's own code (D6'). It is appended to the detail as one segment that
+    of scope on purpose, each path with its reason: since round 5 (D5-2) only a
+    symlink that is not followed (`analyzers/scope_evidence.py`). It is appended
+    to the detail as one segment that
     starts "declared out of scope, not scanned:", fitted to the byte budget
     and never cut (C1, C2), so nothing is excluded silently.
     """

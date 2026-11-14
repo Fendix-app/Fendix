@@ -3,12 +3,12 @@
 D6: an in-scope source file the analyzer never analysed is lost evaluation.
 A ``.py`` file over the 1 MB cap (``_MAX_FILE_BYTES``, also the call index's
 cap), a file or directory that cannot be read, and a JavaScript file over the
-cap that is not a minified bundle make ``ASTAnalyzer.run`` raise
-``AnalysisIncomplete`` after the walk, naming the files; ``engine.py``
-reports the injection check ``failed/execution_error``. What the analyzer
-leaves out on purpose (vendored and build-output directories, symlinked
-source files, an oversized ``*.min.js``) is listed by name in the injection
-status detail instead (``ASTAnalyzer.scope_note``).
+cap make ``ASTAnalyzer.run`` raise ``AnalysisIncomplete`` after the walk,
+naming the files (round 5, D5-2: whatever the file claims to be, minified,
+vendored or generated); ``engine.py`` reports the injection check
+``failed/execution_error``. What the analyzer leaves out on purpose (symlinks,
+and a real ``<root>/.git``) is listed by name in the injection status detail
+instead (``ASTAnalyzer.scope_note``).
 
 redteam2-py-01: a file saved with a UTF-8 BOM (or a PEP 263 declaration) is
 decoded the way CPython decodes it, so it is analysed instead of failing to
@@ -202,16 +202,15 @@ class TestD6OversizedSource:
         _findings, raised = _scan({"static/app.js": js, "app.py": _SHELL_ROUTE})
         assert list(_reasons(raised)) == ["static/app.js"]
 
-    def test_oversized_minified_bundle_is_excluded_and_listed(self) -> None:
+    def test_oversized_minified_bundle_is_lost_evaluation(self) -> None:
+        # Round 5 (D5-2): measured minification is not evidence either; an
+        # over-cap file is a gap whatever it looks like.
         js = "var a=1;" * 140_000
         with tempfile.TemporaryDirectory() as d:
             _write(d, {"static/vendor.min.js": js, "app.py": _SHELL_ROUTE})
             findings, raised, analyzer = _run(d)
-        assert raised is None
-        # Round 4 (D6'): the reason is the measured evidence, not the name.
-        note = analyzer.scope_note()
-        assert note.startswith("declared out of scope, not scanned: 1 path: static/vendor.min.js (minified: ")
-        assert "over the 1 MB cap" in note
+        assert list(_reasons(raised)) == ["static/vendor.min.js"]
+        assert analyzer.scope_note() == ""
         _proven(findings, SHELL)
 
 
@@ -289,9 +288,9 @@ class TestD6EngineStatus:
 
 
 class TestD6ScopeIsListed:
-    def test_evidenced_dirs_are_listed_and_named_dirs_are_walked(self) -> None:
-        # Round 4 (D6'): a directory is out of scope on evidence in it, never
-        # because it is called node_modules, venv or build.
+    def test_named_and_marked_dirs_are_walked_and_a_real_root_git_is_skipped(self) -> None:
+        # Round 5 (D5-2): neither a name nor a marker file (`pyvenv.cfg`) is
+        # evidence; only a real `<root>/.git` is left out.
         with tempfile.TemporaryDirectory() as d:
             _write(
                 d,
@@ -302,16 +301,17 @@ class TestD6ScopeIsListed:
                     "realenv/pyvenv.cfg": "home = /usr\n",
                     "realenv/lib/m.py": _SHELL_ROUTE,
                     ".git/HEAD": "ref: x\n",
+                    ".git/objects/pack/.keep": "",
+                    ".git/refs/heads/.keep": "",
+                    ".git/hooks/h.py": _SHELL_ROUTE,
                     "app.py": _SHELL_ROUTE,
                 },
             )
             findings, raised, analyzer = _run(d)
         assert raised is None
-        note = analyzer.scope_note()
-        assert note == "declared out of scope, not scanned: 1 path: realenv/ (virtualenv: pyvenv.cfg)"
-        assert ".git" not in note
-        assert not _of(findings, SHELL, "realenv/lib/m.py")
-        for walked in ("venv/lib/m.py", "pkg/build/gen.py"):
+        assert analyzer.scope_note() == ""
+        assert not _of(findings, SHELL, ".git/hooks/h.py")
+        for walked in ("venv/lib/m.py", "pkg/build/gen.py", "realenv/lib/m.py"):
             assert _of(findings, SHELL, walked), walked
         _proven(findings, SHELL)
 
@@ -325,7 +325,7 @@ class TestD6ScopeIsListed:
         findings: list[dict] = []
         analyzer = ASTAnalyzer(str(root), "python")
         analyzer.run(findings.append)
-        assert "link.py (symlink, not followed)" in analyzer.scope_note()
+        assert "link.py (symbolic link)" in analyzer.scope_note()
         assert not _of(findings, SHELL, "link.py")
 
     def test_symlinked_directory_is_listed(self, tmp_path: Path) -> None:
@@ -339,7 +339,7 @@ class TestD6ScopeIsListed:
         findings: list[dict] = []
         analyzer = ASTAnalyzer(str(root), "python")
         analyzer.run(findings.append)
-        assert "lib/ (symlink, not followed)" in analyzer.scope_note()
+        assert "lib/ (symbolic link)" in analyzer.scope_note()
         assert not _of(findings, SHELL, "lib/views.py")
 
     def test_clean_tree_has_no_note(self) -> None:
@@ -350,11 +350,12 @@ class TestD6ScopeIsListed:
 
     def test_engine_ok_detail_lists_the_exclusions(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            _write(d, {"vendor/pyvenv.cfg": "home = /usr\n", "vendor/lib.py": _SHELL_ROUTE, "app.py": _SHELL_ROUTE})
+            _write(d, {"app.py": _SHELL_ROUTE})
+            Path(d, "vendor").symlink_to("/tmp")
             injection, _findings = _engine(d)
         assert injection["state"] == "ok"
         assert "reason" not in injection
-        assert injection["detail"] == "declared out of scope, not scanned: 1 path: vendor/ (virtualenv: pyvenv.cfg)"
+        assert injection["detail"] == "declared out of scope, not scanned: 1 path: vendor/ (symbolic link)"
 
     def test_engine_ok_without_exclusions_has_no_detail(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -364,20 +365,13 @@ class TestD6ScopeIsListed:
 
     def test_engine_mixed_tree_detail_keeps_the_js_note(self) -> None:
         with tempfile.TemporaryDirectory() as d:
-            _write(
-                d,
-                {
-                    "node_modules/a/package.json": '{"name": "a", "version": "1.0.0"}',
-                    "node_modules/a/index.js": "x\n",
-                    "web.js": "eval(a)\n",
-                    "app.py": _SHELL_ROUTE,
-                },
-            )
+            _write(d, {"web.js": "eval(a)\n", "app.py": _SHELL_ROUTE})
+            Path(d, "node_modules").symlink_to("/tmp")
             injection, _findings = _engine(d)
         assert injection["state"] == "ok"
         assert injection["detail"].startswith("1 JavaScript/TypeScript file(s) got pattern checks only")
         assert injection["detail"].endswith(
-            "; declared out of scope, not scanned: 1 path: node_modules/ (1 npm package(s), package.json name and version)"
+            "; declared out of scope, not scanned: 1 path: node_modules/ (symbolic link)"
         )
 
 
