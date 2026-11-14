@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,8 +54,18 @@ func TestRecordBlackbox_Table(t *testing.T) {
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
 		{"active, some probes inconclusive (target)", active, 2, nil, nil, probePhase(40, 37, 3, 0, 0),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
+		// Round 5 (C4B-06): the round-4b row pinned ok here. 0 evaluated of N attempted
+		// is no evidence at all, so it is never complete: the backend reads the same
+		// counts as incomplete, and the CLI and the Action must agree with it. The
+		// reason is the target-owned no_endpoints, never a scanner failure.
 		{"active, every probe inconclusive (target never answers)", active, 2, nil, nil, probePhase(40, 0, 40, 0, 0),
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "no_endpoints"}},
+		{"active, every probe gated (401/403/404/410)", active, 2, nil, nil, gatedPhase(40, 0, map[int]int{403: 30, 404: 10}),
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "no_endpoints"}},
+		{"active, some probes gated, the rest evaluated", active, 2, nil, nil, gatedPhase(40, 30, map[int]int{403: 10}),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
+		{"active, nothing evaluated and a scanner failure", active, 2, nil, nil, probePhase(40, 0, 39, 0, 1),
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "execution_error"}},
 		{"active, unknown-origin failures", active, 2, nil, nil, probePhase(40, 38, 0, 2, 0),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "execution_error"}},
 		{"active, scanner-side failures", active, 2, nil, nil, probePhase(40, 39, 0, 0, 1),
@@ -103,6 +114,22 @@ func probePhase(attempted, evaluated, inconclusive, unknown, scannerFailed int) 
 	}
 	if scannerFailed > 0 {
 		cov.Reasons["scanner"] = map[string]int{"not_sent": scannerFailed}
+	}
+	return checkPhaseOutcome{Attempted: attempted, Probes: cov}
+}
+
+// gatedPhase builds a check-phase outcome whose non-evaluated probes were all
+// gated, by status. Gated probes sit inside inconclusive.
+func gatedPhase(attempted, evaluated int, byStatus map[int]int) checkPhaseOutcome {
+	cov := models.ActiveProbeCoverage{Attempted: attempted, Evaluated: evaluated, Reasons: map[string]map[string]int{},
+		Gated: models.ProbeGated{ByStatus: map[string]int{}}}
+	for code, n := range byStatus {
+		cov.Gated.Total += n
+		cov.Gated.ByStatus[strconv.Itoa(code)] = n
+	}
+	cov.Inconclusive = cov.Gated.Total
+	if cov.Gated.Total > 0 {
+		cov.Reasons["target"] = map[string]int{"gated": cov.Gated.Total}
 	}
 	return checkPhaseOutcome{Attempted: attempted, Probes: cov}
 }

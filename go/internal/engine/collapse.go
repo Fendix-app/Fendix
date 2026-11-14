@@ -45,7 +45,8 @@ import (
 // pair — afterwards the endpoint sets have already been merged and the
 // per-location identity needed here is gone.
 //
-// The representative's severity is kept, but not at the cost of the proof.
+// The representative's severity is kept, but not at the cost of the proof or of
+// a stronger confidence claim another non-Semgrep member made (strongestClaim).
 // Two engines that tie on trust (textscan and a Semgrep taint rule both rank
 // 2) are ordered by severity and text, so the unproven textscan finding can
 // represent a sink that the taint rule proved. When the representative carries
@@ -105,9 +106,11 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 	extraRefs := make(map[int][]string)
 	// proofFrom[best] is the group member whose taint proof the winner adopts.
 	proofFrom := make(map[int]int)
+	// confidenceFrom[best] is the stronger confidence the winner adopts.
+	confidenceFrom := make(map[int]models.Confidence)
 	collapsed := len(twinSink)
 	for sink, taint := range twinSink {
-		extraRefs[taint] = append(extraRefs[taint], findings[sink].References...)
+		extraRefs[taint] = append(extraRefs[taint], mergedRefs(findings[sink])...)
 	}
 	for _, k := range order {
 		idxs := groups[k]
@@ -131,12 +134,15 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 		if donor, ok := proofDonor(findings, idxs, best); ok {
 			proofFrom[best] = donor
 		}
+		if c := strongestClaim(findings, idxs, best); c != "" {
+			confidenceFrom[best] = c
+		}
 		for _, i := range idxs {
 			if i == best {
 				continue
 			}
 			collapsed++
-			extraRefs[best] = append(extraRefs[best], findings[i].References...)
+			extraRefs[best] = append(extraRefs[best], mergedRefs(findings[i])...)
 		}
 	}
 
@@ -159,6 +165,9 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 			f.References = mergeRefs(f.References, refs)
 			sort.Strings(f.References)
 		}
+		if c, ok := confidenceFrom[i]; ok {
+			f.Confidence = c
+		}
 		if d, ok := proofFrom[i]; ok {
 			// Severity, tier and wording stay the representative's; only the
 			// evidence that the sink was proven reachable is carried over.
@@ -174,6 +183,54 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 			"collapsed", collapsed, "remaining", len(out))
 	}
 	return out
+}
+
+// strongestClaim returns the confidence the representative should carry when a
+// member of its group that the collapse drops made a stronger claim, or "" when
+// it keeps its own. Two engines that read one construct can disagree on how
+// literal the match is: the Python engine's eval() rule asserts HIGH (a literal
+// match, which earns the deterministic-detection delta and so can block), while
+// textscan's grades the same call MEDIUM. The higher-trust textscan finding
+// represents the location, and keeping only its confidence turned a blocking
+// finding into a warning once a second analyzer saw the same call (round 5,
+// security5-05).
+//
+// Only members whose tier can earn that delta themselves donate, and only to a
+// representative that can: a Semgrep tier is excluded on both sides, as it is
+// from confidence.HasDeterministicDetection, so the adoption can never hand a
+// Semgrep claim to a native finding, and can never make a blocking finding out
+// of one that no analyzer asserted HIGH for. The representative's severity and
+// wording are untouched.
+func strongestClaim(findings []models.Finding, idxs []int, rep int) models.Confidence {
+	if findings[rep].SourceTier.IsSemgrep() {
+		return ""
+	}
+	best := findings[rep].Confidence
+	for _, i := range idxs {
+		if i == rep || findings[i].SourceTier.IsSemgrep() {
+			continue
+		}
+		if confidenceRank(findings[i].Confidence) > confidenceRank(best) {
+			best = findings[i].Confidence
+		}
+	}
+	if best == findings[rep].Confidence {
+		return ""
+	}
+	return best
+}
+
+// mergedRefs is what a finding the collapse drops leaves on its representative:
+// its references, and the id of its rule as "rule:<id>". The representative
+// reports the same code, so a consumer that follows an issue by its rule can
+// still see that a rule it knows is reported at this location, under another
+// rule's finding (verification pass 1: integration5-01).
+func mergedRefs(f models.Finding) []string {
+	refs := append([]string(nil), f.References...)
+	if f.RuleID != "" {
+		refs = append(refs, "rule:"+f.RuleID)
+	}
+	return refs
 }
 
 // hasDistinctTiers reports whether a location group contains findings from

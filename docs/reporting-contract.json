@@ -17,19 +17,93 @@
       "definitions": {
         "ActiveProbeCoverage": {
           "additionalProperties": false,
-          "description": "Present when active probing was enabled. Accounts for every active probe sent. A scan-wide configured_complete is never proof that every probe was evaluated: read this beside it. attempted = evaluated + inconclusive + unknown_origin + scanner_failed.",
+          "description": "Present when active probing was enabled. Accounts for every active probe sent. A scan-wide configured_complete is never proof that every probe was evaluated: read this beside it. attempted = evaluated + inconclusive + unknown_origin + scanner_failed. A probe the target answered with 401, 403, 404 or 410 is gated: not evaluated, counted inside inconclusive and itemised in gated.",
           "properties": {
             "attempted": {
               "minimum": 0,
               "type": "integer"
+            },
+            "cut_short": {
+              "additionalProperties": false,
+              "description": "Present only when a limit set for the scan ended the probe pass: probes it never started are in no count above. The engine cannot say who set the limit, only which flag and what value.",
+              "properties": {
+                "cause": {
+                  "enum": [
+                    "max_duration",
+                    "max_requests"
+                  ],
+                  "type": "string"
+                },
+                "configured": {
+                  "description": "The limit's value as given to the engine, for example 45s or 500.",
+                  "type": "string"
+                },
+                "limit": {
+                  "enum": [
+                    "--max-duration",
+                    "--max-requests"
+                  ],
+                  "type": "string"
+                },
+                "refused": {
+                  "description": "Requests the --max-requests budget turned away.",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "cause",
+                "limit",
+                "configured",
+                "refused"
+              ],
+              "type": "object"
             },
             "evaluated": {
               "description": "A response came back and the check judged it.",
               "minimum": 0,
               "type": "integer"
             },
+            "gated": {
+              "additionalProperties": false,
+              "description": "The probes the target answered with 401, 403, 404 or 410. A gated probe is NOT evaluated and is evidence of nothing: the request was refused or the path is not served to this client, not proof that the parameter is safe. It is target-side (never a scanner gap, never refunded) and is counted inside inconclusive and reasons.target.gated. Always present from the engine that adds it; absent from older reports.",
+              "properties": {
+                "by_status": {
+                  "additionalProperties": false,
+                  "description": "Non-zero counts by HTTP status; keys are 401, 403, 404, 410 only.",
+                  "properties": {
+                    "401": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "403": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "404": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "410": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "total": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "by_status"
+              ],
+              "type": "object"
+            },
             "inconclusive": {
-              "description": "Confirmed target-side non-answer: not an evaluation, never evidence that anything is absent, safe or fixed, and not a scanner gap.",
+              "description": "Target-side non-evaluation: a confirmed non-answer, a redirect into an address the SSRF guard refuses, or a gated answer (401, 403, 404, 410; see gated). Not an evaluation, never evidence that anything is absent, safe or fixed, and not a scanner gap.",
               "minimum": 0,
               "type": "integer"
             },
@@ -87,6 +161,10 @@
                       "type": "integer"
                     },
                     "connection_reset": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "gated": {
                       "minimum": 1,
                       "type": "integer"
                     },

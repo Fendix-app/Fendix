@@ -109,6 +109,20 @@ type ImportedTool struct {
 	// uploaded findings produced fewer than N rows, instead of leaving the
 	// difference looking like data loss.
 	Corroborated int `json:"corroborated,omitempty"`
+	// The producer's own record of its run (verification pass 1, A3). Additive;
+	// each key is present only when the imported document states it, so an absent
+	// key reads "not recorded", never "fine". A consumer treats an imported
+	// finding as resolved by a later import only when the later import records a
+	// successful run, no error notifications, and a file list that names the
+	// finding's file.
+	//   execution_successful: every invocation said executionSuccessful true
+	//     (false as soon as one said false);
+	//   error_notifications: tool execution and configuration notifications of
+	//     level error, across the tool's runs;
+	//   analyzed_paths: the files the run lists as analysed, repository-relative.
+	ExecutionSuccessful *bool    `json:"execution_successful,omitempty"`
+	ErrorNotifications  *int     `json:"error_notifications,omitempty"`
+	AnalyzedPaths       []string `json:"analyzed_paths,omitempty"`
 }
 
 // ScannerStatusState enumerates the terminal state of one scanner pass.

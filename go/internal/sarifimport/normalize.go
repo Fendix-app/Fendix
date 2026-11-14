@@ -84,6 +84,137 @@ type ToolStat struct {
 	// Normalize runs BEFORE correlation; the orchestrator stamps it in
 	// finalize once CorrelateCrossTool has reported its per-tool counts.
 	Corroborated int `json:"corroborated,omitempty"`
+	// The producer's own record of its run, folded across the tool's runs (see
+	// RunRecord). Each key is present only when the document states it, so an
+	// absent key means "not recorded", never "fine": the backend treats an
+	// imported finding as gone only when a later import of the same tool records
+	// a successful run, no error notifications and a scope that lists the
+	// finding's file.
+	ExecutionSuccessful *bool    `json:"execution_successful,omitempty"`
+	ErrorNotifications  *int     `json:"error_notifications,omitempty"`
+	AnalyzedPaths       []string `json:"analyzed_paths,omitempty"`
+}
+
+// maxAnalyzedPaths bounds the file list one tool's block carries.
+const maxAnalyzedPaths = 4096
+
+// RunRecord is what a SARIF producer says about its own run, as the three
+// values the report carries. nil / empty means the document did not say.
+type RunRecord struct {
+	ExecutionSuccessful *bool
+	ErrorNotifications  *int
+	AnalyzedPaths       []string
+}
+
+// recordOf reads one run's record. A run with no invocation says nothing about
+// success or errors; an invocation without executionSuccessful says nothing
+// about success.
+func recordOf(run Run) RunRecord {
+	var rec RunRecord
+	if len(run.Invocations) > 0 {
+		successful, known := true, true
+		errs := 0
+		for _, inv := range run.Invocations {
+			switch {
+			case inv.ExecutionSuccessful == nil:
+				known = false
+			case !*inv.ExecutionSuccessful:
+				successful = false
+			}
+			for _, group := range [][]Notification{inv.ToolExecutionNotifications, inv.ToolConfigurationNotifications} {
+				for _, n := range group {
+					if strings.EqualFold(strings.TrimSpace(n.Level), "error") {
+						errs++
+					}
+				}
+			}
+		}
+		// A false anywhere is a failed run, whatever else is missing.
+		if !successful {
+			f := false
+			rec.ExecutionSuccessful = &f
+		} else if known {
+			t := true
+			rec.ExecutionSuccessful = &t
+		}
+		rec.ErrorNotifications = &errs
+	}
+	seen := map[string]bool{}
+	for _, a := range run.Artifacts {
+		if !analysedRole(a.Roles) {
+			continue
+		}
+		uri := strings.TrimSpace(a.Location.URI)
+		if uri == "" || isHTTPURL(uri) {
+			continue
+		}
+		if p := NormalizePath(uri, run); p != "" && !seen[p] {
+			seen[p] = true
+			rec.AnalyzedPaths = append(rec.AnalyzedPaths, p)
+		}
+	}
+	sort.Strings(rec.AnalyzedPaths)
+	return rec
+}
+
+// analysedRole reports whether an artifact with these roles was code the run
+// read. The tool's own files and taxonomies are not.
+func analysedRole(roles []string) bool {
+	if len(roles) == 0 {
+		return true
+	}
+	for _, r := range roles {
+		switch r {
+		case "analysisTarget", "resultFile", "traceFile", "attachment", "referencedOnCommandLine", "memoryContents", "responseFile", "scannedFile":
+			return true
+		}
+	}
+	return false
+}
+
+// FoldRecord folds record b into a. first is true while a holds nothing yet.
+// It fails closed: a failed run fails the fold, a run that did not say whether it
+// succeeded (or how many errors it raised) leaves the fold unrecorded, and
+// error counts add up. Listed files are the union of what the runs listed; a
+// run that lists none adds none.
+func FoldRecord(a, b RunRecord, first bool) RunRecord {
+	if first {
+		return b
+	}
+	out := RunRecord{}
+	switch {
+	case (a.ExecutionSuccessful != nil && !*a.ExecutionSuccessful) || (b.ExecutionSuccessful != nil && !*b.ExecutionSuccessful):
+		f := false
+		out.ExecutionSuccessful = &f
+	case a.ExecutionSuccessful != nil && b.ExecutionSuccessful != nil:
+		t := true
+		out.ExecutionSuccessful = &t
+	}
+	if a.ErrorNotifications != nil && b.ErrorNotifications != nil {
+		n := *a.ErrorNotifications + *b.ErrorNotifications
+		out.ErrorNotifications = &n
+	}
+	set := map[string]bool{}
+	for _, p := range append(append([]string(nil), a.AnalyzedPaths...), b.AnalyzedPaths...) {
+		set[p] = true
+	}
+	for p := range set {
+		out.AnalyzedPaths = append(out.AnalyzedPaths, p)
+	}
+	sort.Strings(out.AnalyzedPaths)
+	if len(out.AnalyzedPaths) > maxAnalyzedPaths {
+		out.AnalyzedPaths = out.AnalyzedPaths[:maxAnalyzedPaths]
+	}
+	return out
+}
+
+// Record is the ToolStat's run record.
+func (s ToolStat) Record() RunRecord {
+	return RunRecord{s.ExecutionSuccessful, s.ErrorNotifications, s.AnalyzedPaths}
+}
+
+func (s *ToolStat) setRecord(r RunRecord) {
+	s.ExecutionSuccessful, s.ErrorNotifications, s.AnalyzedPaths = r.ExecutionSuccessful, r.ErrorNotifications, r.AnalyzedPaths
 }
 
 // cweToCategory maps CWE families fendix already understands onto the NATIVE
@@ -128,9 +259,13 @@ func Normalize(doc *Document) ([]evidence.Evidence, ImportStats, error) {
 		st, seen := byTool[toolID]
 		if !seen {
 			st = &ToolStat{Tool: toolID, Version: version}
+			st.setRecord(recordOf(run))
 			byTool[toolID] = st
 			order = append(order, toolID)
-		} else if st.Version != version {
+		} else {
+			st.setRecord(FoldRecord(st.Record(), recordOf(run), false))
+		}
+		if seen && st.Version != version {
 			// Mixed versions of one tool are pathological; the tool name is
 			// what carries provenance, so drop the ambiguous version rather
 			// than assert one run's over another's.

@@ -98,6 +98,7 @@ etc.) record when a field first appeared, not a support commitment.
 | `checks_run` | array of string | no | Names of checks executed. Omitted when empty. |
 | `scanner_status` | array of `ScannerStatus` | no | Per-analyzer outcome, one entry per registry analyzer, in registry order: `dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `python-engine`, `python-engine/auth`, `python-engine/injection`, `python-engine/deps`, `plugins`. The three `python-engine/*` children appear only when the Python engine reports them. Empty for `import` mode. See below. |
 | `coverage` | `Coverage` | no (present on every report from v3.4.0) | The engine's configured-completeness statement. See below. |
+| `imports` | array of `ImportedTool` | no | One block per tool and version on `fendix import` and mixed-import runs: `{tool, version, results, suppressed, no_location, corroborated}` and, **additive (round 5, not in `docs/schema.json` yet: its `ImportedTool` has `additionalProperties: false`, so a report carrying them fails that schema until it is updated; that file is not covered by this documentation change)**, the producer's own run record: `execution_successful` (boolean: true only when every `run.invocations[]` entry says `executionSuccessful: true`, false as soon as one says false, absent when a run has no invocation or one that does not say), `error_notifications` (integer: the `error`-level `toolExecutionNotifications` plus `toolConfigurationNotifications`, summed, a zero emitted, absent when no run has an invocation) and `analyzed_paths` (array of repository-relative files from `run.artifacts[]` whose role is absent or an analysis target or result file, sorted, at most 4096; absent when the run lists no artifacts, which means *scope not recorded*). A tool seen in several runs or files folds fail-closed. A consumer may treat a missing key as *not recorded* and must never read it as success: the Fendix backend closes an imported finding by its later absence only when every block of the tool says `execution_successful: true`, `error_notifications: 0` and an `analyzed_paths` that covers the finding's file, and it keeps only the first 64 paths of 240 characters, so a full-repository import will often not cover the finding's file and the absence stays inconclusive. The import report's `coverage.limitations` names a failed run or error notifications. |
 | `policy_version` | string | no (present from v3.4.0) | Version of the finding-decision policy (`docs/DECISION_POLICY.md`) this build applied. `"1.0.0"` for the RC-3 semantics shipped in v3.2.0. |
 | `release_decision`, `coverage_state`, `decision_policy_version`, `decision_rationale` | string / string / string / object | no | Present only on reports re-rendered by Fendix Cloud, which embeds its release verdict in the input it hands to `fendix report`. A live `fendix scan` never writes them. |
 
@@ -124,7 +125,9 @@ that say evaluation was lost (they start `lost evaluation:`), then notes, then
 the declared exclusions, which start with the exact words `declared out of scope,
 not scanned:`. Everything after that marker up to the next `; ` is a list of
 paths the engine left out on purpose, with the reason for each
-(`minified 1 (lib/jquery.min.js), installed npm packages 1 (node_modules/)`); a
+(`symbolic link 1 (src/linkdir/)`; since round 5 the only reasons the engine
+writes are `symbolic link` and `lockfile`, and a report from an older engine can
+still list `minified`, `vendored library` or `installed npm packages`); a
 reader must not look for loss wording inside it. Every file name in a detail is
 sanitised: `;`, `…`, control characters, line and paragraph separators and
 bidirectional controls become `?`, and a name is cut to 80 bytes. A listing
@@ -139,10 +142,10 @@ is right to, because the engine does not cut an `ok` detail.
 
 An `ok` entry can still say something the reader should see. `semgrep` `ok`
 carries, for example, `partial parse, 2 files with skipped lines: a.py 4, b.js
-10-12` (Semgrep parsed those files except the named lines; the allowance is the
-larger of 3 lines and 5% of the file, and always fewer than all of its lines: a
-file Semgrep skipped whole is lost evaluation, `not parsed by semgrep`; `1 file`
-for one), `nosemgrep suppressed 2 results
+10-12` (Semgrep parsed those files except the named lines, and the engine could
+show from the file that every skipped line is blank or a whole-line comment; a
+skipped line of code, however few, and a file Semgrep skipped whole are lost
+evaluation, `not parsed by semgrep`; `1 file` for one), `nosemgrep suppressed 2 results
 (js-sqli-taint routes.js:12, ...)`, a dropped option that changes nothing that
 is matched, and the declared exclusions. `configured_complete` does not count
 those. See [`checks/semgrep.md`](checks/semgrep.md).
@@ -154,7 +157,7 @@ unknown-origin, <F> scanner-failed`; when `I` is above zero a second segment
 `inconclusive probes (target did not answer): timeout 3, connection_reset 1` lists
 the non-zero target reasons in the fixed order `timeout`, `connection_reset`,
 `connection_refused`, `tls_error`, `rate_limited`, `service_unavailable`,
-`other_transport`. A `failed` entry (`execution_error`) starts with the loss
+`other_transport` (a redirect into an address the SSRF egress guard refuses is `other_transport` too: the target chose where to send the probe). When some of the `I` probes were gated (the target answered 401, 403, 404 or 410: not evaluated, evidence of nothing, never a scanner gap) a segment `gated probes (target answered 401/403/404/410 so not evaluated): 403 4, 404 2` follows, and the `inconclusive probes` segment lists only the probes the target did not answer; gated probes are counted inside `I`, so the counts segment is unchanged. A `failed` entry (`execution_error`) starts with the loss
 segment, `lost evaluation: <U+F> probe(s) not evaluated (<U> unknown-origin, <F>
 scanner-failed)`, then the counts segment, then, if they fit,
 `unknown-origin probes (not evaluated): dns_failure 2` and `scanner-failed probes
@@ -163,16 +166,24 @@ scanner-failed)`, then the counts segment, then, if they fit,
 unknown; `internal_error`, `scan_deadline`, `scan_cancelled`,
 `resource_exhausted`, `proxy_failure`, `request_construction`, `not_sent` for the
 scanner). A pass-level cause comes first and keeps its reason (`failed/timeout`:
-`--max-duration elapsed before the probe pass completed`; `failed/execution_error`:
-`--max-requests exhausted: <N> requests refused before the probe pass completed`).
+`scan limit --max-duration=<value> elapsed before the probe pass completed`;
+`failed/execution_error`: `scan limit --max-requests=<value> exhausted: <N> requests
+refused before the probe pass completed`), and `coverage.active_probes.cut_short`
+names the limit. Probes attempted with none evaluated (the target answered nothing,
+or only 401/403/404/410) is a `failed` entry with reason `no_endpoints`, a
+target-owned reason, whose first segment is `no probe was evaluated: the target gave
+none of the <N> probes an evaluable answer`.
 A segment that does not fit is dropped whole and the detail ends `and <N> more (see
 report metadata)`; the complete account is `coverage.active_probes`. An `ok`
 `active-probes` entry always carries a detail, and `configured_complete` is never
-proof that every probe was evaluated: read `coverage.active_probes` beside it. The
-engine does not turn an all-inconclusive run into a gap (measured against a target
-that reset every probe after the connection: `ok`, `22 attempted, 0 evaluated, 22
-inconclusive (target)`, `configured_complete` true); a consumer that must refuse
-such a scan has to read `evaluated`.
+proof that every probe was evaluated: read `coverage.active_probes` beside it. A
+run in which no probe was evaluated is a gap, by the same rule the hosted backend
+applies (`attempted > 0` with `evaluated == 0`, or any unknown-origin or
+scanner-failed probe): measured against a target that reset every probe after the
+connection (a local server that served one linked page and reset every other path), `failed/no_endpoints`, `14 attempted, 0 evaluated, 14 inconclusive
+(target)`, `configured_complete` false, so `--fail-on-coverage-gap` and
+`--require-analyzers active-probes` exit 2. One evaluated probe is enough for the
+entry to be `ok`, with the counts stated beside it.
 
 Lifecycle classes, derived from `(state, reason)`: `ok`; `not_applicable` (`not_applicable`, `diff_unchanged`); `disabled` (`disabled_by_flag`, `disabled_offline`); `unavailable` (`dependency_missing`); `unsupported` (`unsupported_target`); `failed` (any fail reason). Only `unavailable` and `failed` are engine gaps: the analyzer was configured to run and did not deliver. `disabled` and `unsupported` are visible, intentional or structural, and never a gap on their own.
 
@@ -188,8 +199,8 @@ Lifecycle classes, derived from `(state, reason)`: `ok`; `not_applicable` (`not_
 | `strict` | boolean | The run used `--fail-on-coverage-gap` or `--require-analyzers`. |
 | `configured_complete` | boolean | `true` iff no entry is `unavailable` or `failed`. Not changed by `--require-analyzers`. |
 | `gaps` | array of string | Names of `unavailable` or `failed` entries. |
-| `limitations` | array of string | `"<name>: <detail>"` for every `unsupported` entry, or just `"<name>"` when that entry's `detail` is empty; and, from this release, the complete lists behind the 240-byte details: one or more entries per kind, each starting with the analyzer's name and at most 240 bytes (`"semgrep: lost evaluation, not parsed by semgrep: src/big.js"`, `"secrets: declared out of scope, not scanned: installed npm packages: node_modules/"`, `"semgrep: partial parse, skipped lines: a.py 4"`, `"semgrep: nosemgrep suppressed: python-yaml-load-unsafe app.py:10"`, `"semgrep: retried alone after losing evaluation to time in the first pass: a.js (resolved, evaluated in full when run alone)"`), capped at 400 of them (the last then reads `and <N> more entries not listed (limit 400)`). An entry that starts `<analyzer>: lost evaluation` names files the analyzer did not evaluate; every other entry is a note. The `python-engine/<check>` lists are written the same way (`python-engine/injection: lost evaluation, not fully analysed: big.js (skipped: over the 1 MB size cap (1100007 bytes)), ...`, `python-engine/injection: declared out of scope, not scanned: lib/app.min.js (minified: ...)`), and a check that cut its own list adds `python-engine/<check>: the lists above stop at the check's own cap; more were not listed`. |
-| `active_probes` | `ActiveProbeCoverage` | Present whenever `--enable-active` was set; absent otherwise. Accounts for every active probe sent: `attempted` (= `evaluated` + `inconclusive` + `unknown_origin` + `scanner_failed`), `evaluated` (a response came back and the check judged it), `inconclusive` (confirmed target-side non-answer: not an evaluation, never evidence that anything is absent, safe or fixed, and not a scanner gap), `unknown_origin` and `scanner_failed` (not evaluated; a gap for `active-probes`), `reasons` as `{origin: {reason: count}}` with origins `target`, `unknown`, `scanner` and only non-zero keys, `not_evaluated_checks` (one entry per distinct check, endpoint, origin and reason: `{check, endpoint, origin, reason, evidence}`; `check` is the rule-id family the probe can produce, `injection`, `xss`, `ssrf`, `openredirect`, `hostheader`, `graphql` or `methodtamper`; `endpoint` is `METHOD /path`; `evidence` a fixed phrase, never raw error text) capped at 200 with `truncated: true` when cut, the counts staying complete. A pair absent from the list was evaluated only when `truncated` is false. Additive: no `schema_version` change. |
+| `limitations` | array of string | `"<name>: <detail>"` for every `unsupported` entry, or just `"<name>"` when that entry's `detail` is empty; and, from this release, the complete lists behind the 240-byte details: one or more entries per kind, each starting with the analyzer's name and at most 240 bytes (`"semgrep: lost evaluation, not parsed by semgrep: src/big.js"`, `"secrets: declared out of scope, not scanned: symbolic link: linked/x.py"`, `"semgrep: partial parse, skipped lines: a.py 4"`, `"semgrep: nosemgrep suppressed: python-yaml-load-unsafe app.py:10"`, `"semgrep: retried alone after losing evaluation to time in the first pass: a.js (resolved, evaluated in full when run alone)"`), capped at 400 of them (the last then reads `and <N> more entries not listed (limit 400)`). An entry that starts `<analyzer>: lost evaluation` names files the analyzer did not evaluate; every other entry is a note. The `python-engine/<check>` lists are written the same way (`python-engine/injection: lost evaluation, not fully analysed: big.js (skipped: over the 1 MB size cap (1100007 bytes)), ...`, `python-engine/injection: declared out of scope, not scanned: src/linkdir/ (symbolic link)`), and a check that cut its own list adds `python-engine/<check>: the lists above stop at the check's own cap; more were not listed`. |
+| `active_probes` | `ActiveProbeCoverage` | Present whenever `--enable-active` was set; absent otherwise. Accounts for every active probe sent: `attempted` (= `evaluated` + `inconclusive` + `unknown_origin` + `scanner_failed`), `evaluated` (a response came back and the check judged it), `inconclusive` (target-side non-evaluation: a confirmed non-answer, a redirect into a blocked address, or a gated answer; not an evaluation, never evidence that anything is absent, safe or fixed, and not a scanner gap), `unknown_origin` and `scanner_failed` (not evaluated; a gap for `active-probes`), `reasons` as `{origin: {reason: count}}` with origins `target`, `unknown`, `scanner` and only non-zero keys, `not_evaluated_checks` (one entry per distinct check, endpoint, origin and reason: `{check, endpoint, origin, reason, evidence}`; `check` is the rule-id family the probe can produce, `injection`, `xss`, `ssrf`, `openredirect`, `hostheader`, `graphql` or `methodtamper`; `endpoint` is `METHOD /path`; `evidence` a fixed phrase, never raw error text) capped at 200 with `truncated: true` when cut, the counts staying complete. A pair absent from the list was evaluated only when `truncated` is false. `gated` (`{total, by_status}`, always present from this release): how many probes the target answered with 401, 403, 404 or 410, by status; a gated probe is not evaluated and is evidence of nothing, it sits inside `inconclusive` and `reasons.target.gated`, and its pairs are listed with `reason: gated`. `cut_short` (`{cause, limit, configured, refused}`, present only when `--max-duration` or `--max-requests` ended the pass): probes the limit kept from starting are in no count. Additive: no `schema_version` change. |
 | `required_analyzers` | array of string | The `--require-analyzers` list; empty when none. |
 | `required_gaps` | array of string | Required names not `ok` or `not_applicable`. An explicit requirement is stricter than `configured_complete`: `disabled` and `unsupported` do not satisfy it. |
 | `retried` | array of string | Entries with `attempts > 1`. |

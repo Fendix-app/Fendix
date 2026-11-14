@@ -798,6 +798,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// complete scan is not proof that every probe was evaluated.
 	if o.cfg.EnableActive {
 		ap := probePhase.Probes
+		ap.CutShort = cutShortOf(o.cfg, probePhase)
 		cov.ActiveProbes = &ap
 	}
 
@@ -1205,7 +1206,7 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 		Version:              reportVersion(o.version),
 		Mode:                 "import",
 		Imports:              importedTools,
-		Coverage:             func() *reporters.Coverage { c := reporters.BuildCoverage(nil, nil, false); return &c }(),
+		Coverage:             importCoverage(importedTools),
 		PolicyVersion:        decision.PolicyVersion,
 	}
 
@@ -1214,6 +1215,25 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 		return ec
 	}
 	return decision.ExitCode(decisions)
+}
+
+// importCoverage is the coverage block of an import-only report. The engine
+// scanned nothing, so there is no analyzer to be incomplete; what it can say is
+// what a producer reported about its own run, which a reader of the findings
+// should not have to open the per-tool block to find: a run its producer marked
+// failed, or one that raised error notifications (a partial run), is listed as a
+// limitation (verification pass 1: R5DB5-01, redteam5-02).
+func importCoverage(tools []reporters.ImportedTool) *reporters.Coverage {
+	c := reporters.BuildCoverage(nil, nil, false)
+	for _, t := range tools {
+		if t.ExecutionSuccessful != nil && !*t.ExecutionSuccessful {
+			c.Limitations = append(c.Limitations, "import/"+t.Tool+": the producer reported a failed run; an absent result is not evidence that a finding is gone")
+		}
+		if t.ErrorNotifications != nil && *t.ErrorNotifications > 0 {
+			c.Limitations = append(c.Limitations, fmt.Sprintf("import/%s: the producer reported %d error notification(s); the run may be partial", t.Tool, *t.ErrorNotifications))
+		}
+	}
+	return &c
 }
 
 // loadImports reads, parses and normalizes every configured SARIF file.
@@ -1253,7 +1273,15 @@ func loadImports(paths []string) ([]evidence.Evidence, []reporters.ImportedTool,
 				cur = &reporters.ImportedTool{Tool: t.Tool, Version: t.Version}
 				byTool[t.Tool] = cur
 				order = append(order, t.Tool)
-			} else if cur.Version != t.Version {
+			}
+			// The producer's own account of each run folds fail-closed across
+			// files: one failed run fails the tool, one that records nothing
+			// leaves the tool's record empty.
+			rec := sarifimport.FoldRecord(
+				sarifimport.RunRecord{ExecutionSuccessful: cur.ExecutionSuccessful, ErrorNotifications: cur.ErrorNotifications, AnalyzedPaths: cur.AnalyzedPaths},
+				t.Record(), !seen)
+			cur.ExecutionSuccessful, cur.ErrorNotifications, cur.AnalyzedPaths = rec.ExecutionSuccessful, rec.ErrorNotifications, rec.AnalyzedPaths
+			if seen && cur.Version != t.Version {
 				// Same tool, different versions across files — the tool name
 				// carries the provenance, so drop the ambiguous version.
 				cur.Version = ""
@@ -1543,7 +1571,8 @@ func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, rej
 
 // recordBlackbox records dast, spec and active-probes (spec §4.4) once the
 // check pass has finished. `ok` means the pass ran to completion: nothing
-// cut it short and, for probes, at least one probe got an HTTP response.
+// cut it short and, for probes, at least one probe was evaluated (an HTTP
+// response the check judged: not a 401/403/404/410 and not a target non-answer).
 func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error, phase checkPhaseOutcome) {
 	switch {
 	case cfg.URL == "":
@@ -1573,9 +1602,10 @@ func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints
 	case endpoints == 0:
 		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no endpoints to probe")
 	case phase.Deadline:
-		status.failDetail(AnalyzerActiveProbes, reporters.ReasonTimeout, probeDetail(phase.Probes, true, "--max-duration elapsed before the probe pass completed"))
+		// A limit set for this scan ended the pass: said as one, with its value.
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonTimeout, probeDetail(phase.Probes, true, fmt.Sprintf("scan limit --max-duration=%s elapsed before the probe pass completed", cfg.MaxDuration)))
 	case phase.Rejected > 0:
-		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, probeDetail(phase.Probes, true, fmt.Sprintf("--max-requests exhausted: %d requests refused before the probe pass completed", phase.Rejected)))
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, probeDetail(phase.Probes, true, fmt.Sprintf("scan limit --max-requests=%d exhausted: %d requests refused before the probe pass completed", cfg.MaxRequests, phase.Rejected)))
 	case phase.Attempted == 0:
 		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no probe-eligible parameters on the discovered endpoints")
 	case phase.Probes.UnknownOrigin+phase.Probes.ScannerFailed > 0:
@@ -1583,6 +1613,14 @@ func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints
 		// evidence attributes to the target was not evaluated, and neither may
 		// read as an evaluation or as the target's doing.
 		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, probeDetail(phase.Probes, true, ""))
+	case phase.Probes.Evaluated == 0:
+		// Probes were attempted and not one was evaluated: no evidence at all,
+		// so the pass delivered nothing, whoever's doing that was (a target that
+		// answered nothing, or only 401/403/404/410). The backend reads the same
+		// counts the same way; here it makes the CLI, the Action and
+		// --fail-on-coverage-gap / --require-analyzers active-probes agree with
+		// it. no_endpoints is a target-owned reason: never a scanner failure.
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNoEndpoints, probeDetail(phase.Probes, true, probeNoneEvaluatedSegment(phase.Probes)))
 	default:
 		// ok: every probe was evaluated, or its only non-answers are confirmed
 		// target-side. The counts are always stated: a complete entry is not

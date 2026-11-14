@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -34,7 +35,13 @@ func scanScenario(t *testing.T, item func(w http.ResponseWriter, r *http.Request
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><body><a href="/item?id=1">item</a></body></html>`)
+		fmt.Fprint(w, `<html><body><a href="/item?id=1">item</a> <a href="/ok?id=1">ok</a></body></html>`)
+	})
+	// /ok always answers normally: its probes are legitimately evaluated, so the
+	// pass delivers (a pass in which nothing is evaluated is a gap, round 5).
+	mux.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "fine")
 	})
 	var itemHits atomic.Int32
 	mux.HandleFunc("/item", func(w http.ResponseWriter, r *http.Request) {
@@ -67,14 +74,20 @@ func probesOf(t *testing.T, r reporters.JSONReport) (*models.ActiveProbeCoverage
 }
 
 // itemOnly asserts that every probe that was not evaluated hit /item (the
-// scenario's endpoint) and that the account adds up: the page "/" answers
-// normally, so its probes are legitimately evaluated.
+// scenario's endpoint) or was a GraphQL origin-sweep probe the page answers 404,
+// and that the account adds up: /ok answers normally, so its probes are
+// legitimately evaluated.
 func itemOnly(t *testing.T, ap *models.ActiveProbeCoverage) {
 	t.Helper()
 	if ap.Attempted == 0 || ap.Evaluated+ap.Inconclusive+ap.UnknownOrigin+ap.ScannerFailed != ap.Attempted {
 		t.Fatalf("the account does not add up: %+v", ap)
 	}
 	for _, e := range ap.NotEvaluatedChecks {
+		// The origin GraphQL sweep probes well-known paths the page never links:
+		// the fixture answers them 404, which is gated (round 5), so they are listed.
+		if e.Check == "graphql" && e.Reason == "gated" && e.Origin == "target" {
+			continue
+		}
 		if !strings.HasPrefix(e.Endpoint, "GET /item") {
 			t.Fatalf("an answered endpoint was reported as not evaluated: %+v", e)
 		}
@@ -87,7 +100,7 @@ func TestProbeCoverage_TargetNeverAnswersIsInconclusiveNotCompleteAndSafe(t *tes
 	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) { <-release })
 	ap, st := probesOf(t, rep)
 	itemOnly(t, ap)
-	if ap.Inconclusive == 0 || ap.Reasons["target"]["timeout"] != ap.Inconclusive || ap.UnknownOrigin+ap.ScannerFailed != 0 {
+	if ap.Inconclusive == 0 || ap.Reasons["target"]["timeout"] != ap.Inconclusive-ap.Gated.Total || ap.UnknownOrigin+ap.ScannerFailed != 0 {
 		t.Fatalf("a target that never answers: %+v", ap)
 	}
 	// Target-controlled non-answers alone never fail the entry (no refund path)...
@@ -98,7 +111,13 @@ func TestProbeCoverage_TargetNeverAnswersIsInconclusiveNotCompleteAndSafe(t *tes
 	if !strings.HasPrefix(st.Detail, "probe evaluation: ") || !strings.Contains(st.Detail, "inconclusive probes (target did not answer): timeout") {
 		t.Fatalf("detail = %q", st.Detail)
 	}
-	if len(ap.NotEvaluatedChecks) == 0 || ap.NotEvaluatedChecks[0].Origin != "target" || !strings.HasPrefix(ap.NotEvaluatedChecks[0].Endpoint, "GET /item") {
+	var itemListed bool
+	for _, e := range ap.NotEvaluatedChecks {
+		if e.Origin == "target" && e.Reason == "timeout" && strings.HasPrefix(e.Endpoint, "GET /item") {
+			itemListed = true
+		}
+	}
+	if !itemListed {
 		t.Fatalf("not_evaluated_checks = %+v", ap.NotEvaluatedChecks)
 	}
 	// Findings are always kept; none were fabricated from non-answers.
@@ -122,7 +141,7 @@ func TestProbeCoverage_ResetConnectionsAreTargetSide(t *testing.T) {
 	})
 	ap, st := probesOf(t, rep)
 	itemOnly(t, ap)
-	if ap.Inconclusive == 0 || ap.Reasons["target"]["connection_reset"] != ap.Inconclusive || ap.UnknownOrigin != 0 || ap.ScannerFailed != 0 {
+	if ap.Inconclusive == 0 || ap.Reasons["target"]["connection_reset"] != ap.Inconclusive-ap.Gated.Total || ap.UnknownOrigin != 0 || ap.ScannerFailed != 0 {
 		t.Fatalf("resets: %+v", ap)
 	}
 	if st.State != reporters.ScannerOK {
@@ -130,16 +149,74 @@ func TestProbeCoverage_ResetConnectionsAreTargetSide(t *testing.T) {
 	}
 }
 
-func TestProbeCoverage_GatedStatusesAreEvaluatedAndStayVisible(t *testing.T) {
+// Round 5 (D5-6, C4B-01 / C4B-06). The round-4b test of this subject pinned
+// "401/403/404/410 are evaluated", which is the defect: a target answering 404
+// to every probe read "All N active probes sent were evaluated" and the
+// entry stayed ok. A gated answer is a final answer, but it evaluates nothing.
+//
+// Here the whole target is gated, so nothing at all was evaluated: the entry is
+// failed (target-owned no_endpoints), the CLI says so, and --require-analyzers
+// active-probes exits 2.
+func TestProbeCoverage_GatedStatusesAreNotEvaluated(t *testing.T) {
 	for _, code := range []int{401, 403, 404, 410} {
-		rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(code) })
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/" && r.URL.RawQuery == "" {
+				w.Header().Set("Content-Type", "text/html")
+				fmt.Fprint(w, `<html><body><a href="/item?id=1">item</a></body></html>`)
+				return
+			}
+			w.WriteHeader(code)
+		})
+		srv := httptest.NewServer(mux)
+		out := filepath.Join(t.TempDir(), "r.json")
+		cfg := &models.ScanConfig{URL: srv.URL, AllowPrivate: true, Workers: 4, Timeout: 4, CrawlDepth: 1, Format: "json", OutputPath: out, EnableActive: true,
+			RequiredAnalyzers: []string{AnalyzerActiveProbes}}
+		exit := NewOrchestrator(cfg, "dev").Run(context.Background())
+		srv.Close()
+		rep := readReport(t, out)
 		ap, st := probesOf(t, rep)
-		if ap.Attempted == 0 || ap.Evaluated != ap.Attempted || ap.Inconclusive+ap.UnknownOrigin+ap.ScannerFailed != 0 || len(ap.NotEvaluatedChecks) != 0 {
-			t.Fatalf("%d: %+v", code, ap)
+		k := strconv.Itoa(code)
+		if ap.Attempted == 0 || ap.Evaluated != 0 || ap.Gated.Total == 0 || ap.Gated.ByStatus[k] != ap.Gated.Total || len(ap.Gated.ByStatus) != 1 {
+			t.Fatalf("%d: gated probes must not be evaluated: %+v", code, ap)
 		}
-		if st.State != reporters.ScannerOK {
-			t.Fatalf("%d: state %s %q", code, st.State, st.Detail)
+		if ap.Inconclusive != ap.Gated.Total || ap.UnknownOrigin != 0 || ap.ScannerFailed != 0 || ap.Reasons["target"]["gated"] != ap.Gated.Total {
+			t.Fatalf("%d: a gated probe is target-side, never a scanner or unknown-origin gap: %+v", code, ap)
 		}
+		if len(ap.NotEvaluatedChecks) == 0 || ap.NotEvaluatedChecks[0].Reason != "gated" || ap.NotEvaluatedChecks[0].Origin != "target" {
+			t.Fatalf("%d: the gated pairs must be listed: %+v", code, ap.NotEvaluatedChecks)
+		}
+		if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints {
+			t.Fatalf("%d: state %s/%s %q, want failed/no_endpoints (0 evaluated is never complete)", code, st.State, st.Reason, st.Detail)
+		}
+		if rep.Metadata.Coverage.ConfiguredComplete || len(rep.Metadata.Coverage.RequiredGaps) != 1 {
+			t.Fatalf("%d: coverage %+v must be incomplete with the requirement undelivered", code, rep.Metadata.Coverage)
+		}
+		if exit != 2 {
+			t.Fatalf("%d: exit %d, want 2 for --require-analyzers active-probes with 0 probes evaluated", code, exit)
+		}
+	}
+}
+
+// A gated endpoint beside an evaluated one: the entry still delivers, the gated
+// probes are counted and listed apart, and the pair is never proof of anything.
+func TestProbeCoverage_GatedEndpointBesideAnEvaluatedOneIsListed(t *testing.T) {
+	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403) })
+	ap, st := probesOf(t, rep)
+	if ap.Evaluated == 0 || ap.Gated.Total == 0 || ap.Gated.ByStatus["403"] == 0 {
+		t.Fatalf("the page \"/\" is evaluated and /item is gated: %+v", ap)
+	}
+	if st.State != reporters.ScannerOK || !strings.Contains(st.Detail, "gated probes (target answered 401/403/404/410 so not evaluated): ") {
+		t.Fatalf("state %s %q", st.State, st.Detail)
+	}
+	var item bool
+	for _, e := range ap.NotEvaluatedChecks {
+		if e.Reason == "gated" && strings.HasPrefix(e.Endpoint, "GET /item") {
+			item = true
+		}
+	}
+	if !item {
+		t.Fatalf("/item's gated probes must be listed: %+v", ap.NotEvaluatedChecks)
 	}
 }
 
@@ -152,7 +229,7 @@ func TestProbeCoverage_RateLimitAfterRetriesIsInconclusive(t *testing.T) {
 	})
 	ap, st := probesOf(t, rep)
 	itemOnly(t, ap)
-	if ap.Inconclusive == 0 || ap.Reasons["target"]["rate_limited"] != ap.Inconclusive {
+	if ap.Inconclusive == 0 || ap.Reasons["target"]["rate_limited"] != ap.Inconclusive-ap.Gated.Total {
 		t.Fatalf("429: %+v", ap)
 	}
 	if hits.Load() <= int32(ap.Inconclusive) {

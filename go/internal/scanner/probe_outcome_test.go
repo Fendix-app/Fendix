@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -187,7 +188,16 @@ func TestProbeDo_SmallRetryAfterReplacesTheDefaultPause(t *testing.T) {
 
 // ---- 401 / 403 / 404 / 410 -------------------------------------------------
 
-func TestProbeDo_401_403_404_410AreResponsesNotRetriedNotInconclusive(t *testing.T) {
+// Round 5 (owner decision D5-6): a gated answer is a final answer (never
+// retried) but it is NOT an evaluation. It evaluates nothing about the
+// parameter the probe tested: the request was refused or the path is not served
+// to this client. It is target-side, so it is not a scanner gap.
+//
+// This test replaces the round-4b test of the same subject, which pinned
+// "evaluated" for these four statuses. That pin is the defect C4B-01: a target
+// answering 404 to every probe read "All 2633 active probes sent were
+// evaluated". The no-retry half is unchanged.
+func TestProbeDo_401_403_404_410AreGatedNotRetriedNotEvaluated(t *testing.T) {
 	for _, code := range []int{401, 403, 404, 410} {
 		cc, cfg := probeTestEnv(t)
 		var hits atomic.Int32
@@ -201,12 +211,86 @@ func TestProbeDo_401_403_404_410AreResponsesNotRetriedNotInconclusive(t *testing
 		if hits.Load() != 1 || rec.Retries != 0 {
 			t.Fatalf("%d: hits=%d retries=%d, a gated status is a final answer, never retried", code, hits.Load(), rec.Retries)
 		}
-		// The probe got an answer, so it is an evaluated probe. What the
-		// answer means for a finding is not decided here: verify and the
-		// lifecycle never read a gated status as a fix.
-		if v := ClassifyProbe(rec, cc.Audit); !v.Evaluated {
-			t.Fatalf("%d: verdict %+v, want evaluated", code, v)
+		v := wantVerdict(t, rec, cc, OriginTarget, ReasonGated)
+		if !strings.Contains(v.Evidence, strconv.Itoa(code)) {
+			t.Fatalf("%d: evidence %q does not name the status", code, v.Evidence)
 		}
+	}
+}
+
+func TestClassify_OnlyTheFourGatingStatusesGate(t *testing.T) {
+	cc, _ := probeTestEnv(t)
+	gated := map[int]bool{401: true, 403: true, 404: true, 410: true}
+	for code := 100; code < 600; code++ {
+		v := ClassifyProbe(ProbeRecord{Timestamp: time.Now(), Endpoint: "http://t/a", Status: code}, cc.Audit)
+		switch {
+		case gated[code]:
+			if v.Evaluated || v.Origin != OriginTarget || v.Reason != ReasonGated {
+				t.Fatalf("%d: %+v, want target/gated", code, v)
+			}
+		case retryableStatus(code):
+			if v.Evaluated || v.Origin != OriginTarget || v.Reason == ReasonGated {
+				t.Fatalf("%d: %+v, want a retryable non-answer", code, v)
+			}
+		default:
+			if !v.Evaluated {
+				t.Fatalf("%d: %+v, want evaluated", code, v)
+			}
+		}
+	}
+	// A probe that produced a finding is evidence, whatever status carried it.
+	for code := range gated {
+		if v := ClassifyProbe(ProbeRecord{Timestamp: time.Now(), Endpoint: "http://t/a", Status: code, Finding: true}, cc.Audit); !v.Evaluated {
+			t.Fatalf("%d with a finding: %+v, want evaluated", code, v)
+		}
+	}
+}
+
+func TestSummarize_GatedProbesAreCountedApartAndNeverEvaluated(t *testing.T) {
+	cc, _ := probeTestEnv(t)
+	t0 := time.Now()
+	rec := func(ep string, status int) ProbeRecord {
+		return ProbeRecord{Timestamp: t0, Endpoint: "http://t" + ep, Method: "GET", ProbeType: ProbeXSS, Status: status}
+	}
+	records := []ProbeRecord{
+		rec("/ok", 200), rec("/ok", 200),
+		rec("/a", 403), rec("/a", 403), rec("/a", 404), rec("/b", 401), rec("/c", 410),
+		rec("/d", 503),
+	}
+	cov := SummarizeProbes(records, cc.Audit)
+	if cov.Attempted != 8 || cov.Evaluated != 2 {
+		t.Fatalf("a gated answer must not count as evaluated: %+v", cov)
+	}
+	if cov.Gated.Total != 5 || cov.Gated.ByStatus["403"] != 2 || cov.Gated.ByStatus["404"] != 1 || cov.Gated.ByStatus["401"] != 1 || cov.Gated.ByStatus["410"] != 1 || len(cov.Gated.ByStatus) != 4 {
+		t.Fatalf("gated = %+v", cov.Gated)
+	}
+	// The account still adds up: gated probes sit inside inconclusive (target-side).
+	if cov.Evaluated+cov.Inconclusive+cov.UnknownOrigin+cov.ScannerFailed != cov.Attempted || cov.Inconclusive != 6 || cov.ScannerFailed != 0 || cov.UnknownOrigin != 0 {
+		t.Fatalf("account = %+v", cov)
+	}
+	if cov.Reasons["target"]["gated"] != 5 || cov.Reasons["target"]["service_unavailable"] != 1 {
+		t.Fatalf("reasons = %+v", cov.Reasons)
+	}
+	// The (check, endpoint) pairs stay listed, so a consumer can see that /a was never evaluated.
+	var listed []string
+	for _, e := range cov.NotEvaluatedChecks {
+		if e.Reason == "gated" {
+			if e.Origin != "target" || e.Check != "xss" {
+				t.Fatalf("entry = %+v", e)
+			}
+			listed = append(listed, e.Endpoint)
+		}
+		if strings.Contains(e.Endpoint, "/ok") {
+			t.Fatalf("/ok was evaluated and must not be listed: %+v", e)
+		}
+	}
+	if len(listed) != 3 {
+		t.Fatalf("gated entries = %v, want /a /b /c", listed)
+	}
+	// Nothing gated: the block is present and empty (a stable shape).
+	cov = SummarizeProbes([]ProbeRecord{rec("/ok", 200)}, cc.Audit)
+	if cov.Gated.Total != 0 || cov.Gated.ByStatus == nil || len(cov.Gated.ByStatus) != 0 {
+		t.Fatalf("empty gated block = %+v", cov.Gated)
 	}
 }
 
@@ -723,14 +807,15 @@ func TestSummarize_PartialResultsAndRepeatedNonResponses(t *testing.T) {
 		{Timestamp: t0, Endpoint: "http://t/d", Method: "GET", ProbeType: ProbeSSRF, Failure: &ProbeFailure{Origin: OriginUnknown, Reason: ReasonDNSFailure, Evidence: "y"}},
 	}
 	cov := SummarizeProbes(records, cc.Audit)
-	if cov.Attempted != 9 || cov.Evaluated != 3 || cov.Inconclusive != 4 || cov.UnknownOrigin != 1 || cov.ScannerFailed != 1 {
+	// Round 5: /ok 404 and /gone 410 are gated (not evaluated), so only the 200 is.
+	if cov.Attempted != 9 || cov.Evaluated != 1 || cov.Inconclusive != 6 || cov.UnknownOrigin != 1 || cov.ScannerFailed != 1 {
 		t.Fatalf("counts = %+v", cov)
 	}
-	if cov.Reasons["target"]["connection_reset"] != 3 || cov.Reasons["target"]["service_unavailable"] != 1 {
+	if cov.Reasons["target"]["connection_reset"] != 3 || cov.Reasons["target"]["service_unavailable"] != 1 || cov.Reasons["target"]["gated"] != 2 {
 		t.Fatalf("reasons = %+v", cov.Reasons)
 	}
 	// Distinct (check, endpoint, origin, reason), scanner first, then unknown, then target.
-	if len(cov.NotEvaluatedChecks) != 4 || cov.NotEvaluatedChecks[0].Origin != "scanner" || cov.NotEvaluatedChecks[1].Origin != "unknown" {
+	if len(cov.NotEvaluatedChecks) != 6 || cov.NotEvaluatedChecks[0].Origin != "scanner" || cov.NotEvaluatedChecks[1].Origin != "unknown" {
 		t.Fatalf("list = %+v", cov.NotEvaluatedChecks)
 	}
 	if cov.NotEvaluatedChecks[0].Check != "xss" || cov.NotEvaluatedChecks[0].Endpoint != "GET /c" {
@@ -739,11 +824,19 @@ func TestSummarize_PartialResultsAndRepeatedNonResponses(t *testing.T) {
 	if cov.Truncated {
 		t.Fatal("not truncated")
 	}
-	// A (check, endpoint) the list does not name was evaluated: /ok is absent.
+	// /ok answered 200 once and 404 once: its 404 probe is listed (gated), so the
+	// list never proves that pair evaluated.
+	var okEntries int
 	for _, e := range cov.NotEvaluatedChecks {
 		if strings.Contains(e.Endpoint, "/ok") {
-			t.Fatalf("/ok was evaluated: %+v", e)
+			okEntries++
+			if e.Reason != "gated" {
+				t.Fatalf("/ok entry = %+v", e)
+			}
 		}
+	}
+	if okEntries != 1 {
+		t.Fatalf("/ok entries = %d, want its gated probe listed once", okEntries)
 	}
 }
 

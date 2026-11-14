@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/Fendix-app/Fendix/go/internal/reporters"
 )
 
@@ -30,6 +31,11 @@ func printCoverageSummary(w io.Writer, status scannerStatusList, cov reporters.C
 	} else {
 		fmt.Fprintf(w, "coverage: incomplete (%s)\n", strings.Join(cov.Gaps, ", "))
 	}
+	if ap := cov.ActiveProbes; ap != nil {
+		// The probes' own account, beside the scan-wide verdict: a complete
+		// analyzer is not proof that every probe was evaluated.
+		fmt.Fprintln(w, probeSummaryLine(*ap))
+	}
 	if requiredGiven {
 		if len(cov.RequiredGaps) == 0 {
 			fmt.Fprintln(w, "required: satisfied")
@@ -37,6 +43,22 @@ func printCoverageSummary(w io.Writer, status scannerStatusList, cov reporters.C
 			fmt.Fprintf(w, "required: not delivered (%s)\n", strings.Join(cov.RequiredGaps, ", "))
 		}
 	}
+}
+
+// probeSummaryLine is the one-line account of the active probes printed under
+// the coverage verdict. It never begins with "coverage: " or "required: ", the
+// prefixes the GitHub Action reads its verdict from.
+func probeSummaryLine(ap models.ActiveProbeCoverage) string {
+	line := fmt.Sprintf("active probes: %d attempted, %d evaluated, %d not answered by the target, %d gated",
+		ap.Attempted, ap.Evaluated, ap.Inconclusive-ap.Gated.Total, ap.Gated.Total)
+	if ap.Gated.Total > 0 {
+		line += " (" + gatedList(ap) + ")"
+	}
+	line += fmt.Sprintf(", %d unknown-origin, %d scanner-failed", ap.UnknownOrigin, ap.ScannerFailed)
+	if cs := ap.CutShort; cs != nil {
+		line += fmt.Sprintf(" (cut short by %s=%s)", cs.Limit, cs.Configured)
+	}
+	return line
 }
 
 // describeGaps renders "name: class (reason)" for each named entry, and

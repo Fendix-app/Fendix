@@ -24,8 +24,12 @@ package scanner
 //	  resource_exhausted    EMFILE, ENFILE, ENOMEM, ENOBUFS or EADDRNOTAVAIL (ephemeral ports)
 //	  proxy_failure         the failure happened dialling a configured proxy
 //	  request_construction  the request could not be built, or was rejected before any connection attempt
-//	  not_sent              the probe never left the scanner (--max-requests budget, SSRF egress guard)
+//	  not_sent              the probe never left the scanner (--max-requests budget, the SSRF egress guard
+//	                        refusing the probe's own destination)
 //	TARGET (the connection, and TLS when used, was established unless stated)
+//	  gated                 the target answered HTTP 401, 403, 404 or 410: the request was refused or the
+//	                        path is not served to this client. A gated probe is NOT evaluated and proves
+//	                        nothing about the parameter it tested (never "safe", never "fixed")
 //	  timeout               accepted the connection, then sent no response before the per-request deadline;
 //	                        also a connect timeout when another request to the host succeeded within 30 s
 //	  connection_reset      reset, closed or GOAWAY after the connection was established
@@ -33,7 +37,9 @@ package scanner
 //	  tls_error             a TLS alert sent by the peer
 //	  rate_limited          HTTP 429 after the bounded retries
 //	  service_unavailable   HTTP 502, 503 or 504 after the bounded retries
-//	  other_transport       a malformed or broken response, or a redirect chain past the limit
+//	  other_transport       a malformed or broken response, a redirect chain past the limit, or a redirect
+//	                        into an address the SSRF egress guard refuses (the target chose where to send
+//	                        the probe; it is never the scanner's doing)
 //	UNKNOWN
 //	  dns_failure           name resolution failed
 //	  timeout               a connect timeout, no request to the host succeeded within 30 s
@@ -92,6 +98,7 @@ const (
 	ReasonRequestConstruction ProbeReason = "request_construction"
 	ReasonNotSent             ProbeReason = "not_sent"
 	// Target-side, and shared with unknown where noted.
+	ReasonGated              ProbeReason = "gated"
 	ReasonTimeout            ProbeReason = "timeout" // also unknown
 	ReasonConnectionReset    ProbeReason = "connection_reset"
 	ReasonConnectionRefused  ProbeReason = "connection_refused" // also unknown
@@ -267,6 +274,17 @@ func isRedirectCap(err error) bool {
 	return strings.Contains(err.Error(), "netguard: stopped after")
 }
 
+// budgetExhausted reports that the scan's --max-requests cap was reached: the
+// budget refused at least one request (the first refusal also cancels the scan
+// context, which is how in-flight probes see it).
+func budgetExhausted() bool {
+	if budget.MaxRequests() <= 0 {
+		return false
+	}
+	_, rejected := budget.Stats()
+	return rejected > 0
+}
+
 func failure(o ProbeOrigin, r ProbeReason, evidence string) ProbeFailure {
 	return ProbeFailure{Origin: o, Reason: r, Evidence: evidence}
 }
@@ -280,7 +298,7 @@ func classifyTransportError(err error, resp *http.Response, tr traceFacts, scanC
 	if resp != nil {
 		switch {
 		case isEgressRefusal(err):
-			return failure(OriginScanner, ReasonNotSent, "a redirect hop was refused by the SSRF egress guard; the probe could not be completed")
+			return failure(OriginTarget, ReasonOtherTransport, "the target redirected the probe to an address the SSRF egress guard refuses")
 		case isRedirectCap(err):
 			return failure(OriginTarget, ReasonOtherTransport, "the target's redirect chain exceeded the hop limit")
 		}
@@ -289,12 +307,27 @@ func classifyTransportError(err error, resp *http.Response, tr traceFacts, scanC
 	case errors.Is(err, budget.ErrBudgetExceeded):
 		return failure(OriginScanner, ReasonNotSent, "the probe was refused by the --max-requests budget and never sent")
 	case isEgressRefusal(err):
-		return failure(OriginScanner, ReasonNotSent, "the SSRF egress guard refused the destination; the probe was never sent")
+		if tr.gotConn {
+			// A connection to the probe's own destination was already
+			// established, so this is a later hop: the target redirected the
+			// client and the dial of the hop was refused.
+			return failure(OriginTarget, ReasonOtherTransport, "the target redirected the probe to an address the SSRF egress guard refuses")
+		}
+		return failure(OriginScanner, ReasonNotSent, "the SSRF egress guard refused the destination and the probe was never sent")
 	}
 	if isCtxErr(err) {
 		if scanCtx != nil && scanCtx.Err() != nil {
 			if errors.Is(scanCtx.Err(), context.DeadlineExceeded) {
 				return failure(OriginScanner, ReasonScanDeadline, "the scan's --max-duration elapsed while the probe was in flight")
+			}
+			if budgetExhausted() {
+				// The --max-requests cap cancels the scan context. A probe it
+				// stopped before the request was written never left the
+				// scanner (not_sent); one already written was cut in flight.
+				if !tr.wroteRequest {
+					return failure(OriginScanner, ReasonNotSent, "the --max-requests budget was exhausted and the probe was never sent")
+				}
+				return failure(OriginScanner, ReasonScanCancelled, "the --max-requests budget was exhausted while the probe was in flight")
 			}
 			return failure(OriginScanner, ReasonScanCancelled, "the scan was cancelled while the probe was in flight")
 		}
@@ -449,6 +482,8 @@ func probeDo(ctx context.Context, client *http.Client, req *http.Request, log *P
 		f := failure(OriginScanner, ReasonNotSent, "the probe's context ended before it was sent")
 		if sc := log.scanContext(); sc != nil && errors.Is(sc.Err(), context.DeadlineExceeded) {
 			f = failure(OriginScanner, ReasonScanDeadline, "the scan's --max-duration elapsed before the probe was sent")
+		} else if budgetExhausted() {
+			f = failure(OriginScanner, ReasonNotSent, "the --max-requests budget was exhausted and the probe was never sent")
 		}
 		info.Failure = &f
 		return nil, info, &ProbeError{Failure: f, Err: err}
@@ -794,7 +829,28 @@ func ClassifyProbe(r ProbeRecord, log *ProbeAuditLog) ProbeVerdict {
 		}
 		return ProbeVerdict{Origin: OriginTarget, Reason: reason, Evidence: ev}
 	}
+	if !r.Finding && IsGatedStatus(r.Status) {
+		return ProbeVerdict{Origin: OriginTarget, Reason: ReasonGated, Evidence: gatedEvidence(r.Status)}
+	}
 	return ProbeVerdict{Evaluated: true}
+}
+
+// IsGatedStatus reports whether an HTTP status gates a probe: the target
+// refused the request or does not serve the path to this client, so the answer
+// says nothing about the parameter the probe tested. The list is closed
+// (models.GatedStatuses) and has no other member.
+func IsGatedStatus(code int) bool {
+	for _, g := range models.GatedStatuses {
+		if code == g {
+			return true
+		}
+	}
+	return false
+}
+
+func gatedEvidence(code int) string {
+	word := map[int]string{401: "authentication required", 403: "forbidden", 404: "not found", 410: "gone"}[code]
+	return "the target answered HTTP " + strconv.Itoa(code) + " (" + word + "), so the probe was gated and nothing was evaluated"
 }
 
 var originRank = map[ProbeOrigin]int{OriginScanner: 0, OriginUnknown: 1, OriginTarget: 2}
@@ -807,6 +863,7 @@ func SummarizeProbes(records []ProbeRecord, log *ProbeAuditLog) models.ActivePro
 		Attempted:          len(records),
 		Reasons:            map[string]map[string]int{},
 		NotEvaluatedChecks: []models.NotEvaluatedCheck{},
+		Gated:              models.ProbeGated{ByStatus: map[string]int{}},
 	}
 	// One entry per (check, endpoint, origin, reason). The evidence kept is the
 	// smallest of the group, so the entry does not depend on probe order.
@@ -825,6 +882,10 @@ func SummarizeProbes(records []ProbeRecord, log *ProbeAuditLog) models.ActivePro
 			cov.ScannerFailed++
 		default:
 			cov.UnknownOrigin++
+		}
+		if v.Origin == OriginTarget && v.Reason == ReasonGated {
+			cov.Gated.Total++
+			cov.Gated.ByStatus[strconv.Itoa(r.Status)]++
 		}
 		o := string(v.Origin)
 		if cov.Reasons[o] == nil {
