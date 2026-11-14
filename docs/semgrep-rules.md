@@ -82,7 +82,7 @@ overflow, internal matching error or too many matches, rules Semgrep lists
 as skipped, a profile with no fixpoint list, a dropped `--project-root` or
 `--x-ignore-semgrepignore-files`, a file Semgrep could not parse at all
 (`Syntax error`, `Lexical error`, `Other syntax error`, `AST builder error`),
-a partial parse that skipped more than a few lines, and an in-scope file that
+a partial parse that skipped any line of code, and an in-scope file that
 was over the size cap, unreadable or not in Semgrep's `paths.scanned`.
 Fendix logs each one, keeps the findings the run did produce, and records
 the `semgrep` entry in `scanner_status` as `failed`: reason `timeout` when
@@ -91,22 +91,24 @@ with `lost evaluation:` and the counts (for example `lost evaluation: 3 rule
 timeouts on 1 file, every other rule skipped on 1 file after 3 rule
 timeouts`), then names the first files and rules. Coverage is therefore
 incomplete, and `--fail-on-scanner-error` exits 2. A file that only partly
-parses, with the skipped lines reported, at most the larger of 3 and 5% of
-the file's lines and never all of them, leaves the run `ok`, with the skipped
-lines named in its detail. A stage that reaches its 300 s wall budget is `failed` with reason
+parses leaves the run `ok` only when every skipped line is reported and the engine
+can show it is blank or a whole-line comment (decision D1', C4B-27); a skipped line
+of code, however few, is lost evaluation. The skipped lines are named in the detail. A stage that reaches its 300 s wall budget is `failed` with reason
 `timeout`; with one invocation it has no Semgrep findings, and with one per
-language group the groups that finished keep theirs.
+language group the groups that finished keep theirs (a group over 3 MiB also runs its heaviest files in invocations of their own, so a bundle that does not finish loses only itself).
 
-**What is not scanned is decided by evidence, and listed.** The engine no
-longer excludes `node_modules/`, `dist/`, `build/`, `.next/`, `target/`,
-`vendor/` or `*.min.js` by name. A directory is skipped when it holds the
-markers of installed or built code (a `node_modules/` with `.package-lock.json`,
-a directory with `pyvenv.cfg`, a Cargo `target/`, and so on), and a JavaScript
-or TypeScript file is skipped when its content is minified or is a known
-vendored library (a banner naming the library and a version, the library's own
-identifier in the body, and a library's size; a header that merely mentions a
-library does not count); a project's own code in a directory called `vendor/`
-or `build/` is scanned. The Semgrep run does not read the repository's
+**Everything under the size cap is scanned, and what is not is listed
+(decision D5-2).** The engine does not exclude `node_modules/`, `dist/`,
+`build/`, `.next/`, `target/`, `vendor/` or `*.min.js` by name, does not skip a
+directory because it holds the markers of installed or built code, and does not
+skip a JavaScript or TypeScript file because it looks minified or carries a
+vendored-library banner: a banner, header, name or marker can be written by
+anyone who can commit, so none is evidence about the rest of a file. A minified,
+vendored, generated or test file at or below 1 MiB is evaluated like any other
+file; one over it is lost evaluation. Only a symbolic link and (by policy; no
+analyzer applies it in this tree) a recognised lockfile are declared out of
+scope, and a real `<root>/.git` is skipped quietly. This costs scan time on
+repositories with large front-end trees (measured figures, and why no installed-dependency tree is excluded, are in `checks/semgrep.md`, "Scope"). The Semgrep run does not read the repository's
 `.semgrepignore` files or Semgrep's built-in default ignore list, so a Python
 `tests/` directory is scanned. The JavaScript, TypeScript, Java and Go packs
 carry a `paths: exclude:` list on every rule (test, mock and fixture paths,
@@ -119,7 +121,7 @@ source file whose extension Semgrep does not select (`APP.JS`, `.mts`, `.cts`,
 `.es6`) is evaluated in an extensions pass; a `.vue` file cannot be and is lost
 evaluation. Every path left out is named, with its reason, in the `ok` detail
 and in full in `metadata.coverage.limitations`. See `checks/semgrep.md`, "Scope
-(decisions D6 and D6')", for the evidence, the reasons and the
+(decisions D6 and D5-2)", for the rule, the reasons and the
 `--diff` behaviour.
 
 > **Install Semgrep for full coverage.** Without it, only the

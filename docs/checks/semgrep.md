@@ -70,14 +70,15 @@ taint gate requires (`semgrep.ReachabilityLanguages` is empty, ADR-011).
 ## How It Works
 
 1. On the first scan of a process, `ensureRules()` extracts the embedded pack to a temp dir (cached in a `sync.Once` for the process lifetime). The extracted copy has every rule's `paths.exclude` removed (`rulepaths.go`, decision D6'): the embedded pack carries test, mock and fixture path filters, which made every rule of a language skip such a file, and no source file is left out of a scan for its path. `paths.include` is kept
-2. Decides the scope from the tree before it runs Semgrep (`go/internal/scanner/semgrep/targets.go`, `go/internal/scope`): it lists the in-scope files Semgrep is meant to evaluate and the paths declared out of scope on evidence (see "Scope (decisions D6 and D6')" below). `--code` that is itself a symbolic link is resolved first: `<code_path>` below is the directory it resolves to, because Semgrep does not follow a linked scanning root; links below it are never followed.
-3. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet --disable-version-check --time --max-target-bytes 1048576 --disable-nosem --dataflow-traces --timeout 30 --jobs <n> --max-memory <MiB> --project-root <code_path> --x-ignore-semgrepignore-files [--exclude /<path> ...] [--include <changed file> ...] <code_path>`, inside a wall budget (see "Runtime and memory budget"). Each option does one thing:
+2. Decides the scope from the tree before it runs Semgrep (`go/internal/scanner/semgrep/targets.go`, `go/internal/scope`): it lists the in-scope files Semgrep is meant to evaluate and what is declared out of scope (a symbolic link and, by policy, a recognised lockfile; see "Scope (decisions D6 and D5-2)" below). `--code` that is itself a symbolic link is resolved first: `<code_path>` below is the directory it resolves to, because Semgrep does not follow a linked scanning root; links below it are never followed.
+3. Invokes `semgrep --config <rules_dir> --json --no-git-ignore --quiet --disable-version-check --time --max-target-bytes 1048576 --disable-nosem --dataflow-traces --timeout 30 --jobs <n> --max-memory <MiB> --project-root <code_path> --x-ignore-semgrepignore-files [--exclude /.git] [--exclude <anchored unreadable entry> ...] [--include=<changed file> ...] -- <absolute target> ...`, inside a wall budget (see "Runtime and memory budget"). Each option does one thing:
    - `--timeout 30` bounds one rule on one file; a rule that hits it loses its matches in that file, and Semgrep's `--timeout-threshold`, left at its default of 3, skips every remaining rule on a file after three such timeouts. Semgrep reports a taint rule that ran out of its fixpoint budget on a function only in the run's profile (`time.fixpoint_timeouts`), never in `errors`; v3.7.0 never read that profile, so those matches vanished with no error. Semgrep 1.182.1 writes the profile with or without `--time`; `--time` is passed so that a release which writes it only on request does too, and detection does not depend on it: a document without a `fixpoint_timeouts` list is recorded as a gap (below). Any of these is lost rule evaluation: the findings of the run are kept, and the `semgrep` entry in `scanner_status` is `failed` (see "What `ok` means" below), because the rule's matches in that file are missing.
    - `--max-target-bytes 1048576` is the size cap every Go analyzer shares, passed explicitly so that a Semgrep whose default differs skips exactly the files the engine lists as too large.
    - `--disable-nosem` stops Semgrep dropping a result whose line carries a `nosemgrep` comment; the engine applies the comment itself and reports what it suppressed (see "`nosemgrep`").
    - `--x-ignore-semgrepignore-files` stops Semgrep reading the scanned tree's `.semgrepignore` files and, when the tree has none at its root, its own built-in default ignore list (which drops `tests/` and `test/` at any depth, `*.min.js` and more): what is scanned is the engine's decision, the same for every project, never the repository's. A Python `tests/` directory is therefore scanned.
-   - `--exclude /<path>` is one anchored pattern for each path the engine declared out of scope on evidence (at most 1000 per run; a path past that is scanned). There is no name-based exclude list.
-   - `--include <changed file>` is added for each changed file of a `--diff` scan.
+   - `--exclude /.git` is passed only when `<code_path>/.git` has a real layout (see "Scope"). The only other excludes are an anchored `--exclude` for each entry the engine itself could not open (a file with no read permission, a directory it cannot list; at most 512 per run): Semgrep's own listing of the root would otherwise exit 2 with `Failed to obtain target files from semgrep-core` and every readable file would lose its Semgrep evaluation (recorded by the round-5 engine owner before the change: a mode-000 `hidden.py`, `hidden.js` and directory made the whole run `failed` / `execution_error`; after it Semgrep evaluated `app.py` and the detail read `lost evaluation: 3 in-scope files not read: 3 unreadable (hidden.js, hidden.py, secret/)`). Such an entry is still lost evaluation, named in the detail; the exclude only keeps it from taking the rest of the run down. When a large language group isolates its heaviest files ("Isolating heavy files", below), the bulk run carries an anchored `--exclude` for exactly those files and each of them runs under one anchored `--include=/<rel>`. No name, marker, banner or appearance removes a file from the evaluation: an isolated file is evaluated in an invocation of its own.
+   - `--include=<changed file>` is added for each changed file of a `--diff` scan, as one argument, so a file called `-x.py` is a value and never an option.
+   - `--` ends the options. Every target after it is an absolute path (a relative `--code` is made absolute first), so no file or directory name, and not the scan root's, can be read by Semgrep as an option (a file called `--config=x.mts` reaches it as a path). Semgrep rejects both `-x.py` and `--include -x.py` as unknown options, which is why the engine writes `--include=<rel>` and `--`.
    - `--scan-unknown-extensions` is added only to the extensions pass and to the retry of a file it ran (see "The extensions pass").
    - `--project-root <code_path>` makes the scan target the project root, so a target inside a git work tree (`<gitroot>/fixtures/repo`) is not filtered by the git root's `fixtures/` exclusion.
    - `--jobs` and `--max-memory` are the budget's (below).
@@ -96,14 +97,20 @@ taint gate requires (`semgrep.ReachabilityLanguages` is empty, ADR-011).
 Semgrep's defaults are sized from the host, not the container. Inside a two-CPU container on a ten-core VM, `--jobs` defaulted to nine threads; there was no `--max-memory`, so the only memory bound was the kernel's out-of-memory killer, which ends Semgrep whole (no JSON document, so every finding of the run is lost); and there was one deadline for the whole tree. The stage is now bounded (`go/internal/scanner/semgrep/budget.go`, `plan.go`):
 
 - **CPUs and jobs.** The CPU allowance is the tightest cgroup CPU quota along the process's cgroup path (v2 `cpu.max`, or v1 `cpu.cfs_quota_us`), intersected with the process's CPU affinity. `--jobs` is `floor(0.85 x CPUs + 0.5)`, at least 1: Semgrep's own recommendation applied to the allowance (2 CPUs give 2 jobs, 4 give 3).
-- **Memory.** The memory budget is the cgroup memory limit (capped by the host's `MemTotal`); with no cgroup limit it is half the host's memory (a 3.8 GB host gives 1900 MiB, the share of one scan worker at concurrency 1). `--max-memory` is `(budget - 384 MiB) x 90%`, never below 256 MiB: 384 MiB is held back for Semgrep's Python wrapper, the engine and the page cache, and Semgrep's documentation says the limit "will be exceeded before it gets detected", so a tenth is margin. 1900 MiB gives 1364; 3800 MiB gives 3074. With the limit exceeded Semgrep reports a per-file `Out of memory` naming the file (the engine does not die, and findings of other files are kept), which is recorded `failed` / `execution_error`. With no memory information, none is passed.
+- **Memory.** The memory budget is the cgroup memory limit (capped by the host's `MemTotal`). With no cgroup limit it is half the host's memory divided among the scans that share the host: `FENDIX_SCAN_CONCURRENCY` says how many, and when it is unset the engine assumes 2 (a 3.8 GB host gives 3.8 GiB x 50% / 2 = about 950 MiB per scan). **Production runs the scan worker at concurrency 2 with no container memory limit on a 2-CPU, 3.8 GB host with no swap** (observed read-only on 2026-11-12, backend `DEPLOY_RUNBOOK.md` 8.5); the budget therefore assumes no container cap, at most 2 CPUs per scan (a 10-core VM gets the same plan as the 2-CPU host) and two scans at once. The backend does not pass `FENDIX_SCAN_CONCURRENCY` to engine children, so a hosted worker runs on the default of 2 whatever its `--concurrency` is; at a worker concurrency of 1 that is the cautious direction (more per-file out-of-memory gaps, never an out-of-memory kill), and passing the worker's own concurrency is an open item for the backend. `--max-memory` is split per `semgrep-core` job: `(budget - 384 MiB) x 90%`, never below 256 MiB, and a job is given at least 512 MiB, so when the budget cannot give every job that much the run uses fewer jobs (the round-5 budget owner measured `--jobs 2 --max-memory 720` for a 950 MiB share on a 7.9 GB host, and `--jobs 1 --max-memory 509` under a 950 MiB cgroup). 384 MiB is held back for Semgrep's Python wrapper, the engine and the page cache, and Semgrep's documentation says the limit "will be exceeded before it gets detected", so a tenth is margin. With the limit exceeded Semgrep reports a per-file `Out of memory` naming the file (the engine does not die, and findings of other files are kept), which is recorded `failed` / `execution_error`. With no memory information, none is passed.
 - **Wall budget.** 300 s for the whole stage, every invocation and retry together, shrunk to leave 90 s of the run's own remaining time for the analyzers that run after Semgrep when the run has a deadline, never below 20 s. A hosted scan's own deadline is minutes above it, so the engine has time left to write its report.
 - **The log line.** Each stage logs its budget at INFO, for example `semgrep: stage budget budget="jobs=2 max-memory=1004MiB wall=5m0s (cgroup v2, cpu quota 2.00, memory limit 1500 MiB)"`.
-- **Settings.** `FENDIX_SEMGREP_JOBS` (1 to 256), `FENDIX_SEMGREP_MAX_MEMORY_MIB` (0 for none, otherwise at least 256), `FENDIX_SEMGREP_BUDGET_SECONDS` (30 to 3600) and `FENDIX_SEMGREP_SPLIT_BYTES` (-1 never splits) override the derived values; a value that is not an integer in range is ignored with a warning and never turns into an unbounded run. `models.ScanConfig` carries `SemgrepJobs`, `SemgrepMaxMemoryMiB` (negative: pass none) and `SemgrepWallBudget`; there is no command-line flag. A service that builds each engine child's environment by default-deny (the hosted backend does) never passes the variables on, so a hosted worker is sized by its container's limits.
+- **Settings.** `FENDIX_SEMGREP_JOBS` (1 to 256), `FENDIX_SEMGREP_MAX_MEMORY_MIB` (0 for none, otherwise at least 256), `FENDIX_SEMGREP_BUDGET_SECONDS` (30 to 3600) and `FENDIX_SEMGREP_SPLIT_BYTES` (-1 never splits), `FENDIX_SCAN_CONCURRENCY` (1 to 64: how many scans share the memory budget), `FENDIX_SEMGREP_CHUNK_BYTES` (the group size from which heavy files are isolated, default 3 MiB, -1 never) and `FENDIX_SEMGREP_HEAVY_FILE_BYTES` (a positive size, default 192 KiB) override the derived values; a value that is not an integer in range is ignored with a warning and never turns into an unbounded run. `models.ScanConfig` carries `SemgrepJobs`, `SemgrepMaxMemoryMiB` (negative: pass none) and `SemgrepWallBudget`; there is no command-line flag. A service that builds each engine child's environment by default-deny (the hosted backend does) never passes the variables on, so a hosted worker is sized by its container's limits.
 
 ### One invocation, or one per language group
 
-A tree in a single language group, or a small one, is one invocation with every pack, as it always was. A tree with in-scope files in at least two language groups (`python`, `javascript` with `typescript`, `java`, `go`) and at least 4 MiB of in-scope source is split into one invocation per group, cheapest first, each loading only its own packs. The deadlines are static offsets from the start of the stage, computed from file sizes and the budget only, so a slow group borrows what an earlier one left and cannot starve the groups after it. A group that reaches its deadline is killed and loses only its own findings (Semgrep prints its JSON once, at the end); the finished groups' findings are kept. The stage ends `failed` / `timeout` with one segment that is never cut: `semgrep: timed out after 1m0s; not evaluated: java 3 files`. The unevaluated files are not in `paths.scanned`, so they are also named as not evaluated. Killing an invocation takes down its whole process tree (descendants are read from `/proc` and killed, then the wrapper) and leaves Semgrep in the engine's own process group, so a caller that ends a timed-out engine by process group still ends Semgrep. Before this, a timed-out Semgrep left `semgrep-core` running, using CPU and memory for the next analyzer and the next scan.
+A tree in a single language group, or a small one, is one invocation with every pack, as it always was. A tree with in-scope files in at least two language groups (`python`, `javascript` with `typescript`, `java`, `go`) and at least 4 MiB of in-scope source is split into one invocation per group, cheapest first, each loading only its own packs. The deadlines are static offsets from the start of the stage, computed from file sizes and the budget only, so a slow group borrows what an earlier one left and cannot starve the groups after it. A group that reaches its deadline is killed and loses only its own findings (Semgrep prints its JSON once, at the end); the finished groups' findings are kept. The stage ends `failed` / `timeout` with one segment that is never cut: `semgrep: timed out after 1m0s; not evaluated: java 3 files`. The unevaluated files are not in `paths.scanned`, so they are also named as not evaluated. Killing an invocation takes down its whole process tree and leaves Semgrep in the engine's own process group, so a caller that ends a timed-out engine by process group still ends Semgrep. The tree is frozen first (the parent and every descendant found are stopped with SIGSTOP, repeated until no new one appears), then the descendants are killed, then the parent: killing descendants first let a wrapper that waits for its worker print a document and exit 0 inside the gap. An invocation whose deadline fired is `timedOut` whatever its exit status was: the engine no longer accepts a document from a run that finished after its deadline, so the unit is listed as not evaluated and the stage is `failed` / `timeout`. Before this, a timed-out Semgrep left `semgrep-core` running, using CPU and memory for the next analyzer and the next scan.
+
+### Isolating heavy files (round 5)
+
+What exhausts the stage budget on a repository that commits minified or installed code is a few big files, not many small ones. Measured by the round-5 budget owner (real Semgrep 1.182.1, one run, not re-run for these notes): on the `gogs` repository one 461 KB single-function bundle (`openjpeg_nowasm_fallback.js`) alone took more than 160 s, five of the 17 JavaScript taint rules taking more than 100 s each on it, while the other 223 JavaScript files of the group finished in 13 s. Semgrep also resolves every explicit file target with its own `semgrep-core` process (about 0.14 s per file: the 819-file tree of the backend repository took 6.9 s as a directory and 121 s as explicit targets), so chunking a tree into file lists is slower, not faster.
+
+So a group (or an unsplit tree) of at most 3 MiB (`FENDIX_SEMGREP_CHUNK_BYTES`) is one root run, as before. A larger one gives up its heaviest files only: the isolable files of at least 192 KiB (`FENDIX_SEMGREP_HEAVY_FILE_BYTES`), the 8 largest of the stage. Each runs alone under one anchored `--include=/<rel>`; the rest of the group runs once with those files `--exclude`d by anchored pattern. Units run bulk first, then heavy files smallest first, each with its own share of the stage budget. The choice is by size alone; a name that cannot be written safely as a pattern (glob characters, braces, a leading `!` or `#`, blanks at either end, non-ASCII) is never isolated and stays in the root run. A unit that hits its deadline loses only its own files, which fall out of `paths.scanned` and are named as lost evaluation; the findings of the units that finished are kept, and a result printed by two units is reported once. Nothing is excluded from analysis, and no scope, status, reason or schema changes: the stage still ends `failed` / `timeout` with `semgrep: timed out after 5m0s; not evaluated: javascript 1 file`. Whether to optimise the rules instead (the five slow taint rules carry two TypeScript-only source clauses that also run on every `.js` file; the real fix is to run them only on TypeScript files, a change to rule packaging that is public contract) is an open owner decision; no rule was changed.
 
 ### The extensions pass
 
@@ -147,11 +154,11 @@ saw a taint fixpoint timeout at all.
 | Run | Recorded |
 |---|---|
 | Exit 0, JSON envelope, no error of level `error`, no lost evaluation, every in-scope file reported scanned | `ok` |
-| A partial parse (`PartialParsing`) whose skipped line spans are reported, are at most the larger of 3 lines and 5% of the file's lines, and are fewer than all of its lines (the allowance is `min(max(3, 5%), lines - 1)`, decision D1') | `ok`, with the count by type in `detail` (never the message, which can quote source): `<n> non-fatal per-file problem(s) reported by semgrep (PartialParsing <n>); findings in those files may be incomplete`, then the lines: `partial parse, <n> files with skipped lines: a.py 4, b.js 10-12` (`1 file` for one) |
-| A file Semgrep could not parse at all (`Syntax error`, `Lexical error`, `Other syntax error`, `AST builder error`, and the constructor spellings `ParseError`, `LexicalError`, `OtherParseError`, `AstBuilderError`), or a partial parse with no usable span, with more lines skipped than above, or that skipped every line of the file (decision D1': the analysed scope must be known, so a file Semgrep skipped whole is never "a few lines") | `failed` / `execution_error`, `<k> not parsed by semgrep (<path>, ...)` in the `lost evaluation:` segment; findings kept |
+| A partial parse (`PartialParsing`) whose skipped line spans are all reported, lie inside the file, and **every line they touch is blank or a whole-line comment** (`#` for Python; `//`, or a one-line `/* ... */`, for JavaScript, TypeScript, Java and Go), judged by the engine from the file itself, one line at a time (decisions D1' and C4B-27: the engine must be able to show that the skipped spans hold no analysable code) | `ok`, with the count by type in `detail` (never the message, which can quote source): `<n> non-fatal per-file problem(s) reported by semgrep (PartialParsing <n>); findings in those files may be incomplete`, then the lines: `partial parse, <n> files with skipped lines: a.py 4, b.js 10-12` (`1 file` for one) |
+| A file Semgrep could not parse at all (`Syntax error`, `Lexical error`, `Other syntax error`, `AST builder error`, and the constructor spellings `ParseError`, `LexicalError`, `OtherParseError`, `AstBuilderError`), or a partial parse that skipped **any line of code, however few lines or small the share**, with no usable span, or with a span outside the file (the round-4 allowance of `min(max(3, 5%), lines - 1)` skipped lines is gone: a skipped long line can hold the handler), or a Python file (`.py`, `.pyw`, `.pyi`) whose first two lines declare a source encoding that is not ASCII-transparent (PEP 263: `utf-7`, `utf-16`, `cp037`, ...; the allow-list is `utf-8`, `ascii`, `latin-1`, `iso-8859-n`, `cp125x`, a few DOS and Mac pages): CPython decodes such a file with that codec, Semgrep reads the bytes as UTF-8 and sees text that is not the program, so the engine cannot show the code was evaluated (round 5, redteam5-10: before the change the verifier recorded `semgrep` `ok` for a `# coding: utf-7` file holding `subprocess.call(input(), shell=True)`) | `failed` / `execution_error`, `<k> not parsed by semgrep (<path>, ...)` in the `lost evaluation:` segment; findings kept |
 | Lost evaluation where every loss is a timeout: a rule `Timeout` (a rule Semgrep stopped on a file after `--timeout 30`), the rest of a file's rules skipped after 3 rule timeouts (`--timeout-threshold`), a taint `Fixpoint timeout`, a `Timeout during interfile analysis` | `failed` / `timeout`, `detail` starting `lost evaluation:` (format below); findings kept |
 | Any other lost evaluation: a per-file `Out of memory`, `Stack overflow`, `OOM during interfile analysis`, `Internal matching error`, `Too many matches`, `Missing plugin`, `Fatal error`, `SemgrepWarning`, or any per-file type not listed as a parse problem above, in either Semgrep's spelling or the constructor name (`OutOfMemory`, `MatchingError`, ...), since a type Fendix does not know cannot be shown to have cost nothing; an `errors` entry that could not be decoded at all, or an `errors` that is not a list; a loss-type entry whose fields could not be read (it is decoded leniently, and any count beyond what was decoded is reported); rules Semgrep lists in `skipped_rules`; a profile whose `fixpoint_timeouts` is missing, `null` or not a list; a dropped `--project-root` or `--x-ignore-semgrepignore-files`; an in-scope file over 1048576 bytes, unreadable, not parsed, or absent from Semgrep's `paths.scanned` (decision D6, below); or a timeout mixed with any of these | `failed` / `execution_error`, `detail` as above; findings kept |
-| Files declared out of scope left unread on evidence (decision D6'): a directory of installed or built code, a minified or vendored-library bundle, a lockfile, source map, generated or compiled file over the cap, and a symbolic link. A source file is never declared out of scope for its name, extension or path: `APP.JS`, `.mts`, a test or fixture file are evaluated, and a `.vue` file is lost evaluation (below) | `ok`, with the paths named in `detail` (below); never a gap |
+| Files declared out of scope (decisions D6 and D5-2): a symbolic link, and a recognised lockfile (the policy; no analyzer applies it in this tree, see "Scope"). A source file is never declared out of scope for what it looks like, its name, extension or path: a minified, vendored, generated, compiled, test or fixture file, one in `node_modules` or a virtualenv, `APP.JS` and `.mts` are evaluated, and a `.vue` file is lost evaluation (below) | `ok`, with the paths named in `detail` (below); never a gap |
 | A `nosemgrep` comment removed one or more results | `ok`, with `nosemgrep suppressed <n> result(s) (<rule> <path>:<line>, ...)` in `detail`; never silent |
 | The stage past its wall budget | `failed` / `timeout`; `semgrep: timed out after <budget>; not evaluated: <group> <n> files`; the findings of the groups that finished are kept (a single invocation keeps none) |
 | A non-zero exit other than 1, or death by a signal: an invalid or missing config (exit 7), a rule that does not parse (exit 2), the engine killed or crashed mid-run, out of memory included (exit 2, "the engine was killed") | `failed` / `execution_error`, `detail` naming the first error |
@@ -188,11 +195,20 @@ Loss segments:
    (<Type> <n>, ...)` (`entry` for 1; the type of an entry that could not be
    decoded at all is `undecodable`, of one whose type could not be read
    `unknown`).
-3. For in-scope files left unread (decisions D6 and D1'): `lost evaluation: <N>
+3. For in-scope files left unread (decisions D6, D1' and D5-2): `lost evaluation: <N>
    in-scope files not read: <k> over 1048576 bytes (<path>, <path>, <path> +<m>
    more), <k> unreadable (<path>), <k> not evaluated by semgrep (<path>), <k>
    not parsed by semgrep (<path>)`, each kind present only when it applies,
-   at most three paths each.
+   at most three paths each. A source file over the cap is **always** under `over
+   1048576 bytes`, whatever it looks like (a minified or generated file over the
+   cap is no longer "declared out of scope"). The `lost evaluation:` lead is what
+   the hosted backend reads to keep such a loss from being refunded as a scanner
+   crash (a repository-caused gap, `scanning/services.py` `_LOST_FILES_RE`), so
+   do not reword it. The complete lists in `metadata.coverage.limitations` read
+   `semgrep: lost evaluation, over 1048576 bytes: <names>`, `semgrep: lost
+   evaluation, not parsed by semgrep: <names>`, `semgrep: lost evaluation, not
+   evaluated by semgrep: <names>` and `semgrep: lost evaluation, unreadable:
+   <names>`.
 4. `semgrep reported no taint fixpoint timeouts list (--time), so a taint rule that ran out of time would be silent`
 5. The lossy dropped-options note, followed by `; files may be skipped: ` and what each lossy option costs, joined with `; `: `the packs' path filters need --project-root`, `Semgrep's default ignore list and the tree's .semgrepignore files apply`.
 
@@ -205,7 +221,7 @@ Notes:
 
 Exclusions:
 
-10. `declared out of scope, not scanned: <reason> <n> (<name>, <name>, <name> +<m> more), <reason> <n> (...)`, one entry per reason in the order each was first used.
+10. `declared out of scope, not scanned: <reason> <n> (<name>, <name>, <name> +<m> more), <reason> <n> (...)`, one entry per reason in the order each was first used. The only reasons written are `symbolic link` (a directory link is named with a trailing `/`) and `lockfile` (never written in this tree, see "Scope").
 
 A run that has rule errors keeps a detail of its own, `<n> rule errors, rules
 not loaded: ...`, and appends `; <n> rule timeout(s) as well` and `; <n> taint
@@ -220,21 +236,26 @@ and
 `lost evaluation: 1 taint fixpoint timeout on 1 file; first: main.go (taint fixpoint at line 13, 2 taint rules from go-ssrf-taint)`,
 both `failed` / `timeout`, with `semgrep` among the coverage gaps.
 
-Two details from scans of a small tree on this tree with Semgrep 1.182.1
-(round 4):
-`lost evaluation: 2 in-scope files not read: 2 not parsed by semgrep (src/big.js, tiny.js); 2 non-fatal per-file problem(s) reported by semgrep (PartialParsing 2); findings in those files may be incomplete; and 3 more (see report metadata)`
-(`failed` / `execution_error`; a JavaScript class with one broken member, which
-Semgrep reported as a `Syntax error` for the whole file, and a two-line file
-that a partial parse skipped whole) and
-`nosemgrep suppressed 1 result (python-yaml-load-unsafe app.py:10); declared out of scope, not scanned: minified 1 (lib/jquery.min.js), installed npm packages 1 (node_modules/)`
-(`ok`). The first shows the budget at work: the three segments that did not fit
-are counted in `and 3 more` and listed in `metadata.coverage.limitations`.
+Two details from scans of small trees on this tree with Semgrep 1.182.1
+(round 5, `review/engine-dev:pr145`, one run each):
+`lost evaluation: 3 in-scope files not read: 1 over 1048576 bytes (big.js), 1 not evaluated by semgrep (src/Comp.vue), 1 not parsed by semgrep (src/whole.js); and 3 more (see report metadata)`
+(`failed` / `execution_error`: a file of 1,100,007 bytes, a Vue component, and a
+two-line file a partial parse skipped whole; the three segments that did not fit
+the budget are counted in `and 3 more` and listed in
+`metadata.coverage.limitations`) and
+`lost evaluation: 1 in-scope file not read: 1 not parsed by semgrep (src/partial.js); 1 non-fatal per-file problem(s) reported by semgrep (PartialParsing 1); findings in those files may be incomplete; nosemgrep suppressed 1 result`
+(`failed` / `execution_error`: a JavaScript file of 80 lines with one line,
+`const bad = @@@;`, that Semgrep skipped. That is one skipped line of code out of
+80, which round 4 allowed to stay `ok`; it is lost evaluation now, because the
+engine cannot show the skipped line holds no analysable code). The same detail
+with a symbolic link reads
+`declared out of scope, not scanned: symbolic link 1 (src/linkdir/)`.
 
 A taint fixpoint timeout depends on load, so the same file can lose its taint
 matches on one run and not on the next; the run that lost them says so, and the
 retry pass (above) re-runs the file alone before it is recorded lost.
 
-### Scope (decisions D6 and D6')
+### Scope (decisions D6 and D5-2)
 
 Semgrep's JSON names the files it evaluated (`paths.scanned`) and nothing
 about the ones it did not. Fendix therefore lists the files the run was meant
@@ -243,78 +264,129 @@ file under `<code_path>`, or every changed file of a `--diff` scan, with an
 extension of the packs' languages in any letter case (`.py`, `.pyi`, `.js`,
 `.jsx`, `.cjs`, `.mjs`, `.ts`, `.tsx`, `.java`, `.go`, which Semgrep 1.182.1
 selects when written in lower case, and `.cts`, `.mts`, `.es6`, `.vue`, which
-it does not select: those are run in the extensions pass), outside `.git/`, not
-reached through a link. It then compares that list with `paths.scanned`:
+it does not select: those are run in the extensions pass), except the root
+`.git` directory (below) and what is reached through a link. It then compares
+that list with `paths.scanned`:
 
-- a file over 1048576 bytes (`--max-target-bytes`) that nothing in it shows to
-  be generated, one that cannot be opened, a directory that cannot be listed,
-  a file Semgrep could not parse (decision D1'), and a file absent from
-  `paths.scanned` is lost evaluation, recorded `failed` / `execution_error`
-  with the files named (the findings of the rest of the run are kept). A
-  document with no `paths.scanned` list loses every file it was meant to
-  evaluate;
-- a path declared out of scope on evidence (decision D6', below) is never a
-  gap: it is listed by name, with its reason, in the `ok` detail and,
-  complete, in `metadata.coverage.limitations`.
+- **Every supported file at or below 1048576 bytes is evaluated, whatever it
+  looks like.** Minified, vendored, generated, compiled, source-map, test and
+  fixture code are in scope, and so is code under `node_modules`, a virtualenv,
+  `site-packages`, `vendor`, `target`, `build`, `dist` or `.next`. Nothing is
+  excluded for a banner or header (`/*! jQuery v3.6.0 */`, `@generated`, `Code
+  generated ... DO NOT EDIT.`), for a file or directory name (`*.min.js`,
+  `node_modules`), for a marker file (`pyvenv.cfg`, `conda-meta`,
+  `.yarn-integrity`, `.package-lock.json`, `modules.txt`, a `*.dist-info` with a
+  `RECORD`), for a large literal, for line statistics, or for how the code looks.
+  A file's head, banner or name can be written by anyone who can commit to the
+  repository, and a first-party handler can sit beside or inside any of them, so
+  none is evidence about the rest of the file. This supersedes the round-4 rule
+  (decision D6'), which classified such files by evidence and left them unread.
+- An over-cap or unreadable in-scope file is lost evaluation for Semgrep: a file
+  over 1048576 bytes, one that cannot be opened, a directory that cannot be
+  listed, a file Semgrep could not parse (decision D1' and C4B-27), and a file
+  absent from `paths.scanned`. Semgrep is recorded `failed` / `execution_error`
+  with the files named (the findings of the rest of the run are kept). A document
+  with no `paths.scanned` list loses every file it was meant to evaluate. Nothing
+  is dropped silently.
 
-**Evidence, never a name.** A directory is left out only when it holds the
-markers of installed or built code (`go/internal/scope/dirs.go`), whatever it
-is called, and a directory merely called `node_modules`, `vendor`, `dist`,
-`build`, `target` or `.next` is walked. The reasons, each in the `declared out
-of scope` segment:
+**What is declared out of scope.** Two things only, listed by name with their
+reason in the `ok` detail and, complete, in `metadata.coverage.limitations`:
 
-| Reason | Evidence read from the directory |
+| Reason | Rule |
 |---|---|
-| `installed npm packages` | a `node_modules/` with `.package-lock.json`, `.yarn-integrity` or `.modules.yaml`; or `node_modules/<pkg>` (or `@scope/<pkg>`) whose `package.json` names exactly that package and a version |
-| `python virtualenv` | `pyvenv.cfg` with a `home =` line, or `conda-meta/history`, under any directory name |
-| `installed python packages` | `site-packages` or `dist-packages` with a `*.dist-info` holding `RECORD` and `METADATA` |
-| `go vendor tree` | `vendor/modules.txt` |
-| `composer vendor tree` | `vendor/composer/installed.json` and `vendor/autoload.php` |
-| `cargo build output` | `target/CACHEDIR.TAG` with Cargo's signature |
-| `maven build output` | `target/` beside a `pom.xml`, holding `maven-status`, `maven-archiver` or `surefire-reports` |
-| `gradle build output` | `build/` beside a `build.gradle`, `build.gradle.kts`, `settings.gradle` or `settings.gradle.kts`, holding `classes`, `libs`, `tmp`, `reports`, `generated`, `intermediates` or `kotlin` |
-| `next.js build output` | `.next/` with `BUILD_ID` and `build-manifest.json` |
-| `npm cache` | `.npm/_cacache` |
-| `setuptools build output` | `build/` beside `setup.py` or `pyproject.toml`, holding `lib` and a `bdist.*` or `temp.*` directory |
+| `symbolic link` | a link to a directory, or to a source file of a pack language, which Semgrep never follows. A directory link is listed with a trailing `/`: `declared out of scope, not scanned: symbolic link 1 (linked/x.py)` |
+| `lockfile` | a recognised lockfile: its exact base name is on a closed list **and** its whole content parses as that format (below). |
 
-A file is left out only on content read from it (`go/internal/scope/classify.go`).
-Only a JavaScript or TypeScript file under the size cap whose verdict is
-`minified` or `vendored library` is skipped (one `--exclude` each); a
-`generator header` or `compiled output` file under the cap is still scanned, so
-that excluding more than before never weakens detection. A file over the cap
-with any of these verdicts is declared out of scope instead of lost:
+The `lockfile` list is closed: `package-lock.json`, `npm-shrinkwrap.json`,
+`yarn.lock` (classic and Berry), `pnpm-lock.yaml`, `poetry.lock`,
+`Pipfile.lock`, `Cargo.lock`, `go.sum`, `composer.lock`, `Gemfile.lock`. The
+recognizer (`go/internal/scope/lockfile.go`, `scope.ClassifyFile`) reads to the end
+of the file, up to 32 MiB, and accepts only the format's own keys, sections and line
+shapes with values limited to the characters package names, versions, URLs and
+hashes are written in; a file with a listed name that starts like a lockfile and
+holds source code or an unknown key after it is not a lockfile and is in scope.
+Ten other names round 4 accepted (`bun.lockb`, `deno.lock`, `pdm.lock`,
+`uv.lock`, `mix.lock`, `pubspec.lock`, `Podfile.lock`, `packages.lock.json`,
+`gradle.lockfile`, `flake.lock`) are no longer recognised and are scanned,
+because none has a strict whole-content grammar here. Limits: a package name, a
+version or a URL is free text within its character set, so a secret written as a
+package name inside an otherwise well-formed lockfile would still be skipped if an
+analyzer applied the exclusion. **In this tree no analyzer calls the recognizer**
+(a lockfile has no pack-language extension, so the Semgrep planner never targets
+one, and the secrets scanner and textscan read it like any other file): the
+`lockfile` reason is a documented policy and a tested function, and it is never
+written today. Whether the secrets scanner and textscan apply it is an open owner
+decision.
 
-| Reason | Evidence read from the file |
-|---|---|
-| `lockfile` | a package manager's exact lockfile name (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `poetry.lock`, `Pipfile.lock`, `composer.lock`, `Gemfile.lock`, ...) **and** content that parses as that lockfile's format |
-| `source map` | a `*.map` file that is a version-3 source map with a string `mappings` |
-| `minified` | JavaScript, TypeScript or CSS in which at least 90% of the bytes lie in lines over 250 bytes, those lines hold at least 1024 bytes, at least one byte in twenty of them is `;`, `{`, `}`, `(`, `)` or `=`, and at most 40 other lines are non-blank |
-| `vendored library` | all three of: a leading comment whose **subject** is a known library with a version (`jQuery v3.6.0`, `Bootstrap v3.1.1`, `Lodash <https://lodash.com/>`; the table has jQuery, Bootstrap, Underscore, lodash, Backbone, Moment, Angular, React, Vue, D3, Chart.js, Popper, highlight.js, Hammer, Zepto, Modernizr, Handlebars, Select2, DataTables, Leaflet, Knockout, Highcharts, Socket.IO, and the three.js, Ace and pdf.js builds); the library's own identifier at least three times in the 64 KiB after the banner; and a size of at least 8 KiB whose body reads no HTTP request (`req.query`, `request.body`, ...) and imports none of `express`, `koa`, `fastify`, `http`, `child_process`. A header that only mentions a library, an SPDX line, or any `/*!` banner with a version is not that, and neither is a library the table does not list: those files are in scope |
-| `generator header` | in the first 25 lines, comment lines only: `// Code generated ... DO NOT EDIT.`, `@generated`, the protocol buffer compiler's header or a `protoc-gen-` plugin, "do not edit" beside "generated", `Generated by <tool> <version>`, Thrift, OpenAPI Generator and swagger-codegen headers |
-| `compiled output` | a trailing `sourceMappingURL` comment or a webpack bootstrap |
+**The `.git` directory.** `<code_path>/.git` is not source and is skipped, but only
+when its layout is real: a regular `HEAD` file plus `objects/` and `refs/`
+directories, all probed with `Lstat` only (nothing is opened, no link is followed).
+The skip is quiet (it is not listed in any detail) and Semgrep is told with one
+anchored `--exclude /.git`. A `.git` or an `objects` directory anywhere else, a
+`.git` whose layout is forged or incomplete (a `HEAD` alone, a link for `objects`),
+and a `.git` that is a file or a link are ordinary content and are scanned. An
+uploaded archive can still carry a real-layout `.git` at its root, whose contents
+are then not analysed (accepted, decision D5-2).
 
-A file called `app.min.js` that is ordinary source, or `package-lock.json` that
-is not a lockfile, has no such evidence and is scanned. The minified thresholds
-were measured on 26,272 JavaScript, TypeScript and CSS files (mostly the
-installed packages of four projects) and 1,175 first-party files; the
-measurement is in
-`go/internal/scope/classify.go`, and `FENDIX_SCOPE_CORPUS` in `corpus_test.go`
-re-runs it on a tree.
+**Probing never blocks and never leaves the root.** The readability probe of every
+target, the read of a partially parsed file and of a finding's evidence line use
+`scope.OpenRegular`: `O_NONBLOCK|O_NOFOLLOW|O_CLOEXEC` and an `fstat` that must say
+regular file (on other platforms `Lstat` plus `SameFile`). A named pipe or special
+file is unreadable, so it is lost evaluation and the scan completes; a link is not
+followed out of the scan root.
 
-One more kind is listed, not judged:
+**What no longer appears.** The reasons `minified`, `vendored library`,
+`generator header`, `compiled output`, `source map`, `test/fixture path`,
+`extension not selected`, `installed npm packages`, `python virtualenv`,
+`installed python packages`, `go vendor tree`, `composer vendor tree`, `cargo
+build output`, `maven build output`, `gradle build output`, `next.js build
+output`, `npm cache`, `setuptools build output`, `generated artifact` and
+`vendored/build dir` are never written. A consumer must still tolerate them inside
+a declared segment, which it never reads for loss, because a report from an older
+engine can carry them.
 
-- `symbolic link`: a link to a directory, or to a source file of a pack
-  language, which Semgrep never follows.
+**No installed dependency tree is excluded (owner amendment A1).** The owner
+allowed excluding installed third-party code only on independently verified
+provenance, and a first attempt (a Go module directory excluded when its files
+hashed to the `go.sum` `h1:` line, listed as `verified go module (lockfile hash)`)
+was removed before any release: `go.sum`, `package-lock.json`, a dist-info
+`RECORD` and `vendor/modules.txt` are all written by the repository being scanned,
+so a self-consistent forged pin (a `third_party/example.com/lib@v1.0.0/` directory
+holding a credential and a SQL injection, plus its own `h1:` hash in `go.sum`)
+hid first-party code and the scan read complete (measured by the round-5 engine
+owner on the deps5 tree: 0 findings, exit 0; after the removal 4 findings, exit
+1). An offline scan has no authority outside the repository to check a pin
+against, so nothing is excluded: a Go module cache, `node_modules` and a
+virtualenv are analysed in full. The text `verified go module (lockfile hash)`
+never appears in a report. An online scheme (a checksum-database lookup, or
+re-fetching the tarball or wheel by its lockfile integrity hash and comparing file
+by file) would need network access on the hosted worker and a new coverage reason,
+and is an open owner decision.
 
-Two things that were once listed here are no longer left out at all. A test or
-fixture file used to be listed as `test/fixture path`, because every rule of its
-language excluded it by the pack's `paths.exclude`; the engine now strips those
-filters from the packs it runs (see "How It Works"), so such a file is
-evaluated, and `test/fixture path` is no longer written. A source file whose
-extension Semgrep does not select (`APP.JS`, `.mts`) used to be listed as
-`extension not selected`; it is evaluated in the extensions pass, and
-`extension not selected` is no longer written. (A consumer must still tolerate
-both inside a declared segment, which it never reads.)
+**Cost, measured.** With no exclusion Semgrep evaluates every minified bundle and
+installed dependency tree in scope. The round-5 budget owner measured it with real
+Semgrep 1.182.1 on a VM shared with other jobs, one run each, at `--cpus=2`
+(these figures are theirs, in `review-reports/fendix-remediation/work/budget5.md`
+with the raw outputs; they were not re-run for these notes, and a 2x difference is
+real while a few seconds are noise). Round-4b checkpoint (exclusions) versus this
+tree: WebGoat 21 to 33 s became 63 to 70 s and its Semgrep status `ok` became
+`failed` / `execution_error` (a skipped line of code in a minified bundle, below);
+`gogs` 50 to 55 s became 305 s, `failed` / `timeout`, with 1 JavaScript file
+(the pathological bundle) named lost after heavy-file isolation, where before the
+isolation 230 files, a first-party `gogs.js` among them, were lost with it; the
+backend repository 22 s became 36 s, `ok` became `failed` / `execution_error` for
+the same reason; juice-shop 34 s became 50 s; a synthetic tree of 6,196 first-party
+and installed JavaScript and TypeScript files (92 MB) took 313 s and ended `failed` / `timeout` with
+657 extension-pass files named lost; and the whole frontend checkout with
+`node_modules` and `.next` (3.4 GB, 100,000 files) took 533 s, peak 2.7 GiB, with 31,955
+JavaScript files named lost (the root run of the group did not finish in its
+share of the stage). Two scans at once in one cgroup of 2 CPUs and no memory
+limit (the production shape) peaked at 1,076 MiB; no run in the matrix was killed
+by the kernel for memory. **A scan of a repository that commits or installs a
+large JavaScript tree can therefore read `semgrep` `failed` (`timeout`), and the
+loss is named, never silent.** The owner decides whether to raise the budget,
+optimise the five slow JavaScript taint rules, or accept the cost; no exclusion
+was added.
 
 The segment is written within what is left of the 240 bytes, naming fewer files
 and keeping the counts, and an `ok` detail is never cut with `…`, which the
@@ -324,8 +396,8 @@ loss patterns inside it, so a file named like a loss message cannot change a
 verdict; every file name in a detail is sanitised (`;`, `…`, control characters
 and bidirectional controls become `?`, and a name is cut to 80 bytes).
 
-In a `--diff` scan the same classification applies to the changed files: a
-changed file under such a directory, or reached through a link, is listed.
+In a `--diff` scan the same rules apply to the changed files: a changed file
+reached through a link is listed.
 
 ### `nosemgrep`
 

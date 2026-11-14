@@ -326,12 +326,20 @@ interpreter cannot parse (a `match` statement under Python 3.9, for example) mak
 that analyzer `failed` in `metadata.scanner_status`, with the files named, the
 findings from the rest of the tree kept, and the scan's coverage incomplete
 (`--fail-on-scanner-error` exits 2; the GitHub Action with `require-analyzers`
-fails). A directory or file is left out of scope only on evidence read from it
-(an installed-package tree, a virtualenv, a minified or vendored-library
-bundle, a generated file with its generator header, a lockfile), never because
-of its name, and everything left out is listed with its reason: in the
-analyzer's `detail` after `declared out of scope, not scanned:` and in full in
-`metadata.coverage.limitations`. A `// nosemgrep` comment removes a Semgrep
+fails). **Every supported in-scope file at or below the size cap is analysed, whatever it
+looks like**: minified, vendored, generated and test code, and code under
+`node_modules`, a virtualenv or `vendor`, are scanned, because a banner, a header,
+a name or a marker file proves nothing about the rest of a file. Nothing is
+excluded for them. What is left out is a symbolic link and, by policy, a recognised
+lockfile (a closed list of exact names whose whole content parses as that format;
+no analyzer applies it yet), plus a real `<root>/.git`, skipped quietly; everything
+left out except `.git` is listed with its reason: in the analyzer's `detail` after
+`declared out of scope, not scanned:` and in full in
+`metadata.coverage.limitations`. No installed-dependency tree is excluded either (nothing
+the repository writes proves its own `node_modules` is third-party). This costs scan time
+on repositories with large front-end or installed-dependency trees, and the Semgrep stage
+can end `failed` / `timeout` with the unfinished files named: measured figures are in
+`docs/checks/semgrep.md`, "Scope". A `// nosemgrep` comment removes a Semgrep
 result only visibly: the result is listed. A source file Semgrep cannot read as JavaScript, such as a Vue
 single-file component (`.vue`), is lost evaluation too. See
 [`docs/checks/semgrep.md`](docs/checks/semgrep.md),
@@ -355,7 +363,7 @@ fendix scan \
 
 When the black-box scanner and static analyzer both identify the same vulnerability, Fendix merges them into a single `correlated` finding with elevated confidence.
 
-**Active probes and coverage.** With `--enable-active`, a probe the target did not answer is not an evaluation. Each probe is attributed from evidence about what happened on the wire (never from the error type alone) to the scanner, the target or an unknown origin, and the report counts them in `metadata.coverage.active_probes` (`attempted`, `evaluated`, `inconclusive`, `unknown_origin`, `scanner_failed`, with the reasons and the checks and endpoints not evaluated). A target that resets, stalls or rate-limits a probe leaves it `inconclusive`; that is not a scanner gap and `active-probes` stays `ok`, but it is never evidence that the endpoint is safe, fixed or resolved. A scanner-side or unknown-origin failure makes `active-probes` `failed`. A 429, 502, 503 or 504, a reset after the connection or a timeout on an accepted connection is retried twice (after 1 s, then 2 s) within the scan's deadline and request budget. `coverage.configured_complete` is never proof that every probe was evaluated: read `active_probes` beside it. See [`docs/schema.md`](docs/schema.md).
+**Active probes and coverage.** With `--enable-active`, a probe the target did not answer is not an evaluation. Each probe is attributed from evidence about what happened on the wire (never from the error type alone) to the scanner, the target or an unknown origin, and the report counts them in `metadata.coverage.active_probes` (`attempted`, `evaluated`, `inconclusive`, `unknown_origin`, `scanner_failed`, with the reasons and the checks and endpoints not evaluated). A target that resets, stalls or rate-limits a probe leaves it `inconclusive`; that is not a scanner gap and `active-probes` stays `ok` while at least one probe was evaluated, but it is never evidence that the endpoint is safe, fixed or resolved. A probe the target answered 401, 403, 404 or 410 is **gated**: it is not evaluated and is evidence of nothing (counted in `coverage.active_probes.gated`, by status, and inside `inconclusive`). A pass in which **no probe was evaluated** (every probe gated or unanswered) is `failed` / `no_endpoints`, `coverage: incomplete (active-probes)`, and exits 2 under `--fail-on-coverage-gap` or `--require-analyzers active-probes`; `--require-analyzers active-probes` is never satisfied by 0 evaluated of N attempted. A pass ended by `--max-duration` or `--max-requests` is `failed` and `coverage.active_probes.cut_short` names the flag and its value; a probe lost to Fendix's own deadline or budget is never read as the target's doing. The stderr summary adds `active probes: A attempted, E evaluated, N not answered by the target, G gated (403 4, 404 2), U unknown-origin, F scanner-failed`. A scanner-side or unknown-origin failure makes `active-probes` `failed`. A 429, 502, 503 or 504, a reset after the connection or a timeout on an accepted connection is retried twice (after 1 s, then 2 s) within the scan's deadline and request budget. `coverage.configured_complete` is never proof that every probe was evaluated: read `active_probes` beside it. See [`docs/schema.md`](docs/schema.md).
 ### Import findings from other scanners
 
 Normalize SARIF 2.1.0 from CodeQL, Semgrep, Trivy, or another scanner and run
@@ -477,7 +485,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix scan` | Run a security scan against an API, source code, or both |
 | `fendix import <file.sarif>...` | Normalize and gate on third-party SARIF 2.1.0 findings |
 | `fendix report` | Re-render a saved JSON findings file to another format |
-| `fendix verify <id>` | Re-test one finding from a saved baseline: `resolved` (exit 0) for a secrets-scanner finding only when its credential was searched for across `--code` (text and binary files, pruned directories, archives, several encodings) and found nowhere; `unknown` (exit 2) for every other file-anchored finding and for every active-probe finding, whatever the endpoint now returns |
+| `fendix verify <id>` | Re-test one finding from a saved baseline: `resolved` (exit 0) for a secrets-scanner finding only when its credential was searched for across `--code` (text and binary files, pruned directories, archives, several encodings) and found nowhere; `unknown` (exit 2) for every other finding (a passive URL finding whose header is now set and a dependency no longer listed included) and for every active-probe finding, whatever the endpoint now returns; a correlated finding is never `resolved` on an HTTP status (a 401, 403, 404 or 410 is `unknown`), and HTTP status alone never resolves anything, and a value built at run time is out of scope ("not detected" is not "fixed") |
 | `fendix demo` | Spin up OWASP Juice Shop in Docker and scan it — a real report in <60s |
 | `fendix init` | Generate CI workflow + `.fendix.yaml` + `.fendix-ignore` starters |
 | `fendix hook` | Manage the git pre-commit hook (`install` / `status` / `uninstall`) |

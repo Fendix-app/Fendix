@@ -8,46 +8,62 @@ files a rule reads: for example Go rules read `.go`, the JavaScript rules read
 `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs` and `.cjs`. A file no rule applies to is
 not read and is not listed.
 
-It prunes a directory only on evidence in the directory itself (decision D6'):
-the same markers the secrets scanner and Semgrep use (a `node_modules/` with
-`.package-lock.json`, a directory with `pyvenv.cfg`, a Cargo `target/`, and so
-on; see [`semgrep.md`](semgrep.md)). A directory that is merely called
+Extensions and names are matched case-insensitively (`APP.JS`, `Main.GO`,
+`K8S.YAML`, `DOCKERFILE`), and the JavaScript set is `.js`, `.jsx`, `.ts`,
+`.tsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.es6` and `.vue`, the set the Semgrep
+planner treats as JavaScript or TypeScript source (round 5, C4B-26: `eval(...)` in
+`a.mts`, `a.es6` or `APP.JS` was reported by no analyzer before).
+
+**No directory is pruned for its name or its markers** (decision D5-2). A
 `node_modules`, `vendor`, `build`, `dist`, `target`, `.next`, `.cache` or
-`__pycache__` is walked. Before D6' the scanner skipped those names (and
-`.nuxt`, `.svelte-kit`, `.pytest_cache`, `.venv`) whatever they held. `.git/`
-is skipped without being listed. The scan root itself is never pruned:
-`--code ./build` is the scope the user chose.
+`__pycache__` directory, a directory with `pyvenv.cfg`, a `node_modules/` with
+`.package-lock.json` or a Cargo `target/` is walked, and its files are read, minified,
+vendored and generated code included. Round 4 pruned them on marker files, which
+anyone who can commit can write. The only directory skipped is `<root>/.git`, and
+only when it has a real layout (a regular `HEAD` file and `objects/` and `refs/`
+directories, probed with `Lstat` only): quietly, without being listed. A `.git`
+anywhere else, or one with a forged layout, is ordinary content. The scan root
+itself is never pruned: `--code ./build` is the scope the user chose. Every file is
+opened through `scope.OpenRegular` (`O_NONBLOCK|O_NOFOLLOW`, `fstat` must say
+regular file), including the binary sniff: a named pipe called `fifo.js` is
+`unreadable` (lost evaluation, the scan goes on) and no longer blocks the whole scan
+(round 5, redteam5-11: before the change the scan hung in the sniff; after it the
+scan exits 0 with `textscan failed ... 1 unreadable (fifo.js)`, run by the engine
+owner in the engine image). As with the
+secrets scanner, reading installed dependency trees costs time (the round-5 verify
+owner measured the frontend checkout's `node_modules` plus `.next` at 0.34 s for
+textscan before the change and 21.7 s after, once, on a laptop; not re-measured for
+these docs); whether to add a literal prefilter or an explicit exclusion is an open
+owner decision, and no installed-dependency tree is excluded (owner amendment A1:
+the provenance records that could justify it are written by the scanned repository).
 
-## What `ok` means: scope (decisions D6, D6')
+## What `ok` means: scope (decisions D6, D5-2)
 
-- A file a rule applies to that is over 1048576 bytes and that nothing in it
-  shows to be generated, cannot be opened or read, or is not text (a NUL byte
-  in its first 512 bytes), and a directory the walk cannot list, is lost
-  evaluation: `textscan` is `failed` / `execution_error` with the detail
+- A file a rule applies to that is over 1048576 bytes (**whatever it looks like**),
+  cannot be opened or read, or is not text (a NUL byte in its first 512 bytes), and a
+  directory the walk cannot list, is lost evaluation: `textscan` is `failed` /
+  `execution_error` with the detail
   `lost evaluation: <N> in-scope files not read: <k> over 1048576 bytes
   (<path>, ...), <k> unreadable (<path>, ...), <k> not text (NUL bytes)
   (<path>, ...)` (each kind only when it applies, at most three paths each,
   `+<m> more` for the rest; an unreadable directory is named with a trailing
   `/`). The findings from the rest of the tree are kept, and the scan reads
-  incomplete.
-- A file over the cap, or one with a NUL byte, whose content shows a generator
-  wrote it (a lockfile that parses as one, a source map, a minified or
-  vendored-library bundle, a generator header; see [`semgrep.md`](semgrep.md)),
-  a directory with the evidence of installed or built code, and a link to
-  something outside the scan root are declared out of scope and never a gap.
-  `textscan` stays `ok`, and its detail lists them with the reason: `declared
-  out of scope, not scanned: installed npm packages 1 (node_modules/)`
-  (measured), and, beside a loss, `lost evaluation: 1 in-scope file not read: 1
-  over 1048576 bytes (big/huge.js); declared out of scope, not scanned:
-  vendored library 1 (big/jquery-big.js), installed npm packages 1
-  (node_modules/)` (measured, `failed` / `execution_error`). The complete lists
-  are in `metadata.coverage.limitations`. A generated file under the cap is
-  scanned like any other file; it is not excluded by its name.
-- In a `--diff` scan a changed file under a pruned directory is skipped, and
-  the directory is listed with its reason, as a full scan lists it (measured:
-  `declared out of scope, not scanned: installed npm packages 1
-  (node_modules/)` for a changed `node_modules/leftpad/index.js`); a changed
-  symbolic link to something outside the root is listed.
+  incomplete. The hosted backend treats this lead as repository-caused (incomplete,
+  no automatic refund).
+- A link to something outside the scan root is declared out of scope and never a
+  gap. `textscan` stays `ok`, and its detail lists it with the reason: `declared
+  out of scope, not scanned: symbolic link 1 (src/linkdir/)` (measured), and,
+  beside a loss, `lost evaluation: 1 in-scope file not read: 1 over 1048576 bytes
+  (big.js); declared out of scope, not scanned: symbolic link 1 (src/linkdir/)`
+  (measured, `failed` / `execution_error`). The complete lists are in
+  `metadata.coverage.limitations`. A recognised lockfile (the closed list in
+  [`semgrep.md`](semgrep.md), "Scope") is the only content-based exclusion the
+  policy allows; textscan does not apply it in this tree, so no `lockfile` entry is
+  written today. A generated, minified or vendored file under the cap is scanned
+  like any other file.
+- In a `--diff` scan a changed file is read like a changed file of a full scan (a
+  changed `node_modules/leftpad/index.js` is scanned); a changed symbolic link
+  to something outside the root is listed.
 
 When `--code` is itself a symbolic link, the directory it resolves to is
 scanned; links below it are never followed.
