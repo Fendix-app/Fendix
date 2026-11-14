@@ -309,11 +309,10 @@ func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule, cov *scope
 		return nil
 	}
 	if info.Size() > textMaxFileBytes {
-		if v := scope.ClassifyFile(path, rel, info.Size()); !v.None() {
-			cov.Exclude(v.Reason, secrets.SafeName(rel))
-		} else {
-			cov.TooLarge(secrets.LostName(rel))
-		}
+		// Over the cap is lost evaluation whatever the file looks like
+		// (contract C6): a banner or a layout is not evidence that nothing in
+		// it matters.
+		cov.TooLarge(secrets.LostName(rel))
 		return nil
 	}
 	// Skip binary blobs. Reading PNGs/jars/sqlite line-by-line against every
@@ -325,9 +324,6 @@ func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule, cov *scope
 	switch {
 	case err != nil:
 		cov.Unreadable(secrets.LostName(rel))
-		return nil
-	case looksBinary && !scope.ClassifyFile(path, rel, info.Size()).None():
-		cov.Exclude(scope.ClassifyFile(path, rel, info.Size()).Reason, secrets.SafeName(rel))
 		return nil
 	case looksBinary:
 		cov.NotText(secrets.LostName(rel))
@@ -382,7 +378,7 @@ var dockerfileNumericRe = regexp.MustCompile(`^[0-9]+$`)
 // when the image actually drops privileges. Cheap whole-file pre-pass
 // so the per-line scan can stay stateless.
 func dockerfileHasUSER(path string) bool {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return false
 	}
@@ -414,7 +410,7 @@ func dockerfileHasUSER(path string) bool {
 // Returns nil (not an empty map) when the file declares no aliases, so the
 // caller can skip installing the predicate entirely.
 func dockerfileStageAliases(path string) map[string]struct{} {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return nil
 	}
@@ -510,7 +506,7 @@ func dockerfileRefIsPinned(ref string, aliases map[string]struct{}) bool {
 // rules. We use bufio.Scanner with a generous buffer to handle
 // auto-generated source files with long lines.
 func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +566,7 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 			continue
 		}
 		if content == nil {
-			content, _ = os.ReadFile(path)
+			content, _ = scope.ReadRegular(path, textMaxFileBytes)
 		}
 		if !r.FileGuard.Match(content) {
 			suppressRule[r.ID] = true
@@ -582,7 +578,7 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 	var fileConsts map[string]struct{}
 	constsOf := func() map[string]struct{} {
 		if fileConsts == nil {
-			src, _ := os.ReadFile(path)
+			src, _ := scope.ReadRegular(path, textMaxFileBytes)
 			fileConsts = fileStringConstants(src, langOf(path))
 		}
 		return fileConsts
@@ -661,41 +657,54 @@ func pathRel(rootDir, path string) string {
 	return filepath.ToSlash(path)
 }
 
-// HasGoExtension is a small exported helper used by Applies funcs.
-func HasGoExtension(path string) bool {
-	return strings.HasSuffix(path, ".go")
-}
+// Extension matching is case-insensitive (APP.JS, Server.GO and Config.YAML are
+// source) and the JavaScript/TypeScript set is complete: the same extensions the
+// Semgrep target planner treats as JavaScript or TypeScript source, including
+// .mts, .cts, .es6 and .vue (C4B-26). Before round 5 the match was
+// case-sensitive and missed those, so `eval` in an .es6 file was reported by no
+// analyzer.
 
-// HasJSExtension reports JavaScript / TypeScript files.
-func HasJSExtension(path string) bool {
-	for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"} {
-		if strings.HasSuffix(path, ext) {
+// hasAnySuffixFold reports whether path ends with one of exts, ignoring case.
+func hasAnySuffixFold(path string, exts ...string) bool {
+	lower := strings.ToLower(path)
+	for _, ext := range exts {
+		if strings.HasSuffix(lower, ext) {
 			return true
 		}
 	}
 	return false
 }
 
+// HasGoExtension is a small exported helper used by Applies funcs.
+func HasGoExtension(path string) bool {
+	return hasAnySuffixFold(path, ".go")
+}
+
+// jsExtensions are the JavaScript and TypeScript source extensions.
+var jsExtensions = []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".es6", ".vue"}
+
+// HasJSExtension reports JavaScript / TypeScript files.
+func HasJSExtension(path string) bool {
+	return hasAnySuffixFold(path, jsExtensions...)
+}
+
 // HasJavaExtension reports Java source files (v0.27 Java regex SAST).
 func HasJavaExtension(path string) bool {
-	return strings.HasSuffix(path, ".java")
+	return hasAnySuffixFold(path, ".java")
 }
 
 // IsDockerfile reports paths the Dockerfile rules apply to.
-// Matches `Dockerfile`, `Dockerfile.<anything>`, and `*.dockerfile`.
+// Matches `Dockerfile`, `Dockerfile.<anything>` and `*.dockerfile`, in any case.
 func IsDockerfile(path string) bool {
-	base := filepath.Base(path)
-	if base == "Dockerfile" || strings.HasPrefix(base, "Dockerfile.") {
-		return true
-	}
-	return strings.HasSuffix(strings.ToLower(base), ".dockerfile")
+	base := strings.ToLower(filepath.Base(path))
+	return base == "dockerfile" || strings.HasPrefix(base, "dockerfile.") || strings.HasSuffix(base, ".dockerfile")
 }
 
 // IsYAML reports paths with a YAML extension. Caller (the k8s rule)
 // is responsible for checking content shape (`apiVersion:` + `kind:`)
 // before flagging anything.
 func IsYAML(path string) bool {
-	return strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")
+	return hasAnySuffixFold(path, ".yaml", ".yml")
 }
 
 // isBinaryFile sniffs the first 512 bytes of path and reports whether
@@ -705,7 +714,7 @@ func IsYAML(path string) bool {
 // (false, nil) when the file can't be opened — the caller will then
 // try to scan it (and probably fail similarly), which is fine.
 func isBinaryFile(path string) (bool, error) {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return false, err
 	}

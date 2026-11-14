@@ -234,6 +234,297 @@ func shardDeadlines(shards []shard, pass1 time.Duration) []time.Duration {
 	return out
 }
 
+// Round 5, R-008 residuals 1 and 2: the heaviest files of a group run alone.
+//
+// Semgrep prints one JSON document at the end of a run, so a run killed at its
+// deadline keeps nothing. Splitting by language group isolated one language
+// from another, but a group is still all or nothing: with every in-scope file
+// evaluated (decision D5-2), gogs' JavaScript group is 230 files and 5.4 MB
+// (semantic-ui, mermaid, pdf.js, codemirror, jquery and the first-party
+// public/js/gogs.js), it did not finish in the stage budget, and the one
+// first-party file was lost with the bundles.
+//
+// What blows a budget is a few big files, not many small ones: on gogs the
+// 461 KB openjpeg_nowasm_fallback.js alone costs more than 160 s (five taint
+// rules each exceed 100 s on it, see docs/semgrep-rules.md), while 223 other
+// files finish in 11 s. A group of more than ChunkBytes of source therefore
+// runs the files of HeavyFileBytes or more, the maxHeavyFiles largest of the
+// stage, each in an invocation of its own, and everything else as the group's
+// one root run with those files excluded. A heavy file that does not finish
+// loses only itself, which falls out of paths.scanned and is named lost
+// evaluation, and the stage is recorded failed/timeout. This is an ordering,
+// not an exclusion: no file is left out and nothing is chosen by its name or
+// appearance, only by its size.
+//
+// Splitting the rest further was measured and does not pay: Semgrep resolves
+// explicit file targets one process each (about 0.14 s a file) and an
+// --include list is matched against every file of the tree, so a 1,000-file
+// chunk of a 9,000-file tree costs 22 s before it analyses anything. Cutting
+// gogs' and a node_modules tree's bulk into chunks cost more than it saved.
+
+// DefaultChunkBytes is the in-scope source size above which a group or an
+// unsplit tree isolates its heaviest files. A tree at or under it is one
+// invocation over the root, exactly as before.
+const DefaultChunkBytes int64 = 3 << 20
+
+// DefaultHeavyFileBytes is the size from which a file of such a group runs in
+// an invocation of its own, and maxHeavyFiles how many of a stage do (the
+// largest): each costs Semgrep's start-up, about 2-3 s.
+const (
+	DefaultHeavyFileBytes int64 = 192 << 10
+	maxHeavyFiles               = 8
+)
+
+// EnvChunkBytes is the group size from which heavy files are isolated, in
+// bytes; -1 never isolates. EnvHeavyFileBytes is the size of a heavy file.
+const (
+	EnvChunkBytes     = "FENDIX_SEMGREP_CHUNK_BYTES"
+	EnvHeavyFileBytes = "FENDIX_SEMGREP_HEAVY_FILE_BYTES"
+)
+
+// unit is one pass-1 invocation of the plan: a language group, or an unsplit
+// tree, run over the root; or one heavy file of such a group, run alone.
+type unit struct {
+	label   string
+	group   string
+	configs []string
+	// includes, for a heavy file: the root is scanned with one anchored
+	// --include naming exactly that file. Semgrep resolves that in a single
+	// targeting pass, where an explicit target costs a process.
+	includes []string
+	// excludes, for the rest of a group that gave up its heavy files: the
+	// anchored --exclude patterns that name exactly those files.
+	excludes []string
+	nfiles   int // files this unit is responsible for, for the report
+	bytes    int64
+	// largest is the size of the unit's biggest file: what makes a unit slow
+	// is a big file (a minified bundle, a taint fixpoint), not many small ones,
+	// so units run in order of it.
+	largest int64
+}
+
+// chunk reports whether the unit is a heavy file run alone.
+func (u unit) chunk() bool { return u.includes != nil }
+
+// includePatternSafe reports whether rel can be passed as one anchored
+// --include pattern and select exactly that file, and as one anchored --exclude
+// pattern that names exactly that file. Semgrep reads both as globs, so a name
+// with a glob character or one it may trim is not safe; neither is any
+// non-ASCII byte, whose handling is not worth betting a file's evaluation on.
+// A file that is not safe is never isolated: it stays in its group's root run.
+func includePatternSafe(rel string) bool {
+	if rel == "" || rel[0] == ' ' || rel[len(rel)-1] == ' ' {
+		return false
+	}
+	for i := 0; i < len(rel); i++ {
+		c := rel[i]
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+		switch c {
+		case '*', '?', '[', ']', '{', '}', '\\', '!', '#':
+			return false
+		}
+	}
+	_, ok := excludePattern(rel)
+	return ok
+}
+
+// chunkBytesFromEnv is the group size from which heavy files are isolated:
+// EnvChunkBytes when it is an integer (-1 never isolates, 0 is the default),
+// else DefaultChunkBytes.
+func chunkBytesFromEnv(env func(string) string) int64 {
+	return int64Env(env, EnvChunkBytes, DefaultChunkBytes, -1)
+}
+
+// heavyBytesFromEnv is the size of a heavy file: EnvHeavyFileBytes when it is a
+// positive integer, else DefaultHeavyFileBytes.
+func heavyBytesFromEnv(env func(string) string) int64 {
+	return int64Env(env, EnvHeavyFileBytes, DefaultHeavyFileBytes, 1)
+}
+
+func int64Env(env func(string) string, name string, def, min int64) int64 {
+	raw := strings.TrimSpace(env(name))
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < min {
+		slog.Warn("semgrep: ignoring a budget setting that is not an integer in range", "name", name, "value", raw)
+		return def
+	}
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+// selectedBytes is the size of the files Semgrep selects by their extension,
+// the ones a root run evaluates (the others go to the extensions pass), and
+// the files themselves.
+func selectedBytes(files []string, size map[string]int64) (sel []string, total int64) {
+	for _, rel := range files {
+		if semgrepSelects(rel) {
+			sel = append(sel, rel)
+			total += size[rel]
+		}
+	}
+	return sel, total
+}
+
+// heavyFiles is the set of files that run each in an invocation of their own:
+// the isolable files of at least heavyBytes, the maxHeavyFiles largest of them.
+// The choice is a function of names and sizes only.
+func heavyFiles(files []string, size map[string]int64, heavyBytes int64) map[string]bool {
+	var cand []string
+	for _, f := range files {
+		if size[f] >= heavyBytes && includePatternSafe(f) {
+			cand = append(cand, f)
+		}
+	}
+	sort.SliceStable(cand, func(i, j int) bool {
+		if size[cand[i]] != size[cand[j]] {
+			return size[cand[i]] > size[cand[j]]
+		}
+		return cand[i] < cand[j]
+	})
+	if len(cand) > maxHeavyFiles {
+		cand = cand[:maxHeavyFiles]
+	}
+	set := make(map[string]bool, len(cand))
+	for _, f := range cand {
+		set[f] = true
+	}
+	return set
+}
+
+// planUnits is the plan of pass 1. shards is the per-language split (nil when
+// the tree is not split); rules is the directory holding every pack, run for
+// an unsplit tree. A group whose files total no more than chunkBytes (or any
+// group when chunkBytes < 0) is one root run, as before; a larger one gives up
+// its heaviest files to invocations of their own (heavyFiles) and runs the
+// rest over the root with those files excluded. Units are ordered cheapest
+// first: the bulk, then the heavy files smallest first.
+func planUnits(t Targets, shards []shard, rules, root string, chunkBytes, heavyBytes int64) []unit {
+	type base struct {
+		name    string
+		configs []string
+		files   []string
+		bytes   int64
+		all     int
+	}
+	var bases []base
+	if len(shards) == 0 {
+		sel, total := selectedBytes(t.files, t.size)
+		bases = []base{{name: "source", configs: []string{rules}, files: sel, bytes: total, all: len(t.files)}}
+	} else {
+		for _, sh := range shards {
+			sel, total := selectedBytes(sh.files, t.size)
+			bases = append(bases, base{name: sh.name, configs: sh.configs, files: sel, bytes: total, all: len(sh.files)})
+		}
+	}
+	isolated := func(b base) bool {
+		return chunkBytes >= 0 && b.bytes > chunkBytes && !(len(shards) > 0 && b.name == otherGroup)
+	}
+	// The largest files of the groups that isolate any, at most maxHeavyFiles
+	// in all.
+	var candidates []string
+	for _, b := range bases {
+		if isolated(b) {
+			candidates = append(candidates, b.files...)
+		}
+	}
+	heavySet := heavyFiles(candidates, t.size, heavyBytes)
+	var out []unit
+	for _, b := range bases {
+		var largest int64
+		for _, f := range b.files {
+			if t.size[f] > largest && !heavySet[f] {
+				largest = t.size[f]
+			}
+		}
+		whole := unit{label: b.name, group: b.name, configs: b.configs, nfiles: b.all, bytes: b.bytes, largest: largest}
+		var heavy []string
+		if isolated(b) {
+			for _, f := range b.files {
+				if heavySet[f] {
+					heavy = append(heavy, f)
+				}
+			}
+		}
+		if len(heavy) == 0 {
+			out = append(out, whole)
+			continue
+		}
+		for _, f := range heavy {
+			pattern, _ := excludePattern(f)
+			whole.excludes = append(whole.excludes, pattern)
+			whole.bytes -= t.size[f]
+			whole.nfiles--
+		}
+		out = append(out, whole)
+		for _, f := range heavy {
+			out = append(out, unit{
+				label:    fmt.Sprintf("%s %s", b.name, f),
+				group:    b.name,
+				configs:  b.configs,
+				includes: []string{"/" + f},
+				nfiles:   1,
+				bytes:    t.size[f],
+				largest:  t.size[f],
+			})
+		}
+	}
+	chunked := false
+	for _, u := range out {
+		if u.chunk() {
+			chunked = true
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		// A plan with a heavy file runs the bulk first and the heavy files
+		// smallest first; a plan without keeps the groups' order (fewest
+		// bytes first).
+		if chunked && out[i].largest != out[j].largest {
+			return out[i].largest < out[j].largest
+		}
+		if out[i].bytes != out[j].bytes {
+			return out[i].bytes < out[j].bytes
+		}
+		return out[i].label < out[j].label
+	})
+	return out
+}
+
+// unitDeadlines is shardDeadlines for any plan: the offsets from the start of
+// pass 1 at which each unit's invocation is killed, from the units' sizes and
+// the budget alone.
+func unitDeadlines(units []unit, pass1 time.Duration) []time.Duration {
+	shards := make([]shard, len(units))
+	for i, u := range units {
+		shards[i] = shard{name: u.label, bytes: u.bytes}
+	}
+	return shardDeadlines(shards, pass1)
+}
+
+// unfinishedNames names what a stage did not evaluate, one entry per group:
+// "javascript 31 files". Units are folded by group in plan order.
+func unfinishedNames(lost []unit) []string {
+	var order []string
+	n := map[string]int{}
+	for _, u := range lost {
+		if _, ok := n[u.group]; !ok {
+			order = append(order, u.group)
+		}
+		n[u.group] += u.nfiles
+	}
+	out := make([]string, 0, len(order))
+	for _, g := range order {
+		out = append(out, fmt.Sprintf("%s %s", g, filesNoun(n[g])))
+	}
+	return out
+}
+
 // minShardWindow is the least time a language group's invocation is started
 // with. A group left with less is not run and is reported not evaluated.
 var minShardWindow = 5 * time.Second
@@ -343,6 +634,12 @@ type invocation struct {
 	// (a retry, or the extensions pass): no includes and no declared excludes,
 	// both of which apply to a scan of the root.
 	explicit bool
+	// includes, when set, replace the stage's --include list: the invocation
+	// scans the root and selects exactly these files (a heavy file run alone).
+	includes []string
+	// excludes are anchored --exclude patterns added to the stage's: the heavy
+	// files a group's root run leaves to their own invocations.
+	excludes []string
 	// unknownExt passes --scan-unknown-extensions, so Semgrep evaluates a named
 	// file whose extension it does not select (APP.JS, x.mts).
 	unknownExt bool
@@ -398,7 +695,7 @@ func (st *stage) args(inv invocation) []string {
 		args = append(args, "--config", c)
 	}
 	args = append(args, st.base...)
-	excludes := st.excludes
+	excludes := append(append([]string(nil), st.excludes...), inv.excludes...)
 	if inv.retry || inv.explicit {
 		excludes = nil
 	}
@@ -417,15 +714,42 @@ func (st *stage) args(inv invocation) []string {
 	if inv.unknownExt {
 		args = append(args, "--scan-unknown-extensions")
 	}
+	includes := st.includes
+	if inv.includes != nil {
+		includes = inv.includes
+	}
 	if !inv.retry && !inv.explicit {
-		for _, rel := range st.includes {
-			args = append(args, "--include", rel)
+		for _, rel := range includes {
+			// One argument, "--include=<rel>": a changed file called "-x.py" is a
+			// value, never an option (review item 4).
+			args = append(args, "--include="+rel)
 		}
 	}
-	if len(inv.targets) == 0 {
-		return append(args, st.target)
+	// Every target is absolute, and follows "--", so that no name, a file's or
+	// the scan root's, can be read by Semgrep as an option: a file called
+	// "--config=x.mts" or a root called "-x" reaches it as a path (review item
+	// 4, decision D5-2).
+	targets := inv.targets
+	if len(targets) == 0 {
+		targets = []string{st.target}
 	}
-	return append(args, inv.targets...)
+	args = append(args, "--")
+	for _, t := range targets {
+		args = append(args, absoluteTarget(t))
+	}
+	return args
+}
+
+// absoluteTarget is p as an absolute path, so it cannot start with '-'. A path
+// that cannot be made absolute is prefixed with "./", which has the same effect.
+func absoluteTarget(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return "." + string(filepath.Separator) + p
 }
 
 // run starts one invocation and waits for it.
@@ -441,13 +765,18 @@ func (st *stage) run(ctx context.Context, inv invocation) invResult {
 	stdout, err := cmd.Output()
 	res.elapsed = time.Since(started)
 	res.stdout, res.stderr = stdout, stderr.String()
-	if err == nil {
+	// A deadline that fired while the process ran means it was killed, even if
+	// the wrapper then exited 0: its document is not trusted as a finished run
+	// (round 5, DE6-02). The findings it printed are kept by the caller, as for
+	// any timeout.
+	deadlineFired := errors.Is(ictx.Err(), context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.Canceled)
+	if err == nil && !deadlineFired {
 		return res
 	}
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
 		res.ctxErr = ctx.Err()
-	case errors.Is(ictx.Err(), context.DeadlineExceeded):
+	case deadlineFired:
 		res.timedOut = true
 	default:
 		var exitErr *exec.ExitError
@@ -563,8 +892,16 @@ func mergeOutputs(docs []*semgrepOutput) *semgrepOutput {
 	var fix []json.RawMessage
 	skipped := map[string]bool{}
 	var skippedList []json.RawMessage
+	seenResult := map[string]bool{}
 	for _, d := range docs {
-		m.Results = append(m.Results, d.Results...)
+		// Invocations are disjoint by construction; a result that two of them
+		// print (an --exclude an old Semgrep ignored) is one result.
+		for _, r := range d.Results {
+			if k := resultKey(r); !seenResult[k] {
+				seenResult[k] = true
+				m.Results = append(m.Results, r)
+			}
+		}
 		entries, ok := errorEntries(d.Errors)
 		if !ok {
 			entries = []json.RawMessage{json.RawMessage(`"errors that are not a list"`)}

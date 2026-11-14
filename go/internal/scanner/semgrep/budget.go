@@ -55,12 +55,39 @@ const (
 	// EnvSplitBytes is the in-scope source size from which a tree in several
 	// languages runs one invocation per language group; -1 never splits.
 	EnvSplitBytes = "FENDIX_SEMGREP_SPLIT_BYTES"
+	// EnvConcurrency is how many scans share the memory the budget is derived
+	// from: the container's memory limit, or the host's memory when there is
+	// none. 1..maxConcurrency. A deployment that runs several scans in one
+	// container or on one host sets it to its worker concurrency.
+	EnvConcurrency = "FENDIX_SCAN_CONCURRENCY"
 )
 
 const (
 	maxJobs        = 256
+	maxConcurrency = 64
 	minWallSeconds = 30
 	maxWallSeconds = 3600
+
+	// assumedMaxCPUs is the most CPUs a scan is planned for (round 5, D5-5).
+	// The hosted worker has 2 CPUs and no per-container CPU quota, so the
+	// kernel reports the whole host; a bigger host, or a quota above this,
+	// does not buy a bigger plan, so the plan (jobs, and with them the memory
+	// a run can claim) is the same on a 10-core VM as on the 2-CPU host.
+	// FENDIX_SEMGREP_JOBS raises it deliberately.
+	assumedMaxCPUs = 2
+
+	// minJobMemoryMiB is the least --max-memory worth giving one semgrep-core
+	// process: its rule packs alone hold about 250 MiB, and below this a
+	// medium file is a per-file out-of-memory error. When the budget cannot
+	// give every job this much, the run uses fewer jobs.
+	minJobMemoryMiB = 512
+
+	// uncappedConcurrency is how many scans are assumed to share the host's
+	// memory when there is no cgroup limit and EnvConcurrency says nothing:
+	// production runs celery-scans at concurrency 2 with no container limit
+	// (D5-5), so nothing but this keeps two scans from each claiming half the
+	// host.
+	uncappedConcurrency = 2
 
 	// minMaxMemoryMiB is the smallest --max-memory the budget will derive.
 	// Below it Semgrep cannot hold a rule pack and a large file at once, so
@@ -79,10 +106,10 @@ const (
 	// tenth of margin.
 	maxMemoryPercent = 90
 
-	// unlimitedHostPercent is the share of the host's memory a scan may use
-	// when no cgroup limit says what it gets. The worker shares its host with
-	// the web tier, the queue and the other workers, so half is the budget
-	// ("celery-scans concurrency 1 on the 3.8 GB host" is 1.9 GB).
+	// unlimitedHostPercent is the share of the host's memory all scans together
+	// may use when no cgroup limit says what they get. The worker shares its
+	// host with the web tier, the queue and the other workers, so half is the
+	// budget, divided among the scans that run at once (EnvConcurrency).
 	unlimitedHostPercent = 50
 )
 
@@ -126,15 +153,21 @@ type Budget struct {
 	// Jobs is Semgrep's --jobs.
 	Jobs int
 	// MaxMemoryMiB is Semgrep's --max-memory; 0 passes none (no limit known).
+	// Semgrep applies it to each semgrep-core process on its own, so a run
+	// can claim Jobs times this much (see memoryPlan).
 	MaxMemoryMiB int
-	// MemoryMiB is the memory the stage was sized for, 0 when unknown.
+	// MemoryMiB is the memory this scan's stage was sized for, 0 when unknown.
 	MemoryMiB int
+	// Concurrency is how many scans the memory was divided among.
+	Concurrency int
 	// Wall is the total wall budget of the stage.
 	Wall time.Duration
 	// Limits is what the budget was derived from.
 	Limits Limits
 	// Overridden names the settings an environment variable set.
 	Overridden []string
+	// memoryPinned is set when --max-memory was chosen by hand.
+	memoryPinned bool
 }
 
 // String is the budget in one log line.
@@ -143,7 +176,7 @@ func (b Budget) String() string {
 	if b.MaxMemoryMiB > 0 {
 		mem = strconv.Itoa(b.MaxMemoryMiB) + "MiB"
 	}
-	s := fmt.Sprintf("jobs=%d max-memory=%s wall=%s (%s)", b.Jobs, mem, b.Wall, b.Limits.Source)
+	s := fmt.Sprintf("jobs=%d max-memory=%s wall=%s concurrency=%d (%s)", b.Jobs, mem, b.Wall, b.Concurrency, b.Limits.Source)
 	if len(b.Overridden) > 0 {
 		s += " overridden: " + strings.Join(b.Overridden, ",")
 	}
@@ -377,35 +410,72 @@ func jobsFor(cpus float64) int {
 	return j
 }
 
-// memoryBudgetMiB is the memory a scan may use, from the limits: the cgroup
+// memoryBudgetMiB is the memory ONE scan may use, from the limits: the cgroup
 // limit when there is one (capped by the host's memory), else half of the
-// host's. 0 when nothing is known.
-func memoryBudgetMiB(l Limits) int {
+// host's, divided among the scans that share it. 0 when nothing is known.
+func memoryBudgetMiB(l Limits, concurrency int) int {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	var m int64
 	switch {
 	case l.MemoryBytes > 0:
-		m := l.MemoryBytes
+		m = l.MemoryBytes
 		if l.HostMemoryBytes > 0 && l.HostMemoryBytes < m {
 			m = l.HostMemoryBytes
 		}
-		return int(m >> 20)
 	case l.HostMemoryBytes > 0:
-		return int((l.HostMemoryBytes >> 20) * unlimitedHostPercent / 100)
+		m = l.HostMemoryBytes * unlimitedHostPercent / 100
+	default:
+		return 0
 	}
-	return 0
+	return int(m>>20) / concurrency
 }
 
-// maxMemoryFor is --max-memory for a memory budget: what is left after the
-// reservation, less the detection margin, never below minMaxMemoryMiB; 0 when
-// the budget is unknown.
-func maxMemoryFor(memoryMiB int) int {
+// memoryPlan is the run's --jobs and --max-memory for a memory budget. What is
+// left after the reservation, less the detection margin, is the heap all of a
+// run's semgrep-core processes may hold, and Semgrep applies --max-memory to
+// each process on its own, so each gets its share of it: a pair that runs
+// away on two jobs at once cannot claim twice the budget and be killed by the
+// kernel (which loses every finding of the run). A share under
+// minJobMemoryMiB would make ordinary files out-of-memory errors, so jobs are
+// dropped until each has it, down to one. maxMemory is 0 when the budget is
+// unknown, and never below minMaxMemoryMiB.
+func memoryPlan(memoryMiB, jobs int) (int, int) {
+	if memoryMiB <= 0 {
+		return jobs, 0
+	}
+	avail := (memoryMiB - reservedMiB) * maxMemoryPercent / 100
+	for jobs > 1 && avail/jobs < minJobMemoryMiB {
+		jobs--
+	}
+	return jobs, perJobMemory(memoryMiB, jobs)
+}
+
+// perJobMemory is --max-memory for jobs processes sharing a memory budget.
+func perJobMemory(memoryMiB, jobs int) int {
 	if memoryMiB <= 0 {
 		return 0
 	}
-	m := (memoryMiB - reservedMiB) * maxMemoryPercent / 100
-	if m < minMaxMemoryMiB {
-		m = minMaxMemoryMiB
+	if jobs < 1 {
+		jobs = 1
 	}
-	return m
+	per := (memoryMiB - reservedMiB) * maxMemoryPercent / 100 / jobs
+	if per < minMaxMemoryMiB {
+		per = minMaxMemoryMiB
+	}
+	return per
+}
+
+// SetJobs sets the run's --jobs to n deliberately (a caller's or an
+// environment override). The memory each process may hold is re-divided for n,
+// unless --max-memory was set by hand, so asking for more jobs never claims
+// more memory than the budget.
+func (b *Budget) SetJobs(n int) {
+	b.Jobs = n
+	if !b.memoryPinned && b.MemoryMiB > 0 {
+		b.MaxMemoryMiB = perJobMemory(b.MemoryMiB, n)
+	}
 }
 
 // stageWall is the stage's wall budget: want, shrunk to leave the later
@@ -434,19 +504,32 @@ func DeriveBudget(l Limits, remaining time.Duration, env func(string) string) Bu
 	if l.CPUs > 0 && (cpus == 0 || l.CPUs < cpus) {
 		cpus = l.CPUs
 	}
-	b.Jobs = jobsFor(cpus)
-	b.MemoryMiB = memoryBudgetMiB(l)
-	b.MaxMemoryMiB = maxMemoryFor(b.MemoryMiB)
+	if cpus == 0 || cpus > assumedMaxCPUs {
+		cpus = assumedMaxCPUs
+	}
+	b.Concurrency = 1
+	if l.MemoryBytes <= 0 {
+		b.Concurrency = uncappedConcurrency
+	}
+	if env != nil {
+		if v, ok := envInt(env, EnvConcurrency, 1, maxConcurrency); ok {
+			b.Concurrency = v
+			b.Overridden = append(b.Overridden, EnvConcurrency)
+		}
+	}
+	b.MemoryMiB = memoryBudgetMiB(l, b.Concurrency)
+	b.Jobs, b.MaxMemoryMiB = memoryPlan(b.MemoryMiB, jobsFor(cpus))
 	want := DefaultWall
 
 	if env != nil {
 		if v, ok := envInt(env, EnvJobs, 1, maxJobs); ok {
-			b.Jobs = v
+			b.SetJobs(v)
 			b.Overridden = append(b.Overridden, EnvJobs)
 		}
 		if raw := env(EnvMaxMemoryMiB); strings.TrimSpace(raw) != "" {
 			if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && (v == 0 || v >= minMaxMemoryMiB) {
 				b.MaxMemoryMiB = v
+				b.memoryPinned = true
 				b.Overridden = append(b.Overridden, EnvMaxMemoryMiB)
 			} else {
 				slog.Warn("semgrep: ignoring a budget setting that is not 0 or at least the minimum",

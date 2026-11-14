@@ -19,9 +19,11 @@
 //     the files that timed out re-run alone with a larger per-file timeout.
 //   - A 30 s bound per rule and file (ruleTimeoutSeconds); a rule that hits it
 //     is reported in Run.Timeouts, not dropped silently.
-//   - Installed packages, build output and vendored libraries are left out of a
-//     run only on evidence read from the tree (decision D6', targets.go), and
-//     every one left out is listed, never dropped silently.
+//   - Every source file at or below the size cap is evaluated, whatever it looks
+//     like or where it is (decision D5-2, targets.go): nothing is left out for a
+//     banner, a header, a name, a directory or a marker file. Only the root .git
+//     directory with a real layout is skipped, and a file over the cap or
+//     unreadable is named as lost evaluation.
 //   - A `// nosemgrep` comment is honoured as Semgrep honours it, but the run
 //     passes --disable-nosem and the engine applies the comment itself
 //     (nosem.go), so every suppressed result is reported in Run.Suppressed.
@@ -227,10 +229,10 @@ type Run struct {
 	// SkippedRules are rules Semgrep loaded and did not run (its
 	// `skipped_rules`, for example a rule this Semgrep is too old for).
 	SkippedRules []string
-	// Coverage is what the run left unread (decision D6, targets.go): the
-	// in-scope files too large, unreadable or not in Semgrep's paths.scanned,
-	// which are lost evaluation, and the files and directories declared out
-	// of scope, which the ok detail lists.
+	// Coverage is what the run left unread (decisions D6 and D5-2,
+	// targets.go): the in-scope files too large, unreadable or not in Semgrep's
+	// paths.scanned, which are lost evaluation, and the symbolic links not
+	// followed, which the ok detail lists as declared out of scope.
 	Coverage scope.Coverage
 	// ParseFailures lists the files Semgrep could not parse at all (decision
 	// D1'): no rule ran on them. ScanRun also records each in Coverage as lost
@@ -251,6 +253,10 @@ type Run struct {
 	// Groups names the per-language invocations a split run made, in order;
 	// empty for a run of one invocation.
 	Groups []string
+	// Units names every pass-1 invocation the plan made, in order, the ones
+	// that did not run or did not finish included: one per language group or
+	// per chunk of a large group, or the single run of a small tree.
+	Units []string
 	// Retries is what the retry pass did with each file that lost evaluation
 	// to time in pass 1: re-ran it alone (resolved or not) or did not.
 	Retries []Retry
@@ -439,6 +445,12 @@ type Options struct {
 	// MaxRetryFiles bounds the retry pass; 0 uses DefaultMaxRetryFiles, a
 	// negative value disables it.
 	MaxRetryFiles int
+	// ChunkBytes is the in-scope source size above which a language group (or
+	// an unsplit tree) runs its heaviest files each in an invocation of its
+	// own (plan.go); 0 uses DefaultChunkBytes, a negative value never does.
+	ChunkBytes int64
+	// HeavyFileBytes is the size of such a file; 0 uses DefaultHeavyFileBytes.
+	HeavyFileBytes int64
 }
 
 // limitsFunc and getenv are how the budget reads the host; tests replace them.
@@ -456,15 +468,17 @@ func resolveBudget(ctx context.Context, opts Options) Budget {
 	}
 	b := DeriveBudget(limitsFunc(), remaining, getenv)
 	if opts.Jobs > 0 {
-		b.Jobs = opts.Jobs
+		b.SetJobs(opts.Jobs)
 		b.Overridden = append(b.Overridden, "options.jobs")
 	}
 	switch {
 	case opts.MaxMemoryMiB > 0:
 		b.MaxMemoryMiB = opts.MaxMemoryMiB
+		b.memoryPinned = true
 		b.Overridden = append(b.Overridden, "options.max-memory")
 	case opts.MaxMemoryMiB < 0:
 		b.MaxMemoryMiB = 0
+		b.memoryPinned = true
 		b.Overridden = append(b.Overridden, "options.max-memory=none")
 	}
 	if opts.Wall > 0 {
@@ -605,54 +619,73 @@ func ScanRunWithOptions(ctx context.Context, codePath string, allow *gitdiff.All
 		slog.Info("semgrep: the tree is run as one invocation per language group, cheapest first", "groups", strings.Join(names, ", "))
 	}
 
+	// Pass 1: the plan's units, cheapest first (plan.go). A group or an unsplit
+	// tree over chunkBytes of source runs its heaviest files each alone, so a
+	// bundle that does not finish loses only itself and no other file's
+	// findings (round 5, R-008).
+	chunkBytes := opts.ChunkBytes
+	if chunkBytes == 0 {
+		chunkBytes = chunkBytesFromEnv(getenv)
+	}
+	heavyBytes := opts.HeavyFileBytes
+	if heavyBytes <= 0 {
+		heavyBytes = heavyBytesFromEnv(getenv)
+	}
+	units := planUnits(targets, shards, rules, target, chunkBytes, heavyBytes)
+	chunked := false
+	for _, u := range units {
+		if u.chunk() {
+			chunked = true
+		}
+	}
+	if chunked {
+		names := make([]string, len(units))
+		for i, u := range units {
+			names[i] = fmt.Sprintf("%s(%s, %d KiB)", u.label, filesNoun(u.nfiles), u.bytes>>10)
+		}
+		slog.Info("semgrep: the heaviest files run in invocations of their own, cheapest first", "units", strings.Join(names, ", "))
+	}
+
 	var results []invResult
-	var unfinished []string
-	if len(shards) == 0 {
+	var lostUnits []unit
+	offsets := unitDeadlines(units, end.Sub(started))
+	for i, u := range units {
+		deadline := minTime(end, started.Add(offsets[i]))
+		if len(units) == 1 {
+			deadline = end
+		}
+		if time.Until(deadline) < minShardWindow && len(units) > 1 {
+			lostUnits = append(lostUnits, u)
+			continue
+		}
 		res := st.run(ctx, invocation{
-			label:    "semgrep",
-			configs:  []string{rules},
+			label:    u.label,
+			configs:  u.configs,
+			includes: u.includes,
+			excludes: u.excludes,
 			timeout:  ruleTimeoutSeconds,
 			jobs:     budget.Jobs,
-			deadline: end,
+			deadline: deadline,
 		})
 		switch {
 		case res.ctxErr != nil:
 			return Run{}, res.ctxErr
-		case res.timedOut:
+		case res.timedOut && len(units) == 1:
 			return Run{}, fmt.Errorf("%w after %s", ErrTimeout, end.Sub(started).Round(time.Second))
+		case res.timedOut:
+			slog.Warn("semgrep: an invocation did not finish within its share of the stage budget; its files are not evaluated and the others' findings are kept",
+				"unit", u.label, "files", u.nfiles, "elapsed", res.elapsed.Round(time.Second))
+			lostUnits = append(lostUnits, u)
+			continue
 		case res.startErr != nil:
 			return Run{}, fmt.Errorf("semgrep: %w", res.startErr)
 		}
-		results = []invResult{res}
-	} else {
-		offsets := shardDeadlines(shards, end.Sub(started))
-		for i, sh := range shards {
-			deadline := minTime(end, started.Add(offsets[i]))
-			if time.Until(deadline) < minShardWindow {
-				unfinished = append(unfinished, fmt.Sprintf("%s %s", sh.name, filesNoun(len(sh.files))))
-				continue
-			}
-			res := st.run(ctx, invocation{
-				label:    sh.name,
-				configs:  sh.configs,
-				timeout:  ruleTimeoutSeconds,
-				jobs:     budget.Jobs,
-				deadline: deadline,
-			})
-			switch {
-			case res.ctxErr != nil:
-				return Run{}, res.ctxErr
-			case res.timedOut:
-				slog.Warn("semgrep: a language group did not finish within its share of the stage budget; its findings are lost",
-					"group", sh.name, "files", len(sh.files), "elapsed", res.elapsed.Round(time.Second))
-				unfinished = append(unfinished, fmt.Sprintf("%s %s", sh.name, filesNoun(len(sh.files))))
-				continue
-			case res.startErr != nil:
-				return Run{}, fmt.Errorf("semgrep: %w", res.startErr)
-			}
-			results = append(results, res)
+		if chunked {
+			slog.Info("semgrep: invocation finished", "unit", u.label, "files", u.nfiles, "bytes", u.bytes, "elapsed", res.elapsed.Round(time.Millisecond))
 		}
+		results = append(results, res)
 	}
+	unfinished := unfinishedNames(lostUnits)
 
 	// The extensions pass (decision D6', redteam4-d6-02, DE4-04): source files
 	// Semgrep does not select by their extension (APP.JS, x.mts, a .vue
@@ -806,6 +839,9 @@ func ScanRunWithOptions(ctx context.Context, codePath string, allow *gitdiff.All
 	run.Retries = retries
 	for _, sh := range shards {
 		run.Groups = append(run.Groups, sh.name)
+	}
+	for _, u := range units {
+		run.Units = append(run.Units, u.label)
 	}
 	if cerr == nil {
 		// Decision D6: what the run was meant to evaluate, against what it
@@ -1744,7 +1780,8 @@ func readSourceLine(path string, n int) string {
 	if path == "" || n <= 0 {
 		return ""
 	}
-	f, err := os.Open(path)
+	// Never blocks on a FIFO or follows a link swapped in for the file (C6).
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return ""
 	}

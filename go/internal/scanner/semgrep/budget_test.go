@@ -24,39 +24,91 @@ func TestJobsForFollowsTheCPUAllowanceNotTheHost(t *testing.T) {
 	}
 }
 
-func TestMaxMemoryForLeavesRoomBesideSemgrepCore(t *testing.T) {
+// Round 5, R-008 / D5-5: Semgrep applies --max-memory to each semgrep-core
+// process on its own, so the budget divides the heap among the jobs, and gives
+// fewer jobs rather than a share too small to hold a rule pack.
+func TestMemoryPlanDividesTheHeapAmongTheJobs(t *testing.T) {
 	for _, c := range []struct {
-		memMiB, want int
+		name         string
+		memMiB, jobs int
+		wantJobs     int
+		wantMax      int
 	}{
-		{0, 0},                        // unknown: no limit is invented
-		{1900, 1364},                  // the concurrency-1 share of the 3.8 GB host
-		{3800, 3074},                  // the whole host
-		{600, minMaxMemoryMiB},        // too small to hold a pack: floor, never unbounded
-		{384, minMaxMemoryMiB},        // nothing left after the reservation
-		{512, minMaxMemoryMiB},        // (512-384)*0.9 = 115, floored
-		{2048, (2048 - 384) * 9 / 10}, //
+		{"unknown memory: no limit is invented", 0, 2, 2, 0},
+		{"the concurrency-1 share of the 3.8 GB host", 1900, 2, 2, 682}, // (1900-384)*0.9 = 1364 between two jobs
+		{"the whole host", 3800, 2, 2, 1537},                            // 3074 between two jobs
+		{"one job keeps all of it", 1900, 1, 1, 1364},
+		{"half of that: two jobs would get 254 each, so one runs", 950, 2, 1, 509},
+		{"too small to hold a pack: floor, never unbounded", 600, 2, 1, minMaxMemoryMiB},
+		{"nothing left after the reservation", 384, 2, 1, minMaxMemoryMiB},
+		{"a roomy box", 2048, 1, 1, (2048 - 384) * 9 / 10},
 	} {
-		if got := maxMemoryFor(c.memMiB); got != c.want {
-			t.Errorf("maxMemoryFor(%d) = %d, want %d", c.memMiB, got, c.want)
+		jobs, max := memoryPlan(c.memMiB, c.jobs)
+		if jobs != c.wantJobs || max != c.wantMax {
+			t.Errorf("%s: memoryPlan(%d, %d) = jobs %d max-memory %d, want %d / %d", c.name, c.memMiB, c.jobs, jobs, max, c.wantJobs, c.wantMax)
+		}
+		// The invariant the plan exists for: every process at its limit still
+		// fits the budget (the floor aside).
+		if c.memMiB > reservedMiB && max > minMaxMemoryMiB && jobs*max > c.memMiB-reservedMiB {
+			t.Errorf("%s: %d jobs x %d MiB = %d exceeds the budget %d MiB", c.name, jobs, max, jobs*max, c.memMiB-reservedMiB)
 		}
 	}
 }
 
-func TestMemoryBudgetUsesTheCgroupLimitElseHalfTheHost(t *testing.T) {
+func TestMemoryBudgetUsesTheCgroupLimitElseHalfTheHostDividedAmongScans(t *testing.T) {
 	const gib = int64(1) << 30
 	for _, c := range []struct {
-		name string
-		l    Limits
-		want int
+		name        string
+		l           Limits
+		concurrency int
+		want        int
 	}{
-		{"cgroup limit", Limits{MemoryBytes: 2 * gib, HostMemoryBytes: 8 * gib}, 2048},
-		{"cgroup limit above the host", Limits{MemoryBytes: 16 * gib, HostMemoryBytes: 4 * gib}, 4096},
-		{"no limit: half of a 3.8 GB host", Limits{HostMemoryBytes: 3800 << 20}, 1900},
-		{"nothing known", Limits{}, 0},
+		{"cgroup limit", Limits{MemoryBytes: 2 * gib, HostMemoryBytes: 8 * gib}, 1, 2048},
+		{"cgroup limit above the host", Limits{MemoryBytes: 16 * gib, HostMemoryBytes: 4 * gib}, 1, 4096},
+		{"cgroup limit shared by two scans", Limits{MemoryBytes: 2 * gib, HostMemoryBytes: 8 * gib}, 2, 1024},
+		{"no limit: half of a 3.8 GB host for one scan", Limits{HostMemoryBytes: 3800 << 20}, 1, 1900},
+		{"no limit: two scans share that half", Limits{HostMemoryBytes: 3800 << 20}, 2, 950},
+		{"nothing known", Limits{}, 2, 0},
 	} {
-		if got := memoryBudgetMiB(c.l); got != c.want {
+		if got := memoryBudgetMiB(c.l, c.concurrency); got != c.want {
 			t.Errorf("%s: memoryBudgetMiB = %d, want %d", c.name, got, c.want)
 		}
+	}
+}
+
+// D5-5: production has 2 CPUs, no CPU quota and no container memory limit, and
+// runs celery-scans at concurrency 2. The plan must not read the host's core
+// count as the allowance, and must not take the whole host's memory for itself.
+func TestBudgetAssumesTwoCPUsAndNoMemoryCapAtConcurrencyTwo(t *testing.T) {
+	prod := Limits{NumCPU: 2, HostMemoryBytes: 3831 << 20}
+	b := DeriveBudget(prod, -1, nil)
+	if b.Concurrency != uncappedConcurrency {
+		t.Errorf("an uncapped host is assumed shared by %d scans, got %d", uncappedConcurrency, b.Concurrency)
+	}
+	if b.MemoryMiB != 3831/2/2 {
+		t.Errorf("MemoryMiB = %d, want a quarter of the 3831 MiB host", b.MemoryMiB)
+	}
+	if b.Jobs*b.MaxMemoryMiB > b.MemoryMiB-reservedMiB {
+		t.Errorf("%d jobs x %d MiB exceeds this scan's %d MiB less the %d MiB reserve", b.Jobs, b.MaxMemoryMiB, b.MemoryMiB, reservedMiB)
+	}
+	// A 10-core VM and a 64-CPU quota plan like the 2-CPU host.
+	for name, l := range map[string]Limits{
+		"10 cores, no quota": {NumCPU: 10, HostMemoryBytes: 3831 << 20},
+		"quota of 64 CPUs":   {NumCPU: 64, CPUs: 64, HostMemoryBytes: 3831 << 20},
+	} {
+		if got := DeriveBudget(l, -1, nil); got.Jobs != b.Jobs || got.MaxMemoryMiB != b.MaxMemoryMiB {
+			t.Errorf("%s: jobs %d max-memory %d, want the 2-CPU plan %d / %d", name, got.Jobs, got.MaxMemoryMiB, b.Jobs, b.MaxMemoryMiB)
+		}
+	}
+	// The deployment says how many scans share the host.
+	one := DeriveBudget(prod, -1, envOf(map[string]string{EnvConcurrency: "1"}))
+	if one.MemoryMiB != 3831/2 || one.Concurrency != 1 {
+		t.Errorf("FENDIX_SCAN_CONCURRENCY=1: memory %d concurrency %d", one.MemoryMiB, one.Concurrency)
+	}
+	// Asking for more jobs re-divides the same memory, never claims more.
+	more := DeriveBudget(prod, -1, envOf(map[string]string{EnvConcurrency: "1", EnvJobs: "4"}))
+	if more.Jobs != 4 || more.Jobs*more.MaxMemoryMiB > more.MemoryMiB {
+		t.Errorf("4 jobs: %d x %d MiB exceeds %d MiB", more.Jobs, more.MaxMemoryMiB, more.MemoryMiB)
 	}
 }
 
@@ -98,8 +150,8 @@ func TestReadLimitsCgroupV2(t *testing.T) {
 		t.Errorf("Source = %q", l.Source)
 	}
 	b := DeriveBudget(l, -1, nil)
-	if b.Jobs != 2 || b.MaxMemoryMiB != 1364 || b.Wall != DefaultWall {
-		t.Errorf("budget = %+v, want jobs 2, max-memory 1364, wall %s", b, DefaultWall)
+	if b.Jobs != 2 || b.MaxMemoryMiB != 682 || b.Wall != DefaultWall {
+		t.Errorf("budget = %+v, want jobs 2, max-memory 682 each, wall %s", b, DefaultWall)
 	}
 }
 
@@ -116,12 +168,14 @@ func TestReadLimitsCgroupV2Unlimited(t *testing.T) {
 		t.Errorf("max means no limit, got cpus %v memory %d", l.CPUs, l.MemoryBytes)
 	}
 	b := DeriveBudget(l, -1, nil)
-	// No quota: the process's own CPU count; no memory limit: half the host.
-	if b.Jobs != 3 {
-		t.Errorf("jobs = %d, want 3 for 4 CPUs", b.Jobs)
+	// No quota: the process's own CPU count, at most the 2 CPUs a scan is
+	// planned for; no memory limit: half the host, shared by two scans, which
+	// leaves room for one job.
+	if b.Jobs != 1 {
+		t.Errorf("jobs = %d, want 1 (a quarter of the host holds one job)", b.Jobs)
 	}
-	if b.MemoryMiB != 1900 || b.MaxMemoryMiB != 1364 {
-		t.Errorf("memory = %d / max-memory %d, want 1900 / 1364", b.MemoryMiB, b.MaxMemoryMiB)
+	if b.MemoryMiB != 950 || b.MaxMemoryMiB != 509 {
+		t.Errorf("memory = %d / max-memory %d, want 950 / 509", b.MemoryMiB, b.MaxMemoryMiB)
 	}
 }
 
@@ -181,8 +235,8 @@ func TestReadLimitsWithoutCgroupsOrProc(t *testing.T) {
 		t.Errorf("limits = %+v", l)
 	}
 	b := DeriveBudget(l, -1, nil)
-	if b.Jobs != 5 || b.MaxMemoryMiB != 0 {
-		t.Errorf("budget = %+v: jobs from the CPU count, and no --max-memory when memory is unknown", b)
+	if b.Jobs != 2 || b.MaxMemoryMiB != 0 {
+		t.Errorf("budget = %+v: jobs from the CPU count (at most 2), and no --max-memory when memory is unknown", b)
 	}
 }
 
@@ -231,6 +285,9 @@ func TestDeriveBudgetIgnoresUnusableSettings(t *testing.T) {
 		"tiny wall":       {EnvWallSeconds: "1"},
 		"huge wall":       {EnvWallSeconds: "999999"},
 		"blank":           {EnvJobs: "  ", EnvWallSeconds: ""},
+		"zero scans":      {EnvConcurrency: "0"},
+		"huge scans":      {EnvConcurrency: "100000"},
+		"scans not a num": {EnvConcurrency: "two"},
 	} {
 		got := DeriveBudget(l, -1, envOf(env))
 		if got.Jobs != want.Jobs || got.MaxMemoryMiB != want.MaxMemoryMiB || got.Wall != want.Wall || len(got.Overridden) != 0 {
@@ -262,7 +319,7 @@ func TestStageWallLeavesRoomUnderTheRunDeadline(t *testing.T) {
 func TestBudgetStringNamesEverythingASRECares(t *testing.T) {
 	b := DeriveBudget(Limits{NumCPU: 10, CPUs: 2, MemoryBytes: 1900 << 20, Source: "cgroup v2, cpu quota 2.00"}, -1, envOf(map[string]string{EnvJobs: "2"}))
 	s := b.String()
-	for _, want := range []string{"jobs=2", "max-memory=1364MiB", "wall=5m0s", "cpu quota 2.00", EnvJobs} {
+	for _, want := range []string{"jobs=2", "max-memory=682MiB", "wall=5m0s", "concurrency=1", "cpu quota 2.00", EnvJobs} {
 		if !strings.Contains(s, want) {
 			t.Errorf("String() = %q, missing %q", s, want)
 		}
@@ -279,6 +336,20 @@ func TestSplitBytesFromEnvironment(t *testing.T) {
 	} {
 		if got := splitBytesFromEnv(envOf(map[string]string{EnvSplitBytes: c.raw})); got != c.want {
 			t.Errorf("%q: splitBytesFromEnv = %d, want %d", c.raw, got, c.want)
+		}
+	}
+}
+
+func TestChunkBytesFromEnvironment(t *testing.T) {
+	for _, c := range []struct {
+		raw  string
+		want int64
+	}{
+		{"", DefaultChunkBytes}, {"0", DefaultChunkBytes}, {"-1", -1}, {"524288", 512 << 10},
+		{"lots", DefaultChunkBytes}, {"-5", DefaultChunkBytes},
+	} {
+		if got := chunkBytesFromEnv(envOf(map[string]string{EnvChunkBytes: c.raw})); got != c.want {
+			t.Errorf("%q: chunkBytesFromEnv = %d, want %d", c.raw, got, c.want)
 		}
 	}
 }

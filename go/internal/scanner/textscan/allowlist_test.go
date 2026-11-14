@@ -75,30 +75,32 @@ func TestScanWithAllowlist_EmptyFindsNothing(t *testing.T) {
 	}
 }
 
-// TestScanWithAllowlist_FastPathPrunesVendor is the B3/S8 parity guard: the
-// diff-aware fast path must still skip files under a pruned dir (vendor/),
-// exactly as the full walk does — even when such a file is in the allowlist
-// (a committed vendor/ change).
-func TestScanWithAllowlist_FastPathPrunesVendor(t *testing.T) {
+// TestScanWithAllowlist_FastPathScansAChangedVendorFile: round 4 pinned that the
+// diff-aware fast path skips a changed file under a directory proven to be a Go
+// vendor tree (vendor/modules.txt), as the full walk did. Round 5 (D5-2, C6)
+// prunes nothing on a marker file, so both paths scan the vendored file: the
+// fast path must still agree with the full walk, and does.
+func TestScanWithAllowlist_FastPathScansAChangedVendorFile(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "a.go", vulnGo)
-	// A Go vendor tree, proven by vendor/modules.txt (D6': a folder only named
-	// vendor is first-party and is scanned).
 	writeFile(t, root, "vendor/modules.txt", "# example.com/dep v1.2.3\n## explicit\nexample.com/dep\n")
-	writeFile(t, root, "vendor/v.go", vulnGo) // committed vendor → must be pruned
+	writeFile(t, root, "vendor/v.go", vulnGo)
+	writeFile(t, root, "untouched.go", vulnGo) // not in the allowlist
 
 	allow := gitdiff.NewAllowlist(root, []string{"a.go", filepath.Join("vendor", "v.go")})
 	scoped, err := ScanWithAllowlist(root, AllRules(), allow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(scoped) == 0 {
-		t.Fatal("expected findings from a.go")
-	}
+	seen := map[string]bool{}
 	for _, f := range scoped {
-		if f.Line == nil || filepath.Base(stripLine(*f.Line)) != "a.go" {
-			t.Errorf("fast path scanned a pruned/out-of-scope file: %+v", f.Line)
+		if f.Line == nil {
+			t.Fatalf("finding without a line: %+v", f)
 		}
+		seen[filepath.Base(stripLine(*f.Line))] = true
+	}
+	if !seen["a.go"] || !seen["v.go"] || seen["untouched.go"] {
+		t.Errorf("fast path scanned %v; want a.go and the vendored v.go, not untouched.go", seen)
 	}
 }
 

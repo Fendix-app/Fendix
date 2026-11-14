@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // Decisions D6' and D1' against the real Semgrep: the --exclude patterns the
@@ -36,10 +34,11 @@ func endpoints(run Run) map[string]bool {
 	return out
 }
 
-// redteam3-d6-04 end to end: first-party code that only has a build-output
-// name is evaluated and reported; installed and minified trees that hold the
-// evidence are left out, listed, and not a gap.
-func TestRealSemgrepEvaluatesFirstPartyCodeWithABuildOutputName(t *testing.T) {
+// Decision D5-2 end to end: every source file under the cap is evaluated and
+// reported, whatever its name, directory, banner or markers say. Installed
+// trees, virtualenv-shaped directories, minified bundles and a library banner
+// are ordinary files.
+func TestRealSemgrepEvaluatesEverySourceFileUnderTheCap(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
 		"routes.min.js":                   spikeApp,
@@ -59,26 +58,19 @@ func TestRealSemgrepEvaluatesFirstPartyCodeWithABuildOutputName(t *testing.T) {
 	})
 	run := realRun(t, root)
 	seen := endpoints(run)
-	for _, want := range []string{"routes.min.js:9", "vendor/app/routes.js:9", "dist/api.js:9", "src/app.py:5"} {
+	for _, want := range []string{
+		"routes.min.js:9", "vendor/app/routes.js:9", "dist/api.js:9", "node_modules/dep/index.js:9",
+		"src/app.py:5", "env[1]/lib/y.py:5", "a b/lib/z.py:5", "star*/lib/w.py:5",
+	} {
 		if !seen[want] {
 			t.Errorf("%s was not evaluated: %v", want, seen)
 		}
 	}
-	for ep := range seen {
-		for _, left := range []string{"node_modules/", "lib/jquery.js", "env[1]/", "a b/", "star*/"} {
-			if strings.HasPrefix(ep, left) {
-				t.Errorf("%s was evaluated, but is declared out of scope", ep)
-			}
-		}
+	if run.Coverage.Declared() {
+		t.Errorf("nothing here is a lockfile or version control metadata, yet: %s", run.Coverage.DeclaredDetail(1<<20))
 	}
 	if run.Coverage.Lost() {
-		t.Errorf("declared exclusions are not a gap: %s", run.Coverage.LostDetail(1<<20))
-	}
-	declared := run.Coverage.DeclaredDetail(1 << 20)
-	for _, want := range []string{"installed npm packages 1 (node_modules/)", "vendored library 1 (lib/jquery.js)", "minified 1 (static/bundle.js)", "python virtualenv 3 (a b/, env[1]/, star*/)"} {
-		if !strings.Contains(declared, want) {
-			t.Errorf("declared %q lacks %q", declared, want)
-		}
+		t.Errorf("every file was readable and under the cap: %s", run.Coverage.LostDetail(1<<20))
 	}
 }
 
@@ -100,7 +92,7 @@ func TestRealSemgrepParseOutcomes(t *testing.T) {
 			t.Errorf("%s is not listed lost: %q", want, lost)
 		}
 	}
-	for _, left := range []string{"one.py", "fine.py"} {
+	for _, left := range []string{"fine.py"} {
 		if strings.Contains(lost, left) {
 			t.Errorf("%s is listed lost: %q", left, lost)
 		}
@@ -120,8 +112,14 @@ func TestRealSemgrepParseOutcomes(t *testing.T) {
 			one = &run.PartialParses[i]
 		}
 	}
-	if one == nil || one.Lost || one.Skipped != 1 || one.Total != 123 {
-		t.Errorf("one.py partial parse = %+v; want one line skipped of 123, not lost", one)
+	// C4B-27: the one skipped line is a line of code, so the engine cannot
+	// show it holds nothing analysable; the file is lost evaluation however
+	// small the skip.
+	if one == nil || !one.Lost || one.Skipped != 1 || one.Total != 123 {
+		t.Errorf("one.py partial parse = %+v; want one line skipped of 123, lost", one)
+	}
+	if !strings.Contains(lost, "one.py") {
+		t.Errorf("one.py is not listed lost: %q", lost)
 	}
 	// What the rest of one.py says was still evaluated: the call after the
 	// unsupported token is reported.
@@ -130,9 +128,8 @@ func TestRealSemgrepParseOutcomes(t *testing.T) {
 	}
 }
 
-// A --code that is itself a symbolic link is scanned through it, and its
-// declared exclusions are listed.
-func TestRealSemgrepThroughALinkedRootListsTheExclusions(t *testing.T) {
+// A --code that is itself a symbolic link is scanned through it.
+func TestRealSemgrepThroughALinkedRootScansEveryFile(t *testing.T) {
 	real := t.TempDir()
 	writeTree(t, real, map[string]string{"app.js": spikeApp, "static/bundle.js": minifiedJS()})
 	link := filepath.Join(t.TempDir(), "code")
@@ -143,13 +140,13 @@ func TestRealSemgrepThroughALinkedRootListsTheExclusions(t *testing.T) {
 	if !endpoints(run)["app.js:9"] {
 		t.Errorf("findings = %v; want app.js:9", endpoints(run))
 	}
-	if got := run.Coverage.Names(scope.ReasonMinified); len(got) != 1 || got[0] != "static/bundle.js" {
-		t.Errorf("minified = %q; want static/bundle.js", got)
+	if run.Coverage.Declared() {
+		t.Errorf("declared: %s", run.Coverage.DeclaredDetail(1<<20))
 	}
 }
 
-// vendoredJQuery is a file a known library's banner, identifier and size
-// identify (scope.ClassifyFile: vendored library), with no application code.
+// vendoredJQuery is a file that looks like a vendored jQuery build, with no
+// application code. It is evaluated like any other file.
 func vendoredJQuery() string {
 	var b strings.Builder
 	b.WriteString("/*! jQuery v3.6.0 | (c) OpenJS Foundation and other contributors | jquery.org/license */\n")
@@ -176,8 +173,8 @@ func TestRealSemgrepEvaluatesAFirstPartyFileWhoseHeaderMentionsALibrary(t *testi
 			t.Errorf("%s was not evaluated: %v", want, seen)
 		}
 	}
-	if got := run.Coverage.Names(scope.ReasonVendored); len(got) != 1 || got[0] != "lib/jquery.js" {
-		t.Errorf("vendored = %q; want only the real library lib/jquery.js", got)
+	if run.Coverage.Declared() || run.Coverage.Lost() {
+		t.Errorf("declared %q, lost %q; a library-looking file is evaluated", run.Coverage.DeclaredDetail(1<<20), run.Coverage.LostDetail(1<<20))
 	}
 }
 
@@ -200,8 +197,8 @@ func TestRealSemgrepEvaluatesSourceWhoseExtensionItDoesNotSelect(t *testing.T) {
 			t.Errorf("%s was not evaluated: %v", want, seen)
 		}
 	}
-	if run.Coverage.DeclaredCount(scope.ReasonNotChosen) != 0 {
-		t.Errorf("a source file was declared out of scope by its extension: %v", run.Coverage.Names(scope.ReasonNotChosen))
+	if run.Coverage.Declared() {
+		t.Errorf("a source file was declared out of scope by its extension: %s", run.Coverage.DeclaredDetail(1<<20))
 	}
 	lost := run.Coverage.LostDetail(1 << 20)
 	if !strings.Contains(lost, "Comp.vue") {
@@ -233,8 +230,8 @@ func TestRealSemgrepEvaluatesTestAndFixturePaths(t *testing.T) {
 			t.Errorf("%s was not evaluated: %v", want, seen)
 		}
 	}
-	if run.Coverage.DeclaredCount(scope.ReasonTestPath) != 0 {
-		t.Errorf("a test path was declared out of scope: %v", run.Coverage.Names(scope.ReasonTestPath))
+	if run.Coverage.Declared() {
+		t.Errorf("a test path was declared out of scope: %s", run.Coverage.DeclaredDetail(1<<20))
 	}
 	if run.Coverage.Lost() {
 		t.Errorf("lost: %s", run.Coverage.LostDetail(1<<20))
@@ -283,5 +280,60 @@ func TestRealSemgrepAWholeFileSkippedByAPartialParseIsLost(t *testing.T) {
 	run := realRun(t, root)
 	if lost := run.Coverage.LostDetail(1 << 20); !strings.Contains(lost, "d.js") || strings.Contains(lost, "ok.js") {
 		t.Errorf("lost = %q; want d.js named and ok.js not", lost)
+	}
+}
+
+// Decision D5-2 against the real Semgrep, with the adversarial inputs of C4B-02,
+// C4B-03 and review items 1, 4 and 7: a first-party module that carries a
+// library's banner, a generator header or one large JSON literal, minified-looking
+// code, and files whose names start with '-' are all evaluated, under a relative
+// --code, and their SQL injection is reported.
+func TestRealSemgrepEvaluatesAdversarialFirstPartyFiles(t *testing.T) {
+	koa := "const Router = require('@koa/router');\nconst router = new Router();\nconst { Pool } = require('pg');\nconst pool = new Pool();\n" +
+		"router.get('/u', async (ctx) => {\n  const r = await pool.query(\"SELECT * FROM users WHERE id = '\" + ctx.query.id + \"'\");\n  ctx.body = r.rows;\n});\nmodule.exports = router;\n"
+	pad := strings.Repeat("function pad(a, b) { return a + b; }\n", 400)
+	literal := "const COUNTRIES = [" + strings.Repeat(`{"code":"C000","name":"Country","region":{"id":0,"label":"R0"},"vat":3},`, 700) + "];\n"
+	files := map[string]string{
+		"banners/jquery.js":   "/*! jQuery v3.7.1 | (c) OpenJS Foundation | jquery.org/license */\n// jquery jquery jquery\n" + koa + pad,
+		"banners/socketio.js": "/*! Socket.IO v4.7.2 | (c) 2014-2023 Guillermo Rauch | MIT */\n// socket socket socket\n" + koa + pad,
+		"banners/lodash.js":   "/** @license Lodash <https://lodash.com/> */\n// lodash lodash lodash\n" + koa + pad,
+		"banners/react.js":    "/** React v18.2.0 | MIT */\n// react react react\n" + koa + pad,
+		"gen/generated.js":    "// Code generated by acme-gen v1.0. DO NOT EDIT.\n" + koa,
+		"data/routes.js":      koa + literal,
+		"data/routes.ts":      koa + literal,
+		"minlike/bundle.js":   koa + "\n" + strings.Repeat("a=b(c,d);", 500) + "\n",
+		"-x.py":               picklePy,
+		"--config=evil.py":    picklePy,
+		"-y.mts":              koa,
+		"--version.js":        koa,
+	}
+	root := chdirTempTree(t)
+	writeTree(t, root, files)
+	requireSemgrep(t)
+	resetRulesCacheForTesting()
+	t.Cleanup(resetRulesCacheForTesting)
+	resetVersionCacheForTesting()
+	t.Cleanup(resetVersionCacheForTesting)
+	run, err := ScanRun(context.Background(), ".", nil)
+	if err != nil {
+		t.Fatalf("ScanRun: %v", err)
+	}
+	seen := endpoints(run)
+	for _, f := range run.Findings {
+		for _, o := range f.Occurrences {
+			seen[o.Endpoint] = true
+		}
+	}
+	for _, want := range []string{
+		"banners/jquery.js:8", "banners/socketio.js:8", "banners/lodash.js:8", "banners/react.js:8",
+		"gen/generated.js:7", "data/routes.js:6", "data/routes.ts:6", "minlike/bundle.js:6",
+		"-x.py:5", "--config=evil.py:5", "-y.mts:6", "--version.js:6",
+	} {
+		if !seen[want] {
+			t.Errorf("%s was not evaluated: %v", want, seen)
+		}
+	}
+	if run.Coverage.Declared() || run.Coverage.Lost() {
+		t.Errorf("declared %q, lost %q; nothing here is left out", run.Coverage.DeclaredDetail(1<<20), run.Coverage.LostDetail(1<<20))
 	}
 }

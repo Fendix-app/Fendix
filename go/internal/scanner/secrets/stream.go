@@ -71,6 +71,11 @@ type segment struct {
 	// to belong to this window. ownStart is 0 for the first window of a line;
 	// ownEnd is len(text) for the last (or only) window of the line.
 	ownStart, ownEnd int
+	// base is the offset in the line of text[0], so a span found in one window
+	// can be carried into the next (see lineScanner.carry).
+	base int
+	// last is true for the final window of the line.
+	last bool
 }
 
 // streamLines reads r to its end and calls fn for each window of each line,
@@ -83,6 +88,7 @@ func streamLines(r io.Reader, fn func(segment) error) error {
 		cur       []byte
 		lineno    = 1
 		windows   int  // windows of the current line already emitted
+		lineBase  int  // offset in the line of cur[0]
 		pendingLF bool // a \r ended the last chunk: swallow a \n that follows it
 		buf       = make([]byte, readChunkBytes)
 	)
@@ -90,7 +96,7 @@ func streamLines(r io.Reader, fn func(segment) error) error {
 		if len(cur) == 0 && windows == 0 {
 			return nil
 		}
-		seg := segment{lineno: lineno, first: windows == 0}
+		seg := segment{lineno: lineno, first: windows == 0, base: lineBase, last: final}
 		ctxLen := contextBytes()
 		if windows > 0 {
 			seg.ownStart = ctxLen
@@ -112,6 +118,7 @@ func streamLines(r io.Reader, fn func(segment) error) error {
 			// the region it owns.
 			keep := lineWindowBytes - lineWindowOverlap - ctxLen
 			cur = append(cur[:0], cur[keep:]...)
+			lineBase += keep
 			windows++
 		}
 		return nil
@@ -122,6 +129,7 @@ func streamLines(r io.Reader, fn func(segment) error) error {
 		}
 		cur = cur[:0]
 		windows = 0
+		lineBase = 0
 		lineno++
 		return nil
 	}

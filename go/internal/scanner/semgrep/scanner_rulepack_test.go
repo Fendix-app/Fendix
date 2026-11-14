@@ -835,25 +835,27 @@ func withExtraSemgrepConfig(t *testing.T, config string) {
 // bound (--timeout 0) would let one file use up defaultTimeout and lose every
 // finding of the run.
 //
-// Decision D6' replaced the fixed list of excluded NAMES (node_modules, dist,
-// build, .next, target, vendor, *.min.js) with the paths the tree holds
-// evidence for: this test builds one tree of each kind of evidence and pins an
-// anchored --exclude for exactly those, and none for a directory that merely
-// has one of the old names.
+// Decision D5-2: no name or marker excludes anything. A tree with every
+// marker round 4 trusted gets no --exclude; only a root .git with a real layout
+// is skipped, with one anchored --exclude, and every target follows "--".
 func TestScanArgsExcludeBuildOutputAndBoundRuleTimeout(t *testing.T) {
 	argv := filepath.Join(t.TempDir(), "argv")
 	installArgRecordingSemgrep(t, argv)
 	root := t.TempDir()
-	writeTree(t, root, map[string]string{
+	files := map[string]string{
 		"node_modules/.package-lock.json": `{"lockfileVersion": 3}`,
 		"vendor/modules.txt":              "# example.com/m v1.0.0\n",
 		"target/CACHEDIR.TAG":             "Signature: 8a477f597d28d172789f06886806bc55\n",
 		".next/BUILD_ID":                  "x",
 		".next/build-manifest.json":       "{}",
 		"web/venv/pyvenv.cfg":             "home = /usr/bin\n",
-		"dist/app.js":                     "run();\n", // named like build output, no evidence
+		"dist/app.js":                     "run();\n",
 		"build/app.js":                    "run();\n",
-	})
+	}
+	for k, v := range realGitDir() {
+		files[k] = v
+	}
+	writeTree(t, root, files)
 	if _, err := Scan(context.Background(), root); err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -862,18 +864,13 @@ func TestScanArgsExcludeBuildOutputAndBoundRuleTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	args := "\n" + string(raw)
-	for _, pair := range []string{
-		"--exclude\n/node_modules\n", "--exclude\n/vendor\n", "--exclude\n/target\n", "--exclude\n/.next\n",
-		"--exclude\n/web/venv\n", "--timeout\n30\n", "--disable-nosem\n",
-	} {
+	for _, pair := range []string{"--exclude\n/.git\n", "--timeout\n30\n", "--disable-nosem\n", "--\n" + root + "\n"} {
 		if !strings.Contains(args, "\n"+pair) {
 			t.Errorf("semgrep argv lacks %q:\n%s", strings.ReplaceAll(pair, "\n", " "), raw)
 		}
 	}
-	for _, pair := range []string{"--exclude\ndist\n", "--exclude\n/dist\n", "--exclude\nbuild\n", "--exclude\n/build\n"} {
-		if strings.Contains(args, "\n"+pair) {
-			t.Errorf("semgrep argv excludes %q, a directory with no evidence of being build output:\n%s", strings.ReplaceAll(pair, "\n", " "), raw)
-		}
+	if got := strings.Count(args, "\n--exclude\n"); got != 1 {
+		t.Errorf("semgrep argv has %d --exclude, want only /.git:\n%s", got, raw)
 	}
 	if defaultTimeout != 300*time.Second {
 		t.Errorf("defaultTimeout = %s; want 300s, the bound on one run of every pack", defaultTimeout)

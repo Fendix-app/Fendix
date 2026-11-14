@@ -465,9 +465,8 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 // unread (decision D6). A file the scanner reads (ReadsFile) that was over
 // the size cap, could not be read, or was replaced between the walk and the
 // read, and a directory it could not list, are lost evaluation: the caller
-// records the scan a coverage gap naming them and keeps the findings. A
-// declared generated artifact over the cap (scope.Generated) and a pruned
-// vendored or build-output directory are declared out of scope, listed only.
+// records the scan a coverage gap naming them and keeps the findings. The
+// only directory left unread is <root>/.git (PrunedDir), and it is not source.
 func ScanCoverage(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, scope.Coverage, error) {
 	var findings []evidence.Evidence
 	var cov scope.Coverage
@@ -479,9 +478,8 @@ func ScanCoverage(ctx context.Context, codePath string, allow *gitdiff.Allowlist
 	return findings, cov, err
 }
 
-// noteUnread files a file the walk did not (fully) read: too large (declared
-// out of scope only when its content proves it a generated artifact, D6') or
-// unreadable. A file proven binary is not text and is not recorded.
+// noteUnread files a file the walk did not (fully) read: too large or
+// unreadable, both lost evaluation. A file proven binary is not text and is not recorded.
 func noteUnread(cov *scope.Coverage, absRoot, path string, err error) {
 	if cov == nil || err == nil || errors.Is(err, errBinary) {
 		return
@@ -493,12 +491,9 @@ func noteUnread(cov *scope.Coverage, absRoot, path string, err error) {
 	rel = filepath.ToSlash(rel)
 	switch {
 	case errors.Is(err, errTooLarge):
-		if info, serr := os.Lstat(path); serr == nil {
-			if v := scope.ClassifyFile(path, rel, info.Size()); !v.None() {
-				cov.Exclude(v.Reason, SafeName(rel))
-				return
-			}
-		}
+		// Over the cap is lost evaluation, whatever the file looks like: a
+		// banner or a layout is not evidence that nothing in it matters
+		// (contract C6).
 		cov.TooLarge(lostName(rel))
 	case errors.Is(err, errTooManyFindings):
 		// The file is not evaluated past its findings cap: lost, not skipped.
@@ -972,6 +967,11 @@ type lineScanner struct {
 	matches [][][]int
 	rel     string
 	out     []emitted
+	// carry holds the credential spans the earlier windows of the current line
+	// found, in offsets of the line, so a window that sees only the tail of a
+	// credential still redacts it (carry.go).
+	carry     []carriedSpan
+	carryLine int
 }
 
 // scanReader applies the pattern registry to a stream. rel is the
@@ -1025,7 +1025,11 @@ func (ls *lineScanner) scan(seg segment) {
 		matches[i] = active[i].regex.FindAllStringSubmatchIndex(line, -1)
 		matched = matched || matches[i] != nil
 	}
+	carriedIn := ls.carriedSpans(seg, line)
 	if !matched {
+		// Nothing to emit here, but a credential carried in from an earlier
+		// window may reach through this one into the next.
+		ls.updateCarry(seg, line, carriedIn, nil, 0)
 		return
 	}
 
@@ -1038,8 +1042,9 @@ func (ls *lineScanner) scan(seg segment) {
 	// INVARIANT from here down: `line` is used ONLY for offsets, pattern
 	// matching and placeholder classification. The only string that may
 	// reach an evidence.Evidence is `redacted`.
-	spans := lineSecretSpans(line, active, matches)
+	spans := lineSecretSpans(line, active, matches, carriedIn...)
 	redacted, newSpans := redactSpans(line, spans)
+	ls.updateCarry(seg, line, carriedIn, spans, restOfLineEnd(line, active, matches))
 
 	for i := range active {
 		pat := &active[i]

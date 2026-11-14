@@ -90,13 +90,10 @@ func recordedArgs(t *testing.T, argvFile string) string {
 func TestScanDropsTheOptionsAnOlderHostSemgrepDoesNotKnow(t *testing.T) {
 	argv := filepath.Join(t.TempDir(), "argv")
 	installVersionedSemgrep(t, "1.45.0", []string{"--project-root"}, argv)
-	// D6': the paths left out are the ones the tree holds evidence for, so the
-	// run's tree has an installed npm tree and a vendored Go tree.
+	// D5-2: the only path left out is the root .git directory, with a real
+	// layout.
 	root := t.TempDir()
-	writeTree(t, root, map[string]string{
-		"node_modules/.package-lock.json": `{"lockfileVersion": 3}`,
-		"vendor/modules.txt":              "# example.com/m v1.0.0\n",
-	})
+	writeTree(t, root, realGitDir())
 	if _, err := Scan(context.Background(), root); err != nil {
 		t.Fatalf("Scan on Semgrep 1.45.0: %v", err)
 	}
@@ -104,7 +101,7 @@ func TestScanDropsTheOptionsAnOlderHostSemgrepDoesNotKnow(t *testing.T) {
 	if strings.Contains(args, "--project-root") {
 		t.Errorf("--project-root passed to Semgrep 1.45.0:%s", args)
 	}
-	for _, kept := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--exclude\n/node_modules\n", "\n--exclude\n/vendor\n"} {
+	for _, kept := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--exclude\n/.git\n"} {
 		if !strings.Contains(args, kept) {
 			t.Errorf("Semgrep 1.45.0 takes %q, which was dropped:%s", strings.TrimSpace(kept), args)
 		}
@@ -133,12 +130,12 @@ func TestScanPassesEveryOptionToASemgrepThatHasThem(t *testing.T) {
 		argv := filepath.Join(t.TempDir(), "argv")
 		installVersionedSemgrep(t, version, nil, argv)
 		root := t.TempDir()
-		writeTree(t, root, map[string]string{"vendor/modules.txt": "# example.com/m v1.0.0\n"})
+		writeTree(t, root, realGitDir())
 		if _, err := Scan(context.Background(), root); err != nil {
 			t.Fatalf("Scan on Semgrep %s: %v", version, err)
 		}
 		args := recordedArgs(t, argv)
-		for _, want := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--project-root\n" + root + "\n", "\n--exclude\n/vendor\n",
+		for _, want := range []string{"\n--dataflow-traces\n", "\n--timeout\n30\n", "\n--project-root\n" + root + "\n", "\n--exclude\n/.git\n",
 			"\n--x-ignore-semgrepignore-files\n", "\n--max-target-bytes\n1048576\n"} {
 			if !strings.Contains(args, want) {
 				t.Errorf("Semgrep %s was not given %q:%s", version, strings.TrimSpace(want), args)
@@ -260,4 +257,9 @@ func TestDroppedNameEveryOptionTheVersionPredates(t *testing.T) {
 	if got := droppedNote(parseSemgrepVersion("0.10.0"), dropped); got != want {
 		t.Errorf("droppedNote = %q, want %q", got, want)
 	}
+}
+
+// realGitDir is a root .git directory with a real layout: HEAD, objects/, refs/.
+func realGitDir() map[string]string {
+	return map[string]string{".git/HEAD": "ref: refs/heads/main\n", ".git/objects/x": "x", ".git/refs/heads/main": "x"}
 }

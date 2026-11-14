@@ -100,8 +100,11 @@ func secretValueSpan(pat *pattern, line string, sub []int) (start, end int, ok b
 // Spans are collected in registry order, then sorted by start and merged so
 // overlapping or touching spans (e.g. OPENAI_API_KEY and ANTHROPIC_API_KEY on
 // one token) collapse into a single deterministic marker.
-func lineSecretSpans(line string, active []pattern, matches [][][]int) [][2]int {
-	var spans [][2]int
+func lineSecretSpans(line string, active []pattern, matches [][][]int, extra ...[2]int) [][2]int {
+	// extra holds spans a previous window of a long line found and carried
+	// here (lineScanner.carry): credential material whose start this window
+	// cannot see.
+	spans := append([][2]int(nil), extra...)
 	for i := range active {
 		for _, sub := range matches[i] {
 			if active[i].valueSpans != nil {

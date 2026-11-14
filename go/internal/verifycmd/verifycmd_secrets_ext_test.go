@@ -97,7 +97,7 @@ func TestVerify_SemgrepFindingWithSecretsCategoryIsKept(t *testing.T) {
 // node_modules, vendor or build, and one in a file over 1 MiB, is re-tested
 // like any other. (Round 3 pinned those last three as unknown: that was the
 // scanner skipping first-party code by name and a 1 MiB file by size.)
-func TestVerify_SecretsFindingUnderEvidencedDependencyTreeIsNotResolved(t *testing.T) {
+func TestVerify_SecretsFindingUnderADependencyLookingTreeIsReadNotPruned(t *testing.T) {
 	key := "AKIA" + "ZXCVBNMASDFGHJKL"
 	line := "const awsKey = \"" + key + "\";\n"
 
@@ -127,10 +127,14 @@ func TestVerify_SecretsFindingUnderEvidencedDependencyTreeIsNotResolved(t *testi
 		{"a folder only named node_modules is read", "node_modules/pkg/server.js", nil, line, StatusStillPresent, ""},
 		{"a folder only named vendor is read", "vendor/pkg/server.js", nil, line, StatusStillPresent, ""},
 		{"a folder only named build is read", "build/server.js", nil, line, StatusStillPresent, ""},
-		{"an installed npm tree is pruned", "node_modules/pkg/server.js",
-			map[string]string{"node_modules/.package-lock.json": `{"lockfileVersion": 3}`}, line, StatusUnknown, "node_modules"},
-		{"a Go vendor tree is pruned", "vendor/pkg/server.js",
-			map[string]string{"vendor/modules.txt": "# example.com/pkg v1.0.0\n"}, line, StatusUnknown, "vendor"},
+		// Round 5 (D5-2, C6) reverses the two cases round 4 pinned as unknown:
+		// a marker file proves nothing, so an installed-package tree and a Go
+		// vendor tree are read like any directory and the finding in them is
+		// still present.
+		{"an installed npm tree is read", "node_modules/pkg/server.js",
+			map[string]string{"node_modules/.package-lock.json": `{"lockfileVersion": 3}`}, line, StatusStillPresent, ""},
+		{"a Go vendor tree is read", "vendor/pkg/server.js",
+			map[string]string{"vendor/modules.txt": "# example.com/pkg v1.0.0\n"}, line, StatusStillPresent, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -9,20 +9,34 @@ import (
 	"syscall"
 )
 
-// killTree kills p and every process descended from it. The descendants are
-// read from /proc before anything is killed (a killed parent's children are
-// reparented and can no longer be found by their parent), and the list is
-// taken twice so a child started between the first read and the kill is not
-// missed.
+// killTree kills p and every process descended from it. Nothing is killed
+// until the whole tree is frozen: p is stopped first, then every descendant
+// found is stopped, and the scan repeats until it finds no new one (a child
+// started between two reads is stopped by the next). Only then is everything
+// killed, descendants first and p last. A frozen wrapper cannot notice that its
+// worker died, print a document and exit 0 while the rest of the tree is still
+// being found (round 5, DE6-02), so a run killed at its deadline never reads as
+// one that finished. The descendants are read from /proc before anything is
+// killed, because a killed parent's children are reparented and can no longer
+// be found by their parent.
 func killTree(p *os.Process) error {
+	_ = syscall.Kill(p.Pid, syscall.SIGSTOP)
 	pids := map[int]bool{}
-	for round := 0; round < 2; round++ {
+	for round := 0; round < 4; round++ {
+		fresh := 0
 		for _, pid := range descendantsOf(p.Pid) {
-			pids[pid] = true
+			if !pids[pid] {
+				pids[pid] = true
+				fresh++
+				_ = syscall.Kill(pid, syscall.SIGSTOP)
+			}
 		}
-		for pid := range pids {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		if fresh == 0 {
+			break
 		}
+	}
+	for pid := range pids {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
 	return p.Kill()
 }

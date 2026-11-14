@@ -9,6 +9,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -41,11 +42,11 @@ import (
 //
 // What it searches, stated in every reason that depends on it:
 //
-//   - every file under the root, text or binary, and the directories a scan
-//     prunes (node_modules, virtual environments, build output) as well:
-//     only a .git object store is left, which is compressed history rather
-//     than the tree. A binary file is searched as raw bytes, and one with NULs
-//     also with the NULs removed (UTF-16 text inside it);
+//   - every file under the root, text or binary, node_modules, virtual
+//     environments and build output included: only <root>/.git/objects is
+//     left, which is compressed history rather than the tree. A binary file
+//     is searched as raw bytes, and one with NULs also with the NULs removed
+//     (UTF-16 and UTF-32 text inside it);
 //   - gzip, bzip2, zip (jar, war, whl, apk, docx and the rest) and tar files,
 //     recognised by their first bytes and not by their name, down to a
 //     bounded depth and size; each entry is searched like any other file;
@@ -55,13 +56,27 @@ import (
 //     (\" \' \\ \/ \xHH \uXXXX \u{X} \UXXXXXXXX \NNN), %HH URL-encoding
 //     undone, and a base64 or hex run decoded.
 //
+// Round 5 (D5-3, contract C8) adds, all bounded: the \N{NAME} escape (ASCII
+// names), HTML and XML character references, lists of character codes
+// (String.fromCharCode(65, 75), chr(65)+chr(75), [65, 75]), hexadecimal with
+// separators and 0x prefixes, base64 inside base64 (two layers) and hex or
+// zlib inside base64, UTF-32 text, URL-encoding twice, and the zlib, gzip and
+// bzip2 streams found by header inside any file that is not text (a raw
+// compressed file, an image's or a PDF's flate data, a git object).
+//
 // It does NOT search what is not a representation of the same bytes: a value
-// split over variables or built at run time, reversed, shifted or encrypted, a
-// list of character codes, a compressed archive in a format it cannot decode
-// (xz, zstd, 7z, rar and the like: those files make the answer unknown), a
-// compressed stream inside another format (a PNG, a PDF, a font) or a value
-// that exists only in version-control history. A credential hidden that way is
-// not found, so "resolved" says exactly what was searched.
+// split over variables or built at run time, case-changed, shifted or encrypted
+// (a value committed backwards is the one exception it covers), or one that
+// exists only in version-control history. Content it
+// could not read or decode is recorded as lost evaluation, so the answer is
+// unknown and never resolved: a file over the cap or unreadable, an archive in a
+// format it cannot decode (xz, zstd, 7z, rar and the like), an encrypted or
+// truncated archive or stream, a binary file that is compressed or encrypted and
+// holds no stream it can decode, a \N{NAME} escape outside its ASCII table, and
+// any git object store that is not <root>/.git/objects. The one place it still
+// reads less than all is the payload of a recognised media container (a PNG, a
+// JPEG, a font, an audio or video file): its raw bytes and its flate streams are
+// searched, the entropy-coded data is not, and the reason says so.
 //
 // A candidate is a substring of the exact length of a marker, starting at any
 // byte that can start a value (the scanner reports a value glued to a letter,
@@ -99,6 +114,10 @@ var (
 	// maxSearchTotal is how many bytes one SearchValues call reads in all.
 	maxSearchTotal int64 = 4 << 30
 )
+
+// maxEmbeddedStreamBytes is how many bytes one compressed stream found inside a
+// file may expand to. A variable so a test can lower it.
+var maxEmbeddedStreamBytes int64 = 16 << 20
 
 // ErrCredentialTooLong is returned by SearchValues for a marker whose value is
 // longer than the search supports.
@@ -138,8 +157,10 @@ type Hit struct {
 	// Marker is the redaction marker whose length and digest matched.
 	Marker string
 	// Form says how the value was found: "as written", "with adjacent literals
-	// joined", "with escapes undone", "with URL-encoding undone", "with NUL
-	// bytes removed", "base64-decoded" or "hex-decoded".
+	// joined", "with escapes undone", "with character references undone",
+	// "with URL-encoding undone", "with NUL bytes removed", "reversed",
+	// "character codes decoded", "base64-decoded", "hex-decoded",
+	// "decoded in two layers (...)" or "decompressed".
 	Form string
 }
 
@@ -182,10 +203,11 @@ func (r *SearchResult) Scope() string {
 		s += fmt.Sprintf(" and the contents of %d archives (%d entries)", r.Archives, r.Entries)
 	}
 	s += " under --code, including directories a scan prunes, for the value as written, with adjacent string " +
-		"literals and line continuations joined, backslash escapes and %XX undone, and base64 and hex runs " +
-		"decoded; not covered: a value built at run time or split over variables, reversed or encrypted, a " +
-		"compressed stream inside a binary format, an archive in a format that cannot be decoded, and " +
-		"version-control history"
+		"literals and line continuations joined, backslash escapes (\\xHH, \\uXXXX, \\N{NAME}), HTML character " +
+		"references and %XX undone, character-code lists, base64 and hex (with or without separators) decoded, up to " +
+		"two layers deep, compressed streams inside files decompressed, and the value written backwards; not covered: " +
+		"a value built at run time (case-changed, concatenated from variables, shifted or otherwise computed), " +
+		"encrypted, held in an image or another recognised media payload, or only in version-control history"
 	var skipped []string
 	if r.History > 0 {
 		skipped = append(skipped, fmt.Sprintf("%d git object stores", r.History))
@@ -334,7 +356,7 @@ func hexRun(buf []byte, i, max int) (uint32, int) {
 
 // normalize returns buf with adjacent string literals joined and backslash-
 // newline continuations removed, and, when unescape is set, \" \' \\ \/ \xHH
-// \uXXXX \u{X...} \UXXXXXXXX and \NNN (octal) undone. pos[k] is the index in buf
+// \uXXXX \u{X...} \UXXXXXXXX, \N{NAME} and \NNN (octal) undone. pos[k] is the index in buf
 // of out[k]. changed is false when out equals buf, so the caller can skip a
 // second search.
 func normalize(buf []byte, unescape bool) (out []byte, pos []int32, changed bool) {
@@ -377,6 +399,15 @@ func normalize(buf []byte, unescape bool) (out []byte, pos []int32, changed bool
 			put(buf[i+1], i)
 			i += 2
 			changed = true
+		case c == '\\' && unescape && i+3 < len(buf) && buf[i+1] == 'N' && buf[i+2] == '{':
+			if b, n, ok := nameEscape(buf, i); ok {
+				put(b, i)
+				i += n
+				changed = true
+				continue
+			}
+			put(c, i)
+			i++
 		case c == '\\' && unescape && i+3 < len(buf) && buf[i+1] == 'x':
 			if v, n := hexRun(buf, i+2, 2); n == 2 {
 				put(byte(v), i)
@@ -485,6 +516,19 @@ type searchState struct {
 	seen        map[string]bool
 	total       int64 // bytes read in all
 	archiveLeft int64 // decompressed bytes the current top-level file may still expand to
+
+	// The stream being searched: whether it is not text (binary, or not valid
+	// UTF-8), and what was already recorded as lost for it, so one file is named
+	// once.
+	nonText  bool
+	lostOnce map[string]bool
+	decoded  int // compressed streams decoded inside the current stream
+	// sourceSize is the length of the file being searched when it is known (0 for
+	// a stream inside an archive), which the media check compares a container's
+	// own length field with.
+	sourceSize int64
+	// curRel is the stream the current segment belongs to.
+	curRel string
 }
 
 // SearchValues looks for the credentials the markers stand for in every file
@@ -508,10 +552,22 @@ func SearchValues(ctx context.Context, root string, markers []string) (*SearchRe
 	st := &searchState{vs: vs, res: res, seen: map[string]bool{}}
 	opts := walkOptions{
 		prune: func(abs, rel string) (scope.Reason, bool) {
-			if isGitObjectStore(abs) {
+			if filepath.Base(abs) != "objects" || !realGitLayout(filepath.Dir(abs)) {
+				return "", false
+			}
+			if filepath.ToSlash(rel) == ".git/objects" {
+				// The scan root's own history: the one store left unsearched,
+				// and named as not covered in every reason.
 				res.History++
 				return reasonGitMetadata, true
 			}
+			// Any other directory shaped like an object store (HEAD, refs/ and
+			// objects/ together) is not known to be the scan root's history: a
+			// vendored repository, a fixture, or a layout made up to hide
+			// content. It is searched like any directory, and because its
+			// objects are compressed history that a search for text cannot read,
+			// it is lost evaluation: the answer is unknown (review item 5).
+			res.Coverage.NotText(lostName(filepath.ToSlash(rel)) + "/ (a git object store that is not the scan root's own)")
 			return "", false
 		},
 		reads: func(string) bool { return true },
@@ -530,19 +586,6 @@ func SearchValues(ctx context.Context, root string, markers []string) (*SearchRe
 		return nil, err
 	}
 	return res, nil
-}
-
-// isGitObjectStore reports whether the directory at abs is the object store of
-// a git repository: a directory named objects beside a HEAD file and a refs
-// directory. Its files are zlib-compressed history.
-func isGitObjectStore(abs string) bool {
-	if filepath.Base(abs) != "objects" {
-		return false
-	}
-	parent := filepath.Dir(abs)
-	head, errH := os.Lstat(filepath.Join(parent, "HEAD"))
-	refs, errR := os.Lstat(filepath.Join(parent, "refs"))
-	return errH == nil && head.Mode().IsRegular() && errR == nil && refs.IsDir()
 }
 
 func (st *searchState) searchFile(ctx context.Context, rt *os.Root, path, rootDir string, d fs.DirEntry) error {
@@ -658,6 +701,7 @@ func (st *searchState) searchSource(ctx context.Context, r *bufio.Reader, name, 
 		return err
 	}
 	head, _ := r.Peek(sniffBytes)
+	st.sourceSize = size
 	kind := archiveKind(head)
 	if kind != "" && depth >= maxArchiveDepth {
 		st.res.Coverage.TooLarge(lostName(display) + " (archives nested too deeply)")
@@ -794,14 +838,22 @@ func (st *searchState) searchZip(ctx context.Context, r *bufio.Reader, name, dis
 func (st *searchState) searchPlain(ctx context.Context, r *bufio.Reader, name, display string, head []byte) error {
 	var src io.Reader = r
 	binary := false
-	if is16, bigEnd := utf16BOM(head); is16 {
+	decodedText := false
+	if is32, bigEnd := utf32BOM(head); is32 {
+		if _, err := r.Discard(4); err != nil {
+			return err
+		}
+		src, decodedText = newUTF32Reader(r, bigEnd), true
+	} else if is16, bigEnd := utf16BOM(head); is16 {
 		if _, err := r.Discard(2); err != nil {
 			return err
 		}
-		src = newUTF16Reader(r, bigEnd)
+		src, decodedText = newUTF16Reader(r, bigEnd), true
 	} else if looksBinary(head) {
 		if _, bigEnd, ok := utf16Guess(head); ok {
-			src = newUTF16Reader(r, bigEnd)
+			src, decodedText = newUTF16Reader(r, bigEnd), true
+		} else if bigEnd, ok := utf32Guess(head); ok {
+			src, decodedText = newUTF32Reader(r, bigEnd), true
 		} else if !isKnownText(name) {
 			binary = true
 		}
@@ -816,13 +868,37 @@ func (st *searchState) searchPlain(ctx context.Context, r *bufio.Reader, name, d
 	} else {
 		st.res.Files++
 	}
+	// A file that is not text (binary by type or content, or not valid UTF-8,
+	// such as a raw compressed stream) is also searched for the compressed
+	// streams inside it; one that is compressed or encrypted and could not be
+	// decoded is lost evaluation (contract C8).
+	st.nonText = !decodedText && (binary || !validUTF8Prefix(head))
+	st.decoded = 0
 	n, err := st.searchStream(ctx, src, SafeName(display))
 	st.res.Bytes += n
 	st.total += n
+	if err == nil && st.nonText && st.decoded == 0 && opaqueBinary(head, st.sourceSize) {
+		st.loseOnce(SafeName(display), "binary content that is compressed or encrypted and cannot be decoded")
+	}
+	st.nonText = false
 	if err == nil && st.total >= maxSearchTotal {
 		err = errSearchBudget
 	}
 	return err
+}
+
+// validUTF8Prefix reports whether head is valid UTF-8, allowing a character cut
+// at its end.
+func validUTF8Prefix(head []byte) bool {
+	if len(head) == 0 {
+		return true
+	}
+	for cut := 0; cut < 4 && cut < len(head); cut++ {
+		if utf8.Valid(head[:len(head)-cut]) {
+			return true
+		}
+	}
+	return false
 }
 
 // searchStream searches a stream segment by segment.
@@ -864,6 +940,7 @@ func (st *searchState) searchStream(ctx context.Context, r io.Reader, rel string
 
 // searchSegment searches one segment in every form.
 func (st *searchState) searchSegment(buf []byte, base int64, linesBase int, rel string) {
+	st.curRel = rel
 	record := func(idx int, marker, form string) {
 		if len(st.res.Hits) >= maxHits {
 			st.enough = true
@@ -894,14 +971,23 @@ func (st *searchState) searchSegment(buf []byte, base int64, linesBase int, rel 
 	if uchanged {
 		views = append(views, view{unescaped, upos, "with escapes undone"})
 	}
-	pin, ppos := buf, []int32(nil)
+	pin, ppos := buf, identity(len(buf))
 	if uchanged {
 		pin, ppos = unescaped, upos
-	} else {
-		ppos = identity(len(buf))
 	}
-	if out, pos, changed := percentDecode(pin, ppos); changed {
+	// HTML and XML character references, then URL-encoding (twice: a value
+	// encoded again is %2541 for %41), each on what the step before left.
+	if out, pos, changed := htmlDecode(pin, ppos); changed {
+		views = append(views, view{out, pos, "with character references undone"})
+		pin, ppos = out, pos
+	}
+	for pass := 0; pass < 2; pass++ {
+		out, pos, changed := percentDecode(pin, ppos)
+		if !changed {
+			break
+		}
 		views = append(views, view{out, pos, "with URL-encoding undone"})
+		pin, ppos = out, pos
 	}
 	if out, pos, changed := stripNULs(buf); changed {
 		views = append(views, view{out, pos, "with NUL bytes removed"})
@@ -913,16 +999,182 @@ func (st *searchState) searchSegment(buf []byte, base int64, linesBase int, rel 
 		v := v
 		st.vs.find(v.out, func(i int, m string) { record(int(v.pos[i]), m, v.form) })
 	}
+	if st.enough {
+		return
+	}
+	// The value written backwards: a literal committed reversed and turned
+	// around at run time ("...wL7tR4xP9m"[::-1]) is the commonest way to dodge a
+	// scanner. The reversed buffer is searched as is; positions are mapped back
+	// to the end of the match in the original, which is enough for its line.
+	rev := make([]byte, len(buf))
+	for i, c := range buf {
+		rev[len(buf)-1-i] = c
+	}
+	st.vs.find(rev, func(i int, m string) { record(len(buf)-1-i, m, "reversed") })
+	if st.enough {
+		return
+	}
+	// A list of character codes.
+	charCodeRuns(buf, st.vs.lengths[0], func(blob []byte, at int) {
+		st.vs.find(blob, func(_ int, m string) { record(at, m, "character codes decoded") })
+	})
+	if st.enough {
+		return
+	}
+	st.findEncoded(buf, nil, record)
+	// The same, on the text with its escapes, character references and
+	// URL-encoding undone: a base64 value whose "+" and "/" are written %2B and
+	// %2F, \x2b, or &#43; is one run again.
+	if !st.enough && !bytes.Equal(pin, buf) {
+		st.findEncoded(pin, ppos, record)
+	}
 	if !st.enough {
-		st.findEncoded(buf, record)
+		if out, pos, changed := hexCompact(buf); changed {
+			st.findEncoded(out, pos, record)
+		}
+	}
+	if st.nonText && !st.enough {
+		st.findEmbedded(buf, rel, record)
+	}
+	if esc, bad := undecodableNameEscape(buf); bad {
+		st.loseOnce(rel, "an escape the search cannot decode: "+lostName(esc))
+	}
+}
+
+// loseOnce records the stream rel as lost evaluation for why, once.
+func (st *searchState) loseOnce(rel, why string) {
+	key := rel + "\x00" + why
+	if st.lostOnce == nil {
+		st.lostOnce = map[string]bool{}
+	}
+	if st.lostOnce[key] {
+		return
+	}
+	st.lostOnce[key] = true
+	st.res.Coverage.NotText(lostName(rel) + " (" + lostReason(why) + ")")
+}
+
+// findEmbedded decodes the zlib, gzip and bzip2 streams inside a file that is
+// not text (a raw zlib stream, a PNG's or PDF's flate data, a git object, a
+// pack) and searches what they hold. A stream cut before its end, past the
+// decompression bound, or too many candidates to try, is lost evaluation.
+func (st *searchState) findEmbedded(buf []byte, rel string, record func(idx int, marker, form string)) {
+	limit := st.archiveLeft
+	if limit > maxEmbeddedStreamBytes {
+		limit = maxEmbeddedStreamBytes
+	}
+	if limit <= 0 {
+		st.loseOnce(rel, "compressed streams past the search's bound")
+		return
+	}
+	tooMany := embeddedStreams(buf, limit, func(es embeddedStream) {
+		st.decoded++
+		st.archiveLeft -= int64(len(es.blob))
+		at := es.at
+		st.vs.find(es.blob, func(_ int, m string) { record(at, m, "decompressed") })
+		// What the stream holds may itself be encoded.
+		if !st.enough {
+			st.findEncodedAt(es.blob, at, "decompressed", record)
+		}
+		if es.cut {
+			st.loseOnce(rel, "a compressed stream that ends before it is complete or expands past the search's bound")
+		}
+	})
+	if tooMany {
+		st.loseOnce(rel, "too many compressed-stream headers to try")
 	}
 }
 
 // findEncoded decodes the base64 and hex runs of buf and searches what they
-// decode to. A run is decoded from each of its first four (base64) or two (hex)
+// decode to, then the base64 and hex runs inside what they decode to (two layers
+// in all). A run is decoded from each of its first four (base64) or two (hex)
 // characters, so a value inside it is found whatever its alignment, and a run
-// glued to the bytes before it is still read.
-func (st *searchState) findEncoded(buf []byte, record func(idx int, marker, form string)) {
+// glued to the bytes before it is still read. pos, when not nil, maps buf's
+// offsets back to the original's.
+func (st *searchState) findEncoded(buf []byte, pos []int32, record func(idx int, marker, form string)) {
+	st.encodedRuns(buf, func(blob []byte, at int, kind string) {
+		if pos != nil {
+			at = int(pos[at])
+		}
+		st.vs.find(blob, func(_ int, m string) { record(at, m, kind+"-decoded") })
+		// UTF-16 under the encoding (PowerShell's -EncodedCommand is base64 of
+		// UTF-16LE): a NUL between the characters stands in the way of the match.
+		if out, _, changed := stripNULs(blob); changed {
+			st.vs.find(out, func(_ int, m string) { record(at, m, kind+"-decoded, UTF-16 text") })
+		}
+		if st.enough {
+			return
+		}
+		st.encodedRuns(blob, func(blob2 []byte, _ int, kind2 string) {
+			st.vs.find(blob2, func(_ int, m string) { record(at, m, "decoded in two layers ("+kind+" then "+kind2+")") })
+			if out, _, changed := stripNULs(blob2); changed {
+				st.vs.find(out, func(_ int, m string) { record(at, m, "decoded in two layers ("+kind+" then "+kind2+"), UTF-16 text") })
+			}
+			// What two layers decode to is itself an encoded value: a third
+			// layer, one more than the search reads (contract C8). Not searched,
+			// and not called searched.
+			if st.curRel != "" && looksEncodedValue(blob2, st.vs.lengths[0]) {
+				st.loseOnce(st.curRel, "an encoding nested more than two layers deep")
+			}
+		})
+		// A compressed stream inside the encoded run (base64 of zlib).
+		if len(blob) > 2 && (blob[0] == 0x78 || blob[0] == 0x1f) {
+			embeddedStreams(blob[:min(len(blob), 1<<20)], maxEmbeddedStreamBytes/2, func(es embeddedStream) {
+				st.vs.find(es.blob, func(_ int, m string) { record(at, m, kind+"-decoded, decompressed") })
+			})
+		}
+	})
+}
+
+// findEncodedAt is findEncoded for a buffer that sits at one offset of the
+// original (the content of an embedded stream).
+func (st *searchState) findEncodedAt(buf []byte, at int, form string, record func(idx int, marker, form string)) {
+	st.encodedRuns(buf, func(blob []byte, _ int, kind string) {
+		st.vs.find(blob, func(_ int, m string) { record(at, m, form+", "+kind+"-decoded") })
+	})
+}
+
+// encodedRuns calls fn with the decoding of every base64 and hex run of buf, at
+// every alignment, and the offset of the run. It reads buf as written and, when
+// that differs, buf with adjacent literals joined and wrapped lines made one run
+// (encodedViews), so a value wrapped at 76 columns, or split over literals, is
+// decoded whole.
+func (st *searchState) encodedRuns(buf []byte, fn func(blob []byte, at int, kind string)) {
+	views, poss := encodedViews(buf)
+	// The joined view first: a run of it that spans a join holds the raw runs
+	// the join glued, and every value in those is a value of the joined run (a
+	// raw run is a substring of it, and the four alignments cover every
+	// alignment), so the raw view does not decode them again. Hex is still tried
+	// on the raw view, because a hex run can lose its purity in the join.
+	type span struct{ lo, hi int }
+	var covered []span
+	for k := len(views) - 1; k >= 0; k-- {
+		v, pos := views[k], poss[k]
+		skipB64 := func(i, j int) bool { return false }
+		if pos != nil {
+			// Identical to a raw run: the raw view decodes it.
+			skipAll := func(i, j int) bool { return int(pos[j-1])-int(pos[i]) == j-1-i }
+			st.encodedRunsIn(v, skipAll, skipAll, func(i, j int) {
+				covered = append(covered, span{int(pos[i]), int(pos[j-1])})
+			}, func(blob []byte, at int, kind string) { fn(blob, int(pos[at]), kind) })
+			continue
+		}
+		if len(covered) > 0 {
+			ci := 0
+			skipB64 = func(i, j int) bool {
+				for ci < len(covered) && covered[ci].hi < i {
+					ci++
+				}
+				return ci < len(covered) && covered[ci].lo <= i && j-1 <= covered[ci].hi
+			}
+		}
+		st.encodedRunsIn(v, skipB64, func(i, j int) bool { return false }, func(int, int) {}, fn)
+	}
+}
+
+// encodedRunsIn is encodedRuns for one view. skipB64 and skipHex name runs not
+// to decode; ran is called for each run that was decoded.
+func (st *searchState) encodedRunsIn(buf []byte, skipB64, skipHex func(i, j int) bool, ran func(i, j int), fn func(blob []byte, at int, kind string)) {
 	minLen := st.vs.lengths[0]
 	for i := 0; i < len(buf); {
 		if !isB64(buf[i]) {
@@ -938,42 +1190,60 @@ func (st *searchState) findEncoded(buf []byte, record func(idx int, marker, form
 			j++
 		}
 		run := buf[i:j]
-		if hexOnly && len(run) >= 2*minLen {
+		start := i
+		i = j
+		if hexOnly && len(run) >= 2*minLen && !skipHex(start, j) {
 			for off := 0; off < 2 && off < len(run); off++ {
 				chunk := run[off:]
 				chunk = chunk[:len(chunk)&^1]
 				blob := make([]byte, len(chunk)/2)
 				if _, err := hex.Decode(blob, chunk); err == nil {
-					start := i
-					st.vs.find(blob, func(_ int, m string) { record(start, m, "hex-decoded") })
+					fn(blob, start, "hex")
 				}
 			}
 		}
-		if len(run)*3/4 >= minLen {
-			// One alphabet per run: '-' and '_' mean the URL alphabet.
-			url := bytes.ContainsAny(run, "-_")
-			std := bytes.ContainsAny(run, "+/")
-			if !(url && std) {
-				enc := base64.RawStdEncoding
-				if url {
-					enc = base64.RawURLEncoding
-				}
-				for off := 0; off < 4 && off < len(run); off++ {
-					chunk := run[off:]
-					if len(chunk)%4 == 1 {
-						chunk = chunk[:len(chunk)-1]
-					}
-					blob := make([]byte, enc.DecodedLen(len(chunk)))
-					n, err := enc.Decode(blob, chunk)
-					if err != nil && n == 0 {
-						continue
-					}
-					start := i
-					st.vs.find(blob[:n], func(_ int, m string) { record(start, m, "base64-decoded") })
-				}
-			}
+		if len(run)*3/4 >= minLen && !skipB64(start, j) {
+			ran(start, j)
+			decodeBase64Run(run, func(blob []byte) { fn(blob, start, "base64") })
 		}
-		i = j
+		if len(run)*5/8 >= minLen && isBase32Run(run) {
+			decodeBase32Run(run, func(blob []byte) { fn(blob, start, "base32") })
+		}
+	}
+}
+
+// decodeBase64Run calls fn with the decoding of run at each of its first four
+// alignments. A run that holds both the standard ('+' '/') and the URL-safe
+// ('-' '_') characters (a hyphenated word or a path glued to it) is decoded once
+// per alphabet, with the other alphabet's characters read as the one in use: a
+// value is written in one alphabet, so the one it is written in decodes it.
+func decodeBase64Run(run []byte, fn func(blob []byte)) {
+	url := bytes.ContainsAny(run, "-_")
+	std := bytes.ContainsAny(run, "+/")
+	decode := func(run []byte, enc *base64.Encoding) {
+		for off := 0; off < 4 && off < len(run); off++ {
+			chunk := run[off:]
+			if len(chunk)%4 == 1 {
+				chunk = chunk[:len(chunk)-1]
+			}
+			blob := make([]byte, enc.DecodedLen(len(chunk)))
+			n, err := enc.Decode(blob, chunk)
+			if err != nil && n == 0 {
+				continue
+			}
+			fn(blob[:n])
+		}
+	}
+	switch {
+	case url && std:
+		asStd := strings.NewReplacer("-", "+", "_", "/").Replace(string(run))
+		decode([]byte(asStd), base64.RawStdEncoding)
+		asURL := strings.NewReplacer("+", "-", "/", "_").Replace(string(run))
+		decode([]byte(asURL), base64.RawURLEncoding)
+	case url:
+		decode(run, base64.RawURLEncoding)
+	default:
+		decode(run, base64.RawStdEncoding)
 	}
 }
 
@@ -984,6 +1254,12 @@ func (st *searchState) findEncoded(buf []byte, record func(idx int, marker, form
 func textReader(src io.Reader, name string) (io.Reader, error) {
 	br := bufio.NewReaderSize(src, 64<<10)
 	head, _ := br.Peek(sniffBytes)
+	if utf32, big := utf32BOM(head); utf32 {
+		if _, err := br.Discard(4); err != nil {
+			return nil, err
+		}
+		return newUTF32Reader(br, big), nil
+	}
 	if utf16, big := utf16BOM(head); utf16 {
 		if _, err := br.Discard(2); err != nil {
 			return nil, err
@@ -996,9 +1272,71 @@ func textReader(src io.Reader, name string) (io.Reader, error) {
 		if _, big, ok := utf16Guess(head); ok {
 			return newUTF16Reader(br, big), nil
 		}
+		// UTF-32 (three NULs in every four bytes) is text too.
+		if big, ok := utf32Guess(head); ok {
+			return newUTF32Reader(br, big), nil
+		}
 		if !isKnownText(name) {
 			return nil, errBinary
 		}
 	}
 	return br, nil
+}
+
+// isBase32Run reports whether run is written in the base32 alphabet (A-Z and 2-7)
+// in one case.
+func isBase32Run(run []byte) bool {
+	upper, lower := true, true
+	for _, c := range run {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			lower = false
+		case c >= 'a' && c <= 'z':
+			upper = false
+		case c >= '2' && c <= '7':
+		default:
+			return false
+		}
+	}
+	return upper || lower
+}
+
+// decodeBase32Run calls fn with the decoding of run at each of the eight
+// alignments a byte can have among five-bit characters. Case is folded and
+// padding is not needed.
+func decodeBase32Run(run []byte, fn func(blob []byte)) {
+	up := bytes.ToUpper(run)
+	enc := base32.StdEncoding.WithPadding(base32.NoPadding)
+	for off := 0; off < 8 && off < len(up); off++ {
+		chunk := up[off:]
+		switch len(chunk) % 8 {
+		case 1:
+			chunk = chunk[:len(chunk)-1]
+		case 3:
+			chunk = chunk[:len(chunk)-1]
+		case 6:
+			chunk = chunk[:len(chunk)-1]
+		}
+		blob := make([]byte, enc.DecodedLen(len(chunk)))
+		if n, err := enc.Decode(blob, chunk); err == nil || n > 0 {
+			fn(blob[:n])
+		}
+	}
+}
+
+// looksEncodedValue reports whether b is itself one encoded value: nothing but
+// base64 characters (and trailing padding or a newline), at least long enough to
+// hold a credential once decoded. The text of a decoded configuration file has
+// spaces, newlines and '=' signs in it and is not.
+func looksEncodedValue(b []byte, minLen int) bool {
+	b = bytes.TrimRight(b, "=\r\n")
+	if len(b) < 16 || len(b)*3/4 < minLen {
+		return false
+	}
+	for _, c := range b {
+		if !isB64(c) {
+			return false
+		}
+	}
+	return true
 }

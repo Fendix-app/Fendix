@@ -435,8 +435,10 @@ func TestScan_EvidenceRedactsRawSecret(t *testing.T) {
 
 func TestScan_SkipsGitDirectory(t *testing.T) {
 	dir := t.TempDir()
-	// Version-control metadata is recognised by its structure: HEAD and objects/.
+	// Version-control metadata at the root is recognised by its structure: HEAD,
+	// objects/ and refs/ (C6).
 	writeFile(t, dir, ".git/HEAD", "ref: refs/heads/main\n")
+	writeFile(t, dir, ".git/refs/heads/main", "0000\n")
 	writeFile(t, dir, ".git/objects/pack/p", "x")
 	writeFile(t, dir, ".git/config", `password = "hardcoded_secret_12345"`)
 	fs, err := Scan(context.Background(), dir)
@@ -464,7 +466,11 @@ func TestScan_ReadsADirectoryThatIsOnlyNamedLikeADependencyTree(t *testing.T) {
 	}
 }
 
-func TestScan_SkipsNodeModules(t *testing.T) {
+// Round 5 (D5-2, C6) reverses the round-4 test of this name: an installed-package
+// tree, even one carrying npm's own marker file, is ordinary content. The marker
+// is forgeable, and a credential under a directory that merely looked installed
+// was never read.
+func TestScan_ReadsNodeModulesEvenWithNpmsMarker(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "node_modules/.package-lock.json", `{"name":"x","lockfileVersion":3}`)
 	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIA` + `IOSFODNN7EXAMPLE";`)
@@ -472,8 +478,8 @@ func TestScan_SkipsNodeModules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("found %d findings inside node_modules: %v", len(fs), fs)
+	if got := endpointsOf(fs); len(got) != 1 || !strings.HasSuffix(got[0], "node_modules/pkg/index.js:1") {
+		t.Errorf("findings = %v; want the one under node_modules", got)
 	}
 }
 
@@ -908,14 +914,15 @@ func TestScan_DoesNotOverSuppressRealSecrets(t *testing.T) {
 
 // TestScanWithAllowlist_FastPathParity is the B3/S8 safety net: the diff-aware
 // fast path (scan only allowlisted files) must produce the SAME findings as the
-// full walk for those files — and must still prune skipDirs (a committed
-// vendor/ file the walk never reaches stays unscanned).
+// full walk for those files. (Round 4 also required it to prune a Go vendor
+// tree; round 5, C6, prunes nothing but <root>/.git, so a changed vendor/ file
+// is scanned by both.)
 func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 	dir := t.TempDir()
 	secret := `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`
 	changed := writeFile(t, dir, "app.py", secret)
 	writeFile(t, dir, "vendor/modules.txt", "# example.com/dep v1.2.3\n## explicit\nexample.com/dep\n")
-	writeFile(t, dir, "vendor/dep.py", secret) // a Go vendor tree (modules.txt) → must be skipped
+	writeFile(t, dir, "vendor/dep.py", secret) // a Go vendor tree: ordinary content now (C6)
 	writeFile(t, dir, "untouched.py", secret)  // not in allowlist → must be ignored
 
 	allow := gitdiff.NewAllowlist(dir, []string{changed, filepath.Join(dir, "vendor/dep.py")})
@@ -924,11 +931,19 @@ func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 		t.Fatalf("fast path: %v", err)
 	}
 
-	// Every finding must be from app.py — vendor pruned, untouched out of scope.
+	// Every finding must be from an allowlisted file; untouched.py is out of scope.
+	sawVendor := false
 	for _, f := range fast {
-		if !strings.Contains(f.Endpoint, "app.py") {
-			t.Errorf("fast path scanned an out-of-scope/pruned file: %s", f.Endpoint)
+		if strings.Contains(f.Endpoint, "vendor/dep.py") {
+			sawVendor = true
+			continue
 		}
+		if !strings.Contains(f.Endpoint, "app.py") {
+			t.Errorf("fast path scanned a file outside the allowlist: %s", f.Endpoint)
+		}
+	}
+	if !sawVendor {
+		t.Errorf("fast path skipped the changed vendor/dep.py: %v", endpointsOf(fast))
 	}
 	if len(fast) == 0 {
 		t.Fatal("fast path found nothing; expected the app.py secret")
@@ -1326,14 +1341,20 @@ func TestSkipReason(t *testing.T) {
 			t.Errorf("SkipReason(%s, %d bytes) = %q, want %q", tc.rel, tc.size, got, tc.want)
 		}
 	}
-	// A directory with the evidence that it is an installed-package tree is
-	// pruned; the scan root's own directory never is.
+	// Round 5 (C6): an installed-package tree, marker file or not, is read. Only
+	// <root>/.git with a real layout is skipped.
 	write("node_modules/.package-lock.json", 0)
 	if err := os.WriteFile(filepath.Join(root, "node_modules/.package-lock.json"), []byte(`{"lockfileVersion": 3}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := SkipReason(root, write("node_modules/p/a.js", 10)); !strings.Contains(got, "node_modules") {
-		t.Errorf("an installed node_modules tree should be skipped, got %q", got)
+	if got := SkipReason(root, write("node_modules/p/a.js", 10)); got != "" {
+		t.Errorf("an installed node_modules tree is read (C6), got %q", got)
+	}
+	write(".git/HEAD", 10)
+	write(".git/refs/heads/main", 10)
+	write(".git/objects/ab/cd", 10)
+	if got := SkipReason(root, write(".git/config", 10)); !strings.Contains(got, ".git") {
+		t.Errorf("a real <root>/.git should be skipped, got %q", got)
 	}
 	if got := SkipReason(filepath.Join(root, "node_modules"), write("node_modules/a.js", 10)); got != "" {
 		t.Errorf("a root named node_modules should be read, got %q", got)

@@ -1,33 +1,38 @@
 package semgrep
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
-// Decision D1' (round 4): a Semgrep parse problem that prevents evaluating an
-// in-scope file is a coverage gap.
+// Decision D1' (round 4), tightened by C4B-27 (round 5): a Semgrep parse problem
+// that prevents evaluating an in-scope file is a coverage gap.
 //
 //   - A whole-file failure (parseFailureTypes) is a ParseFailure: Semgrep ran no
 //     rule on the file. ScanRun records it as lost evaluation, the file named.
 //   - "PartialParsing" is a PartialParse: Semgrep matched what it could parse
 //     and reports the spans it skipped (in the error's type, and again in its
-//     `spans`). The analysed scope is then known, and the run stays ok only
-//     when the skipped lines are few (partialSkipOK) and every span is
-//     reported; the detail says which lines were skipped. A PartialParsing
-//     entry with no usable span, or whose spans cover more than a few lines of
-//     the file, is lost evaluation like a whole-file failure.
+//     `spans`). The run stays ok for the file only when the engine can SHOW that
+//     the skipped lines hold no analysable code: every span is reported, lies
+//     inside the file, and every line it touches is blank or a whole-line
+//     comment (spansHoldNoCode). A skipped line of code, however few the lines
+//     or small the share of the file, is lost evaluation like a whole-file
+//     failure: a skipped long line can hold the very handler a rule exists to
+//     read (round 4 allowed up to 5% of a file by line count, which is how a
+//     one-line skip of the vulnerable statement stayed "ok").
 //
-// Real Semgrep 1.182.1 behaviour that fixes the bound (testdata/runs/
-// partial-*.json and the real-Semgrep tests): after a syntax error inside a
-// class body, tree-sitter skips the REST of the class, so one error can leave
-// most of a file unevaluated, and the span says so; a one-token error skips
-// one token.
+// Real Semgrep 1.182.1 behaviour (testdata/runs/partial-*.json and the
+// real-Semgrep tests): after a syntax error inside a class body, tree-sitter
+// skips the REST of the class, so one error can leave most of a file
+// unevaluated, and the span says so; a one-token error skips one token, and the
+// line it is on is then code.
 
 // Span is a range of lines Semgrep skipped, 1-based and inclusive.
 type Span struct {
@@ -51,37 +56,8 @@ type PartialParse struct {
 	// are set by ScanRun, which reads the file.
 	Skipped, Total int
 	// Lost is set by ScanRun when the run may not stay ok for the file: its
-	// spans are not reported, or cover more than a few lines (partialSkipOK).
+	// spans are not reported, or cover a line that holds code (spansHoldNoCode).
 	Lost bool
-}
-
-// partialSkipMaxLines and partialSkipPercent bound how much of a file a
-// partial parse may skip and still read ok: at most the larger of three lines
-// and 5% of the file. They are deliberately small. One unsupported token costs
-// a line; a skipped class body or function costs the code the rules exist to
-// read.
-const (
-	partialSkipMaxLines = 3
-	partialSkipPercent  = 5
-)
-
-// partialSkipOK reports whether skipped of total lines is few enough for the
-// run to stay ok. The allowance never reaches the whole file: a file of three
-// lines or fewer whose every line was skipped (DE4-03: a one-line file that is
-// one syntax error) was not analysed at all, and that is lost evaluation, never
-// "a few lines".
-func partialSkipOK(skipped, total int) bool {
-	if total <= 0 {
-		return skipped == 0
-	}
-	allowed := (total*partialSkipPercent + 99) / 100
-	if allowed < partialSkipMaxLines {
-		allowed = partialSkipMaxLines
-	}
-	if allowed > total-1 {
-		allowed = total - 1
-	}
-	return skipped <= allowed
 }
 
 type spanLoc struct {
@@ -207,26 +183,94 @@ func partialParses(raw json.RawMessage, absRoot string) []PartialParse {
 	return out
 }
 
-// countLines is how many lines the file at p has: its newlines, plus one for a
-// last line with no newline. 0 when it cannot be read.
-func countLines(p string) int {
-	data, err := os.ReadFile(p)
-	if err != nil || len(data) == 0 {
-		return 0
+// readSource reads the file at p, which is at most scope.MaxFileBytes, without
+// blocking on a FIFO or following a link. nil when it cannot be read.
+func readSource(p string) []byte {
+	f, err := scope.OpenRegular(p)
+	if err != nil {
+		return nil
 	}
-	n := bytes.Count(data, []byte{'\n'})
-	if data[len(data)-1] != '\n' {
-		n++
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, scope.MaxFileBytes+1))
+	if err != nil || len(data) > scope.MaxFileBytes {
+		return nil
 	}
-	return n
+	return data
+}
+
+// splitLines is the lines of data without their terminators: a final line with
+// no newline counts, an empty file has none.
+func splitLines(data []byte) []string {
+	if len(data) == 0 {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for i, l := range lines {
+		lines[i] = strings.TrimSuffix(l, "\r")
+	}
+	return lines
+}
+
+// lineCommentOf is the marker of a whole-line comment in a file of the given
+// extension, "" for a language the engine does not know it for.
+func lineCommentOf(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".py", ".pyi":
+		return "#"
+	case ".js", ".jsx", ".cjs", ".mjs", ".es6", ".ts", ".tsx", ".cts", ".mts", ".java", ".go", ".vue":
+		return "//"
+	}
+	return ""
+}
+
+// inertLine reports whether line holds no analysable code: it is blank, a
+// whole-line comment, or a one-line block comment (C-family only). It looks at
+// the line alone, never at the lines around it, so a line inside a multi-line
+// comment that does not itself start a comment is code as far as this proof
+// goes: that is the safe side.
+func inertLine(line, comment string) bool {
+	t := strings.TrimSpace(line)
+	switch {
+	case t == "":
+		return true
+	case comment != "" && strings.HasPrefix(t, comment):
+		return true
+	case comment == "//" && strings.HasPrefix(t, "/*") && strings.HasSuffix(t, "*/") && len(t) >= 4 &&
+		!strings.Contains(t[2:len(t)-2], "*/") && !strings.Contains(t[2:len(t)-2], "/*"):
+		return true
+	}
+	return false
+}
+
+// spansHoldNoCode reports whether every line the spans touch is inert (see
+// inertLine). A span outside the file, or lines that cannot be read, are not
+// shown to be inert.
+func spansHoldNoCode(lines []string, spans []Span, ext string) bool {
+	comment := lineCommentOf(ext)
+	for _, sp := range spans {
+		if sp.StartLine < 1 || sp.EndLine > len(lines) {
+			return false
+		}
+		for n := sp.StartLine; n <= sp.EndLine; n++ {
+			if !inertLine(lines[n-1], comment) {
+				return false
+			}
+		}
+	}
+	return len(spans) > 0
 }
 
 // judge sets Skipped and Total from the file under absRoot and reports whether
-// the run may stay ok for it: the spans are reported and few.
+// the run may stay ok for it: the spans are reported and the engine can show
+// the lines they cover hold no analysable code.
 func (p *PartialParse) judge(absRoot string) bool {
-	p.Total = countLines(filepath.Join(absRoot, filepath.FromSlash(p.Path)))
+	lines := splitLines(readSource(filepath.Join(absRoot, filepath.FromSlash(p.Path))))
+	p.Total = len(lines)
 	p.Skipped = skippedLines(p.Spans)
-	return p.Reported && p.Total > 0 && partialSkipOK(p.Skipped, p.Total)
+	return p.Reported && p.Total > 0 && spansHoldNoCode(lines, p.Spans, path.Ext(p.Path))
 }
 
 // Describe is the partial parse as a detail token, "a.py 4-4", "b.js 10-12,40-41":

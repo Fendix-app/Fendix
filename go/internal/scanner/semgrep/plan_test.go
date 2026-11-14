@@ -44,8 +44,10 @@ if [ "$1" = "--version" ]; then echo 1.182.1; exit 0; fi
 echo "$*" >> "` + scen + `/argv.log"
 key=all
 last=
+inc=
 for a in "$@"; do
   case "$a" in
+    --include=/*) inc=$a;;
     */javascript-*.yaml) key=javascript;;
     */java-*.yaml) key=java;;
     */go-*.yaml) key=go;;
@@ -54,6 +56,8 @@ for a in "$@"; do
   last=$a
 done
 if [ -f "$last" ]; then key=retry-$(basename "$last"); fi
+# A chunk of a group (an anchored --include per file) is keyed by its last file.
+if [ -n "$inc" ]; then key=retry-$(basename "${inc#--include=}"); fi
 if [ -f "` + scen + `/spawn-$key" ]; then
   sleep 300 &
   echo $! > "` + scen + `/child-$key.pid"
@@ -152,12 +156,12 @@ func TestStageRunsOneInvocationWithTheBudgetOnTheCommandLine(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("a small tree must run one invocation, got %d: %v", len(lines), lines)
 	}
-	for _, want := range []string{"--jobs 2", "--max-memory 1364", "--timeout 30", "--time", "--max-target-bytes", "--disable-nosem"} {
+	for _, want := range []string{"--jobs 2", "--max-memory 682", "--timeout 30", "--time", "--max-target-bytes", "--disable-nosem"} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("argv %q is missing %q", lines[0], want)
 		}
 	}
-	if run.Budget.Jobs != 2 || run.Budget.MaxMemoryMiB != 1364 || run.Budget.Wall != DefaultWall {
+	if run.Budget.Jobs != 2 || run.Budget.MaxMemoryMiB != 682 || run.Budget.Wall != DefaultWall {
 		t.Errorf("Run.Budget = %+v", run.Budget)
 	}
 	if len(run.Groups) != 0 {
@@ -261,7 +265,7 @@ func TestStageSplitsALargeMultiLanguageTreeByLanguageGroup(t *testing.T) {
 		t.Errorf("every in-scope file was reported scanned by some group, yet lost: %s", run.Coverage.LostDetail(500))
 	}
 	for _, l := range lines {
-		if !strings.Contains(l, "--jobs 2") || !strings.Contains(l, "--max-memory 1364") {
+		if !strings.Contains(l, "--jobs 2") || !strings.Contains(l, "--max-memory 682") {
 			t.Errorf("every group runs under the budget: %q", l)
 		}
 	}
@@ -484,7 +488,7 @@ func TestRetryResolvesAFileThatTimedOutAndKeepsEveryFinding(t *testing.T) {
 	if !strings.HasSuffix(retry, filepath.Join(root, "a.js")) {
 		t.Errorf("the retry's target is the one file: %q", retry)
 	}
-	if !strings.Contains(retry, "--max-memory 1364") {
+	if !strings.Contains(retry, "--max-memory 682") {
 		t.Errorf("the retry runs under the same memory bound: %q", retry)
 	}
 }

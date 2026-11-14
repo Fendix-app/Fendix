@@ -324,17 +324,20 @@ func TestDockerfileAliasStateDoesNotLeakAcrossFiles(t *testing.T) {
 	}
 }
 
-func TestScan_SkipsNoiseDirs(t *testing.T) {
+// Round 4 pinned that directories proven to hold installed packages were
+// pruned. Round 5 (D5-2, C6) reads them: npm's hidden lockfile and Go's
+// vendor/modules.txt are files a repository can forge, and a vulnerability in a
+// directory that merely looked installed was reported by no analyzer.
+func TestScan_ReadsDependencyTreesEvenWithTheirMarkerFiles(t *testing.T) {
 	dir := t.TempDir()
-	// Dependency trees are pruned on evidence in the directory (D6'), never by
-	// name: npm's hidden lockfile, Go's vendor/modules.txt.
 	writeFile(t, dir, "node_modules/.package-lock.json", `{"lockfileVersion": 3}`)
 	writeFile(t, dir, "node_modules/x/pwned.js", `eval(userCode);`)
 	writeFile(t, dir, "vendor/modules.txt", "# example.com/y v1.0.0\n## explicit\n")
 	writeFile(t, dir, "vendor/y/pwned.go", `var k = "AKIA1234567890ABCDEF"`)
 	got, _ := Scan(dir, AllRules())
-	if len(got) != 0 {
-		t.Errorf("noise dirs should be skipped; got %d findings: %+v", len(got), got)
+	e := eps(got)
+	if len(e) != 2 {
+		t.Errorf("want one finding in each dependency-looking tree; got %v", e)
 	}
 }
 

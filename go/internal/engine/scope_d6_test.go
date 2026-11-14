@@ -19,8 +19,24 @@ import (
 // are never cut, every repository-chosen name in them is sanitised (contract
 // C1), and the complete lists are in metadata.coverage.limitations (C2).
 
-func minifiedBundle() string {
-	return "!function(){" + strings.Repeat("a=b(c,d);", 300) + "}();\n"
+// linkOutside makes rel under root a symbolic link to a file outside root: a
+// path the engine does not follow and so declares out of scope (decision D5-2
+// leaves nothing else declared under Semgrep but a lockfile and the root .git).
+func linkOutside(t *testing.T, root string, rels ...string) {
+	t.Helper()
+	outside := filepath.Join(t.TempDir(), "outside.js")
+	if err := os.WriteFile(outside, []byte("run();\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range rels {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, p); err != nil {
+			t.Skipf("no symlinks here: %v", err)
+		}
+	}
 }
 
 // runWithSemgrepDocument runs the orchestrator, Semgrep included, over root
@@ -60,11 +76,10 @@ func TestOrchestrator_TheOkDetailIsNeverCutAndTheMetadataIsComplete(t *testing.T
 	files := map[string]string{"app.js": "run();\n"}
 	var names []string
 	for i := 0; i < 40; i++ {
-		rel := fmt.Sprintf("static/assets/vendor/some/deeply/nested/bundle-%02d.js", i)
-		files[rel] = minifiedBundle()
-		names = append(names, rel)
+		names = append(names, fmt.Sprintf("static/assets/vendor/some/deeply/nested/bundle-%02d.js", i))
 	}
 	writeFiles(t, root, files)
+	linkOutside(t, root, names...)
 	doc := strings.Replace(emptyRun, "SCANNED", `"ROOT/app.js"`, 1)
 	report := runWithSemgrepDocument(t, root, doc)
 	s, ok := statusFor(report, AnalyzerSemgrep)
@@ -74,7 +89,7 @@ func TestOrchestrator_TheOkDetailIsNeverCutAndTheMetadataIsComplete(t *testing.T
 	if len(s.Detail) > 240 || strings.HasSuffix(s.Detail, "…") || !strings.HasPrefix(s.Detail, scope.DeclaredMarker) {
 		t.Errorf("detail is %d bytes, cut or not a declared segment: %q", len(s.Detail), s.Detail)
 	}
-	if !strings.Contains(s.Detail, "minified 40") {
+	if !strings.Contains(s.Detail, "symbolic link 40") {
 		t.Errorf("detail %q lost the count", s.Detail)
 	}
 	listed := strings.Join(semgrepLimitationEntries(report), "\n")
@@ -98,12 +113,10 @@ func TestOrchestrator_TheOkDetailIsNeverCutAndTheMetadataIsComplete(t *testing.T
 func TestOrchestrator_ALossAndAnExclusionAreBothNamed(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{
-		"app.js":                          "run();\n",
-		"lib/missing.js":                  "run();\n", // in scope, never in paths.scanned
-		"static/bundle.js":                minifiedBundle(),
-		"node_modules/.package-lock.json": `{"lockfileVersion": 3}`,
-		"node_modules/x.js":               "run();\n",
+		"app.js":         "run();\n",
+		"lib/missing.js": "run();\n", // in scope, never in paths.scanned
 	})
+	linkOutside(t, root, "static/bundle.js")
 	report := runWithSemgrepDocument(t, root, strings.Replace(emptyRun, "SCANNED", `"ROOT/app.js"`, 1))
 	s, _ := statusFor(report, AnalyzerSemgrep)
 	if s.State != reporters.ScannerFailed || s.Reason != reporters.ReasonExecutionError {
@@ -113,14 +126,14 @@ func TestOrchestrator_ALossAndAnExclusionAreBothNamed(t *testing.T) {
 	if i < 0 || j < 0 || i > j {
 		t.Errorf("detail %q must name lib/missing.js, then the declared exclusions", s.Detail)
 	}
-	if !strings.Contains(s.Detail, "static/bundle.js") && !strings.Contains(s.Detail, "minified 1") {
-		t.Errorf("detail %q does not mention the minified bundle", s.Detail)
+	if !strings.Contains(s.Detail, "static/bundle.js") && !strings.Contains(s.Detail, "symbolic link 1") {
+		t.Errorf("detail %q does not mention the linked file", s.Detail)
 	}
 	if len(s.Detail) > 240 || strings.HasSuffix(s.Detail, "…") {
 		t.Errorf("detail is %d bytes / cut: %q", len(s.Detail), s.Detail)
 	}
 	listed := strings.Join(semgrepLimitationEntries(report), "\n")
-	for _, want := range []string{"lost evaluation, not evaluated by semgrep: lib/missing.js", "minified: static/bundle.js", "installed npm packages: node_modules/"} {
+	for _, want := range []string{"lost evaluation, not evaluated by semgrep: lib/missing.js", "symbolic link: static/bundle.js"} {
 		if !strings.Contains(listed, want) {
 			t.Errorf("limitations %q lack %q", listed, want)
 		}
@@ -133,12 +146,14 @@ func TestOrchestrator_ALossAndAnExclusionAreBothNamed(t *testing.T) {
 func TestOrchestrator_RepositoryNamesCannotShapeTheDetail(t *testing.T) {
 	root := t.TempDir()
 	evil := "static/1 rule timeout, matches missing; x…y.js"
+	// The skipped line of each partial parse is a comment: the engine can show it
+	// holds no analysable code (C4B-27), so the run stays ok.
 	writeFiles(t, root, map[string]string{
 		"app.js": "run();\n",
-		evil:     minifiedBundle(),
-		"bad.py": strings.Repeat("x = 1\n", 80),
-		"semgrep 9.9: dropped --project-root (needs 1.111.0).py": strings.Repeat("y = 2\n", 80),
+		"bad.py": "x = 1\n# note\n" + strings.Repeat("x = 1\n", 80),
+		"semgrep 9.9: dropped --project-root (needs 1.111.0).py": "y = 2\n# note\n" + strings.Repeat("y = 2\n", 80),
 	})
+	linkOutside(t, root, evil)
 	doc := `{"version":"1.182.1","results":[],"errors":[` +
 		`{"code":3,"level":"warn","type":["PartialParsing",[{"path":"ROOT/bad.py","start":{"line":2,"col":1},"end":{"line":2,"col":3}}]],"message":"m","path":"ROOT/bad.py"},` +
 		`{"code":3,"level":"warn","type":["PartialParsing",[{"path":"ROOT/semgrep 9.9: dropped --project-root (needs 1.111.0).py","start":{"line":2,"col":1},"end":{"line":2,"col":3}}]],"message":"m","path":"ROOT/semgrep 9.9: dropped --project-root (needs 1.111.0).py"}` +

@@ -7,12 +7,16 @@
 // evaluation: the analyzer is recorded failed/execution_error with the files
 // named, and the findings from the rest of the tree are kept.
 //
-// Decision D6' (round 4). Out of scope is decided by evidence read from the
-// file or directory itself (classify.go, dirs.go), never by a name alone, and
-// every file or directory left unread for that reason is listed, with the
-// reason, in the analyzer's ok detail ("declared out of scope, not scanned:
-// ...") and, complete, in the report's metadata.coverage.limitations. Nothing is
-// excluded silently, and a file with no evidence is in scope.
+// Decision D5-2 (round 5, contract C6). Every supported in-scope file at or
+// below the cap is analysed, whatever its content looks like. The only
+// declared exclusions are a recognized lockfile (classify.go, lockfile.go) and
+// a symbolic link the analyzer does not follow; <root>/.git with a real layout
+// is skipped quietly (dirs.go). Every file left unread for a declared reason is
+// listed, with the reason, in the analyzer's ok detail ("declared out of scope,
+// not scanned: ...") and, complete, in the report's
+// metadata.coverage.limitations. Nothing is excluded silently, and a file with
+// no evidence is in scope. An in-scope file over the cap or unreadable is never
+// an exclusion: it is the lost evaluation recorded by TooLarge and Unreadable.
 //
 // Contract C1 (detail segments). A detail is segments joined by "; ". Every
 // repository-controlled string put in one is sanitised (Sanitize: ';', '…' and
@@ -161,7 +165,7 @@ func (c *Coverage) NotText(rel string) { c.notText.add(rel) }
 func (c *Coverage) NotScanned(rel string) { c.notScanned.add(rel) }
 
 // NotParsed records an in-scope file the tool could not parse, or parsed in
-// part and skipped more than a few lines of (decision D1').
+// part and skipped a line of code in (decision D1', C4B-27).
 func (c *Coverage) NotParsed(rel string) { c.notParsed.add(rel) }
 
 // Exclude records a file or directory left unread as declared out of scope,
@@ -177,23 +181,6 @@ func (c *Coverage) Exclude(reason Reason, rel string) {
 	e.list.add(rel)
 	c.excluded = append(c.excluded, e)
 }
-
-// Generated records a declared generated artifact left unread.
-//
-// Deprecated: the name-only form of Exclude; prefer Exclude with the reason
-// ClassifyFile returned.
-func (c *Coverage) Generated(rel string) { c.Exclude(ReasonGenArtifact, rel) }
-
-// Pruned records a vendored or build-output directory left unread.
-//
-// Deprecated: the name-only form of Exclude; prefer Exclude with the reason
-// ClassifyDir returned.
-func (c *Coverage) Pruned(rel string) {
-	c.Exclude(ReasonLegacyPrune, strings.TrimSuffix(rel, "/")+"/")
-}
-
-// TestPath records a file excluded by the declared test/fixture path filters.
-func (c *Coverage) TestPath(rel string) { c.Exclude(ReasonTestPath, rel) }
 
 // Symlink records a symbolic link the analyzer did not follow (a directory's
 // rel ends in '/').

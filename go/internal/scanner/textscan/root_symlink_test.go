@@ -57,8 +57,8 @@ func TestScan_RootThatIsASymlinkIsScanned(t *testing.T) {
 }
 
 // The root is never pruned, whatever its name: `--code ./build`, or a root link
-// that resolves to a directory called dist, is the scope the user chose. (The
-// secrets scanner already exempts its root.)
+// that resolves to a directory called dist, is the scope the user chose. Round 5
+// (C6) also reads node_modules under it: nothing is pruned on a marker file.
 func TestScan_RootNamedLikeASkippedDirIsScanned(t *testing.T) {
 	base := t.TempDir()
 	for _, name := range []string{"build", "dist", "target", "vendor"} {
@@ -75,8 +75,8 @@ func TestScan_RootNamedLikeASkippedDirIsScanned(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Scan(%s): %v", root, err)
 			}
-			if e := eps(got); len(e) != 1 || e[0] != "GO_HARDCODED_AWS_KEY @ main.go:3" {
-				t.Errorf("Scan(%s): %v, want only main.go:3 (the root scanned, node_modules under it pruned)", root, e)
+			if e := eps(got); len(e) != 2 || e[0] != "GO_HARDCODED_AWS_KEY @ main.go:3" || e[1] != "GO_HARDCODED_AWS_KEY @ node_modules/x.go:3" {
+				t.Errorf("Scan(%s): %v, want main.go:3 and node_modules/x.go:3 (the root and everything under it scanned)", root, e)
 			}
 		}
 	}

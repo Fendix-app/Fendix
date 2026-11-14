@@ -196,15 +196,39 @@ func TestRequireAnalyzers_FatalSemgrepRunIsNotOk(t *testing.T) {
 	}
 }
 
-// Per-file problems are normal on real trees: a file that does not parse
-// leaves Semgrep ok, required or not, with the count in its detail.
-func TestRequireAnalyzers_PerFileProblemsKeepSemgrepOk(t *testing.T) {
+// Round 5 (C4B-15). This test, TestRequireAnalyzers_PerFileProblemsKeepSemgrepOk,
+// pinned the pre-D1' rule: a recorded run in which a file did not parse
+// (syntax2.json: /t/syntax2/bad.py, a PartialParsing warning whose span covers
+// all of the file's code) left Semgrep "ok", exit 0, even when required. That
+// is the rule decision D1' replaced: a file Semgrep could not parse was not
+// evaluated, so its findings are unknown and the run must not read as
+// delivered. The engine has recorded such a run failed/execution_error since
+// round 4 (the suite was red on this test, deterministically, in every run);
+// nobody updated the pin.
+//
+// It now states the rule that holds: the unparsed file is lost evaluation,
+// semgrep is failed/execution_error and names the file and the per-file count,
+// an unrequired run still exits by findings (0) with coverage incomplete, and a
+// required semgrep makes the scan exit 2. A per-file problem that leaves no
+// analysable code unevaluated (C6, C4B-27) is a different fixture and the
+// semgrep owner's to pin; this fixture's span holds the file's only code.
+func TestRequireAnalyzers_WholeFileParseFailureIsLostEvaluationNotOk(t *testing.T) {
 	installRecordedSemgrep(t, "syntax2.json", 0)
-	got := runRequired(t, "--require-analyzers", "semgrep")
-	if got.code != 0 || got.semgrep.State != "ok" {
-		t.Fatalf("per-file parse error: exit %d, semgrep %+v; want 0 and ok", got.code, got.semgrep)
+	optional := runRequired(t)
+	if optional.semgrep.State != "failed" || optional.semgrep.Reason != "execution_error" {
+		t.Fatalf("whole-file parse error: semgrep %+v, want failed/execution_error", optional.semgrep)
 	}
-	if !strings.Contains(got.semgrep.Detail, "PartialParsing 1") {
-		t.Errorf("the per-file problem must be counted in the detail, got %q", got.semgrep.Detail)
+	if !strings.Contains(optional.semgrep.Detail, "lost evaluation") || !strings.Contains(optional.semgrep.Detail, "bad.py") {
+		t.Errorf("the detail must say evaluation was lost and name the file, got %q", optional.semgrep.Detail)
+	}
+	if !strings.Contains(optional.semgrep.Detail, "PartialParsing 1") {
+		t.Errorf("the per-file problem must still be counted in the detail, got %q", optional.semgrep.Detail)
+	}
+	if optional.code != 0 {
+		t.Errorf("not required: exit %d, want 0 (coverage incomplete, exit by findings)", optional.code)
+	}
+	required := runRequired(t, "--require-analyzers", "semgrep")
+	if required.code != 2 || !reflect.DeepEqual(required.gaps, []string{"semgrep"}) {
+		t.Fatalf("required semgrep with an unparsed file: exit %d, gaps %v; want 2 and [semgrep]", required.code, required.gaps)
 	}
 }

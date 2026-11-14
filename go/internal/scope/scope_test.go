@@ -5,39 +5,6 @@ import (
 	"testing"
 )
 
-func TestGeneratedArtifactsAreDeclaredByName(t *testing.T) {
-	for _, tc := range []struct{ path, want string }{
-		{"package-lock.json", "lockfile"},
-		{"web/yarn.lock", "lockfile"},
-		{"pnpm-lock.yaml", "lockfile"},
-		{"poetry.lock", "lockfile"},
-		{"Pipfile.lock", "lockfile"},
-		{"Cargo.lock", "lockfile"},
-		{"go.sum", "lockfile"},
-		{"composer.lock", "lockfile"},
-		{"Gemfile.lock", "lockfile"},
-		{`sub\package-lock.json`, "lockfile"},
-		{"public/app.min.js", "minified"},
-		{"public/APP.MIN.JS", "minified"},
-		{"styles/site.min.css", "minified"},
-		{"public/app.js.map", "source map"},
-		{"site.css.map", "source map"},
-		// In scope: source, and names that only look like the declared ones.
-		{"app.js", ""},
-		{"package.json", ""},
-		{"locks/package-lock.json.bak", ""},
-		{"min.js", ""},
-		{"admin.js", ""},
-		{"package-lock.json/app.js", ""},
-		{"roadmap.md", ""},
-		{"Go.sum", ""},
-	} {
-		if got := Generated(tc.path); got != tc.want {
-			t.Errorf("Generated(%q) = %q, want %q", tc.path, got, tc.want)
-		}
-	}
-}
-
 func TestEmptyCoverageSaysNothing(t *testing.T) {
 	var c Coverage
 	if c.Lost() || c.Declared() || c.LostDetail(240) != "" || c.DeclaredDetail(240) != "" {
@@ -66,8 +33,9 @@ func TestDetailsStayWithinTheirBudget(t *testing.T) {
 	long := strings.Repeat("deeply/nested/", 12) + "file.js"
 	for i := 0; i < 50; i++ {
 		c.TooLarge(long)
-		c.Generated(long)
-		c.Pruned(long)
+		c.Exclude(ReasonLockfile, long)
+		c.Symlink(long + "/")
+		c.Exclude(ReasonGitMetadata, long)
 	}
 	for _, budget := range []int{240, 120, 80} {
 		if got := c.LostDetail(budget); len(got) > budget || !strings.Contains(got, "50 over 1048576 bytes") {
@@ -77,7 +45,7 @@ func TestDetailsStayWithinTheirBudget(t *testing.T) {
 		if len(got) > budget || strings.HasSuffix(got, "…") {
 			t.Errorf("DeclaredDetail(%d) = %q (%d bytes)", budget, got, len(got))
 		}
-		if got != "" && !strings.Contains(got, "generated artifact 50") && !strings.Contains(got, "100 in all (see report metadata)") {
+		if got != "" && !strings.Contains(got, "lockfile 50") && !strings.Contains(got, "150 in all (see report metadata)") {
 			t.Errorf("DeclaredDetail(%d) = %q lost the count", budget, got)
 		}
 	}
@@ -88,7 +56,7 @@ func TestDetailsStayWithinTheirBudget(t *testing.T) {
 	}
 	// Past the counts per reason the detail still says how many, and where the
 	// rest is (contract C2), instead of being cut.
-	if got := c.DeclaredDetail(70); got != "declared out of scope, not scanned: 100 in all (see report metadata)" {
+	if got := c.DeclaredDetail(70); got != "declared out of scope, not scanned: 150 in all (see report metadata)" {
 		t.Errorf("DeclaredDetail(70) = %q", got)
 	}
 	if got := c.LostDetail(20); !strings.HasPrefix(got, "lost evaluation: 50 in-scope files not read: 50 over") {
@@ -99,32 +67,20 @@ func TestDetailsStayWithinTheirBudget(t *testing.T) {
 func TestDeclaredDetailListsEveryKind(t *testing.T) {
 	var c Coverage
 	c.Exclude(ReasonLockfile, "package-lock.json")
-	c.Exclude(ReasonMinified, "public/app.min.js")
-	c.TestPath("tests/app.js")
-	c.Exclude(ReasonNPMInstall, "node_modules/")
+	c.Symlink("link.py")
+	c.Exclude(ReasonGitMetadata, ".git/")
 	if c.Lost() {
 		t.Fatal("declared exclusions are not lost evaluation")
 	}
 	// Each reason is named with its count and its first names; the reasons come
 	// in the order they were first used, and the segment starts with the marker
 	// the backend and the frontend skip.
-	const want = "declared out of scope, not scanned: lockfile 1 (package-lock.json), minified 1 (public/app.min.js), test/fixture path 1 (tests/app.js), installed npm packages 1 (node_modules/)"
+	const want = "declared out of scope, not scanned: lockfile 1 (package-lock.json), symbolic link 1 (link.py), git metadata 1 (.git/)"
 	if got := c.DeclaredDetail(240); got != want {
 		t.Errorf("DeclaredDetail =\n %q\nwant\n %q", got, want)
 	}
 	if !strings.HasPrefix(c.DeclaredDetail(240), DeclaredMarker) {
 		t.Errorf("segment does not start with %q", DeclaredMarker)
-	}
-}
-
-// The legacy name-only methods still record, under their own reasons.
-func TestLegacyNameOnlyMethodsStillRecord(t *testing.T) {
-	var c Coverage
-	c.Generated("package-lock.json")
-	c.Pruned("node_modules")
-	const want = "declared out of scope, not scanned: generated artifact 1 (package-lock.json), vendored/build dir 1 (node_modules/)"
-	if got := c.DeclaredDetail(240); got != want {
-		t.Errorf("DeclaredDetail = %q, want %q", got, want)
 	}
 }
 
@@ -160,7 +116,7 @@ func TestANotTextFileAloneIsLostEvaluation(t *testing.T) {
 	}
 	// Declared exclusions never are.
 	var d Coverage
-	d.Exclude(ReasonMinified, "a.min.js")
+	d.Exclude(ReasonLockfile, "yarn.lock")
 	d.Symlink("link.py")
 	if d.Lost() || !d.Declared() {
 		t.Errorf("declared exclusions: Lost = %v, Declared = %v", d.Lost(), d.Declared())
@@ -200,7 +156,7 @@ func TestSanitizeAndSafeToken(t *testing.T) {
 func TestNamesInEveryRenderingAreSanitised(t *testing.T) {
 	var c Coverage
 	c.TooLarge("a;b.js")
-	c.Exclude(ReasonMinified, "x…y.min.js")
+	c.Exclude(ReasonLockfile, "x…y.lock")
 	c.Unreadable("e\nf.py")
 	for _, s := range append(c.Limitations("semgrep"), c.LostDetail(240), c.DeclaredDetail(240)) {
 		if strings.ContainsAny(s, "\n…") || strings.Contains(s, "a;b") || strings.Contains(s, "x…y") {
@@ -252,7 +208,7 @@ func TestComposeNeverCutsASegmentAndSaysWhatItLeftOut(t *testing.T) {
 func TestLimitationsListEveryNameInBoundedEntries(t *testing.T) {
 	var c Coverage
 	for i := 0; i < 60; i++ {
-		c.Exclude(ReasonMinified, "static/vendor/some/long/path/bundle-"+strings.Repeat("x", i%9)+".min.js")
+		c.Exclude(ReasonLockfile, "static/vendor/some/long/path/bundle-"+strings.Repeat("x", i%9)+".lock")
 	}
 	c.TooLarge("big.js")
 	entries := c.Limitations("semgrep")
@@ -267,7 +223,7 @@ func TestLimitationsListEveryNameInBoundedEntries(t *testing.T) {
 		if !strings.HasPrefix(e, "semgrep: ") {
 			t.Errorf("entry %q does not start with the analyzer", e)
 		}
-		names += strings.Count(e, ".min.js")
+		names += strings.Count(e, ".lock")
 	}
 	if names != 60 {
 		t.Errorf("entries name %d of 60 files", names)
@@ -278,7 +234,7 @@ func TestLimitationsListEveryNameInBoundedEntries(t *testing.T) {
 	// Past the names Coverage keeps, the count of the rest is still said.
 	var many Coverage
 	for i := 0; i < maxKept+25; i++ {
-		many.Exclude(ReasonMinified, "f.min.js")
+		many.Exclude(ReasonLockfile, "f.lock")
 	}
 	last := many.Limitations("secrets")
 	if got := last[len(last)-1]; !strings.HasSuffix(got, "and 25 more not listed") {

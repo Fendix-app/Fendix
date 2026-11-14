@@ -28,9 +28,16 @@ func padPast(body string) string {
 	return b.String()
 }
 
-// padJSONLockfile is a package-lock.json over the size cap that parses as one.
+// padJSONLockfile is a package-lock.json over the size cap that parses as one:
+// a version-3 lockfile with enough entries to pass 1 MiB.
 func padJSONLockfile() string {
-	return `{"lockfileVersion": 3, "packages": {"": {"name": "x"}}, "pad": "` + strings.Repeat("0123456789", scope.MaxFileBytes/10+10) + `"}` + "\n"
+	var b strings.Builder
+	b.WriteString(`{"name": "x", "lockfileVersion": 3, "requires": true, "packages": {"": {"name": "x", "version": "1.0.0"}`)
+	for i := 0; b.Len() <= scope.MaxFileBytes+1024; i++ {
+		b.WriteString(`, "node_modules/pkg` + strings.Repeat("x", i%5) + `-` + string(rune('a'+i%26)) + strings.Repeat("y", i/26%40) + `": {"version": "1.0.0", "resolved": "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz", "integrity": "sha512-XI5MPzVNApjAyhQzphX8BkmKsKUxD4LdyK24iZeQGinBN9yTQT3bFlCBy/aVx2HrNcqQGsdot8ghrjyrvMCoEA=="}`)
+	}
+	b.WriteString("}}\n")
+	return b.String()
 }
 
 // padMinified is a bundle over the size cap: a few very long lines.
@@ -104,33 +111,31 @@ func TestOrchestrator_SizeSkippedInScopeFilesAreAGap(t *testing.T) {
 	}
 }
 
+// Decision D5-2: the only exclusions are a recognized lockfile (exact name and
+// whole content; scope.ClassifyFile, which an analyzer may or may not call) and
+// a root .git with a real layout. An installed tree is ordinary content:
+// scanned, and never declared out of scope.
 func TestOrchestrator_DeclaredScopeStaysCompleteAndIsListed(t *testing.T) {
 	root := t.TempDir()
 	writeFiles(t, root, map[string]string{
-		"web/app.js": "const x = 1;\n",
-		// D6': the evidence is in the content. A lockfile that parses as one, a
-		// bundle that is one long line, and an installed npm tree with its marker.
+		"web/app.js":                      "const x = 1;\n",
 		"package-lock.json":               padJSONLockfile(),
-		"public/app.min.js":               padMinified(),
 		"node_modules/.package-lock.json": `{"lockfileVersion": 3}`,
 		"node_modules/x/i.js":             "const y = 2;\n",
+		".git/HEAD":                       "ref: refs/heads/main\n",
+		".git/objects/x":                  "x",
+		".git/refs/heads/main":            "x",
 	})
 	report := runCodeScan(t, root)
-	for _, tc := range []struct {
-		name  string
-		wants []string
-	}{
-		{AnalyzerSecrets, []string{"declared out of scope, not scanned", "node_modules/"}},
-		{AnalyzerTextscan, []string{"declared out of scope, not scanned", "public/app.min.js", "node_modules/"}},
-	} {
-		s, ok := statusFor(report, tc.name)
+	for _, name := range []string{AnalyzerSecrets, AnalyzerTextscan} {
+		s, ok := statusFor(report, name)
 		if !ok || s.State != reporters.ScannerOK {
-			t.Errorf("%s = %+v; want ok", tc.name, s)
+			t.Errorf("%s = %+v; want ok", name, s)
 			continue
 		}
-		for _, w := range tc.wants {
-			if !strings.Contains(s.Detail, w) {
-				t.Errorf("%s detail %q lacks %q", tc.name, s.Detail, w)
+		for _, never := range []string{"node_modules", ".git", "minified", "vendored", "virtualenv", "generator header"} {
+			if strings.Contains(s.Detail, never) {
+				t.Errorf("%s detail %q declares %q out of scope", name, s.Detail, never)
 			}
 		}
 	}
@@ -138,6 +143,22 @@ func TestOrchestrator_DeclaredScopeStaysCompleteAndIsListed(t *testing.T) {
 		if report.Metadata.Coverage != nil && containsString(report.Metadata.Coverage.Gaps, name) {
 			t.Errorf("%s is a gap: %+v", name, report.Metadata.Coverage)
 		}
+	}
+}
+
+// Decision D5-2: an over-cap minified bundle is not declared out of scope on its
+// look. textscan, which keeps the cap, records it as lost evaluation, so the
+// scan is incomplete rather than clean.
+func TestOrchestrator_AnOverCapMinifiedBundleIsAGapNotAnExclusion(t *testing.T) {
+	root := t.TempDir()
+	writeFiles(t, root, map[string]string{"web/app.js": "const x = 1;\n", "public/app.min.js": padMinified()})
+	report := runCodeScan(t, root)
+	s, ok := statusFor(report, AnalyzerTextscan)
+	if !ok || s.State != reporters.ScannerFailed || !strings.Contains(s.Detail, "public/app.min.js") {
+		t.Fatalf("textscan = %+v; want failed, naming public/app.min.js", s)
+	}
+	if strings.Contains(s.Detail, "minified") {
+		t.Errorf("detail %q declares the bundle minified", s.Detail)
 	}
 }
 

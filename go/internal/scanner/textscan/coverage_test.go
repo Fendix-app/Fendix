@@ -13,8 +13,9 @@ import (
 // Decision D6 (redteam-semgrep-01, security-01): a file textscan has a rule
 // for that it leaves unread, because it is over the size cap, cannot be read,
 // or is not text (a NUL byte in its first 512 bytes), is lost evaluation that
-// ScanCoverage names; a declared generated artifact and a pruned vendored or
-// build directory are declared out of scope and listed.
+// ScanCoverage names. Round 5 (D5-2, C6): nothing is declared out of scope for
+// how it looks (a lockfile over the cap, an installed-package tree), only
+// <root>/.git with a real layout, which is quiet.
 
 const innerHTML = "el.innerHTML = location.hash;\n"
 
@@ -31,13 +32,13 @@ func TestScanCoverageNamesWhatItLeftUnread(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "web/app.js", innerHTML)
 	writeFile(t, root, "web/big.js", overTheCap(innerHTML))
-	// A real package-lock.json over the cap is a declared lockfile (content
-	// evidence, D6'); a file merely NAMED like a library is not.
+	// An over-cap lockfile is lost evaluation too (C6).
 	writeFile(t, root, "pnpm-lock.yaml", overTheCap("lockfileVersion: '9.0'\n"))
 	writeFile(t, root, "web/nul.js", "\x00\x00"+innerHTML)
 	writeFile(t, root, "node_modules/.package-lock.json", `{"lockfileVersion": 3}`)
 	writeFile(t, root, "node_modules/pkg/index.js", innerHTML)
 	writeFile(t, root, ".git/HEAD", "ref: refs/heads/main\n")
+	writeFile(t, root, ".git/refs/heads/main", "0\n")
 	writeFile(t, root, ".git/objects/pack/x", "x")
 	writeFile(t, root, ".git/hooks/pre-commit.js", innerHTML)
 	writeFile(t, root, "data.bin", overTheCap("x")) // no rule applies
@@ -46,30 +47,24 @@ func TestScanCoverageNamesWhatItLeftUnread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanCoverage: %v", err)
 	}
-	if got := eps(findings); len(got) != 1 || !strings.HasSuffix(got[0], "web/app.js:1") {
-		t.Errorf("findings = %v; want web/app.js:1 kept", got)
+	if got := eps(findings); len(got) != 2 || !strings.HasSuffix(got[0], "node_modules/pkg/index.js:1") || !strings.HasSuffix(got[1], "web/app.js:1") {
+		t.Errorf("findings = %v; want node_modules/pkg/index.js:1 and web/app.js:1 (nothing from the real .git)", got)
 	}
 	// The detail's wording belongs to the scope package; this test pins which
 	// files are named as lost and which as declared.
 	lost := cov.LostDetail(240)
-	for _, want := range []string{"web/big.js", "web/nul.js"} {
+	for _, want := range []string{"web/big.js", "web/nul.js", "pnpm-lock.yaml"} {
 		if !strings.Contains(lost, want) {
 			t.Errorf("lost detail = %q; want it to name %s", lost, want)
 		}
 	}
-	for _, not := range []string{"pnpm-lock.yaml", "node_modules", ".git", "data.bin"} {
+	for _, not := range []string{"node_modules", ".git", "data.bin"} {
 		if strings.Contains(lost, not) {
 			t.Errorf("lost detail = %q; must not name %s", lost, not)
 		}
 	}
-	declared := cov.DeclaredDetail(240)
-	for _, want := range []string{"pnpm-lock.yaml", "node_modules/"} {
-		if !strings.Contains(declared, want) {
-			t.Errorf("declared detail = %q; want it to name %s", declared, want)
-		}
-	}
-	if strings.Contains(declared, ".git") {
-		t.Errorf("declared detail = %q; version-control metadata is quiet", declared)
+	if cov.Declared() {
+		t.Errorf("declared detail = %q; nothing is declared out of scope (the real .git is quiet)", cov.DeclaredDetail(240))
 	}
 }
 

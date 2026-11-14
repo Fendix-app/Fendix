@@ -77,11 +77,11 @@ func TestSemgrepSizeSkipWithTimeoutsIsAnExecutionError(t *testing.T) {
 
 func TestSemgrepDeclaredScopeIsListedInTheOkDetail(t *testing.T) {
 	var run semgrep.Run
-	run.Coverage.Exclude(scope.ReasonMinified, "public/app.min.js")
-	run.Coverage.TestPath("tests/app.js")
-	run.Coverage.Exclude(scope.ReasonNPMInstall, "node_modules/")
+	run.Coverage.Exclude(scope.ReasonLockfile, "package-lock.json")
+	run.Coverage.Symlink("linked/x.py")
+	run.Coverage.Exclude(scope.ReasonGitMetadata, ".git/")
 	got, _ := recordOne(t, run)
-	const want = "declared out of scope, not scanned: minified 1 (public/app.min.js), test/fixture path 1 (tests/app.js), installed npm packages 1 (node_modules/)"
+	const want = "declared out of scope, not scanned: lockfile 1 (package-lock.json), symbolic link 1 (linked/x.py), git metadata 1 (.git/)"
 	if got.State != reporters.ScannerOK || got.Detail != want {
 		t.Fatalf("entry = %+v; want ok with detail %q", got, want)
 	}
@@ -95,9 +95,9 @@ func TestSemgrepOkDetailWithDeclaredScopeIsNeverCut(t *testing.T) {
 	run := semgrep.Run{Report: semgrep.Report{Incomplete: map[string]int{"PartialParsing": 2}}}
 	long := strings.Repeat("very/deeply/nested/directory/", 6)
 	for i := 0; i < 40; i++ {
-		run.Coverage.Exclude(scope.ReasonMinified, long+"bundle.min.js")
-		run.Coverage.TestPath(long + "tests/a.test.js")
-		run.Coverage.Exclude(scope.ReasonNPMInstall, long+"node_modules/")
+		run.Coverage.Exclude(scope.ReasonLockfile, long+"package-lock.json")
+		run.Coverage.Symlink(long + "linked/a.js")
+		run.Coverage.Exclude(scope.ReasonGitMetadata, long+".git/")
 	}
 	got, _ := recordOne(t, run)
 	t.Logf("detail (%d bytes): %s", len(got.Detail), got.Detail)
@@ -111,7 +111,7 @@ func TestSemgrepOkDetailWithDeclaredScopeIsNeverCut(t *testing.T) {
 	if !strings.HasPrefix(got.Detail, summary) {
 		t.Errorf("detail %q lost the parse summary", got.Detail)
 	}
-	if !strings.Contains(got.Detail, "minified 40") {
+	if !strings.Contains(got.Detail, "lockfile 40") {
 		t.Errorf("detail %q lost the declared counts", got.Detail)
 	}
 }

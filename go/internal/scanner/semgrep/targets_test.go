@@ -53,8 +53,8 @@ func scanTreeWith(t *testing.T, files map[string]string, scanned []string, withP
 	return run, root
 }
 
-// minifiedJS is a bundle's worth of one long line: the content statistics (not
-// the name) are what make a file minified (scope.ClassifyFile).
+// minifiedJS is a bundle's worth of one long line. It is evaluated like any
+// other file (decision D5-2): its look is not a reason to leave it out.
 func minifiedJS() string { return "!function(){" + strings.Repeat("a=b(c,d);", 300) + "}();\n" }
 
 func TestScanRunListsWhatTheRunLeftUnread(t *testing.T) {
@@ -76,27 +76,25 @@ func TestScanRunListsWhatTheRunLeftUnread(t *testing.T) {
 	}, []string{"app.js", "main.py"}, true)
 
 	cov := run.Coverage
-	// D6' (redteam4-d6-03): the replaced expectation declared tests/app.js and
-	// web/app.test.ts out of scope by the packs' path filters; the packs carry
-	// none now, so a test path Semgrep did not report is lost like any file.
-	if !cov.Lost() || cov.LostFiles() != 6 {
-		t.Fatalf("LostFiles = %d (%s); want big.js, dist/out.js, lib/ignored.js, tests/app.js, tests/test_main.py and web/app.test.ts", cov.LostFiles(), cov.LostDetail(1<<20))
+	// D5-2: nothing is declared out of scope on what it looks like. A minified
+	// bundle and a file under node_modules are in scope, so, absent from
+	// paths.scanned, they are lost evaluation like any other file; the packs
+	// carry no path filters, so are tests.
+	if !cov.Lost() || cov.LostFiles() != 8 {
+		t.Fatalf("LostFiles = %d (%s); want big.js, dist/out.js, lib/ignored.js, node_modules/x/index.js, public/app.min.js, tests/app.js, tests/test_main.py and web/app.test.ts", cov.LostFiles(), cov.LostDetail(1<<20))
 	}
 	lost := cov.LostDetail(1 << 20)
-	for _, want := range []string{"1 over 1048576 bytes (big.js)", "5 not evaluated by semgrep (dist/out.js, lib/ignored.js, tests/app.js +2 more)"} {
+	for _, want := range []string{"1 over 1048576 bytes (big.js)", "7 not evaluated by semgrep (dist/out.js, lib/ignored.js, node_modules/x/index.js +4 more)"} {
 		if !strings.Contains(lost, want) {
 			t.Errorf("lost detail %q lacks %q", lost, want)
 		}
 	}
-	declared := cov.DeclaredDetail(1 << 20)
-	for _, want := range []string{"minified 1 (public/app.min.js)", "installed npm packages 1 (node_modules/)"} {
-		if !strings.Contains(declared, want) {
-			t.Errorf("declared detail %q lacks %q", declared, want)
-		}
+	if cov.Declared() {
+		t.Errorf("declared %q; nothing here is a lockfile or version control metadata", cov.DeclaredDetail(1<<20))
 	}
 	for _, never := range []string{"README.md", "package-lock.json", "(app.js", ", app.js", "(main.py", ", main.py"} {
-		if strings.Contains(lost+declared, never) {
-			t.Errorf("%q is in a detail: %q / %q", never, lost, declared)
+		if strings.Contains(lost, never) {
+			t.Errorf("%q is in the lost detail: %q", never, lost)
 		}
 	}
 }
@@ -195,16 +193,17 @@ func TestRealSemgrepReportsWhatItLeftUnread(t *testing.T) {
 	if lost != "lost evaluation: 1 in-scope file not read: 1 over 1048576 bytes (big.js)" {
 		t.Errorf("lost detail = %q", lost)
 	}
-	declared := run.Coverage.DeclaredDetail(1 << 20)
-	// D6' (redteam4-d6-03): tests/app.js is evaluated now, not declared out of
-	// scope by its directory; the replaced expectation listed it as a
-	// "test/fixture path".
-	if !seen["tests/app.js:9"] {
-		t.Errorf("tests/app.js:9 not reported: %v", seen)
+	// D5-2: tests/app.js, the file under node_modules and the minified bundle are
+	// all evaluated (the bundle and the installed file are in paths.scanned, so
+	// the lost detail above names only big.js), and nothing is declared out of
+	// scope.
+	for _, want := range []string{"tests/app.js:9", "node_modules/x/index.js:9"} {
+		if !seen[want] {
+			t.Errorf("%s not reported: %v", want, seen)
+		}
 	}
-	const want = "declared out of scope, not scanned: installed npm packages 1 (node_modules/), minified 1 (public/app.min.js)"
-	if declared != want {
-		t.Errorf("declared detail = %q, want %q", declared, want)
+	if declared := run.Coverage.DeclaredDetail(1 << 20); declared != "" {
+		t.Errorf("declared detail = %q, want none", declared)
 	}
 }
 
@@ -234,30 +233,28 @@ func TestRealSemgrepScansThroughALinkedRoot(t *testing.T) {
 	}
 }
 
-// --x-ignore-semgrepignore-files also turns off Semgrep's default list, so
-// the installed-dependency directories it covered are the engine's own
-// excludes now: not scanned, and listed by name, with the evidence that makes
-// them so. A directory that is only CALLED .venv or venv, with no pyvenv.cfg,
-// is the project's own code (decision D6'): it is scanned.
-func TestVirtualEnvironmentsAreExcludedAndListed(t *testing.T) {
+// --x-ignore-semgrepignore-files also turns off Semgrep's default list. A
+// virtualenv, with or without pyvenv.cfg, is ordinary content (decision D5-2):
+// every Python file in it is a target and nothing is excluded.
+func TestVirtualEnvironmentsAreScannedLikeAnyDirectory(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{
 		".venv/pyvenv.cfg": "home = /usr/bin\n",
 		".venv/lib/python3.14/site-packages/x/__init__.py": picklePy,
-		"env/pyvenv.cfg": "home = /usr/bin\nversion = 3.14\n", // any name
+		"env/pyvenv.cfg": "home = /usr/bin\nversion = 3.14\n",
 		"env/lib/y.py":   picklePy,
-		"venv/lib/z.py":  picklePy, // called venv, no evidence
+		"venv/lib/z.py":  picklePy,
 		"app.py":         picklePy,
 	})
 	targets := inScopeTargets(root, nil)
-	if got := targets.Excludes; len(got) != 2 || got[0] != "/.venv" || got[1] != "/env" {
-		t.Errorf("Excludes = %q; want /.venv and /env", got)
+	if len(targets.Excludes) != 0 {
+		t.Errorf("Excludes = %q; want none", targets.Excludes)
 	}
-	targets.checkScanned(map[string]bool{"app.py": true, "venv/lib/z.py": true}, true)
-	if targets.Coverage.Lost() {
-		t.Errorf("lost %s", targets.Coverage.LostDetail(240))
+	if got := len(targets.files); got != 4 {
+		t.Errorf("targets = %v; want all four Python files", targets.files)
 	}
-	if got := targets.Coverage.DeclaredDetail(240); got != "declared out of scope, not scanned: python virtualenv 2 (.venv/, env/)" {
-		t.Errorf("declared detail = %q", got)
+	targets.checkScanned(map[string]bool{"app.py": true, "venv/lib/z.py": true, "env/lib/y.py": true, ".venv/lib/python3.14/site-packages/x/__init__.py": true}, true)
+	if targets.Coverage.Lost() || targets.Coverage.Declared() {
+		t.Errorf("lost %q, declared %q", targets.Coverage.LostDetail(240), targets.Coverage.DeclaredDetail(240))
 	}
 }

@@ -75,7 +75,15 @@ func installRecordedSemgrep(t *testing.T, version, fixture string, reject ...str
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(dst, []byte(strings.Repeat("x = 1\n", 6)), 0o644); err != nil {
+		// A partial parse is ok only when the engine can show the skipped lines
+		// hold no analysable code (C4B-27): the fixtures' bad.py has skipped lines
+		// 2-3, so they are comments here. A skipped line of code is lost
+		// evaluation, which scope_c6_test.go and the real-Semgrep tests pin.
+		body := strings.Repeat("x = 1\n", 6)
+		if filepath.Base(rel) == "bad.py" {
+			body = "x = 1\n# note\n# note\n" + strings.Repeat("x = 1\n", 3)
+		}
+		if err := os.WriteFile(dst, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

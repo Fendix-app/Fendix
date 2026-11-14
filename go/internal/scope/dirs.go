@@ -1,185 +1,63 @@
 package scope
 
 import (
-	"encoding/json"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
-// Directories (decision D6'). A directory is left out of an analyzer's scope
-// only when the directory itself holds the evidence that a tool, not a person,
-// wrote it: an installed-package tree, a virtualenv, a build-output tree. A
-// directory that is merely called node_modules, vendor, dist, build or target
-// is in scope; its files are then classified one by one (ClassifyFile).
+// Directories (decision D5-2, contract C6). The only directory left out of an
+// analyzer's scope is the version-control metadata directory of the scan root,
+// <root>/.git, and only when its layout is a real one: a HEAD file and the
+// objects/ and refs/ directories. It holds history, not source.
 //
-// ClassifyDir reads a handful of marker files in the directory and never walks
-// below it. Its cost is one failed open per directory for the markers every
-// directory is checked for, and a few more for a directory with a candidate
-// name.
+// Nothing else is left out by a directory's name or by marker files inside it.
+// A node_modules, vendor, dist, build, target or site-packages directory, a
+// virtualenv (pyvenv.cfg, conda-meta) and an installed-package tree are all
+// ordinary directories whose files are scanned like any other, and so are a
+// .git or an objects directory anywhere else than the root. Round 4 pruned
+// them on marker files a repository's author could write, which made every
+// marker a way to hide code (review items 2 and 8, C4B-03's family). If
+// scanning an installed-dependency tree breaks the runtime budget on a real
+// repository, that is reported with measurements and the owner decides; it is
+// not worked around with an exclusion.
+//
+// Marker probing never reads a file and never follows a link: Lstat only, and
+// a link or a special file is not a marker.
 
-func isFile(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && info.Mode().IsRegular()
-}
+// ReasonGitMetadata is the reason for <root>/.git.
+const ReasonGitMetadata Reason = "git metadata"
 
-func isDir(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && info.IsDir()
-}
-
-// smallFile reads at most n bytes of a regular file, or nil.
-func smallFile(p string, n int) []byte {
-	f, err := os.Open(p)
-	if err != nil {
-		return nil
+// ClassifyDir classifies the directory at abs (rel is its path relative to the
+// scan root, forward slashes). The verdict is non-zero only for the root's own
+// .git directory with a real layout.
+func ClassifyDir(abs, rel string) Verdict {
+	if strings.ReplaceAll(rel, `\`, "/") != ".git" || !IsGitMetadataDir(abs) {
+		return Verdict{}
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return nil
-	}
-	return readHead(f, n)
+	return Verdict{ReasonGitMetadata}
 }
 
-var (
-	reVenvCfg   = regexp.MustCompile(`(?mi)^\s*home\s*=`)
-	reModules   = regexp.MustCompile(`(?m)^# \S+ v?\d\S*`)
-	reCargoSig  = regexp.MustCompile(`^Signature: 8a477f597d28d172789f06886806bc55`)
-	rePnpmMod   = regexp.MustCompile(`(?m)^layoutVersion:`)
-	reNPMHidden = regexp.MustCompile(`"lockfileVersion"`)
-)
-
-func hasJSONKey(data []byte, keys ...string) bool {
-	var obj map[string]json.RawMessage
-	if json.Unmarshal(data, &obj) != nil {
+// IsGitMetadataDir reports whether abs, which the caller has established is
+// the .git entry directly under the scan root, has a real git layout: itself a
+// directory (not a link), with a regular HEAD file and objects and refs
+// directories (none of them links). Only Lstat is used, so a FIFO or a link
+// cannot make the probe block or leave the root. Callers must not use it for a
+// .git anywhere else.
+func IsGitMetadataDir(abs string) bool {
+	info, err := os.Lstat(abs)
+	if err != nil || !info.IsDir() {
 		return false
 	}
-	for _, k := range keys {
-		if _, ok := obj[k]; !ok {
+	head, err := os.Lstat(filepath.Join(abs, "HEAD"))
+	if err != nil || !head.Mode().IsRegular() {
+		return false
+	}
+	for _, d := range []string{"objects", "refs"} {
+		fi, err := os.Lstat(filepath.Join(abs, d))
+		if err != nil || !fi.IsDir() {
 			return false
 		}
 	}
 	return true
-}
-
-// ClassifyDir classifies the directory at abs (rel is its path relative to the
-// scan root, forward slashes). It returns the zero Verdict when the directory
-// holds no evidence of being installed or built output.
-func ClassifyDir(abs, rel string) Verdict {
-	rel = strings.ReplaceAll(rel, `\`, "/")
-	base := path.Base(rel)
-	parent := filepath.Dir(abs)
-
-	// Any directory that is a Python virtual environment, whatever it is called.
-	if cfg := smallFile(filepath.Join(abs, "pyvenv.cfg"), 4096); cfg != nil && reVenvCfg.Match(cfg) {
-		return Verdict{ReasonPythonVenv}
-	}
-	if isFile(filepath.Join(abs, "conda-meta", "history")) {
-		return Verdict{ReasonPythonVenv}
-	}
-
-	switch base {
-	case "node_modules":
-		if data := smallFile(filepath.Join(abs, ".package-lock.json"), 4096); data != nil && reNPMHidden.Match(data) {
-			return Verdict{ReasonNPMInstall}
-		}
-		if isFile(filepath.Join(abs, ".yarn-integrity")) {
-			return Verdict{ReasonNPMInstall}
-		}
-		if data := smallFile(filepath.Join(abs, ".modules.yaml"), 4096); data != nil && rePnpmMod.Match(data) {
-			return Verdict{ReasonNPMInstall}
-		}
-	case "vendor":
-		if data := smallFile(filepath.Join(abs, "modules.txt"), 8192); data != nil && reModules.Match(data) {
-			return Verdict{ReasonGoVendor}
-		}
-		if data := smallFile(filepath.Join(abs, "composer", "installed.json"), 1<<20); data != nil &&
-			isFile(filepath.Join(abs, "autoload.php")) && (hasJSONKey(data, "packages") || (len(data) > 0 && data[0] == '[')) {
-			return Verdict{ReasonComposer}
-		}
-	case "target":
-		if data := smallFile(filepath.Join(abs, "CACHEDIR.TAG"), 256); data != nil && reCargoSig.Match(data) {
-			return Verdict{ReasonCargoTarget}
-		}
-		if isFile(filepath.Join(parent, "pom.xml")) &&
-			(isDir(filepath.Join(abs, "maven-status")) || isDir(filepath.Join(abs, "maven-archiver")) || isDir(filepath.Join(abs, "surefire-reports"))) {
-			return Verdict{ReasonMavenTarget}
-		}
-	case "build":
-		for _, script := range []string{"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"} {
-			if isFile(filepath.Join(parent, script)) {
-				for _, sub := range []string{"classes", "libs", "tmp", "reports", "generated", "intermediates", "kotlin"} {
-					if isDir(filepath.Join(abs, sub)) {
-						return Verdict{ReasonGradleBuild}
-					}
-				}
-				break
-			}
-		}
-		if (isFile(filepath.Join(parent, "setup.py")) || isFile(filepath.Join(parent, "pyproject.toml"))) && isDir(filepath.Join(abs, "lib")) {
-			if entries, err := os.ReadDir(abs); err == nil {
-				for _, e := range entries {
-					if e.IsDir() && (strings.HasPrefix(e.Name(), "bdist.") || strings.HasPrefix(e.Name(), "temp.")) {
-						return Verdict{ReasonSetuptools}
-					}
-				}
-			}
-		}
-	case ".next":
-		if isFile(filepath.Join(abs, "BUILD_ID")) && isFile(filepath.Join(abs, "build-manifest.json")) {
-			return Verdict{ReasonNextBuild}
-		}
-	case ".npm":
-		if isDir(filepath.Join(abs, "_cacache")) {
-			return Verdict{ReasonNPMCache}
-		}
-	case "site-packages", "dist-packages":
-		if entries, err := os.ReadDir(abs); err == nil {
-			for _, e := range entries {
-				if e.IsDir() && strings.HasSuffix(e.Name(), ".dist-info") &&
-					isFile(filepath.Join(abs, e.Name(), "RECORD")) && isFile(filepath.Join(abs, e.Name(), "METADATA")) {
-					return Verdict{ReasonPythonInstall}
-				}
-			}
-		}
-	}
-
-	// A package that npm installed: <...>/node_modules/<pkg> or
-	// <...>/node_modules/@scope/<pkg>, whose package.json names exactly that
-	// package and carries a version.
-	if v := npmPackage(abs, rel); !v.None() {
-		return v
-	}
-	return Verdict{}
-}
-
-// npmPackage classifies <...>/node_modules/<pkg> and
-// <...>/node_modules/@scope/<pkg> by its package.json.
-func npmPackage(abs, rel string) Verdict {
-	parts := strings.Split(rel, "/")
-	n := len(parts)
-	var want string
-	switch {
-	case n >= 2 && parts[n-2] == "node_modules" && !strings.HasPrefix(parts[n-1], "@") && !strings.HasPrefix(parts[n-1], "."):
-		want = parts[n-1]
-	case n >= 3 && parts[n-3] == "node_modules" && strings.HasPrefix(parts[n-2], "@"):
-		want = parts[n-2] + "/" + parts[n-1]
-	default:
-		return Verdict{}
-	}
-	data := smallFile(filepath.Join(abs, "package.json"), 1<<20)
-	if data == nil {
-		return Verdict{}
-	}
-	var pkg struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	}
-	if json.Unmarshal(data, &pkg) != nil || pkg.Name != want || pkg.Version == "" {
-		return Verdict{}
-	}
-	return Verdict{ReasonNPMInstall}
 }

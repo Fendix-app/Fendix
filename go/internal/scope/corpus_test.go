@@ -4,49 +4,47 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 )
 
-// TestRealCorpus classifies every file of the directories named in
-// FENDIX_SCOPE_CORPUS (path-list separator) and prints what was flagged, so the
-// thresholds can be re-measured on real code. FENDIX_SCOPE_FIRSTPARTY lists
-// directories whose files must never be flagged minified or vendored unless
-// their own content says so; the test fails for any that is flagged without
-// FENDIX_SCOPE_EXPECT (a substring list) naming it. Skipped when unset.
-func TestRealCorpus(t *testing.T) {
+// TestRealLockfileCorpus classifies every file with a lockfile's name under the
+// directories listed in FENDIX_SCOPE_CORPUS (path-list separator) and fails for
+// any that is not recognized: a real lockfile must be excluded, or every scan
+// of a project reads its dependency hashes as source. It also reports how many
+// files of other names were classified, which must be none. Skipped when unset.
+func TestRealLockfileCorpus(t *testing.T) {
 	roots := os.Getenv("FENDIX_SCOPE_CORPUS")
 	if roots == "" {
 		t.Skip("FENDIX_SCOPE_CORPUS not set")
 	}
-	counts := map[Reason]int{}
-	var flagged []string
+	seen, recognised := 0, 0
 	for _, root := range filepath.SplitList(roots) {
 		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil || !d.Type().IsRegular() {
-				return nil
-			}
-			ext := strings.ToLower(filepath.Ext(p))
-			if !jsFamily[ext] && ext != ".css" {
 				return nil
 			}
 			info, err := d.Info()
 			if err != nil {
 				return nil
 			}
-			rel, _ := filepath.Rel(root, p)
-			v := ClassifyFile(p, rel, info.Size())
-			if !v.None() {
-				counts[v.Reason]++
-				flagged = append(flagged, string(v.Reason)+"\t"+p)
+			v := ClassifyFile(p, filepath.Base(p), info.Size())
+			if !IsLockfileName(d.Name()) {
+				if !v.None() {
+					t.Errorf("%s: %q is not a lockfile name but was classified %q", p, d.Name(), v.Reason)
+				}
+				return nil
+			}
+			if info.Size() == 0 {
+				return nil // an empty file holds nothing to leave out
+			}
+			seen++
+			if v.Reason == ReasonLockfile {
+				recognised++
+			} else {
+				t.Errorf("%s: a real lockfile was not recognized", p)
 			}
 			return nil
 		})
 	}
-	sort.Strings(flagged)
-	for _, f := range flagged {
-		t.Log(f)
-	}
-	t.Logf("counts: %v", counts)
+	t.Logf("lockfiles seen %d, recognized %d", seen, recognised)
 }

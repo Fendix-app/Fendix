@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -31,18 +32,18 @@ import (
 //     No rule skips a file by its path (rulepaths.go), so a test or fixture
 //     file is evaluated like any other.
 //
-// Decision D6' (round 4): what the engine leaves out is decided by EVIDENCE
-// read from the file or directory (package scope), never by a name alone. A
-// directory is left out when it holds the markers of an installed-package or
-// build-output tree (scope.ClassifyDir); a JavaScript or TypeScript file is
-// left out when its content is minified or carries a known vendored library's
-// banner (scope.ClassifyFile). A file called *.min.js that is ordinary source,
-// and a directory called vendor/ or dist/ that holds the project's own code,
-// are scanned. Each exclusion is handed to Semgrep as an anchored --exclude
-// pattern (excludePattern), so Semgrep skips exactly the paths the engine
-// declared and no others. A source file Semgrep does not select by its
-// extension (APP.JS, x.mts) is in scope too, and is named to it in the
-// extensions pass (scanner.go).
+// Decision D5-2 (round 5, contract C6): the engine leaves out of the target
+// set no source file because of what it looks like. Every file of a pack
+// language at or below scope.MaxFileBytes is evaluated: minified, vendored,
+// generated, test and fixture code included, whatever its banner, header, name,
+// directory, literals or line statistics say. The only exclusions are the root
+// .git directory with a real layout (scope.ClassifyDir), which is version
+// control metadata, and, for the other analyzers, a recognized lockfile (never
+// a Semgrep target: none has a pack language's extension). A source file over
+// the cap or unreadable is lost evaluation, never an exclusion. A source file
+// Semgrep does not select by its extension (APP.JS, x.mts) is in scope too, and
+// is named to it in the extensions pass (scanner.go), by an absolute path or
+// after "--" so that no file name can become an option (plan.go args).
 
 // targetLanguages maps the extensions Semgrep 1.182.1 selects for the packs'
 // languages (checked against the real binary: the match is case-sensitive, and
@@ -91,11 +92,6 @@ func semgrepSelects(rel string) bool {
 	return ok
 }
 
-// maxExcludes bounds the --exclude patterns of one run, so the command line
-// stays far below the platform's argument limit. A path past the bound is not
-// excluded: it is in scope, and Semgrep scans it.
-const maxExcludes = 1000
-
 // excludePattern is the anchored gitignore-style --exclude pattern that names
 // exactly the path rel under the scan root, or false when it cannot be written
 // safely (a control character, a name with leading or trailing blanks, invalid
@@ -140,28 +136,43 @@ type Targets struct {
 	// Excludes are the anchored --exclude patterns of what was declared out of
 	// scope and that Semgrep would otherwise select.
 	Excludes []string
+	// unreadableExcludes are the part of Excludes that names an unreadable entry.
+	unreadableExcludes []string
 }
 
-// exclude records a path declared out of scope for reason and returns whether
-// Semgrep is told to skip it. A path that cannot be excluded safely (see
-// excludePattern, maxExcludes) is not recorded: it stays in scope.
-func (t *Targets) exclude(reason scope.Reason, rel string, dir bool) bool {
-	pattern, ok := excludePattern(rel)
-	if !ok || len(t.Excludes) >= maxExcludes {
-		return false
+// maxUnreadableExcludes bounds the --exclude arguments one run carries for
+// files and directories the engine could not read.
+const maxUnreadableExcludes = 512
+
+// excludeUnreadable tells Semgrep's own listing of a root run to leave rel
+// (a file or directory the engine could not read, already recorded as lost
+// evaluation under its reason) alone. Without it Semgrep tries to read the
+// entry itself, fails to obtain its target files and loses the whole run to one
+// unreadable entry (round 5, redteam5-05). The loss stays recorded: this changes
+// what Semgrep is asked, not what the report says.
+func (t *Targets) excludeUnreadable(rel string) {
+	if len(t.unreadableExcludes) >= maxUnreadableExcludes {
+		return
 	}
-	t.Excludes = append(t.Excludes, pattern)
-	if dir {
-		rel += "/"
+	if pattern, ok := excludePattern(rel); ok {
+		t.unreadableExcludes = append(t.unreadableExcludes, pattern)
+		t.Excludes = append(t.Excludes, pattern)
 	}
-	t.Coverage.Exclude(reason, rel)
-	return true
+}
+
+// skipVCSMetadata tells Semgrep to skip exactly the root .git directory the
+// engine left out of the target set. It is not recorded as declared: version
+// control metadata is not source and is quiet in every analyzer's detail.
+func (t *Targets) skipVCSMetadata() {
+	if pattern, ok := excludePattern(".git"); ok {
+		t.Excludes = append(t.Excludes, pattern)
+	}
 }
 
 // inScopeTargets walks root (or, with a non-nil allowlist, its files) and
 // returns what a Semgrep run of it should evaluate. root is the directory the
 // run scans; links inside it are never followed, as Semgrep does not follow
-// them, and .git is not source.
+// them, and the root .git directory (with a real layout) is not source.
 func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 	var t Targets
 	consider := func(abs, rel string, info fs.FileInfo) {
@@ -169,27 +180,26 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 		if !info.Mode().IsRegular() {
 			return
 		}
-		lang := languageOf(rel)
-		if lang == "" {
+		if languageOf(rel) == "" {
 			return
 		}
 		if info.Size() > scope.MaxFileBytes {
-			if v := scope.ClassifyFile(abs, rel, info.Size()); !v.None() {
-				t.Coverage.Exclude(v.Reason, rel)
-			} else {
-				t.Coverage.TooLarge(rel)
-			}
+			// Over the cap: Semgrep skips it too (--max-target-bytes), so the
+			// engine names it as lost evaluation, whatever it looks like.
+			t.Coverage.TooLarge(rel)
 			return
 		}
-		if lang == "javascript" || lang == "typescript" {
-			if v := scope.ClassifyFile(abs, rel, info.Size()); v.ExcludableUnderCap() && t.exclude(v.Reason, rel, false) {
-				return
-			}
-		}
-		f, err := os.Open(abs)
+		// A probe that neither blocks on a FIFO swapped in after the walk nor
+		// follows a link swapped in for the file.
+		f, err := scope.OpenRegular(abs)
 		if err != nil {
 			t.Coverage.Unreadable(rel)
+			t.excludeUnreadable(rel)
 			return
+		}
+		if isPythonSource(rel) && !declaresReadableEncoding(f) {
+			// The program is not the bytes Semgrep reads: say so (redteam5-10).
+			t.Coverage.NotParsed(rel)
 		}
 		_ = f.Close()
 		t.files = append(t.files, rel)
@@ -202,28 +212,18 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 		t.size[rel] = info.Size()
 	}
 
+	rootGit := false
+	if absRoot, err := filepath.Abs(root); err == nil {
+		rootGit = !scope.ClassifyDir(filepath.Join(absRoot, ".git"), ".git").None()
+	}
+	if rootGit {
+		t.skipVCSMetadata()
+	}
+
 	if allow != nil {
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
 			return t
-		}
-		dirVerdict := map[string]scope.Verdict{}
-		// pruned returns the first ancestor directory of rel that holds the
-		// evidence of an installed or built tree.
-		pruned := func(rel string) (string, scope.Verdict) {
-			parts := strings.Split(rel, "/")
-			for i := 1; i < len(parts); i++ {
-				dir := strings.Join(parts[:i], "/")
-				v, ok := dirVerdict[dir]
-				if !ok {
-					v = scope.ClassifyDir(filepath.Join(absRoot, filepath.FromSlash(dir)), dir)
-					dirVerdict[dir] = v
-				}
-				if !v.None() {
-					return dir, v
-				}
-			}
-			return "", scope.Verdict{}
 		}
 		listed := map[string]bool{}
 		for _, abs := range allow.AbsPaths() {
@@ -238,15 +238,13 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 				}
 				continue
 			}
-			if dir, v := pruned(rel); !v.None() {
-				if listed[dir] {
-					continue
-				}
-				if t.exclude(v.Reason, dir, true) {
-					listed[dir] = true
-					continue
-				}
+			if rootGit && strings.HasPrefix(rel, ".git/") {
+				continue
 			}
+			if listed[rel] {
+				continue
+			}
+			listed[rel] = true
 			info, err := os.Lstat(abs)
 			if err != nil {
 				continue
@@ -270,6 +268,9 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 		if walkErr != nil {
 			if rel != "." {
 				t.Coverage.Unreadable(filepath.ToSlash(rel) + "/")
+				if d != nil && d.IsDir() {
+					t.excludeUnreadable(filepath.ToSlash(rel))
+				}
 			}
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
@@ -277,14 +278,9 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 			return nil
 		}
 		if d.IsDir() {
-			if rel == "." {
-				return nil
-			}
-			if d.Name() == ".git" {
-				return fs.SkipDir
-			}
-			slash := filepath.ToSlash(rel)
-			if v := scope.ClassifyDir(p, slash); !v.None() && t.exclude(v.Reason, slash, true) {
+			// Only <root>/.git with a real layout is left out; a .git (or any
+			// other directory) elsewhere is ordinary content.
+			if rootGit && rel == ".git" {
 				return fs.SkipDir
 			}
 			return nil
@@ -305,6 +301,7 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 		if err != nil {
 			if languageOf(rel) != "" {
 				t.Coverage.Unreadable(filepath.ToSlash(rel))
+				t.excludeUnreadable(filepath.ToSlash(rel))
 			}
 			return nil
 		}
@@ -351,4 +348,50 @@ func (t *Targets) checkScanned(scanned map[string]bool, reported bool) {
 		slog.Warn("semgrep: in-scope files were not evaluated; findings in them are missing",
 			"files", lost, "paths_scanned_reported", reported)
 	}
+}
+
+// isPythonSource reports whether rel is a file whose first two lines can declare
+// a source encoding (PEP 263).
+func isPythonSource(rel string) bool {
+	switch strings.ToLower(filepath.Ext(rel)) {
+	case ".py", ".pyw", ".pyi":
+		return true
+	}
+	return false
+}
+
+var (
+	// pepCommentOnly is the first line a declaration may follow (blank or a
+	// comment), pepCoding the declaration itself. Both are CPython's own
+	// expressions (Lib/tokenize.py: cookie_re, blank_re), including that
+	// "coding" is matched in lower case.
+	pepCommentOnly = regexp.MustCompile(`^[ \t\f]*(?:[#\r\n]|$)`)
+	pepCoding      = regexp.MustCompile(`^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)`)
+	// asciiTransparentCodec names the declared encodings in which every ASCII
+	// byte is the character it looks like and nothing else, so reading the bytes
+	// as UTF-8 gives Semgrep the program's own text. Anything else declared (utf-7,
+	// utf-16, utf-32, an EBCDIC page, a multi-byte CJK page, ...) is not.
+	asciiTransparentCodec = regexp.MustCompile(`^(?:utf-?8(?:-sig)?|u8|utf|ascii|us-ascii|646|latin-?1|latin|l1|iso-?8859-\d+|latin-?\d+|l\d+|cp125\d|windows-125\d|cp(?:437|850|852|866)|koi8-[ru]|mac-?roman)$`)
+)
+
+// declaresReadableEncoding reports whether the Python file f declares no source
+// encoding, or one Semgrep reads correctly as UTF-8. Only the first two lines
+// are examined, as CPython does, and only the first 512 bytes are read.
+func declaresReadableEncoding(f *os.File) bool {
+	buf := make([]byte, 512)
+	n, _ := f.ReadAt(buf, 0)
+	lines := strings.SplitN(string(buf[:n]), "\n", 3)
+	for i, line := range lines {
+		if i >= 2 {
+			break
+		}
+		if m := pepCoding.FindStringSubmatch(line); m != nil {
+			name := strings.ToLower(strings.ReplaceAll(m[1], "_", "-"))
+			return asciiTransparentCodec.MatchString(name)
+		}
+		if !pepCommentOnly.MatchString(line) {
+			return true
+		}
+	}
+	return true
 }

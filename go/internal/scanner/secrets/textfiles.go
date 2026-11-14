@@ -17,9 +17,8 @@ import (
 //   - a known binary file type, by extension (images, archives, compiled code,
 //     fonts, media, databases): ReadsFile is false, and a NUL byte in the first
 //     sniffBytes of a file of any other kind proves it binary at read time;
-//   - a directory with structural evidence that it holds installed
-//     dependencies, a virtual environment, a cache or version-control metadata
-//     (PrunedDir), never because of its name alone;
+//   - the version-control metadata directory at the scan root, when its layout
+//     is real (PrunedDir): the one directory that is not read;
 //   - a file over the streaming cap, which is lost evaluation, not a skip.
 //
 // The old scanner read only files whose extension was on a list and skipped
@@ -153,25 +152,47 @@ func utf16Guess(head []byte) (nuls int, bigEndian bool, ok bool) {
 
 // PrunedDir says whether the directory at abs (rel is its path under the scan
 // root, forward slashes) is left unread as declared out of scope, and why. The
-// reason is "" when it is read. A directory is pruned only on structural
-// evidence that it holds something other than first-party source, which
-// scope.ClassifyDir reads from the directory itself (an installed-package tree,
-// a virtualenv, a build-output tree); its name alone never prunes it (D6').
-// Version-control metadata is recognised here: a .git directory with a HEAD
-// file and an objects directory. It holds no source, so it is quiet: not
-// worth listing in a scan's detail.
+// reason is "" when it is read.
+//
+// Exactly one directory is ever pruned (decision D5-2, contract C6): the version
+// control metadata directory at the scan root, <root>/.git, and only when its
+// layout is real (a HEAD file and the objects and refs directories). It holds
+// history, not source, so it is quiet, not worth listing in a scan's detail.
+// No dependency tree is pruned (owner amendment A1): every scheme that could
+// prove a directory is an unmodified third-party package rests on a hash the
+// repository itself writes (go.sum, a package lock, a RECORD file), and the scan
+// is offline, so nothing here can be checked against an authority outside the
+// repository. A forged pin would hide first-party code and credentials from a
+// scan that reads complete.
+// Nothing else is left unread because of how it looks: a directory named .git or
+// objects anywhere else, a .git without that layout, node_modules, a virtual
+// environment, a build-output tree and vendored code are ordinary content and
+// are read like any other directory. (They used to be pruned on marker files
+// and file names, which a repository can forge, so a credential under a
+// directory that merely looked installed was never read.)
 func PrunedDir(abs, rel string) (reason scope.Reason, quiet bool) {
-	if filepath.Base(abs) == ".git" {
-		head, errH := os.Lstat(filepath.Join(abs, "HEAD"))
-		objs, errO := os.Lstat(filepath.Join(abs, "objects"))
-		if errH == nil && head.Mode().IsRegular() && errO == nil && objs.IsDir() {
-			return reasonGitMetadata, true
-		}
-	}
-	if v := scope.ClassifyDir(abs, filepath.ToSlash(rel)); !v.None() {
-		return v.Reason, false
+	if filepath.ToSlash(rel) == ".git" && realGitLayout(abs) {
+		return reasonGitMetadata, true
 	}
 	return "", false
+}
+
+// realGitLayout reports whether dir has the layout of a git directory: a HEAD
+// file and the objects and refs directories. The three are examined with Lstat,
+// so a symbolic link or a device in their place is not the layout, and nothing
+// is opened, so nothing can block.
+func realGitLayout(dir string) bool {
+	head, err := os.Lstat(filepath.Join(dir, "HEAD"))
+	if err != nil || !head.Mode().IsRegular() {
+		return false
+	}
+	for _, d := range []string{"objects", "refs"} {
+		info, err := os.Lstat(filepath.Join(dir, d))
+		if err != nil || !info.Mode().IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 // reasonGitMetadata is the reason for a .git directory: version-control
@@ -239,6 +260,24 @@ func SafeName(s string) string { return scope.Sanitize(s) }
 // characters those patterns are built from, so a file name cannot spell one
 // (scope.SafeToken).
 func lostName(s string) string { return scope.SafeToken(s) }
+
+// lostReason is SafeName for the engine's own reason text in the lost-evaluation
+// segment ("binary content that is compressed or encrypted and cannot be
+// decoded"). A reason is a sentence, so it keeps its spaces, colon and
+// apostrophe; it loses what the segment's grammar is built from around a name:
+// parentheses, commas, double quotes and tabs. Anything taken from a file (an
+// escape's text, a name) is passed through lostName by the caller first
+// (verification pass 1, DE5-05: the sentence used to read
+// "binary?content?that?is?compressed").
+func lostReason(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '(', ')', ',', '"', '\t':
+			return '?'
+		}
+		return r
+	}, scope.Sanitize(s))
+}
 
 // LostName is lostName for another scanner's lost-evaluation names.
 func LostName(s string) string { return lostName(s) }
