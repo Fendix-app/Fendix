@@ -155,7 +155,7 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 		return nil, fmt.Errorf("pip: stat requirements.txt: %w", err)
 	}
 
-	content, err := os.ReadFile(reqFile)
+	content, err := readManifest(reqFile)
 	if err != nil {
 		return nil, fmt.Errorf("pip: read requirements.txt: %w", err)
 	}
@@ -276,7 +276,7 @@ func ScanOffline(codePath string, maxDepth int, snap *offline.Snapshot) ([]evide
 
 	var findings []evidence.Evidence
 	for _, m := range manifests {
-		content, err := os.ReadFile(m)
+		content, err := readManifest(m)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[fendix] pip: read %s failed: %v\n", m, err)
 			continue
@@ -367,7 +367,7 @@ func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.
 	// each pair so each finding's Endpoint correctly attributes ownership.
 	var allPairs []pkgWithManifest
 	for _, m := range manifests {
-		content, err := os.ReadFile(m)
+		content, err := readManifest(m)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[fendix] pip: read %s failed: %v\n", m, err)
 			continue
@@ -1638,4 +1638,19 @@ func writeCache(dir, pkg, version string, vulns []osvVuln) {
 	}
 	tmp.Close()
 	_ = os.Rename(tmp.Name(), p)
+}
+
+// readManifest reads a manifest the scan found in the tree. A path that is a
+// named pipe or a device once links are followed is refused instead of read: an
+// open of a pipe waits for a writer that never comes and would hang the scan
+// (round 5, redteam5-11). A link to a regular file is still followed.
+func readManifest(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return os.ReadFile(path)
 }
