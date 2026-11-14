@@ -40,6 +40,10 @@ func groupedCSP(withOccurrences bool) models.Finding {
 
 // The primary location is fixed, another occurrence is not: the group is
 // still present, never "resolved".
+// Round 5 follow-up (DE5-02, C8): a header now set on an occurrence is an
+// observation, not a fix, so the occurrence that no longer misses the header is
+// unknown rather than resolved, and a group is never resolved by its URL
+// occurrences. The still-present occurrence still keeps the whole group present.
 func TestVerify_GroupIsResolvedOnlyWhenEveryOccurrenceIs(t *testing.T) {
 	for _, withOcc := range []bool{true, false} {
 		srv := cspServer(t, "/b")
@@ -55,7 +59,7 @@ func TestVerify_GroupIsResolvedOnlyWhenEveryOccurrenceIs(t *testing.T) {
 			t.Fatalf("want a verdict per occurrence, got %+v", r.Occurrences)
 		}
 		for _, o := range r.Occurrences {
-			want := StatusResolved
+			want := StatusUnknown
 			if o.Endpoint == "GET /b" {
 				want = StatusStillPresent
 			}
@@ -68,8 +72,8 @@ func TestVerify_GroupIsResolvedOnlyWhenEveryOccurrenceIs(t *testing.T) {
 	srv := cspServer(t, "/nothing-missing")
 	baseline := writeBaseline(t, t.TempDir(), []models.Finding{groupedCSP(true)})
 	r, _ := Run(context.Background(), "SEC-001", Options{BaselinePath: baseline, URL: srv.URL})
-	if r.Status != StatusResolved {
-		t.Errorf("every occurrence fixed: status %v (%s); want resolved", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Errorf("every occurrence now sends the header: status %v (%s); want unknown, a URL finding never resolves", r.Status, r.Reason)
 	}
 }
 

@@ -33,18 +33,22 @@
 //     scanner against the manifest's directory and check if the same
 //     (package, version, OSV-id) tuple still emerges.
 //
-//   - Correlated findings (source: correlated) — C4: re-test BOTH halves.
-//     The blackbox half is the endpoint's reachability; the whitebox half is
-//     the tainted source file's continued existence. Missing or inaccessible
-//     source is unknown, since checkout completeness is not established.
-//     Needs both --url and --code; missing one → unknown.
+//   - Correlated findings (source: correlated): the blackbox half's endpoint is
+//     requested and the whitebox half's source file must still exist. Both
+//     halves holding is still-present. A gated or removed route (401, 403, 404,
+//     410) is never resolved, whatever the category (C4B-11, contract C8): a
+//     status says the route changed, not that the code half was fixed. Missing
+//     or inaccessible source is unknown. Needs both --url and --code; missing
+//     one is unknown.
 //
 //   - Active injection-probe findings (blackbox injection/xss/ssrf/... under
-//     --enable-active) — C4: a gated endpoint (401/403/404/410) resolves the
-//     finding; an open one without consent is reported still-present with a
-//     note that a confirmed re-exploit needs --enable-active consent; with
-//     --enable-active, verify re-hits the endpoint and looks for the recorded
-//     payload signal.
+//     --enable-active) never resolve. A gated endpoint (401/403/404/410) is
+//     unknown; with --enable-active, verify re-hits the endpoint and a
+//     reflected payload marker is still-present.
+//
+// Only a finding of the native secrets scanner has a verdict that rests on what
+// the tree holds; the HTTP re-test of a passive header finding rests on the
+// header the response carries now, never on its status alone.
 //
 // Process exit codes (Sprint 03; mapped in cmd/fendix's verify command):
 //
@@ -235,6 +239,25 @@ func Run(ctx context.Context, findingID string, opts Options) (*Result, error) {
 // verifyOne dispatches one finding (or one occurrence of a grouped finding)
 // to its verifier, writing Status and Reason into out.
 func verifyOne(ctx context.Context, original *models.Finding, opts Options, out *Result) {
+	dispatchOne(ctx, original, opts, out)
+	// Contract C8 and D5-3: resolved is allowed only for a finding the secrets
+	// scanner produced, and only that verifier (verifySecret) can establish it.
+	// This is the backstop for every other verifier, present and future: a
+	// verdict of resolved on any other finding becomes unknown.
+	if out.Status == StatusResolved {
+		if why := notSecretsScannerFinding(original); why != "" {
+			out.Status = StatusUnknown
+			out.Reason = fmt.Sprintf("verify resolves only credentials the secrets scanner found in source; %s (%s)", why, truncate(out.Reason, 160))
+		}
+	}
+}
+
+// observationNote ends a reason that rests on what a response or an inventory
+// shows now, which is evidence about that response and nothing about the fix.
+const observationNote = "this is what one re-test observed, not proof that the vulnerability is fixed: verify resolves only a credential the secrets scanner found in source, so every other finding stays unconfirmed. " +
+	"Re-run `fendix scan` against the target and compare with the baseline"
+
+func dispatchOne(ctx context.Context, original *models.Finding, opts Options, out *Result) {
 	// Gate by Source first. A correlated finding fuses a blackbox URL match
 	// with a whitebox file/taint match; a single-shape verifier would answer
 	// for ONE side only. C4 gives correlated findings a real two-sided verdict
@@ -594,6 +617,13 @@ func verifyURL(ctx context.Context, f *models.Finding, opts Options, out *Result
 	if opts.Auth != "" {
 		req.Header.Set("Authorization", opts.Auth)
 	}
+	// A CORS finding exists because the server answered a request that carried
+	// an attacker Origin (the scanner sends one). The re-test sends the same
+	// header: a server that answers the wildcard only to a cross-origin request
+	// is still vulnerable, and one request without an Origin cannot show it.
+	if strings.Contains(strings.ToUpper(f.Title), "CORS") {
+		req.Header.Set("Origin", corsProbeOrigin)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		out.Status = StatusUnknown
@@ -612,64 +642,93 @@ func verifyURL(ctx context.Context, f *models.Finding, opts Options, out *Result
 
 	// Apply a focused per-title heuristic. Each branch matches a
 	// stable check-output title from internal/scanner/.
-	stillPresent, evidence := checkURLFindingPresence(f, resp, body)
-	if stillPresent {
+	switch state, evidence := checkURLFindingPresence(f, resp, body); state {
+	case urlPresent:
 		out.Status = StatusStillPresent
 		out.Reason = evidence
-	} else {
-		out.Status = StatusResolved
+	case urlAbsent:
+		// What one response shows is an observation, not a remediation
+		// (contract C8, D5-3): a header that is set now can come from another
+		// route, a CDN or a different build, and only a credential the secrets
+		// scanner found in source can be searched for in the whole tree. So the
+		// answer is unknown, with what was observed.
+		out.Status = StatusUnknown
+		out.Reason = evidence + "; " + observationNote
+	default:
+		out.Status = StatusUnknown
 		out.Reason = evidence
 	}
 }
 
-// checkURLFindingPresence returns (true, evidence) if the original
-// finding's signal is still observable in the response, else (false,
-// reason it looks resolved).
-func checkURLFindingPresence(f *models.Finding, resp *http.Response, body []byte) (bool, string) {
+// corsProbeOrigin is the attacker origin the CORS check (scanner/cors.go,
+// evilOrigin) probes with.
+const corsProbeOrigin = "https://evil.example.com"
+
+// urlPresence is what one re-issued request shows about a URL-anchored finding.
+type urlPresence int
+
+const (
+	// urlPresent: the finding's signal is still observable in the response.
+	urlPresent urlPresence = iota
+	// urlAbsent: the response carries the evidence that the signal is gone (a
+	// header that is now set, a version string that is no longer disclosed).
+	urlAbsent
+	// urlInconclusive: the request shows nothing about the finding. An HTTP
+	// status alone never resolves anything (contract C8): a 401, 403, 404 or 410
+	// says the route changed, not that the vulnerability was fixed; and one
+	// request cannot show that a rate limit exists or not.
+	urlInconclusive
+)
+
+// checkURLFindingPresence classifies the response: the original finding's
+// signal is still observable (urlPresent), the response shows it gone
+// (urlAbsent, with what was observed) or the request cannot tell
+// (urlInconclusive).
+func checkURLFindingPresence(f *models.Finding, resp *http.Response, body []byte) (urlPresence, string) {
 	title := f.Title
 	headers := resp.Header
 
 	switch {
 	case strings.Contains(title, "Missing Content-Security-Policy"):
 		if headers.Get("Content-Security-Policy") == "" {
-			return true, "Content-Security-Policy header is still absent"
+			return urlPresent, "Content-Security-Policy header is still absent"
 		}
-		return false, fmt.Sprintf("Content-Security-Policy now set: %s", truncate(headers.Get("Content-Security-Policy"), 80))
+		return urlAbsent, fmt.Sprintf("Content-Security-Policy now set: %s", truncate(headers.Get("Content-Security-Policy"), 80))
 
 	case strings.Contains(title, "Missing Strict-Transport-Security"):
 		if headers.Get("Strict-Transport-Security") == "" {
-			return true, "Strict-Transport-Security header is still absent"
+			return urlPresent, "Strict-Transport-Security header is still absent"
 		}
-		return false, fmt.Sprintf("Strict-Transport-Security now set: %s", truncate(headers.Get("Strict-Transport-Security"), 80))
+		return urlAbsent, fmt.Sprintf("Strict-Transport-Security now set: %s", truncate(headers.Get("Strict-Transport-Security"), 80))
 
 	case strings.Contains(title, "X-Content-Type-Options"):
 		if !strings.EqualFold(headers.Get("X-Content-Type-Options"), "nosniff") {
-			return true, fmt.Sprintf("X-Content-Type-Options still %q (expected 'nosniff')", headers.Get("X-Content-Type-Options"))
+			return urlPresent, fmt.Sprintf("X-Content-Type-Options still %q (expected 'nosniff')", headers.Get("X-Content-Type-Options"))
 		}
-		return false, "X-Content-Type-Options: nosniff is now set"
+		return urlAbsent, "X-Content-Type-Options: nosniff is now set"
 
 	case strings.Contains(title, "X-Frame-Options"):
 		if headers.Get("X-Frame-Options") == "" {
-			return true, "X-Frame-Options header is still absent"
+			return urlPresent, "X-Frame-Options header is still absent"
 		}
-		return false, fmt.Sprintf("X-Frame-Options now set: %s", headers.Get("X-Frame-Options"))
+		return urlAbsent, fmt.Sprintf("X-Frame-Options now set: %s", headers.Get("X-Frame-Options"))
 
 	case strings.Contains(title, "CORS allows any origin"):
 		if headers.Get("Access-Control-Allow-Origin") == "*" {
-			return true, "Access-Control-Allow-Origin is still '*'"
+			return urlPresent, "Access-Control-Allow-Origin is still '*'"
 		}
-		return false, fmt.Sprintf("Access-Control-Allow-Origin now %q", headers.Get("Access-Control-Allow-Origin"))
+		return urlAbsent, fmt.Sprintf("Access-Control-Allow-Origin now %q", headers.Get("Access-Control-Allow-Origin"))
 
 	case strings.Contains(title, "Server version disclosed"):
 		serverHeader := headers.Get("Server")
 		if serverHeader == "" {
-			return false, "Server header is no longer present"
+			return urlAbsent, "Server header is no longer present"
 		}
 		// Detect a version-shaped substring (digits.digits)
 		if containsVersionLike(serverHeader) {
-			return true, fmt.Sprintf("Server header still discloses version: %q", serverHeader)
+			return urlPresent, fmt.Sprintf("Server header still discloses version: %q", serverHeader)
 		}
-		return false, fmt.Sprintf("Server header no longer discloses version: %q", serverHeader)
+		return urlAbsent, fmt.Sprintf("Server header no longer discloses version: %q", serverHeader)
 
 	case strings.Contains(title, "No rate limiting detected"),
 		strings.Contains(title, "No rate limiting observed"):
@@ -678,30 +737,32 @@ func checkURLFindingPresence(f *models.Finding, resp *http.Response, body []byte
 		// a focused load test. (Phase 5.4 renamed the title to the
 		// scoped "No rate limiting observed within N requests"; the old
 		// literal is kept for findings persisted before that change.)
-		return false, "rate-limit verification needs a full re-scan with multiple rapid requests; single-request verify can't disprove rate limiting"
+		return urlInconclusive, "rate-limit verification needs a full re-scan with multiple rapid requests; a single request cannot show that a rate limit exists, so this finding is kept as unconfirmed"
 
 	case strings.Contains(title, "Missing authentication on endpoint"):
 		// Re-test with no auth; if endpoint still 200s, finding holds.
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return true, fmt.Sprintf("endpoint still returns %d to unauthenticated request", resp.StatusCode)
+			return urlPresent, fmt.Sprintf("endpoint still returns %d to unauthenticated request", resp.StatusCode)
 		}
-		return false, fmt.Sprintf("endpoint now returns %d to unauthenticated request", resp.StatusCode)
+		return urlInconclusive, fmt.Sprintf(
+			"endpoint now returns %d to the unauthenticated request; a changed HTTP status alone is not proof of remediation "+
+				"(an auth wall, a WAF, a moved route or a rate limiter answer the same), so this finding is kept as unconfirmed", resp.StatusCode)
 
 	case strings.Contains(title, "Software version string in response"):
 		// Naive but useful: re-scan the body for any version-shaped substring.
 		if containsVersionLike(string(body)) {
-			return true, "response body still contains a version-shaped string"
+			return urlPresent, "response body still contains a version-shaped string"
 		}
-		return false, "response body no longer contains an obvious version string"
+		return urlAbsent, "response body no longer contains an obvious version string"
 
 	default:
-		// Generic fallback: if the response status changed from 200 to
-		// 401/403/404/410, treat as plausibly resolved.
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
-			resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-			return false, fmt.Sprintf("endpoint now returns %d (presumed gated or removed)", resp.StatusCode)
+		// Generic fallback. A status that gates or removes the route is not
+		// evidence about the finding (contract C8): it used to read as
+		// "presumed gated or removed" and resolve.
+		if isGatedStatus(resp.StatusCode) {
+			return urlInconclusive, fmt.Sprintf("endpoint now returns %d; a changed HTTP status alone is not proof of remediation, and there is no per-title re-test for %q, so this finding is kept as unconfirmed", resp.StatusCode, f.Title)
 		}
-		return true, fmt.Sprintf("no per-title re-test for %q yet; endpoint still reachable (HTTP %d) — flagging as still-present conservatively", f.Title, resp.StatusCode)
+		return urlPresent, fmt.Sprintf("no per-title re-test for %q yet; endpoint still reachable (HTTP %d) — flagging as still-present conservatively", f.Title, resp.StatusCode)
 	}
 }
 
@@ -776,9 +837,12 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 // baseline evidence carries ([REDACTED len=N sha256:...], the byte length and
 // the first 4 bytes of the SHA-256 of the value): a rule stops matching as soon
 // as the literal changes shape, the value does not (secrets.SearchValues).
-// The search reads every text file, whatever its name or extension, and finds
-// the value as written, with adjacent string literals and line continuations
-// joined, and with backslash escapes undone. The verdict is:
+// The search reads every file, whatever its name or extension, and finds the
+// value as written, with adjacent string literals and line continuations
+// joined, backslash escapes (\x \u \N{}) and %XX undone, HTML character
+// references undone, as a list of character codes, as hex (with separators) and
+// as base64 (two layers), written backwards, and inside compressed streams.
+// The verdict is:
 //
 //   - still-present: the scanner reports the same rule (rule_id) in the same
 //     file, at any line, or a value with the marker's length and digest is
@@ -788,24 +852,32 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 //     (an environment lookup's default, a call argument, a concatenation) is
 //     still present.
 //   - resolved: the scanner read the whole file and reports that rule there no
-//     more, AND the search read every text file under --code and found the value
-//     nowhere. The reason says what was searched and what was not (binary
-//     files, directories pruned on evidence). When the baseline evidence carries
+//     more, AND the search read and decoded everything under --code and found
+//     the value nowhere. The reason says what was searched and what was not
+//     (the root's own git history; values built at run time), and closes with
+//     "not detected is not the same as fixed". When the baseline evidence carries
 //     no marker (a non-primary occurrence of a group, a signature-only rule, an
 //     older baseline) the value cannot be searched for, so resolved
 //     additionally needs a rule that matches the credential's own token shape
 //     (secrets.IsProviderAnchoredRule) and that fires nowhere under --code; an
 //     assignment-shaped rule stops matching when the literal moves into another
 //     shape, so it stays unknown.
-//   - unknown: everything else, including an incomplete re-test, a file under
-//     --code that could not be read or was over the read cap, and a credential
-//     too long to search for.
+//   - unknown: everything else, including an incomplete re-test, content under
+//     --code that could not be read or decoded (over the read cap, unreadable,
+//     an opaque binary, an archive in a format that cannot be opened, a git
+//     object store other than <root>/.git/objects), and a credential too long
+//     to search for.
 //
 // One rule reported twice in a file keeps both findings present until both
 // are gone: the re-test cannot tell which literal a finding was, so it errs
-// towards still-present, never towards resolved. A credential encoded (base64,
-// hex), split over variables or built at run time is not found: that is stated
-// in the resolved reason, not hidden.
+// towards still-present, never towards resolved. A credential split over
+// variables, case-changed, shifted, encrypted or otherwise built at run time is
+// not found: that is stated in the resolved reason, not hidden, and every
+// resolved reason ends by saying that not detected is not fixed (contract C8).
+// Content that could not be read or decoded (an opaque binary file, an archive
+// in a format that cannot be opened, a \N{} name outside the ASCII table, a git
+// object store other than <root>/.git/objects) makes the answer unknown, and the
+// reason lists it.
 func verifySecret(ctx context.Context, f *models.Finding, opts Options, absFile, relPath string, out *Result) {
 	if why := notSecretsScannerFinding(f); why != "" {
 		out.Status = StatusUnknown
@@ -909,7 +981,7 @@ func verifySecret(ctx context.Context, f *models.Finding, opts Options, absFile,
 			out.Status = StatusResolved
 			out.Reason = fmt.Sprintf(
 				"secrets scanner re-read all of %s and no longer reports %s there, and the credential (%s) "+
-					"was found nowhere: %s",
+					"was found nowhere: %s. "+notFixedNote,
 				safeRel, f.RuleID, strings.Join(markers, ", "), search.Scope())
 		}
 		return
@@ -972,9 +1044,15 @@ func verifySecret(ctx context.Context, f *models.Finding, opts Options, absFile,
 	out.Reason = fmt.Sprintf(
 		"secrets scanner re-read all of %s and no longer reports %s there, and %s, which matches the "+
 			"credential's own format, fires nowhere under --code (%s; the baseline evidence carries no "+
-			"redaction marker to search for the credential itself)",
+			"redaction marker to search for the credential itself). "+notFixedNote,
 		safeRel, f.RuleID, f.RuleID, scopeText)
 }
+
+// notFixedNote closes every resolved reason: not detected is not fixed. A
+// committed credential is exposed until it is revoked, and verify cannot see
+// history, an encrypted copy, or a value built at run time.
+const notFixedNote = "Not detected is not the same as fixed: verify cannot see the repository's history or a value built at run time, " +
+	"so rotate or revoke the credential rather than rely on this result."
 
 // sightingWithMarker returns a sighting whose redaction markers include one of
 // the baseline's, or nil.
@@ -1138,8 +1216,12 @@ func verifyDep(ctx context.Context, f *models.Finding, opts Options, out *Result
 			return
 		}
 	}
-	out.Status = StatusResolved
-	out.Reason = fmt.Sprintf("dep scanner no longer flags this vulnerability at %s", manifest)
+	// The dependency scanner's inventory not listing the vulnerability is an
+	// observation of one manifest, not proof the vulnerable package is gone
+	// from what runs (another manifest, a lockfile out of step, a transitive or
+	// vendored copy). Only the secrets scanner's findings resolve (C8, D5-3).
+	out.Status = StatusUnknown
+	out.Reason = fmt.Sprintf("dep scanner no longer flags this vulnerability at %s; %s", manifest, observationNote)
 }
 
 // ─── C4: correlated + active-probe verifiers ────────────────────────
@@ -1172,13 +1254,6 @@ var activeProbeCategories = map[string]bool{
 // whitebox taint finding in the same category is not misclassified.
 func isActiveProbeFinding(f *models.Finding) bool {
 	return f.Source == models.SourceBlackbox && activeProbeCategories[f.Category]
-}
-
-// isActiveProbeDerived reports whether f (of any Source, correlated included)
-// is in an active-probe category: the blackbox half of a correlated finding in
-// such a category comes from an active probe.
-func isActiveProbeDerived(f *models.Finding) bool {
-	return activeProbeCategories[f.Category]
 }
 
 // verifyCorrelated re-tests BOTH halves of a correlated finding. The blackbox
@@ -1228,20 +1303,18 @@ func verifyCorrelated(ctx context.Context, f *models.Finding, opts Options, out 
 		out.Reason = fmt.Sprintf("correlated blackbox half: request to %s failed: %v", targetURL, err)
 		return
 	}
-	if isGatedStatus(status) && isActiveProbeDerived(f) {
-		// The blackbox half of this correlation is an active-probe finding: a
-		// gated or removed route is not proof it was fixed (contract C5.6).
+	if isGatedStatus(status) {
+		// A gated or removed route is not proof that either half was fixed, for
+		// any category (contract C8, C4B-11): the same status comes from an
+		// auth wall, a WAF, a moved route or a rate limiter, and the whitebox
+		// half (a committed credential, a taint path) is untouched by it. Until
+		// a verification contract validated for the correlated shape exists, a
+		// correlated finding is never resolved.
 		out.Status = StatusUnknown
 		out.Reason = fmt.Sprintf(
-			"the blackbox half is an active-probe finding and its endpoint now returns HTTP %d; a reachability change is not proof of "+
-				"remediation, and no validated probe-specific verification contract exists", status)
-		return
-	}
-	if isGatedStatus(status) {
-		out.Status = StatusResolved
-		out.Reason = fmt.Sprintf(
-			"correlation broken: the blackbox endpoint now returns %d (gated/removed), so the DAST half no "+
-				"longer reproduces — a correlated finding is resolved once either half is gone.", status)
+			"the blackbox endpoint now returns HTTP %d; a changed HTTP status alone is not proof of remediation "+
+				"(it says the route changed, not that the code half was fixed), and verify never resolves a correlated finding "+
+				"on a status", status)
 		return
 	}
 
