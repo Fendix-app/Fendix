@@ -836,6 +836,18 @@ func (st *searchState) searchZip(ctx context.Context, r *bufio.Reader, name, dis
 // searchPlain searches a stream that is not an archive: as text (a UTF-16 stream
 // decoded first), or, when it is binary, as raw bytes and with its NULs removed.
 func (st *searchState) searchPlain(ctx context.Context, r *bufio.Reader, name, display string, head []byte) error {
+	// A Python file whose declared source encoding is not read as written is not
+	// searched as the program CPython runs: its credential can be in text this
+	// search cannot see (R6-E2). It is searched as the bytes it is, and recorded
+	// as lost evaluation, so a search that finds nothing there cannot read
+	// complete. Whether the file is a hit does not change that.
+	if scope.IsPythonSource(name, head) {
+		var py scope.PySource
+		py, r, head = wse1ClassifyPython(r, head)
+		if py.Lost() {
+			st.res.Coverage.Unreadable(lostName(display) + " (" + wse1PyReason(py) + ")")
+		}
+	}
 	var src io.Reader = r
 	binary := false
 	decodedText := false
@@ -1252,35 +1264,84 @@ func decodeBase64Run(run []byte, fn func(blob []byte)) {
 // bytes hold a NUL is proven binary (errBinary). A file with an extension the
 // scanner has always treated as source is read even then.
 func textReader(src io.Reader, name string) (io.Reader, error) {
+	r, _, err := textReaderPy(src, name)
+	return r, err
+}
+
+// wse1ClassifyPython applies the shared PEP 263 predicate (scope.ClassifyPython-
+// Source) to the start of the stream behind br, without consuming it. The 64 KiB
+// window holds lines 1 and 2 of any real source file; when they run past it the
+// stream is read as far as they go (a file is at most maxFileBytes) and put back
+// in front of what is left, which is why the reader it returns replaces br, and
+// the first sniffBytes it returns replace the caller's (a slice of the old
+// reader's buffer, which that read overwrites).
+func wse1ClassifyPython(br *bufio.Reader, head []byte) (scope.PySource, *bufio.Reader, []byte) {
+	win, err := br.Peek(br.Size())
+	complete := err != nil // fewer bytes than the window: the end, or a read the scan meets again
+	if src := scope.ClassifyPythonSource(win, complete); src.Verdict != scope.PyUndeterminable || complete {
+		return src, br, head
+	}
+	src, consumed, _ := scope.ClassifyPythonStream(br, maxFileBytes+1)
+	nb := bufio.NewReaderSize(io.MultiReader(bytes.NewReader(consumed), br), 64<<10)
+	head, _ = nb.Peek(sniffBytes)
+	return src, nb, head
+}
+
+// wse1PyReason is why a Python file the predicate cannot read as its program is
+// lost evaluation, for a lost-evaluation segment: the declared name came from
+// the file, so it goes through lostName.
+func wse1PyReason(py scope.PySource) string {
+	switch {
+	case py.Verdict == scope.PyUndeterminable:
+		return "its source encoding could not be determined"
+	case py.Verdict == scope.PyUnknown:
+		return "a declared source encoding " + lostName(py.Declared) + " that no codec answers to"
+	case py.SkipFirstLine:
+		return "a source encoding " + lostName(py.Declared) + " that only python -x reads"
+	}
+	return "a declared source encoding " + lostName(py.Declared) + " that is not read as written"
+}
+
+// textReaderPy is textReader that also says what the PEP 263 predicate makes of
+// a Python source file (by extension, or a python shebang): a declared encoding
+// that is not ASCII-transparent, a name no codec answers to, or a cookie only
+// `python -x` reads means the bytes this reader hands out are not the program
+// CPython runs (R5-01, R6-E2). The scan still reads such a file and reports what
+// it holds in clear (E1-B6); the caller records the file as lost evaluation.
+func textReaderPy(src io.Reader, name string) (io.Reader, scope.PySource, error) {
 	br := bufio.NewReaderSize(src, 64<<10)
 	head, _ := br.Peek(sniffBytes)
+	var py scope.PySource
+	if scope.IsPythonSource(name, head) {
+		py, br, head = wse1ClassifyPython(br, head)
+	}
 	if utf32, big := utf32BOM(head); utf32 {
 		if _, err := br.Discard(4); err != nil {
-			return nil, err
+			return nil, py, err
 		}
-		return newUTF32Reader(br, big), nil
+		return newUTF32Reader(br, big), py, nil
 	}
 	if utf16, big := utf16BOM(head); utf16 {
 		if _, err := br.Discard(2); err != nil {
-			return nil, err
+			return nil, py, err
 		}
-		return newUTF16Reader(br, big), nil
+		return newUTF16Reader(br, big), py, nil
 	}
 	if looksBinary(head) {
 		// UTF-16 without a byte-order mark: decode it rather than call it binary
 		// (redteam4-secrets-02).
 		if _, big, ok := utf16Guess(head); ok {
-			return newUTF16Reader(br, big), nil
+			return newUTF16Reader(br, big), py, nil
 		}
 		// UTF-32 (three NULs in every four bytes) is text too.
 		if big, ok := utf32Guess(head); ok {
-			return newUTF32Reader(br, big), nil
+			return newUTF32Reader(br, big), py, nil
 		}
 		if !isKnownText(name) {
-			return nil, errBinary
+			return nil, py, errBinary
 		}
 	}
-	return br, nil
+	return br, py, nil
 }
 
 // isBase32Run reports whether run is written in the base32 alphabet (A-Z and 2-7)

@@ -762,28 +762,41 @@ func newReportCmd() *cobra.Command {
 func newVerifyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "verify [finding-id]",
-		Short: "Re-run a single finding by ID and report still-present / resolved",
-		Long: `Re-test a specific finding from a saved baseline scan report and
-report whether it is still present, resolved, or unverifiable.
+		Short: "Re-test a single finding by ID and report still-present / unknown",
+		Long: `Re-test a specific finding from a saved baseline scan report and report
+whether it is still present or could not be confirmed.
 
-Supported finding shapes:
+Verify never answers "resolved". Not finding a problem on a re-test cannot
+prove it is gone: a credential can be written down in more ways than any
+search lists, and one response or one dependency inventory observes only
+itself. So the answer is still-present when the problem is seen again, and
+unknown when it is not or could not be re-tested. To learn whether a finding
+is gone, re-run "fendix scan" and diff against the baseline.
+
+What verify re-tests with a verdict that rests on the tree:
+  - Secrets findings        (source: whitebox, rule secrets/<PATTERN>): the
+                            file is re-read and the whole --code tree is
+                            searched for the credential itself. Seen again:
+                            still-present. Not seen: unknown, with what was
+                            searched and what was not.
+
+Not yet supported for confirming a fix (still-present only where the same
+re-test sees the problem again; otherwise unknown with an explanatory reason):
   - URL-anchored DAST findings    (source: blackbox)
-  - File-anchored SAST findings   (source: whitebox; category:
-                                   secrets / injection / headers / ...)
   - Dependency CVE findings       (category: deps)
-
-Not yet supported (returns status "unknown" with an explanatory reason):
   - Correlated findings           (source: correlated)
-  - Active injection probe findings (require --enable-active to reproduce)
+  - Active injection probe findings (--enable-active re-sends the payload)
+  - Every other file-anchored finding (Semgrep, textscan, the Python engine)
 
-Exit codes (Sprint 03 of the enterprise-readiness plan):
-  0   resolved          — the finding no longer fires
-  1   still-present     — the finding still fires; CI should fail the build
+Exit codes:
+  1   still-present     — the problem was seen again; CI should fail the build
   2   unknown OR
       not-found-in-baseline
-                        — verify could not produce a confident result;
+                        — verify could not confirm the finding is gone;
                           the operator should investigate but CI should
                           NOT auto-fail on this
+Verify never exits 0: an exit status of zero would tell a CI gate that a
+finding is gone, which no re-test can show.
 
 The user passes --baseline pointing at a previously saved findings.json
 from "fendix scan --output ...", plus the same --url and/or --code that
@@ -794,11 +807,10 @@ human-readable summary.
 
 Use in CI:
 
-  fendix verify SEC-001-abc --baseline scan.json --url $TARGET_URL
+  fendix verify SEC-001-abc --baseline scan.json --code .
   case $? in
-    0) echo "resolved";;
     1) echo "still present"; exit 1;;
-    2) echo "verify could not tell — investigate manually";;
+    2) echo "not confirmed gone — re-scan and diff against the baseline";;
   esac
 `,
 		Args: cobra.ExactArgs(1),
@@ -833,14 +845,15 @@ Use in CI:
 				return err
 			}
 
-			// Exit-code semantics for CI scripting (Sprint 03).
-			// 0 = resolved (default for RunE returning nil)
+			// Exit-code semantics for CI scripting (Sprint 03; D4 Option A, Round 6).
 			// 1 = still-present (CI should fail the build)
 			// 2 = unknown / not-found-in-baseline (operator should
 			//     investigate but CI should not auto-fail)
+			// Verify never exits 0: no verdict shows a finding is gone, and
+			// verifycmd never produces resolved. A status that is not one of
+			// the three below (resolved included, which only a defect
+			// could return) is 2, never the success code.
 			switch result.Status {
-			case verifycmd.StatusResolved:
-				return nil
 			case verifycmd.StatusStillPresent:
 				return cli.ExitWithCode(1, "finding still present")
 			case verifycmd.StatusUnknown, verifycmd.StatusNotFound:

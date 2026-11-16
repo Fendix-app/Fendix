@@ -2,12 +2,14 @@ package semgrep
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -134,15 +136,142 @@ type Targets struct {
 	// unreadable, or declared out of scope.
 	Coverage scope.Coverage
 	// Excludes are the anchored --exclude patterns of what was declared out of
-	// scope and that Semgrep would otherwise select.
+	// scope and that Semgrep would otherwise select, and of the unreadable
+	// entries it must not read itself (finalised when the walk ends).
 	Excludes []string
-	// unreadableExcludes are the part of Excludes that names an unreadable entry.
-	unreadableExcludes []string
+	// wse1Unreadable is the set of root-relative paths (a file or a directory,
+	// which covers everything beneath it) Semgrep's own listing is told to
+	// leave alone, because the engine could not read them (excludeUnreadable).
+	wse1Unreadable map[string]bool
+	// wse1Unexcludable are unreadable entries no --exclude can keep out of
+	// Semgrep's listing: none of their ancestors but the scan root can be
+	// written as a pattern. wse1Overflow is set when more than
+	// maxUnreadableExcludes entries are directly under the root. Either one means
+	// Semgrep would fail to list its targets (ListingErr).
+	wse1Unexcludable []string
+	wse1Overflow     bool
 }
 
 // maxUnreadableExcludes bounds the --exclude arguments one run carries for
 // files and directories the engine could not read.
 const maxUnreadableExcludes = 512
+
+// maxUnexcludableNamed bounds how many unexcludable names ListingErr keeps.
+const maxUnexcludableNamed = 64
+
+// wse1Parent is the directory part of a root-relative path, "" for an entry
+// directly under the root.
+func wse1Parent(rel string) string {
+	if i := strings.LastIndexByte(rel, '/'); i >= 0 {
+		return rel[:i]
+	}
+	return ""
+}
+
+// wse1Depth is how many path elements rel has.
+func wse1Depth(rel string) int { return strings.Count(rel, "/") + 1 }
+
+// wse1WritablePattern is excludePattern for an unreadable entry, which unlike a
+// declared exclusion must be kept out of Semgrep's listing whatever its name is.
+// It also writes a path whose only trouble is an ASCII blank at either end,
+// which Semgrep 1.182.1 reads exactly when written as gitignore does (checked on
+// the real binary): a leading blank needs nothing, and every trailing blank is
+// escaped with a backslash, since an unescaped trailing blank is trimmed and the
+// pattern would silently match nothing. A control character or invalid UTF-8
+// anywhere in the path is still not writable.
+func wse1WritablePattern(rel string) (string, bool) {
+	if p, ok := excludePattern(rel); ok {
+		return p, true
+	}
+	inner := strings.Trim(rel, " ")
+	if inner == "" || inner == rel || strings.TrimSpace(inner) != inner {
+		return "", false
+	}
+	p, ok := excludePattern(inner)
+	if !ok {
+		return "", false
+	}
+	lead := rel[:strings.Index(rel, inner)]
+	trail := strings.Repeat(`\ `, len(rel)-len(lead)-len(inner))
+	return "/" + lead + p[1:] + trail, true
+}
+
+// wse1NearestPatternable is rel, or the nearest ancestor of rel whose path
+// wse1WritablePattern can write, or "" when only the scan root is left.
+func wse1NearestPatternable(rel string) string {
+	for rel != "" {
+		if _, ok := wse1WritablePattern(rel); ok {
+			return rel
+		}
+		rel = wse1Parent(rel)
+	}
+	return ""
+}
+
+// wse1Covered reports whether rel, or a directory above it, is already excluded.
+func (t *Targets) wse1Covered(rel string) bool {
+	for p := rel; p != ""; p = wse1Parent(p) {
+		if t.wse1Unreadable[p] {
+			return true
+		}
+	}
+	return false
+}
+
+// wse1Exclude adds rel to the excluded set, and drops the entries beneath it,
+// which it covers.
+func (t *Targets) wse1Exclude(rel string) {
+	if t.wse1Covered(rel) {
+		return
+	}
+	if t.wse1Unreadable == nil {
+		t.wse1Unreadable = map[string]bool{}
+	}
+	prefix := rel + "/"
+	for e := range t.wse1Unreadable {
+		if strings.HasPrefix(e, prefix) {
+			delete(t.wse1Unreadable, e)
+		}
+	}
+	t.wse1Unreadable[rel] = true
+}
+
+// wse1Coalesce brings the excluded set within maxUnreadableExcludes by excluding
+// a directory in place of the entries inside it, deepest first. A readable
+// sibling inside such a directory is no longer given to Semgrep, and is named
+// lost evaluation by checkScanned (it is in t.files and not in paths.scanned):
+// it is never dropped silently. Entries directly under the root cannot be
+// lifted; when they alone exceed the bound, wse1Overflow is set.
+func (t *Targets) wse1Coalesce() {
+	if len(t.wse1Unreadable) <= maxUnreadableExcludes {
+		return
+	}
+	deepest := 0
+	for e := range t.wse1Unreadable {
+		if d := wse1Depth(e); d > deepest {
+			deepest = d
+		}
+	}
+	for depth := deepest; depth > 1 && len(t.wse1Unreadable) > maxUnreadableExcludes; depth-- {
+		var lift []string
+		for e := range t.wse1Unreadable {
+			if wse1Depth(e) == depth {
+				lift = append(lift, e)
+			}
+		}
+		for _, e := range lift {
+			parent := wse1NearestPatternable(wse1Parent(e))
+			if parent == "" {
+				continue // only the root is left above it: it stays as it is
+			}
+			delete(t.wse1Unreadable, e)
+			t.wse1Exclude(parent)
+		}
+	}
+	if len(t.wse1Unreadable) > maxUnreadableExcludes {
+		t.wse1Overflow = true
+	}
+}
 
 // excludeUnreadable tells Semgrep's own listing of a root run to leave rel
 // (a file or directory the engine could not read, already recorded as lost
@@ -150,14 +279,73 @@ const maxUnreadableExcludes = 512
 // entry itself, fails to obtain its target files and loses the whole run to one
 // unreadable entry (round 5, redteam5-05). The loss stays recorded: this changes
 // what Semgrep is asked, not what the report says.
+//
+// Every unreadable entry is kept out of the listing (R5-14, R6-E5). An entry
+// whose own path cannot be written as a pattern (invalid UTF-8, a control
+// character, a blank at either end) is excluded through its nearest ancestor
+// directory that can; and when more than maxUnreadableExcludes patterns would be
+// needed, directories are excluded in place of the entries inside them
+// (wse1Coalesce). A readable file inside such a directory is named lost
+// evaluation, not dropped. An entry with no ancestor but the scan root cannot be
+// excluded at all: ListingErr says so before Semgrep is run.
 func (t *Targets) excludeUnreadable(rel string) {
-	if len(t.unreadableExcludes) >= maxUnreadableExcludes {
+	if t.wse1Overflow || t.wse1Covered(rel) {
+		return // the run is already one ListingErr ends
+	}
+	at := wse1NearestPatternable(rel)
+	if at == "" {
+		if len(t.wse1Unexcludable) < maxUnexcludableNamed {
+			t.wse1Unexcludable = append(t.wse1Unexcludable, rel)
+		} else {
+			t.wse1Overflow = true
+		}
 		return
 	}
-	if pattern, ok := excludePattern(rel); ok {
-		t.unreadableExcludes = append(t.unreadableExcludes, pattern)
-		t.Excludes = append(t.Excludes, pattern)
+	t.wse1Exclude(at)
+	t.wse1Coalesce()
+}
+
+// wse1FinalizeExcludes appends the unreadable entries' patterns to Excludes, in
+// path order so a run's arguments are the same every time.
+func (t *Targets) wse1FinalizeExcludes() {
+	paths := make([]string, 0, len(t.wse1Unreadable))
+	for e := range t.wse1Unreadable {
+		paths = append(paths, e)
 	}
+	sort.Strings(paths)
+	for _, e := range paths {
+		if pattern, ok := wse1WritablePattern(e); ok {
+			t.Excludes = append(t.Excludes, pattern)
+		}
+	}
+}
+
+// ListingErr is non-nil when an unreadable entry cannot be kept out of
+// Semgrep's own file listing by any --exclude: its name cannot be written as a
+// pattern and no directory but the scan root lies above it, or more than
+// maxUnreadableExcludes unreadable entries are directly under the root. Semgrep
+// would try to read them itself and lose the whole run ("Failed to obtain target
+// files"), so a run that starts regardless says nothing true; the caller ends it
+// with this error, naming what could not be excluded.
+func (t Targets) ListingErr() error {
+	if len(t.wse1Unexcludable) == 0 && !t.wse1Overflow {
+		return nil
+	}
+	msg := "semgrep: unreadable entries cannot be kept out of Semgrep's own file listing, so it would fail to list its targets"
+	if n := len(t.wse1Unexcludable); n > 0 {
+		var named []string
+		for i, rel := range t.wse1Unexcludable {
+			if i == 3 {
+				break
+			}
+			named = append(named, scope.Sanitize(rel))
+		}
+		msg += fmt.Sprintf(": no pattern can name %d entr%s directly under the scan root (%s)", n, map[bool]string{true: "y", false: "ies"}[n == 1], strings.Join(named, ", "))
+	}
+	if t.wse1Overflow {
+		msg += fmt.Sprintf("; more than %d unreadable entries are directly under the scan root", maxUnreadableExcludes)
+	}
+	return errors.New(msg)
 }
 
 // skipVCSMetadata tells Semgrep to skip exactly the root .git directory the
@@ -173,8 +361,10 @@ func (t *Targets) skipVCSMetadata() {
 // returns what a Semgrep run of it should evaluate. root is the directory the
 // run scans; links inside it are never followed, as Semgrep does not follow
 // them, and the root .git directory (with a real layout) is not source.
-func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
-	var t Targets
+func inScopeTargets(root string, allow *gitdiff.Allowlist) (t Targets) {
+	// The unreadable entries' patterns are written once the walk has seen them
+	// all, so a directory can stand in for the entries inside it.
+	defer func() { t.wse1FinalizeExcludes() }()
 	consider := func(abs, rel string, info fs.FileInfo) {
 		rel = filepath.ToSlash(rel)
 		if !info.Mode().IsRegular() {
@@ -197,8 +387,14 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) Targets {
 			t.excludeUnreadable(rel)
 			return
 		}
-		if isPythonSource(rel) && !declaresReadableEncoding(f) {
-			// The program is not the bytes Semgrep reads: say so (redteam5-10).
+		if languageOf(rel) == "python" && scope.ClassifyPythonFile(f).Lost() {
+			// The program is not the bytes Semgrep reads: a codec that is not
+			// ASCII-transparent, a name no codec answers to (only a run-time
+			// registration could), a cookie only `python -x` reads (redteam5-10,
+			// R5-01, R6-E1, R6-E6). The shared predicate reads the whole of lines
+			// 1 and 2, as CPython does, and resolves the name through the table
+			// measured on the reference interpreter. The file stays a target:
+			// Semgrep still reports what it finds in it.
 			t.Coverage.NotParsed(rel)
 		}
 		_ = f.Close()
@@ -348,50 +544,4 @@ func (t *Targets) checkScanned(scanned map[string]bool, reported bool) {
 		slog.Warn("semgrep: in-scope files were not evaluated; findings in them are missing",
 			"files", lost, "paths_scanned_reported", reported)
 	}
-}
-
-// isPythonSource reports whether rel is a file whose first two lines can declare
-// a source encoding (PEP 263).
-func isPythonSource(rel string) bool {
-	switch strings.ToLower(filepath.Ext(rel)) {
-	case ".py", ".pyw", ".pyi":
-		return true
-	}
-	return false
-}
-
-var (
-	// pepCommentOnly is the first line a declaration may follow (blank or a
-	// comment), pepCoding the declaration itself. Both are CPython's own
-	// expressions (Lib/tokenize.py: cookie_re, blank_re), including that
-	// "coding" is matched in lower case.
-	pepCommentOnly = regexp.MustCompile(`^[ \t\f]*(?:[#\r\n]|$)`)
-	pepCoding      = regexp.MustCompile(`^[ \t\f]*#.*?coding[:=][ \t]*([-\w.]+)`)
-	// asciiTransparentCodec names the declared encodings in which every ASCII
-	// byte is the character it looks like and nothing else, so reading the bytes
-	// as UTF-8 gives Semgrep the program's own text. Anything else declared (utf-7,
-	// utf-16, utf-32, an EBCDIC page, a multi-byte CJK page, ...) is not.
-	asciiTransparentCodec = regexp.MustCompile(`^(?:utf-?8(?:-sig)?|u8|utf|ascii|us-ascii|646|latin-?1|latin|l1|iso-?8859-\d+|latin-?\d+|l\d+|cp125\d|windows-125\d|cp(?:437|850|852|866)|koi8-[ru]|mac-?roman)$`)
-)
-
-// declaresReadableEncoding reports whether the Python file f declares no source
-// encoding, or one Semgrep reads correctly as UTF-8. Only the first two lines
-// are examined, as CPython does, and only the first 512 bytes are read.
-func declaresReadableEncoding(f *os.File) bool {
-	buf := make([]byte, 512)
-	n, _ := f.ReadAt(buf, 0)
-	lines := strings.SplitN(string(buf[:n]), "\n", 3)
-	for i, line := range lines {
-		if i >= 2 {
-			break
-		}
-		if m := pepCoding.FindStringSubmatch(line); m != nil {
-			name := strings.ToLower(strings.ReplaceAll(m[1], "_", "-"))
-			return asciiTransparentCodec.MatchString(name)
-		}
-		if !pepCommentOnly.MatchString(line) {
-			return true
-		}
-	}
-	return true
 }

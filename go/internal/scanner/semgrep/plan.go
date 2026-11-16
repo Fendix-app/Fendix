@@ -525,6 +525,61 @@ func unfinishedNames(lost []unit) []string {
 	return out
 }
 
+// The extensions pass keeps a reserved share of the stage (round 6, lever 6).
+//
+// It names the source files Semgrep does not select by extension one by one
+// (APP.JS, x.mts, a .vue component) and runs after every unit, so it used to
+// get whatever the units left: when they used their whole window it never
+// started, and on a 94 MB node_modules tree it lost 657 files that way. The
+// reserve is taken from the units' window, never added after the stage: the
+// units' invocations end by the stage's end less the reserve, the pass runs to
+// the stage's end, and a pass that hangs is killed there like any unit. Units
+// and pass together stay within the wall.
+const (
+	// extensionsStartup is what one extensions invocation costs before it
+	// analyses anything: Semgrep's start-up and the rule load, about 2-3 s (the
+	// plan.go estimate above; 1.2-1.7 s measured on the 1.182.1 image).
+	extensionsStartup = 3 * time.Second
+	// extensionsPerFile is Semgrep's cost for one explicit file target, which
+	// it resolves one process each (see above): about 0.14 s a file (0.06 s
+	// measured on a quiet image, so this holds twice the time).
+	extensionsPerFile = 140 * time.Millisecond
+	// minExtensionsReserve is the least a stage with explicit targets keeps:
+	// twice the start-up, so a pass over a few files finishes inside it.
+	minExtensionsReserve = 2 * extensionsStartup
+	// extensionsWallNum/extensionsWallDen is the most of the stage's wall the
+	// reserve takes, two fifths: the units keep at least three fifths, which
+	// holds a unit that needs 9 s of the 20 s floor stage and one that needs
+	// 16 s of a 30 s one.
+	extensionsWallNum, extensionsWallDen = 2, 5
+)
+
+// extensionsReserve is how much of a stage of the given wall is kept back from
+// the units for the extensions pass over files explicit targets in groups
+// language groups: the pass's estimated cost (one start-up per group plus
+// extensionsPerFile a file), never below minExtensionsReserve, and never more
+// than two fifths of the wall. No explicit target, no reserve: the
+// units keep the whole stage. A pass that needs more than the cap is not
+// finished by its reserve; it is killed at the stage's end and its files are
+// reported not evaluated (StageTimeoutError.Unfinished), never dropped
+// silently.
+func extensionsReserve(groups, files int, wall time.Duration) time.Duration {
+	if files <= 0 || wall <= 0 {
+		return 0
+	}
+	if groups < 1 {
+		groups = 1
+	}
+	need := time.Duration(groups)*extensionsStartup + time.Duration(files)*extensionsPerFile
+	if need < minExtensionsReserve {
+		need = minExtensionsReserve
+	}
+	if cap := wall * extensionsWallNum / extensionsWallDen; need > cap {
+		need = cap
+	}
+	return need
+}
+
 // minShardWindow is the least time a language group's invocation is started
 // with. A group left with less is not run and is reported not evaluated.
 var minShardWindow = 5 * time.Second
@@ -759,6 +814,7 @@ func (st *stage) run(ctx context.Context, inv invocation) invResult {
 	defer cancel()
 	cmd := commandContext(ictx, st.bin, st.args(inv)...)
 	killOnCancel(cmd)
+	preferAsOOMVictim(cmd)
 	var stderr strings.Builder
 	cmd.Stderr = &limitedWriter{w: &stderr, n: stderrKeep}
 	started := time.Now()

@@ -62,7 +62,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -406,9 +405,26 @@ func FailureOf(err error) ProbeFailure {
 type probeInfo struct {
 	// Retries is how many times the probe was re-sent.
 	Retries int
+	// Waited is how long probeDo itself slept between attempts: the pauses it
+	// actually took (a pause cut short by the context counts as far as it ran),
+	// never the Retry-After a target asked for. That time is the engine's, not
+	// the target's, so a timing check takes it off the elapsed time
+	// (targetTime). C4B-09.
+	Waited time.Duration
 	// Failure is the classification of the final failed attempt (nil when the
 	// probe got an HTTP response).
 	Failure *ProbeFailure
+}
+
+// targetTime is the part of elapsed (measured around probeDo) that the target
+// spent: elapsed less the retry pauses the engine took. A target that only
+// rate-limits has none of the delay a timing check looks for, however long the
+// engine waited for it.
+func (pi probeInfo) targetTime(elapsed time.Duration) time.Duration {
+	if d := elapsed - pi.Waited; d > 0 {
+		return d
+	}
+	return 0
 }
 
 // apply copies the outcome onto the audit record the caller is about to write.
@@ -524,7 +540,11 @@ func probeDo(ctx context.Context, client *http.Client, req *http.Request, log *P
 		}
 		// Wait with the previous response still open: if the context ends
 		// mid-pause the caller gets that response, with its classification.
-		if !sleepCtx(ctx, pause) {
+		// The pause actually taken is kept: it is the engine's own time.
+		slept := time.Now()
+		ok = sleepCtx(ctx, pause)
+		info.Waited += time.Since(slept)
+		if !ok {
 			return resp, info, err
 		}
 		if resp != nil && resp.Body != nil {
@@ -585,7 +605,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 type probeState struct {
 	mu           sync.Mutex
 	scanCtx      context.Context
-	retries      map[string]int
+	retries      map[uint64]int // by endpointHash: bounded bytes per endpoint
 	retriesTotal int
 	health       map[string]map[int64]struct{}
 	healthSize   int
@@ -614,7 +634,7 @@ func (a *ProbeAuditLog) scanContext() context.Context { return a.state.scanConte
 // takes nothing, when either is spent.
 func (a *ProbeAuditLog) reserveRetry(endpoint string, capProbes int) bool {
 	a.state.mu.Lock()
-	retriesHere := a.state.retries[endpoint]
+	retriesHere := a.state.retries[endpointHash(endpoint)]
 	total := a.state.retriesTotal
 	a.state.mu.Unlock()
 	if total >= maxScanRetries {
@@ -627,9 +647,9 @@ func (a *ProbeAuditLog) reserveRetry(endpoint string, capProbes int) bool {
 func (a *ProbeAuditLog) noteRetry(endpoint string) {
 	a.state.mu.Lock()
 	if a.state.retries == nil {
-		a.state.retries = map[string]int{}
+		a.state.retries = map[uint64]int{}
 	}
-	a.state.retries[endpoint]++
+	a.state.retries[endpointHash(endpoint)]++
 	a.state.retriesTotal++
 	a.state.mu.Unlock()
 }
@@ -857,81 +877,21 @@ var originRank = map[ProbeOrigin]int{OriginScanner: 0, OriginUnknown: 1, OriginT
 
 // SummarizeProbes builds the active-probe coverage account from the audit
 // records. Deterministic: the result depends on the records and the health
-// evidence, not on the order concurrent probes finished in.
+// evidence, not on the order concurrent probes finished in. It feeds the same
+// bounded ledger the scan-wide log streams into (probe_ledger.go), so its
+// memory does not grow past the listing ceiling with the number of groups.
 func SummarizeProbes(records []ProbeRecord, log *ProbeAuditLog) models.ActiveProbeCoverage {
-	cov := models.ActiveProbeCoverage{
-		Attempted:          len(records),
-		Reasons:            map[string]map[string]int{},
-		NotEvaluatedChecks: []models.NotEvaluatedCheck{},
-		Gated:              models.ProbeGated{ByStatus: map[string]int{}},
-	}
-	// One entry per (check, endpoint, origin, reason). The evidence kept is the
-	// smallest of the group, so the entry does not depend on probe order.
-	type key struct{ check, endpoint, origin, reason string }
-	byKey := map[key]string{}
+	l := newProbeLedger()
 	for _, r := range records {
-		v := ClassifyProbe(r, log)
-		if v.Evaluated {
-			cov.Evaluated++
-			continue
-		}
-		switch v.Origin {
-		case OriginTarget:
-			cov.Inconclusive++
-		case OriginScanner:
-			cov.ScannerFailed++
-		default:
-			cov.UnknownOrigin++
-		}
-		if v.Origin == OriginTarget && v.Reason == ReasonGated {
-			cov.Gated.Total++
-			cov.Gated.ByStatus[strconv.Itoa(r.Status)]++
-		}
-		o := string(v.Origin)
-		if cov.Reasons[o] == nil {
-			cov.Reasons[o] = map[string]int{}
-		}
-		cov.Reasons[o][string(v.Reason)]++
-		k := key{checkOfProbe(r), endpointLabel(r), o, string(v.Reason)}
-		ev := sanitizeField(v.Evidence, 160)
-		if cur, ok := byKey[k]; !ok || ev < cur {
-			byKey[k] = ev
-		}
+		l.add(r)
 	}
-	var entries []models.NotEvaluatedCheck
-	for k, ev := range byKey {
-		entries = append(entries, models.NotEvaluatedCheck{Check: k.check, Endpoint: k.endpoint, Origin: k.origin, Reason: k.reason, Evidence: ev})
-	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		a, b := entries[i], entries[j]
-		if ra, rb := originRank[ProbeOrigin(a.Origin)], originRank[ProbeOrigin(b.Origin)]; ra != rb {
-			return ra < rb
-		}
-		if a.Check != b.Check {
-			return a.Check < b.Check
-		}
-		if a.Endpoint != b.Endpoint {
-			return a.Endpoint < b.Endpoint
-		}
-		if a.Reason != b.Reason {
-			return a.Reason < b.Reason
-		}
-		return a.Evidence < b.Evidence
-	})
-	if len(entries) > models.ActiveProbeListCap {
-		entries = entries[:models.ActiveProbeListCap]
-		cov.Truncated = true
-	}
-	if entries != nil {
-		cov.NotEvaluatedChecks = entries
-	}
-	return cov
+	return l.summary(log)
 }
 
-// SummarizeGlobalProbes summarises the scan-wide audit log.
+// SummarizeGlobalProbes summarises the scan-wide audit log: every probe it
+// recorded, exactly, whether or not the record itself was retained.
 func SummarizeGlobalProbes() models.ActiveProbeCoverage {
-	log := currentAuditLog()
-	return SummarizeProbes(log.Records(), log)
+	return currentAuditLog().Summary()
 }
 
 // RuleFamilyOfCheck maps a registry check name to the rule-id family its

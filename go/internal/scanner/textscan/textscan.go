@@ -41,6 +41,7 @@ package textscan
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -114,7 +115,7 @@ func Scan(rootDir string, rules []Rule) ([]evidence.Evidence, error) {
 // skip-dir pruning still happens) but non-allowlisted files are skipped
 // before they are read, keeping diff scans sub-second on large trees.
 func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
-	findings, _, err := ScanCoverage(rootDir, rules, allow)
+	findings, _, err := ScanCoverage(context.Background(), rootDir, rules, allow)
 	return findings, err
 }
 
@@ -125,13 +126,22 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 // caller records the scan a coverage gap naming them and keeps the findings.
 // A declared generated artifact (scope.Generated) left unread and a pruned
 // vendored or build-output directory are declared out of scope, listed only.
-func ScanCoverage(rootDir string, rules []Rule, allow *gitdiff.Allowlist) ([]evidence.Evidence, scope.Coverage, error) {
+//
+// The scan honours ctx (R5-19, gate G2.5): it checks the context before every
+// directory entry and every allowlisted file, so the overrun past a
+// --max-duration deadline is at most one entry's work (a file is at most 1 MiB).
+// When ctx ends the scan stops and returns what it found so far, what it had
+// left unread so far, and the context's error (wrapped, so errors.Is sees
+// context.DeadlineExceeded and the caller records the analyzer failed/timeout):
+// a finding made before the deadline is real and is never dropped with the
+// error.
+func ScanCoverage(ctx context.Context, rootDir string, rules []Rule, allow *gitdiff.Allowlist) ([]evidence.Evidence, scope.Coverage, error) {
 	var cov scope.Coverage
-	findings, err := scanTree(rootDir, rules, allow, &cov)
+	findings, err := scanTree(ctx, rootDir, rules, allow, &cov)
 	return findings, cov, err
 }
 
-func scanTree(rootDir string, rules []Rule, allow *gitdiff.Allowlist, cov *scope.Coverage) ([]evidence.Evidence, error) {
+func scanTree(ctx context.Context, rootDir string, rules []Rule, allow *gitdiff.Allowlist, cov *scope.Coverage) ([]evidence.Evidence, error) {
 	var findings []evidence.Evidence
 
 	if rootDir == "" {
@@ -165,6 +175,9 @@ func scanTree(rootDir string, rules []Rule, allow *gitdiff.Allowlist, cov *scope
 		}
 		noted := map[string]bool{}
 		for _, path := range allow.AbsPaths() {
+			if err := ctx.Err(); err != nil {
+				return findings, fmt.Errorf("textscan: stopped before the scan finished: %w", err)
+			}
 			info, err := os.Lstat(path)
 			if err != nil || info.IsDir() {
 				continue
@@ -186,6 +199,10 @@ func scanTree(rootDir string, rules []Rule, allow *gitdiff.Allowlist, cov *scope
 	// which the check below drops, and walk nothing (redteam-secrets-01).
 	cleanRoot := filepath.Clean(rootDir)
 	err := walkRoot(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
+		// Before every entry, the run's own deadline (R5-19).
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			// Skip unreadable entries and keep walking, but a directory not
 			// listed, or a file a rule applies to, is in scope and was not
@@ -244,7 +261,9 @@ func scanTree(rootDir string, rules []Rule, allow *gitdiff.Allowlist, cov *scope
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("walk %s: %w", rootDir, err)
+		// What was found before the walk stopped is kept (R5-19): the caller
+		// records the failure, and a finding made before it is still a finding.
+		return findings, fmt.Errorf("walk %s: %w", rootDir, err)
 	}
 	return findings, nil
 }

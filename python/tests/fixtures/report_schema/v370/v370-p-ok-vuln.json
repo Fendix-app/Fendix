@@ -1,0 +1,766 @@
+{
+  "metadata": {
+    "schema_version": 2,
+    "fingerprint_algorithm": "fendix/v2",
+    "target": "http://127.0.0.1:18800",
+    "started_at": "2026-11-12T12:11:32.291581796Z",
+    "duration": "13.592s",
+    "version": "v3.7.0",
+    "mode": "blackbox",
+    "endpoints_scanned": 1,
+    "endpoints_discovered": 1,
+    "active_probes": true,
+    "checks_run": [
+      "configleak",
+      "headers",
+      "cors",
+      "exposure",
+      "ratelimit",
+      "cookie-flags",
+      "injection",
+      "open-redirect",
+      "xss",
+      "ssrf",
+      "host-header",
+      "graphql",
+      "method-tamper"
+    ],
+    "scanner_status": [
+      {
+        "name": "dast",
+        "state": "ok"
+      },
+      {
+        "name": "spec",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --spec"
+      },
+      {
+        "name": "active-probes",
+        "state": "ok"
+      },
+      {
+        "name": "secrets",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --code"
+      },
+      {
+        "name": "textscan",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --code"
+      },
+      {
+        "name": "semgrep",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --code"
+      },
+      {
+        "name": "govulncheck",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --code"
+      },
+      {
+        "name": "pip",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --code"
+      },
+      {
+        "name": "npm",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --code"
+      },
+      {
+        "name": "python-engine",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --code or --spec"
+      },
+      {
+        "name": "plugins",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no plugins configured"
+      }
+    ],
+    "coverage": {
+      "contract_version": 1,
+      "strict": false,
+      "configured_complete": true,
+      "gaps": [],
+      "limitations": [],
+      "required_analyzers": [],
+      "required_gaps": [],
+      "retried": []
+    },
+    "policy_version": "1.0.0"
+  },
+  "summary": {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+    "info": 6
+  },
+  "sources": {
+    "blackbox": 12,
+    "whitebox": 0,
+    "correlated": 0
+  },
+  "total": 12,
+  "decisions": {
+    "total": 12,
+    "confirmed": 10,
+    "blocking": 1,
+    "warning": 2,
+    "informational": 9
+  },
+  "findings": [
+    {
+      "id": "SEC-001",
+      "fingerprint": "5c5227547dc43114204241a211b035bb80567a54",
+      "fingerprint_v1": "f23c4f52a068660b158eda2c60f06cc50e66646d",
+      "rule_id": "headers/Content-Security-Policy/missing",
+      "title": "Missing Content-Security-Policy header",
+      "severity": "MEDIUM",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "5c5227547dc43114204241a211b035bb80567a54"
+        }
+      ],
+      "evidence": "Response does not include Content-Security-Policy header",
+      "fix": "Add a Content-Security-Policy header with appropriate directives",
+      "references": [
+        "CWE-693"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "WARN",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "actionable finding below the --fail-on threshold",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-002",
+      "fingerprint": "725d2c4fbe0a382548854410b11611854d4a6335",
+      "fingerprint_v1": "b134db64eebf46a228166da6f5741d7e992f55a5",
+      "rule_id": "headers/Cross-Origin-Embedder-Policy",
+      "title": "Missing Cross-Origin-Embedder-Policy header",
+      "severity": "INFO",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "725d2c4fbe0a382548854410b11611854d4a6335"
+        }
+      ],
+      "evidence": "Response does not include Cross-Origin-Embedder-Policy header",
+      "fix": "Add header: Cross-Origin-Embedder-Policy: require-corp",
+      "references": [
+        "CWE-693"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-003",
+      "fingerprint": "509393ab90e6ce0a1d68cb1c6005b296c5938773",
+      "fingerprint_v1": "967d641e045248e512c7244c0c695cd4cddfbbef",
+      "rule_id": "headers/Cross-Origin-Opener-Policy",
+      "title": "Missing Cross-Origin-Opener-Policy header",
+      "severity": "INFO",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "509393ab90e6ce0a1d68cb1c6005b296c5938773"
+        }
+      ],
+      "evidence": "Response does not include Cross-Origin-Opener-Policy header",
+      "fix": "Add header: Cross-Origin-Opener-Policy: same-origin",
+      "references": [
+        "CWE-693"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-004",
+      "fingerprint": "e5456de85950910b4df844367bb4cdff1b902e26",
+      "fingerprint_v1": "0af3f3169ebf3466a0d4918fdfc4a276d3eac9ff",
+      "rule_id": "headers/Cross-Origin-Resource-Policy",
+      "title": "Missing Cross-Origin-Resource-Policy header",
+      "severity": "INFO",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "e5456de85950910b4df844367bb4cdff1b902e26"
+        }
+      ],
+      "evidence": "Response does not include Cross-Origin-Resource-Policy header",
+      "fix": "Add header: Cross-Origin-Resource-Policy: same-origin",
+      "references": [
+        "CWE-693"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-005",
+      "fingerprint": "5cd2115cb33f8f451b924f432457f87f20377a8b",
+      "fingerprint_v1": "be42148eb57d454efbf43c27e44f55a9aebf05b1",
+      "rule_id": "headers/Permissions-Policy",
+      "title": "Missing Permissions-Policy header",
+      "severity": "INFO",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "5cd2115cb33f8f451b924f432457f87f20377a8b"
+        }
+      ],
+      "evidence": "Response does not include Permissions-Policy header",
+      "fix": "Add a Permissions-Policy header to restrict powerful browser features (geolocation, camera, etc.)",
+      "references": [
+        "CWE-693"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-006",
+      "fingerprint": "e91c5fc5249ae19d62980fe42e55beeb0ea27c0a",
+      "fingerprint_v1": "0008330dc831e4c9a0cafedd14ec35a9d8cad824",
+      "rule_id": "headers/Referrer-Policy",
+      "title": "Missing Referrer-Policy header",
+      "severity": "LOW",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "e91c5fc5249ae19d62980fe42e55beeb0ea27c0a"
+        }
+      ],
+      "evidence": "Response does not include Referrer-Policy header",
+      "fix": "Add header: Referrer-Policy: no-referrer or strict-origin-when-cross-origin",
+      "references": [
+        "CWE-200"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-007",
+      "fingerprint": "999cac59888feedf09177267dc1d5d6dab0ef05c",
+      "fingerprint_v1": "39a3b4edc2dffa85442fb86d26ec497242e4e393",
+      "rule_id": "headers/Strict-Transport-Security/missing",
+      "title": "Missing Strict-Transport-Security header",
+      "severity": "MEDIUM",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "999cac59888feedf09177267dc1d5d6dab0ef05c"
+        }
+      ],
+      "evidence": "Response does not include Strict-Transport-Security header",
+      "fix": "Add header: Strict-Transport-Security: max-age=31536000; includeSubDomains",
+      "references": [
+        "CWE-319"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "WARN",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "actionable finding below the --fail-on threshold",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-008",
+      "fingerprint": "cb5c23f1b21f3b44990a4798d818f668292676d7",
+      "fingerprint_v1": "8acb71562c6a1bef0eaf956260341c5ab3e67116",
+      "rule_id": "headers/X-Content-Type-Options",
+      "title": "Missing or incorrect X-Content-Type-Options header",
+      "severity": "LOW",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "cb5c23f1b21f3b44990a4798d818f668292676d7"
+        }
+      ],
+      "evidence": "X-Content-Type-Options: \"\" (expected 'nosniff')",
+      "fix": "Add header: X-Content-Type-Options: nosniff",
+      "references": [
+        "CWE-693"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-009",
+      "fingerprint": "6b91cc66d9348a6060648008b5fdd23a09c3e566",
+      "fingerprint_v1": "69c879b2c06336f5211bc1af63a4a416af757c28",
+      "rule_id": "headers/X-Frame-Options",
+      "title": "Missing or incorrect X-Frame-Options header",
+      "severity": "LOW",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "6b91cc66d9348a6060648008b5fdd23a09c3e566"
+        }
+      ],
+      "evidence": "X-Frame-Options: \"\" (expected 'DENY' or 'SAMEORIGIN')",
+      "fix": "Add header: X-Frame-Options: DENY",
+      "references": [
+        "CWE-1021"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-010",
+      "fingerprint": "1bd2005ae22f2d4ee7710a408f605237235a7665",
+      "fingerprint_v1": "45357da5dd31163231eecedfe56854ddbf5cf908",
+      "rule_id": "headers/Server",
+      "title": "Server version disclosed in header",
+      "severity": "INFO",
+      "source": "blackbox",
+      "category": "headers",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "1bd2005ae22f2d4ee7710a408f605237235a7665"
+        }
+      ],
+      "evidence": "Server: BaseHTTP/0.6 Python/3.14.5",
+      "fix": "Remove version information from Server header or remove the header entirely",
+      "references": [
+        "CWE-200"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+30 direct observation: the finding is a deterministic read of a live response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 30,
+          "code": "direct_observation",
+          "text": "direct observation: the finding is a deterministic read of a live response"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "direct observation of a live response"
+      ]
+    },
+    {
+      "id": "SEC-011",
+      "fingerprint": "87308635c3fd6c197d8404939c3af7d4b19a6c2f",
+      "fingerprint_v1": "48c4555dafcd3cca3a70a614e73058bafa95ec29",
+      "rule_id": "xss/reflected",
+      "title": "Reflected Cross-Site Scripting (XSS)",
+      "severity": "HIGH",
+      "source": "blackbox",
+      "category": "injection",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "87308635c3fd6c197d8404939c3af7d4b19a6c2f"
+        }
+      ],
+      "evidence": "Reflected XSS confirmed: payload \"\\\"\u003e\u003csvg/onload=fendixXSS780de872345f1a6e\u003e\" reflected un-encoded in a text/html response (Content-Type \"text/html\"), param=\"id\" (in=query). Marker \"fendixXSS780de872345f1a6e\" with raw HTML metacharacters survived (not entity-encoded). Snippet: html\u003e\u003cbody\u003eItem 1 / id=1\u0026id=\"\u003e\u003csvg/onload=fendixXSS780de872345f1a6e\u003e\u003c/body\u003e\u003c/html\u003e",
+      "fix": "Contextually output-encode all user input rendered into HTML (HTML-entity-encode \u003c, \u003e, \", ', \u0026). Set a restrictive Content-Security-Policy and prefer framework auto-escaping over manual string concatenation.",
+      "references": [
+        "CWE-79",
+        "OWASP-A03"
+      ],
+      "confidence": "HIGH",
+      "line": null,
+      "status": "BLOCK",
+      "confidence_score": 55,
+      "confidence_band": "MEDIUM",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present",
+        "+10 active probe payload elicited a confirming response"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        },
+        {
+          "delta": 10,
+          "code": "payload_validated",
+          "text": "active probe payload elicited a confirming response"
+        }
+      ],
+      "decision_reason": "severity at or above the --fail-on threshold; corroborated by: payload-validated probe",
+      "decision_policy": "enforced",
+      "independent_signals": [
+        "payload-validated probe"
+      ]
+    },
+    {
+      "id": "SEC-012",
+      "fingerprint": "10d7e4dc3d915820701e2a233b1834fdfb768735",
+      "fingerprint_v1": "d288072281e8a1e74c6e0753b779ef0fcb8e8977",
+      "rule_id": "ratelimit/none-observed",
+      "title": "No rate limiting observed within 20 requests",
+      "severity": "INFO",
+      "source": "blackbox",
+      "category": "rate_limiting",
+      "endpoint": "GET /item",
+      "occurrences": [
+        {
+          "endpoint": "GET /item",
+          "fingerprint": "10d7e4dc3d915820701e2a233b1834fdfb768735"
+        }
+      ],
+      "evidence": "Sent 20 rapid GET requests with no 429 response and no rate-limit headers (X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset). Scope note: this bounded burst cannot prove the absence of slower per-minute/per-hour limiters — it only shows no limiting within 20 requests. Granularity note: the probe observes only whether THIS operation answered with a limit. It cannot tell a missing per-operation limiter from a shared gateway or perimeter limiter whose threshold this burst never reached, so nothing here establishes where a limit would have to be added. Prioritization note: graded INFO because this endpoint ordinary operation with no abuse-sensitive parameters or route semantics — the observation itself is the same for every operation, only its consequence differs.",
+      "fix": "Implement rate limiting. Return 429 Too Many Requests with Retry-After header.",
+      "references": [
+        "CWE-770"
+      ],
+      "confidence": "MEDIUM",
+      "line": null,
+      "status": "INFO",
+      "confidence_score": 45,
+      "confidence_band": "MEDIUM",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 runtime (DAST) observation present"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "runtime_evidence",
+          "text": "runtime (DAST) observation present"
+        }
+      ],
+      "decision_reason": "informational finding",
+      "decision_policy": "enforced"
+    }
+  ]
+}

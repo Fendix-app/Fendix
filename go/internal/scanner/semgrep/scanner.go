@@ -578,6 +578,9 @@ func ScanRunWithOptions(ctx context.Context, codePath string, allow *gitdiff.All
 	// Decision D6': what the run leaves out is decided from the tree before it
 	// starts, so Semgrep is told to skip exactly those paths.
 	targets := inScopeTargets(target, scopeAllowlist(allow, codePath, target))
+	if err := targets.ListingErr(); err != nil {
+		return Run{}, err
+	}
 
 	budget := resolveBudget(ctx, opts)
 	slog.Info("semgrep: stage budget", "budget", budget.String())
@@ -646,13 +649,37 @@ func ScanRunWithOptions(ctx context.Context, codePath string, allow *gitdiff.All
 		slog.Info("semgrep: the heaviest files run in invocations of their own, cheapest first", "units", strings.Join(names, ", "))
 	}
 
+	// The extensions pass runs one invocation per language group with only that
+	// group's packs: an explicit file of an unselected extension is parsed as
+	// every language of every rule it is run with, and a Python rule would
+	// report the JavaScript file as a syntax error.
+	byGroup := map[string][]string{}
+	var order []string
+	for _, rel := range targets.explicit {
+		g := groupOfLanguage[languageOf(rel)]
+		if _, seen := byGroup[g]; !seen {
+			order = append(order, g)
+		}
+		byGroup[g] = append(byGroup[g], filepath.Join(target, filepath.FromSlash(rel)))
+	}
+
+	// What the pass will need is kept back from every unit's window: the units
+	// end by pass1End, the pass runs to the stage's end (plan.go,
+	// extensionsReserve). With no explicit target the units keep the stage.
+	pass1End := end
+	if reserve := extensionsReserve(len(order), len(targets.explicit), end.Sub(started)); reserve > 0 {
+		pass1End = end.Add(-reserve)
+		slog.Info("semgrep: time reserved for the extensions pass", "reserve", reserve.Round(time.Millisecond).String(),
+			"files", len(targets.explicit), "groups", len(order))
+	}
+
 	var results []invResult
 	var lostUnits []unit
-	offsets := unitDeadlines(units, end.Sub(started))
+	offsets := unitDeadlines(units, pass1End.Sub(started))
 	for i, u := range units {
-		deadline := minTime(end, started.Add(offsets[i]))
+		deadline := minTime(pass1End, started.Add(offsets[i]))
 		if len(units) == 1 {
-			deadline = end
+			deadline = pass1End
 		}
 		if time.Until(deadline) < minShardWindow && len(units) > 1 {
 			lostUnits = append(lostUnits, u)
@@ -670,7 +697,7 @@ func ScanRunWithOptions(ctx context.Context, codePath string, allow *gitdiff.All
 		switch {
 		case res.ctxErr != nil:
 			return Run{}, res.ctxErr
-		case res.timedOut && len(units) == 1:
+		case res.timedOut && len(units) == 1 && len(targets.explicit) == 0:
 			return Run{}, fmt.Errorf("%w after %s", ErrTimeout, end.Sub(started).Round(time.Second))
 		case res.timedOut:
 			slog.Warn("semgrep: an invocation did not finish within its share of the stage budget; its files are not evaluated and the others' findings are kept",
@@ -694,19 +721,6 @@ func ScanRunWithOptions(ctx context.Context, codePath string, allow *gitdiff.All
 	// this pass does not report is lost evaluation (checkScanned), never an
 	// exclusion by name.
 	if len(targets.explicit) > 0 {
-		// One invocation per language group, with only that group's packs: an
-		// explicit file of an unselected extension is parsed as every language
-		// of every rule it is run with, and a Python rule would report the
-		// JavaScript file as a syntax error.
-		byGroup := map[string][]string{}
-		var order []string
-		for _, rel := range targets.explicit {
-			g := groupOfLanguage[languageOf(rel)]
-			if _, seen := byGroup[g]; !seen {
-				order = append(order, g)
-			}
-			byGroup[g] = append(byGroup[g], filepath.Join(target, filepath.FromSlash(rel)))
-		}
 		for _, g := range order {
 			files := byGroup[g]
 			configs := []string{rules}

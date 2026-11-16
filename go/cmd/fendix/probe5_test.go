@@ -99,6 +99,12 @@ func TestCLI_ActiveProbesRequirementFailsWhenNothingWasEvaluated(t *testing.T) {
 	}
 }
 
+// Round 6 (OR-71, A-D5): the Round 5 version of this test pinned that one
+// evaluated probe beside gated ones satisfied --require-analyzers active-probes
+// (exit 0, ok, complete). Required-probe coverage has no threshold now: a probe
+// the target gated was not evaluated, so the pass is incomplete (target-owned
+// failed/no_endpoints) and the requirement is refused. The name is kept so the
+// case stays traceable.
 func TestCLI_ActiveProbesRequirementIsMetByOneEvaluatedProbe(t *testing.T) {
 	code, active, complete, _ := runActive(t, func(w http.ResponseWriter, r *http.Request) {
 		if page(w, r, `<a href="/ok?id=1">ok</a> <a href="/item?id=1">item</a>`) {
@@ -111,10 +117,25 @@ func TestCLI_ActiveProbesRequirementIsMetByOneEvaluatedProbe(t *testing.T) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprint(w, "fine")
 	}, "--require-analyzers", "active-probes")
-	if code != 0 || active.State != "ok" || !complete {
-		t.Fatalf("exit %d, active-probes %+v, complete %v: some probes evaluated, the rest gated beside them", code, active, complete)
+	if code != 2 || active.State != "failed" || active.Reason != "no_endpoints" || complete {
+		t.Fatalf("exit %d, active-probes %+v, complete %v: some probes evaluated and the rest gated is still a gap under A-D5 (no threshold), and the requirement is refused", code, active, complete)
 	}
 	if !strings.Contains(active.Detail, "gated probes (target answered 401/403/404/410 so not evaluated): 403 ") {
 		t.Fatalf("the gated probes must be stated beside the verdict, got %q", active.Detail)
+	}
+}
+
+// The companion (OR-71): when every probe is evaluated the requirement is met,
+// the entry is ok, the scan is complete and the exit is 0.
+func TestCLI_ActiveProbesRequirementIsMetWhenEveryProbeIsEvaluated(t *testing.T) {
+	code, active, complete, gated := runActive(t, func(w http.ResponseWriter, r *http.Request) {
+		if page(w, r, `<a href="/ok?id=1">ok</a>`) {
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "fine")
+	}, "--require-analyzers", "active-probes")
+	if code != 0 || active.State != "ok" || !complete || gated != 0 {
+		t.Fatalf("exit %d, active-probes %+v, complete %v, gated %d: every probe was evaluated, so the requirement is met", code, active, complete, gated)
 	}
 }

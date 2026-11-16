@@ -140,6 +140,7 @@ func semgrepVersionOf(ctx context.Context, bin string) semgrepVersion {
 	defer cancel()
 	cmd := commandContext(vctx, bin, "--version")
 	cmd.Env = probeEnv()
+	preferAsOOMVictim(cmd)
 	// A child that keeps stdout open must not hold the probe past its bound.
 	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()

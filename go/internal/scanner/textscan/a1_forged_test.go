@@ -1,6 +1,7 @@
 package textscan
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -22,7 +23,7 @@ func TestAForgedGoSumDoesNotHideCodeFromTextscan(t *testing.T) {
 	writeFile(t, root, rel+"/web/app.js", innerHTML)
 	h := forgedDirHash1(t, filepath.Join(root, filepath.FromSlash(rel)), mod+"@"+ver)
 	writeFile(t, root, "go.sum", mod+" "+ver+" "+h+"\n")
-	findings, cov, err := ScanCoverage(root, AllRules(), nil)
+	findings, cov, err := ScanCoverage(context.Background(), root, AllRules(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -121,3 +121,21 @@ func cutShortOf(cfg *models.ScanConfig, phase checkPhaseOutcome) *models.ProbeCu
 	}
 	return nil
 }
+
+// probeInconsistentSegment leads the failed entry whose counts do not add up.
+const probeInconsistentSegment = "unreadable probe account: the counts do not add up, so the pass is not complete"
+
+// probeTargetIncompleteDetail is the detail of a pass whose only unevaluated
+// probes are target-side (A-D5: every planned probe is required). It leads with
+// the counts segment every reader parses, exactly as an ok entry does, and never
+// with "lost evaluation": that lead names a Fendix-side loss, and these probes
+// are the target's (gated, or not answered). A pass that reached the listing
+// ceiling says so after the counts.
+func probeTargetIncompleteDetail(cov models.ActiveProbeCoverage) string {
+	segs := probeSegs(cov, "")
+	if cov.ListingCeilingReached {
+		ceiling := fmt.Sprintf("listing ceiling reached: %d probe(s) without group detail (counts exact)", cov.ListingOverflow)
+		segs = append(segs[:1:1], append([]scope.Seg{func(int) string { return ceiling }}, segs[1:]...)...)
+	}
+	return scope.Compose(detailMax, segs...)
+}

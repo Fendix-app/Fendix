@@ -1,67 +1,71 @@
 // Package verifycmd implements `fendix verify <finding-id>` — re-run a
 // single finding against the current state of the target and report
-// whether it's still present or has been resolved.
+// whether it is still present or could not be confirmed.
 //
 // Surfaced as a Track 4 gap by the TwiScope-backend scan: the verify
 // subcommand was a Phase-4 stub that just printed "not yet implemented"
 // despite being documented in `fendix --help`.
 //
-// Supported finding shapes:
+// Decision D4, Option A (Round 6): verify never answers "resolved". Not finding
+// a credential in an enumerated list of representations cannot prove it is gone,
+// because the list of ways to write a value down is open (encodings, archives,
+// media containers, a file name, history, a value built at run time). The
+// answer is still-present when the problem is seen, and unknown otherwise, for
+// every finding, occurrence and group. StatusResolved stays in the output
+// vocabulary so a consumer that knows it keeps parsing, but nothing here
+// produces it: verifyOne turns any such verdict into unknown, and the fold over
+// a group's occurrences cannot reach it.
 //
-//   - URL-anchored DAST findings (endpoint shape: "GET /path", "POST /path",
-//     or "http(s)://host/path"; source: blackbox): re-issue the request
-//     with the same auth and re-evaluate the SAME check that produced
-//     the finding originally.
+// What verify re-tests:
 //
-//   - File-anchored SAST findings (endpoint shape: "path/to/file.py:42";
-//     source: whitebox). Only a finding the native secrets scanner produced
-//     (rule_id "secrets/<PATTERN>", no source tier) is re-tested: the file is
-//     re-read by that scanner and the finding is still present while the same
-//     rule fires anywhere in the same file, or while the credential's VALUE
-//     (identified by the redaction marker in the baseline evidence) is found in
-//     any text file under --code, as written or with string concatenation,
-//     line continuations and backslash escapes undone (see verifySecret).
-//     Resolved needs the whole searchable tree read and the value found
-//     nowhere; anything that could not be searched is unknown. Every other
-//     file-anchored finding — Semgrep, textscan, the Python engine, including
-//     their `secrets`-category findings — is unknown: verify cannot re-run
-//     that analyzer on one file, and a scanner that never emits a rule can
-//     never prove it gone.
+//   - File-anchored findings the native secrets scanner produced (rule_id
+//     "secrets/<PATTERN>", no source tier): the file is re-read by that scanner
+//     and the finding is still present while the same rule fires anywhere in the
+//     same file, or while the credential's VALUE (identified by the redaction
+//     marker in the baseline evidence) is found in any text file under --code, as
+//     written or with string concatenation, line continuations and backslash
+//     escapes undone (see verifySecret). When neither is seen the answer is
+//     unknown, with what was searched stated: a credential found nowhere is not a
+//     credential that is gone. Every other file-anchored finding — Semgrep,
+//     textscan, the Python engine, including their `secrets`-category findings —
+//     is unknown: verify cannot re-run that analyzer on one file.
+//
+//   - URL-anchored DAST findings (endpoint shape: "GET /path", "POST /path", or
+//     "http(s)://host/path"; source: blackbox): the request is re-issued with the
+//     same auth and the SAME check that produced the finding re-evaluates it. A
+//     response that still shows the problem is still-present; anything else is
+//     unknown, because what one response shows now says nothing about a fix.
 //
 //   - Dep-CVE findings (category: deps, endpoint: "requirements.txt" or
-//     "package-lock.json" or similar): re-run the relevant native
-//     scanner against the manifest's directory and check if the same
-//     (package, version, OSV-id) tuple still emerges.
+//     "package-lock.json" or similar): the relevant native scanner is re-run
+//     against the manifest's directory. The same (package, version, OSV-id)
+//     tuple emerging is still-present; otherwise unknown.
 //
 //   - Correlated findings (source: correlated): the blackbox half's endpoint is
 //     requested and the whitebox half's source file must still exist. Both
 //     halves holding is still-present. A gated or removed route (401, 403, 404,
-//     410) is never resolved, whatever the category (C4B-11, contract C8): a
-//     status says the route changed, not that the code half was fixed. Missing
-//     or inaccessible source is unknown. Needs both --url and --code; missing
-//     one is unknown.
+//     410) is never a fix, whatever the category (C4B-11, contract C8): a status
+//     says the route changed, not that the code half was fixed. Missing or
+//     inaccessible source is unknown. Needs both --url and --code; missing one is
+//     unknown.
 //
 //   - Active injection-probe findings (blackbox injection/xss/ssrf/... under
 //     --enable-active) never resolve. A gated endpoint (401/403/404/410) is
 //     unknown; with --enable-active, verify re-hits the endpoint and a
 //     reflected payload marker is still-present.
 //
-// Only a finding of the native secrets scanner has a verdict that rests on what
-// the tree holds; the HTTP re-test of a passive header finding rests on the
-// header the response carries now, never on its status alone.
-//
 // Process exit codes (Sprint 03; mapped in cmd/fendix's verify command):
 //
-//   - 0 — Status: resolved. The finding no longer fires. This is the ONLY
-//     status that exits 0.
 //   - 1 — Status: still-present. The finding still fires; CI should fail.
 //   - 2 — Status: unknown OR not-found-in-baseline (and any status the
 //     command does not recognise, and any command error). Verify could not
-//     produce a confident result; the operator should investigate but
-//     CI should NOT auto-fail on this — that would punish edge cases
+//     confirm the finding is gone; the operator should investigate but CI
+//     should NOT auto-fail on this — that would punish edge cases
 //     (correlated findings, baseline drift) the operator hasn't yet
-//     opted to handle. It is never the success code: a gate that treats
-//     exit 0 as "resolved" never closes an unknown.
+//     opted to handle. It is never the success code.
+//   - 0 — Status: resolved. Reserved: verify does not produce it (D4 Option A).
+//     A gate that treats exit 0 as "resolved" never closes an unknown, and
+//     under Option A it never sees a zero for a secrets finding.
 //
 // There's no automatic discovery of the scan target — the caller passes
 // --url / --code explicitly, the same way they did for the original scan.
@@ -222,10 +226,10 @@ func Run(ctx context.Context, findingID string, opts Options) (*Result, error) {
 
 	// A grouped finding presents several security occurrences. Re-testing
 	// only its primary location and reporting the result for the whole
-	// group would declare a still-vulnerable occurrence "resolved" — and that
-	// verdict is evidence a tracked issue can be closed on. So each
-	// occurrence is re-tested on its own, and the group is resolved only when
-	// every occurrence is.
+	// group would let one occurrence speak for the others: a still-present
+	// occurrence must keep the group present. So each occurrence is re-tested on
+	// its own and folded (verifyEach). Neither an occurrence nor the fold is ever
+	// resolved (D4 Option A).
 	if units := verifyUnits(original); len(units) > 1 {
 		verifyEach(ctx, units, opts, out)
 	} else {
@@ -240,21 +244,26 @@ func Run(ctx context.Context, findingID string, opts Options) (*Result, error) {
 // to its verifier, writing Status and Reason into out.
 func verifyOne(ctx context.Context, original *models.Finding, opts Options, out *Result) {
 	dispatchOne(ctx, original, opts, out)
-	// Contract C8 and D5-3: resolved is allowed only for a finding the secrets
-	// scanner produced, and only that verifier (verifySecret) can establish it.
-	// This is the backstop for every other verifier, present and future: a
-	// verdict of resolved on any other finding becomes unknown.
+	// D4 Option A (Round 6): verify never answers resolved. Not finding a
+	// credential in a list of forms cannot prove it is gone, and no verifier
+	// establishes absence any other way (contract C8, D5-3: only a secrets
+	// finding could resolve, and that was the verdict this removes). This is the
+	// backstop for every verifier, present and future: a verdict of resolved
+	// becomes unknown, so neither an occurrence nor the fold over a group can
+	// carry it out of this function.
 	if out.Status == StatusResolved {
-		if why := notSecretsScannerFinding(original); why != "" {
-			out.Status = StatusUnknown
-			out.Reason = fmt.Sprintf("verify resolves only credentials the secrets scanner found in source; %s (%s)", why, truncate(out.Reason, 160))
+		why := absenceNote
+		if w := notSecretsScannerFinding(original); w != "" {
+			why = fmt.Sprintf("%s; %s", w, absenceNote)
 		}
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf("verify never answers resolved (%s): %s", why, truncate(out.Reason, 160))
 	}
 }
 
 // observationNote ends a reason that rests on what a response or an inventory
 // shows now, which is evidence about that response and nothing about the fix.
-const observationNote = "this is what one re-test observed, not proof that the vulnerability is fixed: verify resolves only a credential the secrets scanner found in source, so every other finding stays unconfirmed. " +
+const observationNote = "this is what one re-test observed, not proof that the vulnerability is fixed: verify never answers resolved, so a finding it cannot see is unconfirmed. " +
 	"Re-run `fendix scan` against the target and compare with the baseline"
 
 func dispatchOne(ctx context.Context, original *models.Finding, opts Options, out *Result) {
@@ -358,8 +367,10 @@ func verifyUnits(f *models.Finding) []*models.Finding {
 }
 
 // verifyEach re-tests every occurrence and folds the verdicts: any
-// still-present occurrence keeps the finding present; it is resolved only
-// when every occurrence is resolved; anything else is unknown.
+// still-present occurrence keeps the finding present; anything else is
+// unknown. A group never folds to resolved: no occurrence can be resolved
+// (D4 Option A), and a fold of resolved verdicts would claim a whole group gone
+// from what was not seen.
 func verifyEach(ctx context.Context, units []*models.Finding, opts Options, out *Result) {
 	var present, unknown []string
 	for _, u := range units {
@@ -385,8 +396,11 @@ func verifyEach(ctx context.Context, units []*models.Finding, opts Options, out 
 		out.Reason = fmt.Sprintf("%d of %d occurrences could not be re-tested (%s); the finding is not resolved until every occurrence is",
 			len(unknown), len(units), strings.Join(unknown, ", "))
 	default:
-		out.Status = StatusResolved
-		out.Reason = fmt.Sprintf("all %d occurrences re-tested and resolved", len(units))
+		// Every occurrence answered resolved. No verifier produces that any more
+		// (D4 Option A: resolved is never derived from absence), so a fold that
+		// reaches here is a defect elsewhere, and it fails closed.
+		out.Status = StatusUnknown
+		out.Reason = fmt.Sprintf("all %d occurrences read resolved, which verify never answers (%s)", len(units), absenceNote)
 	}
 }
 
@@ -832,8 +846,8 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 // For a secrets-scanner finding the re-test reads exactly the finding's file
 // through secrets.RetestFile, which refuses to answer for a file it cannot
 // read completely (a skipped path or binary type, a symlink, an unreadable or
-// over-cap file). Before anything is called resolved, the whole --code root is
-// searched for the credential ITSELF, identified by the redaction marker the
+// over-cap file). Before the answer can be anything but still-present, the whole
+// --code root is searched for the credential ITSELF, identified by the redaction marker the
 // baseline evidence carries ([REDACTED len=N sha256:...], the byte length and
 // the first 4 bytes of the SHA-256 of the value): a rule stops matching as soon
 // as the literal changes shape, the value does not (secrets.SearchValues).
@@ -851,17 +865,17 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 //     same kind, moved to another file of any kind, or written another way
 //     (an environment lookup's default, a call argument, a concatenation) is
 //     still present.
-//   - resolved: the scanner read the whole file and reports that rule there no
-//     more, AND the search read and decoded everything under --code and found
-//     the value nowhere. The reason says what was searched and what was not
-//     (the root's own git history; values built at run time), and closes with
-//     "not detected is not the same as fixed". When the baseline evidence carries
-//     no marker (a non-primary occurrence of a group, a signature-only rule, an
-//     older baseline) the value cannot be searched for, so resolved
-//     additionally needs a rule that matches the credential's own token shape
-//     (secrets.IsProviderAnchoredRule) and that fires nowhere under --code; an
-//     assignment-shaped rule stops matching when the literal moves into another
-//     shape, so it stays unknown.
+//   - never resolved (D4 Option A). The scanner read the whole file and reports
+//     that rule there no more, AND the search read and decoded everything under
+//     --code and found the value nowhere: the answer is unknown, and the reason
+//     says what was searched and what was not (the root's own git history;
+//     values built at run time) and closes with "not detected is not the same as
+//     fixed". The list of forms the search decodes is not the list of ways to
+//     write a value down, so absence from it proves nothing; likewise, when the
+//     baseline evidence carries no marker (a non-primary occurrence of a group, a
+//     signature-only rule, an older baseline) and a rule that matches the
+//     credential's own token shape (secrets.IsProviderAnchoredRule) fires
+//     nowhere under --code, the value was never searched for at all.
 //   - unknown: everything else, including an incomplete re-test, content under
 //     --code that could not be read or decoded (over the read cap, unreadable,
 //     an opaque binary, an archive in a format that cannot be opened, a git
@@ -870,10 +884,10 @@ func verifyFile(ctx context.Context, f *models.Finding, opts Options, out *Resul
 //
 // One rule reported twice in a file keeps both findings present until both
 // are gone: the re-test cannot tell which literal a finding was, so it errs
-// towards still-present, never towards resolved. A credential split over
-// variables, case-changed, shifted, encrypted or otherwise built at run time is
-// not found: that is stated in the resolved reason, not hidden, and every
-// resolved reason ends by saying that not detected is not fixed (contract C8).
+// towards still-present. A credential split over variables, case-changed,
+// shifted, encrypted or otherwise built at run time is not found: that is stated
+// in the reason, not hidden, and the reason of an unfound credential ends by
+// saying that not detected is not fixed (contract C8).
 // Content that could not be read or decoded (an opaque binary file, an archive
 // in a format that cannot be opened, a \N{} name outside the ASCII table, a git
 // object store other than <root>/.git/objects) makes the answer unknown, and the
@@ -978,10 +992,10 @@ func verifySecret(ctx context.Context, f *models.Finding, opts Options, absFile,
 					strings.Join(markers, ", "), safeEndpoint(hit.Endpoint), hit.RuleID, f.RuleID, safeRel)
 				return
 			}
-			out.Status = StatusResolved
+			out.Status = StatusUnknown
 			out.Reason = fmt.Sprintf(
 				"secrets scanner re-read all of %s and no longer reports %s there, and the credential (%s) "+
-					"was found nowhere: %s. "+notFixedNote,
+					"was found nowhere: %s. "+absenceNote,
 				safeRel, f.RuleID, strings.Join(markers, ", "), search.Scope())
 		}
 		return
@@ -1040,19 +1054,22 @@ func verifySecret(ctx context.Context, f *models.Finding, opts Options, absFile,
 			f.RuleID, safeRel, scopeText)
 		return
 	}
-	out.Status = StatusResolved
+	out.Status = StatusUnknown
 	out.Reason = fmt.Sprintf(
 		"secrets scanner re-read all of %s and no longer reports %s there, and %s, which matches the "+
 			"credential's own format, fires nowhere under --code (%s; the baseline evidence carries no "+
-			"redaction marker to search for the credential itself). "+notFixedNote,
+			"redaction marker to search for the credential itself). "+absenceNote,
 		safeRel, f.RuleID, f.RuleID, scopeText)
 }
 
-// notFixedNote closes every resolved reason: not detected is not fixed. A
-// committed credential is exposed until it is revoked, and verify cannot see
-// history, an encrypted copy, or a value built at run time.
-const notFixedNote = "Not detected is not the same as fixed: verify cannot see the repository's history or a value built at run time, " +
-	"so rotate or revoke the credential rather than rely on this result."
+// absenceNote closes the reason of a secrets finding whose credential was seen
+// nowhere. That is as far as verify goes: D4 Option A, verify never answers
+// resolved from absence. The ways to write a value down are open (encodings,
+// archives, containers, a file name, history, a value built at run time), so
+// not finding it in a list of forms cannot show it is gone.
+const absenceNote = "Not detected is not the same as fixed: the ways a committed credential can be written down are open, " +
+	"and verify cannot see the repository's history, an encrypted copy or a value built at run time, " +
+	"so it answers unknown, never resolved. Rotate or revoke the credential, then re-run `fendix scan --code <path>` and diff against the baseline"
 
 // sightingWithMarker returns a sighting whose redaction markers include one of
 // the baseline's, or nil.
@@ -1219,7 +1236,7 @@ func verifyDep(ctx context.Context, f *models.Finding, opts Options, out *Result
 	// The dependency scanner's inventory not listing the vulnerability is an
 	// observation of one manifest, not proof the vulnerable package is gone
 	// from what runs (another manifest, a lockfile out of step, a transitive or
-	// vendored copy). Only the secrets scanner's findings resolve (C8, D5-3).
+	// vendored copy). Nothing resolves (D4 Option A; C8, D5-3).
 	out.Status = StatusUnknown
 	out.Reason = fmt.Sprintf("dep scanner no longer flags this vulnerability at %s; %s", manifest, observationNote)
 }

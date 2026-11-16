@@ -34,8 +34,12 @@ diagnose the issue without re-running the scan.
 - environment.json    — fendix version, OS, Go runtime, Python version
 - metadata.json       — scan metadata (target, duration, mode, counts)
 - findings.json       — the scan's findings, post-sanitization
-- probes.jsonl        — active probe audit log (only when --enable-active)
-- debug.log           — buffered DEBUG-level slog stream from the scan
+- probes.jsonl        — active probe audit log (only when --enable-active);
+                        bounded, never the whole log of a large scan
+- probes.summary.json — how many probes the scan sent, how many records
+                        probes.jsonl holds, and whether it is truncated
+- debug.log           — buffered DEBUG-level slog stream from the scan;
+                        bounded, and it says how many bytes it dropped
 
 ## Redaction
 
@@ -73,18 +77,23 @@ type Bundle struct {
 	enabled bool
 	path    string
 
-	mu        sync.Mutex
-	cfg       *models.ScanConfig
-	meta      json.RawMessage
-	findings  json.RawMessage
-	probes    []scanner.ProbeRecord
-	pythonVer string
+	mu       sync.Mutex
+	cfg      *models.ScanConfig
+	meta     json.RawMessage
+	findings json.RawMessage
+	probes   []scanner.ProbeRecord
+	// probesTotal is how many probes the scan sent, which may exceed
+	// len(probes): the scan-wide log retains a bounded prefix (OR-13).
+	probesTotal int
+	pythonVer   string
 
 	// logMu guards logBuf only. Kept separate from mu so a late slog write
 	// from a goroutine that didn't drain before the orchestrator called
 	// Write() can't deadlock against the metadata-write critical section.
 	logMu  sync.Mutex
 	logBuf bytes.Buffer
+	// logDropped counts the bytes of slog output beyond MaxBundleLogBytes.
+	logDropped int
 
 	// teeHandler captures DEBUG-level slog records into logBuf alongside
 	// whatever the user's existing slog handler does. nil when disabled.
@@ -103,7 +112,7 @@ func New(path string, cfg *models.ScanConfig) *Bundle {
 		path:    path,
 		cfg:     cfg,
 	}
-	b.teeHandler = newBufferHandler(&b.logBuf, &b.logMu)
+	b.teeHandler = newBufferHandler(&b.logBuf, &b.logMu, &b.logDropped)
 	return b
 }
 
@@ -154,14 +163,32 @@ func (b *Bundle) SetFindings(findings any) {
 	}
 }
 
+// MaxBundleProbes and MaxBundleProbeBytes bound probes.jsonl: a scan can send
+// probes without limit (a hosted scan runs with max_endpoints 0), so the bundle
+// holds at most this many records and this many bytes of them, never an
+// unbounded copy (OR-13, risk R-34). What is left out is counted exactly in
+// probes.summary.json.
+const (
+	MaxBundleProbes     = scanner.ProbeRecordRetention
+	MaxBundleProbeBytes = 8 << 20
+)
+
+// MaxBundleLogBytes bounds debug.log. Later bytes are dropped and counted; the
+// bundle is a bug-report attachment, and the head of the log is the part that
+// explains how the scan started.
+const MaxBundleLogBytes = 16 << 20
+
 // SetProbes stores the active-probe audit log. Empty when --enable-active
-// was not set.
+// was not set. The scan-wide log retains a bounded prefix of its records, so
+// the exact total behind the records given is taken from the log when they are
+// its own (probes.summary.json declares the difference).
 func (b *Bundle) SetProbes(records []scanner.ProbeRecord) {
 	if !b.Enabled() {
 		return
 	}
+	total := scanner.GlobalProbeLog().TotalFor(records)
 	b.mu.Lock()
-	b.probes = records
+	b.probes, b.probesTotal = records, total
 	b.mu.Unlock()
 }
 
@@ -251,6 +278,11 @@ func (b *Bundle) Write(fendixVersion string) error {
 		// of the same target. Audit records are appended in scan order
 		// today, but a future parallelization could reorder them.
 		records := append([]scanner.ProbeRecord(nil), b.probes...)
+		// Oldest first within the bound: when records must be left out it is the
+		// later ones, and probes.summary.json says how many.
+		if len(records) > MaxBundleProbes {
+			records = records[:MaxBundleProbes]
+		}
 		sort.SliceStable(records, func(i, j int) bool {
 			if !records[i].Timestamp.Equal(records[j].Timestamp) {
 				return records[i].Timestamp.Before(records[j].Timestamp)
@@ -260,21 +292,48 @@ func (b *Bundle) Write(fendixVersion string) error {
 			}
 			return records[i].Parameter < records[j].Parameter
 		})
+		written := 0
 		for _, r := range records {
-			line, err := json.Marshal(r)
+			line, err := json.Marshal(scanner.ClipProbeRecord(r))
 			if err != nil {
 				return fmt.Errorf("marshalling probe record: %w", err)
 			}
+			if pbuf.Len()+len(line)+1 > MaxBundleProbeBytes {
+				break
+			}
 			pbuf.Write(line)
 			pbuf.WriteByte('\n')
+			written++
+		}
+		total := b.probesTotal
+		if total < len(b.probes) {
+			total = len(b.probes)
+		}
+		summary, err := json.MarshalIndent(map[string]any{
+			"probes_total":     total,
+			"probes_in_bundle": written,
+			"probes_omitted":   total - written,
+			"truncated":        written < total,
+			"record_limit":     MaxBundleProbes,
+			"byte_limit":       MaxBundleProbeBytes,
+			"note":             "probes.jsonl holds the first probes of the scan in time order, each long field cut; every probe is counted in the scan report's coverage.active_probes",
+		}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshalling probe summary: %w", err)
 		}
 		if err := writeEntry(tw, "probes.jsonl", pbuf.Bytes(), now); err != nil {
+			return err
+		}
+		if err := writeEntry(tw, "probes.summary.json", summary, now); err != nil {
 			return err
 		}
 	}
 
 	b.logMu.Lock()
 	logText := redactSecrets(b.logBuf.String(), secrets)
+	if b.logDropped > 0 {
+		logText += fmt.Sprintf("\n[debug bundle] %d further bytes of this log were not kept (limit %d bytes)\n", b.logDropped, MaxBundleLogBytes)
+	}
 	b.logMu.Unlock()
 	if err := writeEntry(tw, "debug.log", []byte(logText), now); err != nil {
 		return err
@@ -351,8 +410,8 @@ func (f *fanoutHandler) WithGroup(name string) slog.Handler {
 // newBufferHandler returns a slog text handler that writes DEBUG-level and
 // above records into buf, locked under mu so concurrent writers don't
 // interleave bytes mid-record.
-func newBufferHandler(buf *bytes.Buffer, mu *sync.Mutex) slog.Handler {
-	return slog.NewTextHandler(&lockedWriter{buf: buf, mu: mu}, &slog.HandlerOptions{
+func newBufferHandler(buf *bytes.Buffer, mu *sync.Mutex, dropped *int) slog.Handler {
+	return slog.NewTextHandler(&lockedWriter{buf: buf, mu: mu, dropped: dropped}, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})
 }
@@ -361,12 +420,26 @@ func newBufferHandler(buf *bytes.Buffer, mu *sync.Mutex) slog.Handler {
 // shared mutex. Without this the worker pool can interleave bytes from two
 // log records during the same scan.
 type lockedWriter struct {
-	buf *bytes.Buffer
-	mu  *sync.Mutex
+	buf     *bytes.Buffer
+	mu      *sync.Mutex
+	dropped *int
 }
 
+// Write keeps the head of the log up to MaxBundleLogBytes and counts the rest
+// (OR-13). It always reports the whole write as taken, so slog never fails.
 func (l *lockedWriter) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.buf.Write(p)
+	room := MaxBundleLogBytes - l.buf.Len()
+	if room >= len(p) {
+		return l.buf.Write(p)
+	}
+	if room > 0 {
+		l.buf.Write(p[:room])
+		p = p[room:]
+	}
+	if l.dropped != nil {
+		*l.dropped += len(p)
+	}
+	return len(p) + max(room, 0), nil
 }

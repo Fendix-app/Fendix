@@ -1,0 +1,62 @@
+{
+  "decisions": {
+    "blocking": 0,
+    "confirmed": 0,
+    "informational": 0,
+    "total": 0,
+    "warning": 0
+  },
+  "findings": [],
+  "metadata": {
+    "active_probes": false,
+    "coverage": {
+      "configured_complete": false,
+      "contract_version": 1,
+      "gaps": [
+        "import/codeql"
+      ],
+      "limitations": [
+        "import/codeql: the producer reported 1 error notification(s); the run may be partial"
+      ],
+      "required_analyzers": [],
+      "required_gaps": [],
+      "retried": [],
+      "strict": false
+    },
+    "duration": "0s",
+    "endpoints_scanned": 0,
+    "fingerprint_algorithm": "fendix/v2",
+    "imports": [
+      {
+        "analyzed_paths": [
+          "app/db.py",
+          "app/views.py"
+        ],
+        "error_notifications": 1,
+        "execution_successful": true,
+        "results": 0,
+        "tool": "codeql",
+        "version": "2.19.0"
+      }
+    ],
+    "mode": "import",
+    "policy_version": "1.0.0",
+    "schema_version": 2,
+    "started_at": "2026-11-14T00:00:00Z",
+    "target": "",
+    "version": "golden"
+  },
+  "sources": {
+    "blackbox": 0,
+    "correlated": 0,
+    "whitebox": 0
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "info": 0,
+    "low": 0,
+    "medium": 0
+  },
+  "total": 0
+}

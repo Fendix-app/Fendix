@@ -124,33 +124,35 @@ func TestVerify_CredentialStillCommittedInAListedEncodingIsStillPresent(t *testi
 	}
 }
 
-// Values built at run time are out of scope, and the resolved reason says so;
-// "not detected" is never worded as "fixed".
+// Values built at run time are out of scope, and the reason says so; "not
+// detected" is never worded as "fixed". Round 6 (D4 Option A): the status of a
+// credential found nowhere is unknown (it was resolved).
 func TestVerify_ResolvedSaysNotDetectedNeverFixed(t *testing.T) {
 	f, root := baselineOf(t, "secrets/HARDCODED_PASSWORD", "app/settings.py", `DB_PASSWORD = "`+vsPW+`"`+"\n")
 	rewrite(t, root, map[string]string{"app/settings.py": `DB_PASSWORD = os.environ["DB_PASSWORD"]` + "\n"})
 	r := verifyIn(t, f, root)
-	if r.Status != StatusResolved {
-		t.Fatalf("status %s, want resolved: %s", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Fatalf("status %s, want unknown (D4 Option A: never resolved): %s", r.Status, r.Reason)
 	}
 	for _, want := range []string{"Not detected is not the same as fixed", "built at run time", "backwards", "version-control history", "character-code", "two layers"} {
 		if !strings.Contains(r.Reason, want) {
-			t.Errorf("the resolved reason must say %q: %s", want, r.Reason)
+			t.Errorf("the reason must say %q: %s", want, r.Reason)
 		}
 	}
 	if strings.Contains(strings.ToLower(r.Reason), "was fixed") || strings.Contains(strings.ToLower(r.Reason), "is fixed") {
-		t.Errorf("a resolved reason must not claim the credential was fixed: %s", r.Reason)
+		t.Errorf("the reason must not claim the credential was fixed: %s", r.Reason)
 	}
 }
 
-// A value assembled at run time is out of scope: the result is resolved with the
-// limit stated, not a claim that the tree holds no credential. (A literal
+// A value assembled at run time is out of scope: the result is unknown (Round 6,
+// D4 Option A; it was resolved) with the limit stated, not a claim that the tree
+// holds no credential. (A literal
 // committed backwards is searched, so it is still present.)
 func TestVerify_RuntimeBuiltValueIsOutOfScopeAndSaidSo(t *testing.T) {
 	f, root := baselineOf(t, "secrets/HARDCODED_PASSWORD", "app/settings.py", `DB_PASSWORD = "`+vsPW+`"`+"\n")
 	rewrite(t, root, map[string]string{"app/settings.py": `K = "` + strings.ToLower(vsPW) + `".capitalize()` + "\n"})
 	r := verifyIn(t, f, root)
-	if r.Status != StatusResolved || !strings.Contains(r.Reason, "built at run time") || !strings.Contains(r.Reason, "case-changed") {
+	if r.Status != StatusUnknown || !strings.Contains(r.Reason, "built at run time") || !strings.Contains(r.Reason, "case-changed") {
 		t.Fatalf("status %s: a case-changed literal is out of scope and the reason must say so: %s", r.Status, r.Reason)
 	}
 	rev := []byte(vsPW)
@@ -207,7 +209,7 @@ func TestVerify_OnlyTheRootGitObjectsStoreIsLeftUnsearched(t *testing.T) {
 		".git/refs/heads/m": "0\n",
 		".git/objects/ab/c": "compressed history\n",
 	})
-	if r := verifyIn(t, f, root); r.Status != StatusResolved || !strings.Contains(r.Reason, "git object stores") {
+	if r := verifyIn(t, f, root); r.Status != StatusUnknown || !strings.Contains(r.Reason, "git object stores") { // Round 6 (D4 Option A): was resolved
 		t.Fatalf("the root's own history is the one thing left, and named: %s %s", r.Status, r.Reason)
 	}
 	// An objects directory beside a HEAD and refs/ elsewhere is content.

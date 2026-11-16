@@ -103,9 +103,10 @@ func TestProbeCoverage_TargetNeverAnswersIsInconclusiveNotCompleteAndSafe(t *tes
 	if ap.Inconclusive == 0 || ap.Reasons["target"]["timeout"] != ap.Inconclusive-ap.Gated.Total || ap.UnknownOrigin+ap.ScannerFailed != 0 {
 		t.Fatalf("a target that never answers: %+v", ap)
 	}
-	// Target-controlled non-answers alone never fail the entry (no refund path)...
-	if st.State != reporters.ScannerOK {
-		t.Fatalf("state = %s/%s %q, want ok: target non-responses alone are not a scanner gap", st.State, st.Reason, st.Detail)
+	// Target-controlled non-answers are not a scanner gap: under A-D5 they make
+	// the entry failed with the target-owned no_endpoints (no refund path)...
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints {
+		t.Fatalf("state = %s/%s %q, want failed/no_endpoints: target non-responses are target-side, and not evaluated", st.State, st.Reason, st.Detail)
 	}
 	// ...but the entry states what was and was not evaluated, first.
 	if !strings.HasPrefix(st.Detail, "probe evaluation: ") || !strings.Contains(st.Detail, "inconclusive probes (target did not answer): timeout") {
@@ -144,7 +145,7 @@ func TestProbeCoverage_ResetConnectionsAreTargetSide(t *testing.T) {
 	if ap.Inconclusive == 0 || ap.Reasons["target"]["connection_reset"] != ap.Inconclusive-ap.Gated.Total || ap.UnknownOrigin != 0 || ap.ScannerFailed != 0 {
 		t.Fatalf("resets: %+v", ap)
 	}
-	if st.State != reporters.ScannerOK {
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints { // A-D5: target-side, not evaluated
 		t.Fatalf("state %s/%s %q", st.State, st.Reason, st.Detail)
 	}
 }
@@ -206,7 +207,9 @@ func TestProbeCoverage_GatedEndpointBesideAnEvaluatedOneIsListed(t *testing.T) {
 	if ap.Evaluated == 0 || ap.Gated.Total == 0 || ap.Gated.ByStatus["403"] == 0 {
 		t.Fatalf("the page \"/\" is evaluated and /item is gated: %+v", ap)
 	}
-	if st.State != reporters.ScannerOK || !strings.Contains(st.Detail, "gated probes (target answered 401/403/404/410 so not evaluated): ") {
+	// A-D5: the gated probes are required and not evaluated, so the entry is
+	// failed/no_endpoints (target-owned), with the gated segment.
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || !strings.Contains(st.Detail, "gated probes (target answered 401/403/404/410 so not evaluated): ") {
 		t.Fatalf("state %s %q", st.State, st.Detail)
 	}
 	var item bool
@@ -235,11 +238,12 @@ func TestProbeCoverage_RateLimitAfterRetriesIsInconclusive(t *testing.T) {
 	if hits.Load() <= int32(ap.Inconclusive) {
 		t.Fatalf("hits=%d inconclusive=%d: 429 must have been retried", hits.Load(), ap.Inconclusive)
 	}
-	if st.State != reporters.ScannerOK || !strings.Contains(st.Detail, "rate_limited") {
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || !strings.Contains(st.Detail, "rate_limited") {
 		t.Fatalf("state %s detail %q", st.State, st.Detail)
 	}
-	if rep.Metadata.Coverage.ConfiguredComplete != true {
-		t.Fatalf("target non-answers keep scan-wide completeness: %+v", rep.Metadata.Coverage)
+	// A-D5: an unevaluated required probe makes the scan incomplete.
+	if rep.Metadata.Coverage.ConfiguredComplete {
+		t.Fatalf("target non-answers left the scan complete: %+v", rep.Metadata.Coverage)
 	}
 }
 

@@ -48,6 +48,115 @@ type ActiveProbeCoverage struct {
 	// limit ended the probe pass, so probes it never started are in no count
 	// above. Absent when the pass ran to its end.
 	CutShort *ProbeCutShort `json:"cut_short,omitempty"`
+
+	// Bounded evidence (A-D5, contract keys OR-10; additive, no schema_version
+	// change). Every probe that was not evaluated is accounted for exactly, in
+	// storage whose size does not follow the probe count:
+	//
+	// NotEvaluatedCounts is the exact aggregate: one row per (origin, reason,
+	// HTTP status) with a non-zero count, a few dozen rows at most because the
+	// vocabularies are closed. The rows add up to Attempted - Evaluated.
+	NotEvaluatedCounts []ProbeCountRow `json:"not_evaluated_counts"`
+	// NotEvaluatedGroups is at most ProbeInlineGroups groups of (endpoint,
+	// origin, reason), each with the checks it covers, in a fixed order.
+	NotEvaluatedGroups []ProbeGroup `json:"not_evaluated_groups"`
+	// GroupsTotal is the number of groups the engine listed (at most the
+	// listing ceiling); InlineTruncated is true when GroupsTotal exceeds the
+	// inline groups shown, so every group left out is counted.
+	GroupsTotal     int  `json:"groups_total"`
+	InlineTruncated bool `json:"inline_truncated"`
+	// ListingCeilingReached is true when there were more groups than the
+	// engine's hard listing ceiling; ListingOverflow is the exact number of
+	// unevaluated probes whose group detail was therefore not recorded. Their
+	// counts are in NotEvaluatedCounts all the same. A pass that reached the
+	// ceiling is never complete.
+	ListingCeilingReached bool `json:"listing_ceiling_reached"`
+	ListingOverflow       int  `json:"listing_overflow"`
+}
+
+// ProbeCountRow is one cell of the exact not-evaluated aggregate. Status is the
+// HTTP status for an answer that was not evaluable (gated 401/403/404/410,
+// rate_limited 429, service_unavailable 502/503/504); absent otherwise.
+type ProbeCountRow struct {
+	Origin string `json:"origin"`
+	Reason string `json:"reason"`
+	Status int    `json:"status,omitempty"`
+	Count  int    `json:"count"`
+}
+
+// ProbeGroup is one (endpoint, origin, reason) group of unevaluated probes and
+// the rule-id families of the checks those probes belonged to.
+type ProbeGroup struct {
+	Endpoint string   `json:"endpoint"`
+	Origin   string   `json:"origin"`
+	Reason   string   `json:"reason"`
+	Checks   []string `json:"checks"`
+}
+
+// Bounds of the probe evidence (PHASE1-GATE-PROPOSALS 1.4b; starting values
+// accepted under OR-29).
+const (
+	// ProbeInlineGroups is G_inline, the groups shown inline.
+	ProbeInlineGroups = 200
+	// ProbeListingCeiling is H, the hard ceiling on listed groups. It does not
+	// rely on the planner: --max-endpoints 0 removes the endpoint cap.
+	ProbeListingCeiling = 100_000
+)
+
+// Consistent reports whether the account adds up: no negative count, the
+// four groups sum to Attempted, the reasons sum to their origin's count, the
+// gated statuses sum to the gated total, and the gated total is the target's
+// gated reason and fits inside Inconclusive. An account that does not add up
+// is unreadable, and a reader must treat the pass as incomplete.
+func (c ActiveProbeCoverage) Consistent() bool {
+	for _, n := range []int{c.Attempted, c.Evaluated, c.Inconclusive, c.UnknownOrigin, c.ScannerFailed, c.Gated.Total, c.ListingOverflow, c.GroupsTotal} {
+		if n < 0 {
+			return false
+		}
+	}
+	if c.Evaluated+c.Inconclusive+c.UnknownOrigin+c.ScannerFailed != c.Attempted {
+		return false
+	}
+	for origin, want := range map[string]int{"target": c.Inconclusive, "unknown": c.UnknownOrigin, "scanner": c.ScannerFailed} {
+		sum := 0
+		for _, n := range c.Reasons[origin] {
+			if n < 0 {
+				return false
+			}
+			sum += n
+		}
+		if sum != want {
+			return false
+		}
+	}
+	byStatus := 0
+	for _, n := range c.Gated.ByStatus {
+		if n < 0 {
+			return false
+		}
+		byStatus += n
+	}
+	if byStatus != c.Gated.Total || c.Gated.Total > c.Inconclusive || c.Reasons["target"]["gated"] != c.Gated.Total {
+		return false
+	}
+	if c.NotEvaluatedCounts != nil {
+		rows := 0
+		for _, r := range c.NotEvaluatedCounts {
+			if r.Count < 1 {
+				return false
+			}
+			rows += r.Count
+		}
+		if rows != c.Attempted-c.Evaluated {
+			return false
+		}
+	}
+	return true
+}
+
+// NotEvaluated is the number of probes that were not evaluated.
+func (c ActiveProbeCoverage) NotEvaluated() int {
+	return c.Inconclusive + c.UnknownOrigin + c.ScannerFailed
 }
 
 // ProbeGated counts the probes the target answered with 401, 403, 404 or 410.

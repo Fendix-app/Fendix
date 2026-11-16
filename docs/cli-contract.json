@@ -483,7 +483,7 @@
           "default": "",
           "repeatable": false,
           "required": false,
-          "usage": "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence)",
+          "usage": "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence); exit 2 instead when an imported producer's run failed or was partial",
           "availability": "stable"
         },
         {
@@ -1383,7 +1383,7 @@
     {
       "path": "fendix verify",
       "use": "verify [finding-id]",
-      "short": "Re-run a single finding by ID and report still-present / resolved",
+      "short": "Re-test a single finding by ID and report still-present / unknown",
       "availability": "stable",
       "runnable": true,
       "flags": [

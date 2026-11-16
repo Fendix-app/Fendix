@@ -175,8 +175,29 @@ out of scope, not scanned:`, never cut mid-list, file names sanitised); see
   ...`, in entries of at most 240 bytes. A check that cut its own list adds
   `python-engine/<check>: the lists above stop at the check's own cap; more were
   not listed`.
-- **Decoding.** A UTF-8 byte order mark and a PEP 263 coding declaration are
-  honoured, so a BOM file is parsed instead of dropped.
+- **Decoding.** A Python file is decoded as CPython runs it (Round 6, R5-01,
+  R6-E1, R6-E6): the shared PEP 263 predicate
+  (`scope_evidence.python_source_encoding`, the same one the Go readers use, pinned
+  by the same generated vectors) reads the cookie on line 1, or on line 2 when
+  line 1 is blank or a comment (and on line 2 whatever line 1 holds for
+  `python -x`), with CPython's line model (`\r\n`, `\r`, `\n`; no byte limit) and
+  resolves the name through the codec table measured on CPython 3.14.5. A UTF-8
+  byte order mark is dropped, so a BOM file is parsed instead of dropped. A file
+  with no cookie or an ASCII-transparent codec is read as that codec (a stray byte
+  replaced); a **foreign** codec CPython knows (`utf-7`, `utf-16`, `cp037`, ...) is
+  decoded strictly with that codec, as the import path does. **There is no UTF-8
+  fallback**: the old one analysed text that was not the program and read `ok`.
+  A name no codec answers to in a fresh interpreter (only a run-time registration
+  could supply it), a cookie only `python -x` reads, and a foreign file that does not
+  decode are **lost evaluation** for that file, with the reason
+  `unreadable: declared source encoding '<name>' ...`, listed under
+  `python-engine/<check>: lost evaluation, not fully analysed`. No codec error ever
+  escapes (a `# coding: idna` or `rot13` file used to abort the whole tree), and a
+  file CPython itself refuses never costs another file its analysis. The codec
+  policy is owner decision D2 as approved, one constant
+  (`PEP263_POLICY = "d2"` here, `codecPolicy` in `go/internal/scope/pysource.go`);
+  D2-A, which keeps only the takeover-immune spellings (`utf-8`, `latin-1`, `ascii`)
+  transparent, is a one-line change pending the owner.
 
 ### Guards and reaching definitions (redteam3-py-01)
 

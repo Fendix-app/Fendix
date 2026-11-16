@@ -52,8 +52,9 @@ func TestRecordBlackbox_Table(t *testing.T) {
 			[2]string{"ok", ""}, [2]string{"failed", "input_error"}, [2]string{"skipped", "disabled_by_flag"}},
 		{"active, probes completed with responses", active, 2, nil, nil, probePhase(40, 40, 0, 0, 0),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
+		// A-D5 (Round 6): every planned probe is required, so a target-side unevaluated probe makes the entry failed/no_endpoints (target-owned), never ok.
 		{"active, some probes inconclusive (target)", active, 2, nil, nil, probePhase(40, 37, 3, 0, 0),
-			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "no_endpoints"}},
 		// Round 5 (C4B-06): the round-4b row pinned ok here. 0 evaluated of N attempted
 		// is no evidence at all, so it is never complete: the backend reads the same
 		// counts as incomplete, and the CLI and the Action must agree with it. The
@@ -62,8 +63,9 @@ func TestRecordBlackbox_Table(t *testing.T) {
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "no_endpoints"}},
 		{"active, every probe gated (401/403/404/410)", active, 2, nil, nil, gatedPhase(40, 0, map[int]int{403: 30, 404: 10}),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "no_endpoints"}},
+		// A-D5 (Round 6): every planned probe is required, so a target-side unevaluated probe makes the entry failed/no_endpoints (target-owned), never ok.
 		{"active, some probes gated, the rest evaluated", active, 2, nil, nil, gatedPhase(40, 30, map[int]int{403: 10}),
-			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"ok", ""}},
+			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "no_endpoints"}},
 		{"active, nothing evaluated and a scanner failure", active, 2, nil, nil, probePhase(40, 0, 39, 0, 1),
 			[2]string{"ok", ""}, [2]string{"skipped", "not_applicable"}, [2]string{"failed", "execution_error"}},
 		{"active, unknown-origin failures", active, 2, nil, nil, probePhase(40, 38, 0, 2, 0),
@@ -93,10 +95,12 @@ func TestRecordBlackbox_Table(t *testing.T) {
 			check(AnalyzerActiveProbes, tc.wantProbes)
 		})
 	}
-	// Inconclusive probes stay visible in the detail of an ok entry.
+	// Inconclusive probes stay visible in the detail, which still leads with
+	// the counts (A-D5: the entry is failed/no_endpoints, target-owned).
 	var l scannerStatusList
 	recordBlackbox(&l, &active, 2, nil, nil, probePhase(40, 37, 3, 0, 0))
-	if got := find(l, AnalyzerActiveProbes); !strings.HasPrefix(got.Detail, "probe evaluation: 40 attempted, 37 evaluated, 3 inconclusive (target)") {
+	if got := find(l, AnalyzerActiveProbes); got.State != reporters.ScannerFailed || got.Reason != reporters.ReasonNoEndpoints ||
+		!strings.HasPrefix(got.Detail, "probe evaluation: 40 attempted, 37 evaluated, 3 inconclusive (target)") {
 		t.Fatalf("inconclusive probes must be named in detail, got %+v", got)
 	}
 }

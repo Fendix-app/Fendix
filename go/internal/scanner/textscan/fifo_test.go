@@ -3,6 +3,7 @@
 package textscan
 
 import (
+	"context"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -31,7 +32,7 @@ func TestAFifoNamedLikeSourceDoesNotHangTheScan(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		got, cov, _ := ScanCoverage(dir, AllRules(), nil)
+		got, cov, _ := ScanCoverage(context.Background(), dir, AllRules(), nil)
 		done <- result{len(got), cov.Lost(), cov.LostDetail(240)}
 	}()
 	select {

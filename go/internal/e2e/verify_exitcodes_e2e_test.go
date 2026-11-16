@@ -16,9 +16,11 @@ import (
 
 // Sprint 03 introduced CI-script-friendly exit codes for `fendix verify`:
 //
-//	0  resolved
 //	1  still-present
 //	2  unknown OR not-found-in-baseline
+//
+// Round 6 (D4 Option A): verify never exits 0. The 0 / resolved row this table
+// once had is gone with the verdict: absence is not proof.
 //
 // Pre-Sprint-03 verify always exited 0; CI scripts had to parse JSON
 // output to fail the build. These tests lock in the new contract via the
@@ -144,15 +146,16 @@ func scanForSecretBaseline(t *testing.T, bin, dir, tree string) (string, string)
 	return "", ""
 }
 
-// TestE2EVerifyExit0_Resolved: the only finding that resolves is a credential
-// the secrets scanner found in source, and only when the whole --code tree was
-// read and the credential's value is found nowhere in it. Verify exits 0.
+// TestE2EVerifyExit0_Resolved: a credential the secrets scanner found in source,
+// removed from the whole --code tree, was the one finding that resolved and
+// exited 0. Round 6 (D4 Option A): not finding a credential is absence, not
+// proof, so verify exits 2 (unknown) and never answers resolved. The name is
+// kept so the case stays traceable.
 //
 // Round 5 follow-up (DE5-02, contract C8, D5-3): this test used a "Missing
 // Content-Security-Policy header" finding that "resolved" because one response
 // now carried the header. That is an observation of a response, not a
-// remediation, so a URL finding exits 2 (see TestE2EVerifyExit2_HeaderNowSetIsUnknown)
-// and exit 0 is exercised with the one kind of finding that can resolve.
+// remediation, so a URL finding exits 2 (see TestE2EVerifyExit2_HeaderNowSetIsUnknown).
 func TestE2EVerifyExit0_Resolved(t *testing.T) {
 	bin := fendixBinary(t)
 	dir := t.TempDir()
@@ -171,11 +174,11 @@ func TestE2EVerifyExit0_Resolved(t *testing.T) {
 		t.Fatal(err)
 	}
 	exit, stdout, stderr := runVerifyCode(t, bin, id, baseline, tree)
-	if exit != 0 {
-		t.Errorf("want exit 0 (resolved), got %d\nstdout=%s\nstderr=%s", exit, stdout, stderr)
+	if exit != 2 {
+		t.Errorf("want exit 2 (unknown: a credential found nowhere is not proof it is gone), got %d\nstdout=%s\nstderr=%s", exit, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "\"resolved\"") {
-		t.Errorf("want status resolved, got %s", stdout)
+	if strings.Contains(stdout, "\"resolved\"") || !strings.Contains(stdout, "\"unknown\"") {
+		t.Errorf("want status unknown, never resolved, got %s", stdout)
 	}
 }
 
@@ -295,7 +298,7 @@ func TestE2EVerifyHelpListsExitCodes(t *testing.T) {
 		t.Fatalf("verify --help: %v\n%s", err, out)
 	}
 	help := string(out)
-	for _, want := range []string{"Exit codes", "still-present", "not-found-in-baseline", "Supported finding shapes"} {
+	for _, want := range []string{"Exit codes", "still-present", "not-found-in-baseline", "Verify never answers"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("verify --help should advertise %q\nfull help:\n%s", want, help)
 		}

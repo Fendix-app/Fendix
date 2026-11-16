@@ -37,12 +37,14 @@ func TestProbeDetail_ExactStrings(t *testing.T) {
 			t.Fatalf("%s %q", st.State, st.Detail)
 		}
 	})
-	t.Run("ok with confirmed target-side inconclusive probes", func(t *testing.T) {
+	// A-D5: target-side unevaluated probes fail the entry with the
+	// target-owned no_endpoints; the detail is the ok entry's, counts first.
+	t.Run("failed with confirmed target-side inconclusive probes", func(t *testing.T) {
 		st := activeEntry(t, checkPhaseOutcome{Attempted: 10, Probes: models.ActiveProbeCoverage{Attempted: 10, Evaluated: 4, Inconclusive: 6,
 			Reasons: reasons(map[string]int{"timeout": 3, "connection_reset": 1, "rate_limited": 2}, nil, nil)}})
 		want := "probe evaluation: 10 attempted, 4 evaluated, 6 inconclusive (target), 0 unknown-origin, 0 scanner-failed; " +
 			"inconclusive probes (target did not answer): timeout 3, connection_reset 1, rate_limited 2"
-		if st.State != reporters.ScannerOK || st.Detail != want {
+		if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || st.Detail != want {
 			t.Fatalf("%s %q", st.State, st.Detail)
 		}
 	})
@@ -105,7 +107,7 @@ func TestProbeDetail_ExactStrings(t *testing.T) {
 		st := activeEntry(t, gatedPhase(10, 4, map[int]int{403: 4, 404: 2}))
 		want := "probe evaluation: 10 attempted, 4 evaluated, 6 inconclusive (target), 0 unknown-origin, 0 scanner-failed; " +
 			"gated probes (target answered 401/403/404/410 so not evaluated): 403 4, 404 2"
-		if st.State != reporters.ScannerOK || st.Detail != want {
+		if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || st.Detail != want { // A-D5
 			t.Fatalf("%s %q", st.State, st.Detail)
 		}
 	})
@@ -116,7 +118,7 @@ func TestProbeDetail_ExactStrings(t *testing.T) {
 		want := "probe evaluation: 10 attempted, 4 evaluated, 6 inconclusive (target), 0 unknown-origin, 0 scanner-failed; " +
 			"inconclusive probes (target did not answer): timeout 3; " +
 			"gated probes (target answered 401/403/404/410 so not evaluated): 401 3"
-		if st.State != reporters.ScannerOK || st.Detail != want {
+		if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || st.Detail != want { // A-D5
 			t.Fatalf("%s %q", st.State, st.Detail)
 		}
 	})
@@ -142,14 +144,18 @@ func TestProbeDetail_ExactStrings(t *testing.T) {
 // TestProbeDetail_NothingEvaluatedIsNeverCompleteAndNeverSatisfiesARequirement.)
 func TestProbeDetail_OkEntryAlwaysStatesCounts(t *testing.T) {
 	st := activeEntry(t, checkPhaseOutcome{Attempted: 2, Probes: models.ActiveProbeCoverage{Attempted: 2, Evaluated: 1, Inconclusive: 1, Reasons: reasons(map[string]int{"timeout": 1}, nil, nil)}})
-	if st.State != reporters.ScannerOK || !strings.Contains(st.Detail, "1 evaluated") || !strings.Contains(st.Detail, "1 inconclusive (target)") {
+	// A-D5: the unevaluated probe fails the entry (target-owned); the counts are
+	// stated all the same.
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || !strings.Contains(st.Detail, "1 evaluated") || !strings.Contains(st.Detail, "1 inconclusive (target)") {
 		t.Fatalf("%s %q", st.State, st.Detail)
 	}
 	var l scannerStatusList
 	l.set(st)
 	cov := reporters.BuildCoverage([]reporters.ScannerStatus(l), nil, false)
-	if !cov.ConfiguredComplete {
-		t.Fatal("target-side non-responses beside an evaluated probe keep scan-wide completeness (decision 6)")
+	// A-D5 (no threshold; was decision 6): an unevaluated required probe, whoever's
+	// it is, leaves the scan incomplete.
+	if cov.ConfiguredComplete || len(cov.Gaps) != 1 || cov.Gaps[0] != AnalyzerActiveProbes {
+		t.Fatalf("a target-side non-response beside an evaluated probe must leave the scan incomplete (A-D5): %+v", cov)
 	}
 }
 
@@ -180,11 +186,17 @@ func TestProbeDetail_NothingEvaluatedIsNeverCompleteAndNeverSatisfiesARequiremen
 			}
 		})
 	}
-	// One evaluated probe is enough for the entry to deliver, as it is for the backend.
+	// A-D5 (no threshold): 1 of 22 evaluated is not delivery either; only a
+	// pass with every planned probe evaluated satisfies a requirement.
 	var l scannerStatusList
 	l.set(activeEntry(t, probePhase(22, 1, 21, 0, 0)))
+	if cov := reporters.BuildCoverage([]reporters.ScannerStatus(l), []string{AnalyzerActiveProbes}, true); cov.StrictOK() {
+		t.Fatalf("1 of 22 evaluated satisfied a required active-probes: %+v", cov)
+	}
+	l = nil
+	l.set(activeEntry(t, probePhase(22, 22, 0, 0, 0)))
 	if cov := reporters.BuildCoverage([]reporters.ScannerStatus(l), []string{AnalyzerActiveProbes}, true); !cov.StrictOK() {
-		t.Fatalf("1 of 22 evaluated delivers the analyzer (the counts are stated beside it): %+v", cov)
+		t.Fatalf("22 of 22 evaluated must deliver the analyzer: %+v", cov)
 	}
 }
 

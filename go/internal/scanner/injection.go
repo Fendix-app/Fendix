@@ -96,37 +96,56 @@ type ProbeRecord struct {
 }
 
 // ProbeAuditLog records every active probe for accountability and debugging.
+//
+// Its memory and output are bounded whatever the probe count (OR-13, OR-27,
+// OR-28; risk R-34): it keeps the first ProbeRecordRetention records, an exact
+// streaming account of every probe (probe_ledger.go), and a per-endpoint
+// request count keyed by a 64-bit hash of the endpoint, so a target-controlled
+// endpoint costs a fixed number of bytes. Per-probe lines go to the writer up
+// to a byte budget; Flush then writes one exact line for the rest, and
+// SetVerbose(true) restores every line.
 type ProbeAuditLog struct {
-	mu      sync.Mutex
-	records []ProbeRecord
-	writer  io.Writer
-	state   probeState
+	mu          sync.Mutex
+	records     []ProbeRecord
+	ledger      *probeLedger
+	perEndpoint map[uint64]int
+	writer      io.Writer
+	out         probeOutput
+	state       probeState
 }
 
 // NewProbeAuditLog creates a new audit log that writes to stderr.
 func NewProbeAuditLog() *ProbeAuditLog {
-	return &ProbeAuditLog{
-		writer: os.Stderr,
-	}
+	return NewProbeAuditLogWithWriter(os.Stderr)
 }
 
 // NewProbeAuditLogWithWriter creates an audit log with a custom writer (for testing).
 func NewProbeAuditLogWithWriter(w io.Writer) *ProbeAuditLog {
 	return &ProbeAuditLog{
-		writer: w,
+		writer:      w,
+		ledger:      newProbeLedger(),
+		perEndpoint: map[uint64]int{},
 	}
 }
 
-// Record adds a probe record to the audit log and writes it to the log writer.
+// Record accounts for a probe, keeps it when under the retention bound, and
+// writes its line when under the output budget.
 func (a *ProbeAuditLog) Record(r ProbeRecord) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.records = append(a.records, r)
-	fmt.Fprintf(a.writer, "[PROBE] %s %s type=%s param=%q payload=%q status=%d duration=%s finding=%v\n",
-		r.Timestamp.Format(time.RFC3339), r.Endpoint, r.ProbeType, r.Parameter, r.Payload, r.Status, r.Duration, r.Finding)
+	if a.ledger == nil {
+		a.ledger, a.perEndpoint = newProbeLedger(), map[uint64]int{}
+	}
+	a.ledger.add(r)
+	a.perEndpoint[endpointHash(r.Endpoint)]++
+	if len(a.records) < ProbeRecordRetention {
+		a.records = append(a.records, ClipProbeRecord(r))
+	}
+	a.out.write(a.writer, r)
 }
 
-// Records returns a copy of all recorded probe entries.
+// Records returns a copy of the retained probe records: the first
+// ProbeRecordRetention of the scan. Attempted says how many there were.
 func (a *ProbeAuditLog) Records() []ProbeRecord {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -138,11 +157,12 @@ func (a *ProbeAuditLog) Records() []ProbeRecord {
 // Count returns the number of requests spent on a given endpoint: the probes
 // recorded for it plus the retries sent for it. Retries share the per-endpoint
 // budget (--max-probes-per-endpoint) so a retry never sends a request the cap
-// would have refused.
+// would have refused. Constant time.
 func (a *ProbeAuditLog) Count(endpoint string) int {
+	h := endpointHash(endpoint)
 	n := a.countRecords(endpoint)
 	a.state.mu.Lock()
-	n += a.state.retries[endpoint]
+	n += a.state.retries[h]
 	a.state.mu.Unlock()
 	return n
 }
@@ -151,13 +171,7 @@ func (a *ProbeAuditLog) Count(endpoint string) int {
 func (a *ProbeAuditLog) countRecords(endpoint string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := 0
-	for _, r := range a.records {
-		if r.Endpoint == endpoint {
-			n++
-		}
-	}
-	return n
+	return a.perEndpoint[endpointHash(endpoint)]
 }
 
 // PrintDisclaimer writes the active scanning disclaimer to stderr.
@@ -200,7 +214,10 @@ func measureBaseline(ctx context.Context, client *http.Client, cfg *models.ScanC
 			return 0, fmt.Errorf("baseline request %d failed: %w", i+1, err)
 		}
 		resp.Body.Close()
-		durations = append(durations, elapsed)
+		// The target's time only: the retry pauses probeDo took are the
+		// engine's, and a limiter that makes every baseline request wait would
+		// otherwise raise the threshold above a real delay (C4B-09).
+		durations = append(durations, pi.targetTime(elapsed))
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
 	return durations[1], nil // median
@@ -519,6 +536,10 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 
 		resp, pi, err := probeDo(ctx, client, req, auditLog, endpoint.FullURL, cfg)
 		elapsed := time.Since(start)
+		// What the target spent: the pauses probeDo took before its retries are
+		// the engine's own and never count as delay (C4B-09). record.Duration
+		// stays the whole time the probe took, retries included.
+		delay := pi.targetTime(elapsed)
 
 		record := ProbeRecord{
 			Timestamp: start,
@@ -543,7 +564,7 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 		record.Status = resp.StatusCode
 
 		threshold := baseline + 4*time.Second
-		if elapsed > threshold {
+		if delay > threshold {
 			record.Finding = true
 			auditLog.Record(record)
 
@@ -557,29 +578,42 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 			// finding and skip confirmation rather than overshooting the
 			// cap the operator set to bound load on the target.
 			if auditLog.Count(endpoint.FullURL) < maxProbes {
-				// Run a second probe to confirm timing isn't a one-off blip.
+				// Run a second probe to confirm timing isn't a one-off blip. It
+				// is sent like the first, through probeDo: a 429 or 502/503/504
+				// on it is retried, the engine's pause is not counted as delay,
+				// and a failure is recorded with its origin. Sent with client.Do
+				// it answered a limiter's 429 at once, so a real, reproducible
+				// delay stayed MEDIUM and did not block (OR-18).
 				start2 := time.Now()
 				req2, err := buildProbeRequest(ctx, endpoint, param, p.Payload, loc)
 				if err == nil {
 					cfg.Auth.ApplyToRequest(req2)
-					resp2, err := client.Do(req2)
+					resp2, pi2, err2 := probeDo(ctx, client, req2, auditLog, endpoint.FullURL, cfg)
 					elapsed2 := time.Since(start2)
-					if err == nil {
+					delay2 := pi2.targetTime(elapsed2)
+					confirmation := ProbeRecord{
+						Timestamp: start2,
+						Endpoint:  endpoint.FullURL,
+						ProbeType: ProbeSQLi,
+						Payload:   p.Payload + " (confirmation)",
+						Parameter: param,
+						Method:    endpoint.Method,
+						Duration:  elapsed2.Round(time.Millisecond).String(),
+					}
+					pi2.apply(&confirmation)
+					if err2 != nil {
+						// Not reproduced: the finding keeps MEDIUM, and the
+						// failed confirmation is on the record with its origin.
+						logagg.Warn("injection", "sqli confirmation probe failed", "endpoint", endpoint.FullURL, "db", p.DB, "error", err2)
+						auditLog.Record(confirmation)
+					} else {
 						resp2.Body.Close()
-						if elapsed2 > threshold {
+						if delay2 > threshold {
 							confidence = models.ConfidenceHigh
 						}
-						auditLog.Record(ProbeRecord{
-							Timestamp: start2,
-							Endpoint:  endpoint.FullURL,
-							ProbeType: ProbeSQLi,
-							Payload:   p.Payload + " (confirmation)",
-							Parameter: param,
-							Method:    endpoint.Method,
-							Status:    resp2.StatusCode,
-							Duration:  elapsed2.Round(time.Millisecond).String(),
-							Finding:   elapsed2 > threshold,
-						})
+						confirmation.Status = resp2.StatusCode
+						confirmation.Finding = delay2 > threshold
+						auditLog.Record(confirmation)
 					}
 				}
 			}
@@ -592,7 +626,7 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 				Category: "injection",
 				Endpoint: fmt.Sprintf("%s %s", endpoint.Method, endpoint.Path),
 				Evidence: fmt.Sprintf("Time-based blind SQLi: baseline=%s, probe=%s (threshold=%s), %s, payload=%q",
-					baseline.Round(time.Millisecond), elapsed.Round(time.Millisecond), threshold.Round(time.Millisecond), paramLabel(param, loc), p.Payload),
+					baseline.Round(time.Millisecond), delay.Round(time.Millisecond), threshold.Round(time.Millisecond), paramLabel(param, loc), p.Payload),
 				Fix:        "Use parameterized queries / prepared statements. Never concatenate user input into SQL.",
 				References: []string{"CWE-89", "OWASP-A03"},
 				Confidence: confidence,
@@ -602,7 +636,7 @@ func probeSQLi(ctx context.Context, client *http.Client, cfg *models.ScanConfig,
 				// response observation; recording an unread body would be
 				// fabrication.
 				Payload:  p.Payload,
-				Response: ProbeTimingExcerpt(elapsed, threshold),
+				Response: ProbeTimingExcerpt(delay, threshold),
 			})
 			// Once one DB type confirms, skip the rest for this (param, loc) —
 			// the underlying vuln is the same; multiple findings would just be

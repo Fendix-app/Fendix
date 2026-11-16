@@ -1,6 +1,7 @@
 package textscan
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +44,7 @@ func TestScanCoverageNamesWhatItLeftUnread(t *testing.T) {
 	writeFile(t, root, ".git/hooks/pre-commit.js", innerHTML)
 	writeFile(t, root, "data.bin", overTheCap("x")) // no rule applies
 
-	findings, cov, err := ScanCoverage(root, AllRules(), nil)
+	findings, cov, err := ScanCoverage(context.Background(), root, AllRules(), nil)
 	if err != nil {
 		t.Fatalf("ScanCoverage: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestScanCoverageNamesAnUnreadableFileAndDirectory(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = os.Chmod(full, 0o755) })
 	}
-	_, cov, err := ScanCoverage(root, AllRules(), nil)
+	_, cov, err := ScanCoverage(context.Background(), root, AllRules(), nil)
 	if err != nil {
 		t.Fatalf("ScanCoverage: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestScanCoverageOfADiffNamesTheChangedFilesItLeftUnread(t *testing.T) {
 	writeFile(t, root, "a.go", "package a\n")
 	writeFile(t, root, "big.go", overTheCap("package a\n"))
 	allow := gitdiff.NewAllowlist(root, []string{"a.go", "big.go"})
-	_, cov, err := ScanCoverage(root, AllRules(), allow)
+	_, cov, err := ScanCoverage(context.Background(), root, AllRules(), allow)
 	if err != nil {
 		t.Fatalf("ScanCoverage: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestScanCoverageOfADiffNamesTheChangedFilesItLeftUnread(t *testing.T) {
 func TestScanCoverageOfACompleteTreeIsEmpty(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "main.go", "package main\n")
-	_, cov, err := ScanCoverage(root, AllRules(), nil)
+	_, cov, err := ScanCoverage(context.Background(), root, AllRules(), nil)
 	if err != nil || cov.Lost() || cov.Declared() {
 		t.Errorf("ScanCoverage = %v, %q / %q; want nothing", err, cov.LostDetail(240), cov.DeclaredDetail(240))
 	}

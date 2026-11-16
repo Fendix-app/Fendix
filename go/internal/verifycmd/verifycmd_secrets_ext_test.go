@@ -60,10 +60,12 @@ func TestVerify_SecretsFindingInAFormerlyUnreadFileIsReTested(t *testing.T) {
 				t.Fatalf("status = %s, want %s: %s", res.Status, StatusStillPresent, res.Reason)
 			}
 		})
+		// Round 6 (D4 Option A): the key removed is unknown, never resolved; the
+		// re-test still reads the file and says what was searched.
 		t.Run(name+" with the key removed is resolved", func(t *testing.T) {
 			res := run(t, name, "const awsKey = process.env.AWS_KEY;\n")
-			if res.Status != StatusResolved {
-				t.Fatalf("status = %s, want %s: %s", res.Status, StatusResolved, res.Reason)
+			if res.Status != StatusUnknown {
+				t.Fatalf("status = %s, want %s: %s", res.Status, StatusUnknown, res.Reason)
 			}
 			if !strings.Contains(res.Reason, "searched") || !strings.Contains(res.Reason, "text files") {
 				t.Errorf("the reason must say what was searched: %s", res.Reason)

@@ -853,6 +853,12 @@ var (
 	// errTooManyFindings: one file reported maxFindingsPerFile findings, so the
 	// rest of it was not read. The findings so far are kept.
 	errTooManyFindings = errors.New("too many findings in one file")
+	// wse1ErrSourceEncoding: a Python file whose declared source encoding is not
+	// read as written (a codec that is not ASCII-transparent, a name no codec
+	// answers to, a cookie only python -x reads), so what the scan read is not the
+	// program CPython runs. The findings read in clear are kept, and the file is
+	// lost evaluation under the existing "unreadable" reason (R5-01, R6-E2).
+	wse1ErrSourceEncoding = errors.New("a Python file the scan cannot read as the program CPython runs")
 )
 
 // maxFindingsPerFile bounds the memory one file can cost: a file of nothing but
@@ -950,13 +956,18 @@ func scanOpenFile(ctx context.Context, f io.Reader, name, rel string) ([]emitted
 		src = testHookReadSource(src)
 	}
 	lim := &io.LimitedReader{R: src, N: maxFileBytes + 1}
-	r, err := textReader(lim, name)
+	r, py, err := textReaderPy(lim, name)
 	if err != nil {
 		return nil, err
 	}
 	out, err := scanReader(ctx, name, rel, r)
 	if err == nil && lim.N <= 0 {
 		err = errTooLarge
+	}
+	if err == nil && py.Lost() {
+		// Read as written, and reported as far as that reads; but not the program
+		// CPython runs, so the file is lost evaluation (R5-01, R6-E2).
+		err = fmt.Errorf("%w: %s", wse1ErrSourceEncoding, wse1PyReason(py))
 	}
 	return out, err
 }

@@ -93,14 +93,18 @@ func TestVerify_MovedSecretIsFoundEvenWhenTheOriginalFileHasALongLine(t *testing
 // The search is for THIS credential, not for the rule: another, unrelated key
 // of the same kind elsewhere is a different finding and does not keep this one
 // open, and a rotated literal in another file is not this credential either.
+//
+// Round 6 (D4 Option A): that other key does not keep the finding open, but the
+// answer for a credential found nowhere is now unknown, never resolved. The name
+// is kept so the case stays traceable.
 func TestVerify_RemovedSecretIsResolvedWhenOnlyOtherCredentialsOfItsKindRemain(t *testing.T) {
 	root := producerFixture(t)
 	f := secretsScannerFinding(t, root, "app/settings.py")
 	writeFile(t, root, "app/settings.py", "import os\n")
 	writeFile(t, root, "app/other.py", `AWS_KEY = "`+otherKey+`"`+"\n")
 	r := verifyAll(t, root, []models.Finding{f})[f.ID]
-	if r.Status != StatusResolved {
-		t.Fatalf("status %s, want resolved: %s", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Fatalf("status %s, want unknown (D4 Option A: never resolved): %s", r.Status, r.Reason)
 	}
 	if !strings.Contains(r.Reason, "nowhere") {
 		t.Errorf("the reason should say the credential was searched for across --code: %s", r.Reason)
@@ -146,8 +150,10 @@ func TestVerify_SecretWithoutValueHashIsNeverResolvedOnOneFile(t *testing.T) {
 				writeFile(t, root, "web/cfg.js", "module.exports = {};\n")
 				writeFile(t, root, "svc/keys.go", "package svc\n")
 				r := verifyAll(t, root, []models.Finding{f})[f.ID]
-				if r.Status != StatusResolved {
-					t.Fatalf("status %s, want resolved: %s", r.Status, r.Reason)
+				// Round 6 (D4 Option A, R6-E3): the rule firing nowhere is absence,
+				// not proof: unknown, never resolved.
+				if r.Status != StatusUnknown {
+					t.Fatalf("status %s, want unknown (D4 Option A: never resolved): %s", r.Status, r.Reason)
 				}
 			})
 		})
@@ -194,12 +200,12 @@ func TestVerify_AssignmentShapedSecretWithoutValueHashIsUnknown(t *testing.T) {
 	if r.Status != StatusStillPresent || !strings.Contains(r.Reason, "app/conn.py:1") {
 		t.Fatalf("with a marker: status %s, want still-present naming app/conn.py:1: %s", r.Status, r.Reason)
 	}
-	// Once the literal is gone from the whole tree the same finding resolves,
-	// and the reason says what was searched.
+	// Once the literal is gone from the whole tree the answer is unknown (Round 6,
+	// D4 Option A: it was resolved), and the reason says what was searched.
 	writeFile(t, root, "app/conn.py", `DSN_PART = os.environ["DSN_PART"]`+"\n")
 	r = verifyAll(t, root, []models.Finding{f2})[f2.ID]
-	if r.Status != StatusResolved || !strings.Contains(r.Reason, "searched") {
-		t.Fatalf("literal removed: status %s, want resolved with what was searched: %s", r.Status, r.Reason)
+	if r.Status != StatusUnknown || !strings.Contains(r.Reason, "searched") {
+		t.Fatalf("literal removed: status %s, want unknown with what was searched: %s", r.Status, r.Reason)
 	}
 }
 

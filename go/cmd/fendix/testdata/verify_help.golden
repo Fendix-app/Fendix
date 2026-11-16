@@ -1,0 +1,62 @@
+Re-test a specific finding from a saved baseline scan report and report
+whether it is still present or could not be confirmed.
+
+Verify never answers "resolved". Not finding a problem on a re-test cannot
+prove it is gone: a credential can be written down in more ways than any
+search lists, and one response or one dependency inventory observes only
+itself. So the answer is still-present when the problem is seen again, and
+unknown when it is not or could not be re-tested. To learn whether a finding
+is gone, re-run "fendix scan" and diff against the baseline.
+
+What verify re-tests with a verdict that rests on the tree:
+  - Secrets findings        (source: whitebox, rule secrets/<PATTERN>): the
+                            file is re-read and the whole --code tree is
+                            searched for the credential itself. Seen again:
+                            still-present. Not seen: unknown, with what was
+                            searched and what was not.
+
+Not yet supported for confirming a fix (still-present only where the same
+re-test sees the problem again; otherwise unknown with an explanatory reason):
+  - URL-anchored DAST findings    (source: blackbox)
+  - Dependency CVE findings       (category: deps)
+  - Correlated findings           (source: correlated)
+  - Active injection probe findings (--enable-active re-sends the payload)
+  - Every other file-anchored finding (Semgrep, textscan, the Python engine)
+
+Exit codes:
+  1   still-present     — the problem was seen again; CI should fail the build
+  2   unknown OR
+      not-found-in-baseline
+                        — verify could not confirm the finding is gone;
+                          the operator should investigate but CI should
+                          NOT auto-fail on this
+Verify never exits 0: an exit status of zero would tell a CI gate that a
+finding is gone, which no re-test can show.
+
+The user passes --baseline pointing at a previously saved findings.json
+from "fendix scan --output ...", plus the same --url and/or --code that
+the original scan used.
+
+Output is JSON (machine-readable) when --json is set; otherwise a short
+human-readable summary.
+
+Use in CI:
+
+  fendix verify SEC-001-abc --baseline scan.json --code .
+  case $? in
+    1) echo "still present"; exit 1;;
+    2) echo "not confirmed gone — re-scan and diff against the baseline";;
+  esac
+
+Usage:
+  fendix verify [finding-id] [flags]
+
+Flags:
+      --auth string       Authorization header value (e.g. "Bearer ...")
+      --baseline string   Path to the saved findings.json from the original scan (required)
+      --code string       Source code path (re-test file-anchored / dep findings; same as original --code)
+      --enable-active     Consent to re-send attack payloads when verifying an active-probe finding (mirrors the original scan's --enable-active)
+  -h, --help              help for verify
+      --json              Emit JSON instead of the human-readable summary
+      --timeout int       HTTP timeout in seconds (URL-anchored verify only) (default 15)
+      --url string        Target URL (re-test URL-anchored findings; same as original --url)

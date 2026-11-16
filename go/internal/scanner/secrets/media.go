@@ -31,7 +31,7 @@ func knownMedia(head []byte, size int64) bool {
 	case bytes.HasPrefix(head, []byte{0xFF, 0xD8, 0xFF}):
 		return validJPEG(head)
 	case bytes.HasPrefix(head, []byte("GIF87a")), bytes.HasPrefix(head, []byte("GIF89a")):
-		return validGIF(head)
+		return validGIF(head, size)
 	case len(head) >= 12 && bytes.Equal(head[:4], []byte("RIFF")) && (bytes.Equal(head[8:12], []byte("WEBP")) || bytes.Equal(head[8:12], []byte("WAVE"))):
 		return validRIFF(head, size)
 	case bytes.HasPrefix(head, []byte("wOFF")), bytes.HasPrefix(head, []byte("wOF2")):
@@ -111,81 +111,136 @@ func validPNG(head []byte) bool {
 }
 
 // validGIF walks the header, the logical screen descriptor and the blocks inside
-// the sample. A comment extension must hold text, so a stream is not passed
-// through one.
-func validGIF(head []byte) bool {
+// the sample, and holds every field it reads to what a GIF encoder writes
+// (OR-14): a header followed by noise is not a picture, however the noise
+// happens to frame as blocks.
+//
+//   - the screen has a width and a height, and a background colour index that
+//     lies inside the global colour table when there is one;
+//   - an extension is one of the four the format defines, with the fixed first
+//     block size it has (graphic control 4, application 11, plain text 12), the
+//     application identifier printable, and a graphic control extension is that
+//     one block and its terminator;
+//   - a comment extension is text: valid UTF-8 without control characters, so a
+//     stream is not passed through one;
+//   - an image has a width and a height, lies inside the screen, sets no
+//     reserved flag, and starts its data with an LZW code size of 2 to 8;
+//   - a trailer is the last byte of the file when the file's length is known.
+//
+// What it cannot do is prove an application extension or the image data is not a
+// payload: they are arbitrary bytes by design (see knownMedia).
+func validGIF(head []byte, size int64) bool {
 	if len(head) < 13 {
+		return false
+	}
+	screenW, screenH := int(binary.LittleEndian.Uint16(head[6:])), int(binary.LittleEndian.Uint16(head[8:]))
+	if screenW == 0 || screenH == 0 {
 		return false
 	}
 	i := 13
 	if head[10]&0x80 != 0 {
-		i += 3 << (head[10]&7 + 1)
-	}
-	subBlocks := func(text bool) (ok, more bool) {
-		var comment []byte
-		printableOK := func() bool {
-			printable := 0
-			for _, c := range comment {
-				if c == '\t' || c == '\n' || c == '\r' || (c >= 0x20 && c < 0x7f) || c >= 0x80 {
-					printable++
-				}
-			}
-			return len(comment) == 0 || printable*10 >= len(comment)*9
+		colours := 2 << (head[10] & 7)
+		if int(head[11]) >= colours {
+			return false
 		}
+		i += 3 * colours
+	}
+	// subBlocks reads the data sub-blocks that start at head[i]: the size of the
+	// first, how many there are before the terminator, their concatenation when
+	// keep is set, and whether a terminator was read inside the sample.
+	subBlocks := func(keep bool) (first, count int, data []byte, ended bool) {
+		first = -1
 		for {
 			if i >= len(head) {
-				return !text || printableOK(), false
+				return first, count, data, false
 			}
 			n := int(head[i])
 			i++
-			if n == 0 {
-				break
+			if first < 0 {
+				first = n
 			}
-			if text {
-				end := min(i+n, len(head))
-				comment = append(comment, head[i:end]...)
+			if n == 0 {
+				return first, count, data, true
+			}
+			count++
+			if keep {
+				data = append(data, head[i:min(i+n, len(head))]...)
 			}
 			i += n
 		}
-		if text && !printableOK() {
-			return false, false
+	}
+	isText := func(b []byte) bool {
+		for _, c := range b {
+			if c < 0x20 && c != '\t' && c != '\n' && c != '\r' || c == 0x7f {
+				return false
+			}
 		}
-		return true, true
+		return validUTF8Prefix(b)
 	}
 	blocks := 0
 	for i < len(head) {
 		switch head[i] {
 		case 0x3B:
-			return blocks > 0
+			if blocks == 0 {
+				return false
+			}
+			return size <= 0 || int64(i)+1 == size
 		case 0x21:
-			if i+2 > len(head) {
+			if i+3 > len(head) {
 				return blocks > 0
 			}
 			label := head[i+1]
 			i += 2
-			if label == 0xFF && i < len(head) {
-				i += 1 + int(head[i]) // the application identifier block
-			}
-			ok, more := subBlocks(label == 0xFE)
-			if !ok {
+			start := i
+			first, count, data, ended := subBlocks(label == 0xFE || label == 0x01)
+			switch label {
+			case 0xF9: // graphic control: one block of 4 bytes, then the terminator
+				if first != 4 || (ended && count != 1) {
+					return false
+				}
+			case 0xFF: // application: an 11-byte identifier (8 + 3) of printable bytes, then data
+				if first != 11 {
+					return false
+				}
+				if id := head[start+1 : min(start+12, len(head))]; !isPrintable(id) {
+					return false
+				}
+			case 0x01: // plain text: a 12-byte header, then text blocks
+				if first != 12 {
+					return false
+				}
+			case 0xFE: // comment: text
+				if !isText(data) {
+					return false
+				}
+			default:
 				return false
 			}
-			if !more {
+			if !ended {
 				return true
 			}
 		case 0x2C:
 			if i+10 > len(head) {
 				return true
 			}
+			left, top := int(binary.LittleEndian.Uint16(head[i+1:])), int(binary.LittleEndian.Uint16(head[i+3:]))
+			w, h := int(binary.LittleEndian.Uint16(head[i+5:])), int(binary.LittleEndian.Uint16(head[i+7:]))
 			flags := head[i+9]
+			if w == 0 || h == 0 || left+w > screenW || top+h > screenH || flags&0x18 != 0 {
+				return false
+			}
 			i += 10
 			if flags&0x80 != 0 {
 				i += 3 << (flags&7 + 1)
 			}
-			i++ // LZW minimum code size
-			if ok, more := subBlocks(false); !ok {
+			if i >= len(head) {
+				return true
+			}
+			if head[i] < 2 || head[i] > 8 { // LZW minimum code size
 				return false
-			} else if !more {
+			}
+			i++
+			if _, _, _, ended := subBlocks(false); !ended {
 				return true
 			}
 		default:
@@ -194,6 +249,16 @@ func validGIF(head []byte) bool {
 		blocks++
 	}
 	return blocks > 0
+}
+
+// isPrintable reports whether every byte of b is printable ASCII.
+func isPrintable(b []byte) bool {
+	for _, c := range b {
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // validJPEG walks the marker segments up to the start of the entropy-coded scan.
@@ -356,20 +421,74 @@ func validFLAC(head []byte) bool {
 	return len(head) >= 8 && head[4]&0x7f == 0 && head[5] == 0 && head[6] == 0 && head[7] == 34
 }
 
-// validISOBMFF checks the ftyp box and the box that follows it.
+// isoTopLevel are the box types a base media file (MP4, MOV, 3GP, HEIC, AVIF,
+// fragmented MP4) may carry at its top level. A box type outside this set is not
+// the framing of such a file, whatever its bytes spell.
+var isoTopLevel = map[string]bool{
+	"moov": true, "mdat": true, "moof": true, "mfra": true, "meta": true, "sidx": true, "ssix": true,
+	"styp": true, "pdin": true, "prft": true, "emsg": true, "etyp": true, "uuid": true,
+	"free": true, "skip": true, "wide": true,
+}
+
+// validISOBMFF walks the top-level boxes inside the sample (R5-12): the ftyp box
+// with a whole number of four-letter brands, then each box whose header lies in
+// the sample must be one of the top-level types above with a size that is
+// consistent (at least a header, within the file when its length is known), and
+// a padding box (free, skip, wide) must hold zeros, because padding is the one
+// box whose content is nothing and so the one place a typed payload would hide.
+// An ftyp box followed by noise, or by a hand-typed box with a printable type, is
+// not media. A payload inside mdat or another content box is not detectable
+// from framing (see knownMedia).
 func validISOBMFF(head []byte, size int64) bool {
 	n := int64(binary.BigEndian.Uint32(head))
-	if n < 16 || n > 512 || !isFourCC(head[8:12]) || (size > 0 && n > size) {
+	if n < 16 || n > 512 || n%4 != 0 || !isFourCC(head[8:12]) || (size > 0 && n > size) {
 		return false
 	}
-	if int64(len(head)) >= n+8 {
-		next := head[n:]
-		if !isFourCC(next[4:8]) {
+	for off := int64(16); off+4 <= n && off+4 <= int64(len(head)); off += 4 {
+		if !isFourCC(head[off:]) {
 			return false
 		}
-		if m := int64(binary.BigEndian.Uint32(next)); m != 0 && m != 1 && m < 8 {
+	}
+	off := n
+	for off+8 <= int64(len(head)) {
+		box := head[off:]
+		m, hdr := int64(binary.BigEndian.Uint32(box)), int64(8)
+		typ := string(box[4:8])
+		if !isoTopLevel[typ] {
 			return false
 		}
+		switch {
+		case m == 1: // a 64-bit size follows the type
+			if off+16 > int64(len(head)) {
+				return true
+			}
+			m, hdr = int64(binary.BigEndian.Uint64(box[8:])), 16
+			if m < 16 {
+				return false
+			}
+		case m == 0: // the box runs to the end of the file
+			if size <= 0 {
+				return true
+			}
+			m = size - off
+		case m < 8:
+			return false
+		}
+		if m < hdr || (size > 0 && off+m > size) {
+			return false
+		}
+		if typ == "free" || typ == "skip" || typ == "wide" {
+			body := head[min(off+hdr, int64(len(head))):min(off+m, int64(len(head)))]
+			for _, c := range body {
+				if c != 0 {
+					return false
+				}
+			}
+		}
+		if off+m >= int64(len(head)) {
+			return true
+		}
+		off += m
 	}
 	return true
 }

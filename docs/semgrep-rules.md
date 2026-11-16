@@ -56,6 +56,28 @@ The Semgrep runner lives at
    `resolveCWE`. A result whose line carries a `nosemgrep` comment is removed
    and reported, never dropped silently (see `checks/semgrep.md`).
 
+Two properties of the run belong here rather than in the steps (round 6).
+**Semgrep is the preferred victim of the OOM killer.** Every Semgrep process the
+engine starts, the version probe and each invocation, goes through a one-line
+`sh -c` that reads the `oom_score_adj` it inherited, writes that plus 500
+(capped at 1000) to its own `/proc/self/oom_score_adj` and then `exec`s Semgrep,
+so the score is in place before Semgrep runs and `semgrep-core` inherits it.
+Under memory pressure the kernel takes Semgrep, the engine records semgrep
+failed and still writes the report, instead of the engine dying with none. The
+engine's own score is never changed, raising one's own score needs no privilege,
+the shell is the system's `/bin/sh` (then `/usr/bin/sh`, then an `sh` on `PATH`), and a host without `/proc` or a shell runs Semgrep as before (`oomvictim_linux.go`).
+**The extensions pass keeps a reserved share of the stage.** It names the source
+files Semgrep does not select by extension (`APP.JS`, `.mts`) and runs after
+every unit, so it used to get whatever the units left, and on a 94 MB
+`node_modules` tree it lost 657 files that way. With explicit targets the units
+now end by the stage's end less a reserve of 3 s per language group plus 0.14 s
+per file, at least 6 s and at most two fifths of the wall (`extensionsReserve`,
+`plan.go`); the pass runs to the stage's end, so units and pass together stay
+within the wall, and a pass that hangs is killed there. A unit cut at its
+reduced deadline, or a pass that does not finish, is named in the stage's
+`Unfinished` list (`semgrep: timed out after 5m0s; not evaluated: ...`), never
+dropped silently. With no explicit target the units keep the whole stage.
+
 `<rules_dir>` is the temp extraction of
 [`go/internal/scanner/semgrep/rules/`](../go/internal/scanner/semgrep/rules/);
 every `.yaml` file in that directory is loaded.

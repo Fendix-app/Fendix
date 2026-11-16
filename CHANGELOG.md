@@ -25,11 +25,13 @@ mislead:**
   everything under the cap is analysed" under Security.
 - **Semgrep partial parse (C4B-27):** stays `ok` only when every skipped line is
   blank or a whole-line comment.
-- **`fendix verify` (D5-3):** `resolved` only for a secrets-scanner finding whose
-  whole scope was read and decoded; an HTTP status never resolves anything; the
-  encodings, the unreadable-content rule and the `<root>/.git/objects`-only history
-  rule are in "`fendix verify` says `resolved` only when the whole scope was read and
-  decoded" under Security.
+- **`fendix verify` (D5-3):** *superseded by Round 6 (D4 Option A, below): `verify`
+  never answers `resolved`.* As written in Round 5, `resolved` was allowed only for a
+  secrets-scanner finding whose whole scope was read and decoded; an HTTP status never
+  resolves anything; the encodings, the unreadable-content rule and the
+  `<root>/.git/objects`-only history rule are in "`fendix verify` says `resolved` only
+  when the whole scope was read and decoded" under Security, which keeps the search
+  that decides `still-present`.
 - **Active probes (D5-6):** 401/403/404/410 answers are gated and not evaluated, and
   a pass that evaluated nothing is a coverage gap that `--require-analyzers
   active-probes` refuses (exit 2); `gated` and `cut_short` are additive
@@ -59,9 +61,8 @@ mislead:**
   (`execution_successful`, `error_notifications`, `analyzed_paths`), so a consumer
   can tell a run that failed or never covered a file from a clean one; the import
   report's `coverage.limitations` names a failed run. Absent keys mean *not recorded*.
-  `docs/schema.json` (`ImportedTool`, `additionalProperties: false`) does not list the
-  three keys yet and must, or a report that carries them fails that schema; the keys are
-  described in `docs/schema.md`.
+  `docs/schema.json` (`ImportedTool`, `additionalProperties: false`) lists the three keys
+  from Round 6 (R5-08); a failed or partial run is now also a coverage gap (below).
 - **Smaller fixes:** a deadline that fired is never trusted even if the process
   exited 0, and the process tree is frozen before it is killed; the strongest
   non-Semgrep confidence wins when findings at one location collapse (`eval` of a
@@ -71,6 +72,96 @@ mislead:**
   Semgrep cannot list no longer fails the whole Semgrep run; a named pipe called
   `*.js` no longer hangs the scan; a Python file with a non-ASCII-transparent PEP 263
   coding line is lost Semgrep evaluation.
+
+**Round 6 of the remediation program (2026-11-15), engine verify, coverage and
+contracts (WS-E2). Nothing here is released; every item has a failing test that
+was written first (`*_round6_test.go`, `*_wse2_test.go`).**
+
+- **`fendix verify` never answers `resolved` (D4 Option A, R-010).** Not finding a
+  credential in an enumerated list of representations cannot prove it is gone, so
+  the answer is `still-present` when the problem is seen again and `unknown`
+  otherwise, for every finding, every occurrence of a grouped finding and the fold
+  over a group (`verifycmd.go`'s two former `resolved` paths, the no-marker
+  provider-anchored path R6-E3 and the grouped fold included). `verify` never exits
+  0: the CLI maps a stray `resolved` to exit 2. `StatusResolved` stays in the output
+  vocabulary for consumers that know it. `fendix verify --help`, its `Short` line, its
+  CI example and `docs/cli-contract.json` no longer promise `resolved` or exit 0 and no
+  longer list URL, dependency or correlated findings as supported shapes; the help is a
+  reviewed golden (`cmd/fendix/testdata/verify_help.golden`, C4B-21). Upgrading: a
+  script that treats exit 0 as "the finding is gone" now never sees 0; re-run
+  `fendix scan` and diff against the baseline. Existing tests that pinned `resolved`
+  were updated to `unknown` (12 in `internal/verifycmd` and one e2e test), none
+  deleted.
+- **A probe pass reads complete only when every planned probe was evaluated (A-D5,
+  policy 2.6.0 engine half).** There is no percentage threshold: a gated (401, 403,
+  404, 410) or unanswered probe is not evaluated, is target-owned, and still makes
+  `active-probes` `failed` / `no_endpoints` (R5-07 read `ok` with 22 of 2,687
+  evaluated). Counts that do not add up read `failed` / `malformed_output`. The
+  evidence is bounded and exact whatever the probe count: `not_evaluated_counts`
+  (one row per origin, reason and HTTP status), at most 200 `not_evaluated_groups`,
+  `groups_total`, `inline_truncated`, `listing_ceiling_reached` and `listing_overflow`
+  (a listing ceiling of 100,000 groups, with the overflow counted), all additive in
+  `coverage.active_probes`. The probe log keeps 10,000 records (long fields cut to
+  1 KiB), an exact streaming ledger and 64-bit endpoint-hash counts (a collision can
+  only make the per-endpoint budget stricter: the count only grows, the 64-bit hash
+  is keyed per process so a target cannot choose colliding endpoints, and no verdict
+  reads those counts); per-probe stderr lines stop at a 1 MiB budget and one exact line
+  counts the rest (`--verbose` restores every line). The paging transport for groups
+  past the inline bound is not part of this change (held for M-2). Existing engine
+  tests that pinned the old rule were updated, none deleted (listed in the
+  Round 6 report).
+- **A producer's failed or partial run is a coverage gap (R5-09, D6).**
+  `executionSuccessful: false`, an exit signal, a non-zero `exitCode` with no success
+  recorded, and error-level `toolExecutionNotifications` or
+  `toolConfigurationNotifications`, in any invocation, run or file of a tool, add an
+  `import/<tool>` entry to `coverage.gaps` and make `configured_complete` false; with
+  two producers only the failed one is a gap. `fendix import --fail-on` then exits 2 (a
+  coverage exit, before the findings exit 1), and `scan --import` reports the same gap.
+  A run with no `invocations` is not a gap, and a non-zero `exitCode` beside an explicit
+  `executionSuccessful: true` is read as neither failure nor success. An error count
+  above zero is no longer lost when another run of the tool records nothing. The import
+  goldens changed (`python/tests/fixtures/report_schema/engine`).
+- **The report schema covers everything the engine writes (R5-08).**
+  `docs/schema.json` gains the `ImportedTool` run record and the D5 keys, with their
+  minimums, and `docs/schema.md` says so; a reflective test walks the report root and
+  fails on any serialised field the schema lacks, and a Python test validates real
+  engine, corpus and v3.7.0 reports with a JSON Schema validator
+  (`python/tests/test_report_schema.py`).
+- **textscan honours `--max-duration` (R5-19).** `textscan.ScanCoverage` takes the
+  run's context and stops within one entry's work of the deadline, on the full walk and
+  the diff-allowlist path, returning the findings it made (which now reach the report)
+  and the context's error (`failed/timeout`). The stage is given a 2 s floor when an
+  earlier stage spent the deadline, so it still delivers what it finds first; the
+  overrun it adds is at most that floor.
+- **Bounded output (OR-13).** The `--debug-bundle` holds at most 10,000 probe records
+  and 8 MiB of them, says so in `probes.summary.json` with the exact total, and keeps
+  at most 16 MiB of `debug.log`; the pip scanner's per-package stderr lines stop at 32
+  KiB and one exact line counts the rest; the worker pool's per-panic log lines stop at
+  64 KiB per pass and one line at the end of the pass counts the rest.
+- **Python source encoding is read as CPython reads it (WS-E1, R5-01, R6-E1, R6-E2,
+  R6-E6, DE5-07).** One predicate (`scope.ClassifyPythonSource`, with the same one in
+  `python/analyzers/scope_evidence.py`) serves Semgrep's target selection, the secrets
+  scan, the `fendix verify` re-test and the Python engine: the cookie is read from line
+  1 or 2 with CPython's line model (`\r\n`, `\r`, `\n`, no byte limit, `python -x`),
+  the name is resolved through a codec table measured on CPython 3.14.5, and a file whose
+  codec is not ASCII-transparent, whose name only a run-time registration could supply,
+  or whose cookie only `python -x` reads is lost evaluation in every reader. The Python
+  engine no longer falls back to UTF-8, and no codec error aborts the tree. Semgrep's
+  partial-parse judge reads the language's own lines. **The codec policy defaults to
+  decision D2 as approved (every ASCII-transparent codec reads as UTF-8), behind one
+  compiled-in constant (`codecPolicy` in `go/internal/scope/pysource.go`,
+  `PEP263_POLICY` in the Python module); D2-A, which keeps only the takeover-immune
+  spellings transparent because a scanned repository can rebind a transparent name at run
+  time, is a one-line switch and is pending the owner's ruling.** `docs/checks/semgrep.md`
+  and `docs/checks/ast-analyzer.md` describe it.
+- **Media framing is stricter (R5-11, R5-12, OR-14).** An ISO-BMFF file needs an `ftyp`
+  box of whole four-letter brands followed by boxes of the types a base media file
+  carries, with consistent sizes and zero-filled padding (an `ftyp` box followed by
+  noise read as video in 1.9 % of seeded runs, and always for a hand-typed `free`
+  box); a GIF needs a well-formed screen, extensions and images inside the screen, a
+  comment that is text, and a trailer that is the last byte (a forged header over noise
+  read as a picture in 8 of 1,000 seeded runs). A container can still carry a payload
+  in `mdat`, an application extension or image data: the check recognises framing.
 
 ### Added
 

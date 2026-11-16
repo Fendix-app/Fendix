@@ -159,7 +159,8 @@ func secretsScannerFinding(t *testing.T, root, rel string) models.Finding {
 // still reports the SAME RULE in the SAME FILE, or the SAME CREDENTIAL (its
 // redaction marker) anywhere under --code. Line moves, in-place rotation to
 // another literal and a move to another file keep it present; replacing the
-// literal with a lookup the scanner does not report resolves it.
+// literal with a lookup the scanner does not report is unknown (Round 6, D4
+// Option A: it resolved before; resolved is never derived from absence).
 func TestVerify_SecretsScannerFindingRemovedUnchangedAndModified(t *testing.T) {
 	const rel = "app/settings.py"
 	cases := []struct {
@@ -171,10 +172,10 @@ func TestVerify_SecretsScannerFindingRemovedUnchangedAndModified(t *testing.T) {
 		{"unchanged", func(*testing.T, string) {}, StatusStillPresent, ""},
 		{"removed from the file", func(t *testing.T, root string) {
 			writeFile(t, root, rel, "import os\n")
-		}, StatusResolved, ""},
+		}, StatusUnknown, "Not detected is not the same as fixed"},
 		{"replaced by an environment lookup", func(t *testing.T, root string) {
 			writeFile(t, root, rel, "import os\nAWS_ACCESS_KEY_ID = os.environ[\"AWS_ACCESS_KEY_ID\"]\n")
-		}, StatusResolved, ""},
+		}, StatusUnknown, "Not detected is not the same as fixed"},
 		{"rotated in place to another literal", func(t *testing.T, root string) {
 			writeFile(t, root, rel, `AWS_ACCESS_KEY_ID = "`+newKey+`"`+"\n")
 		}, StatusStillPresent, ""},
@@ -288,8 +289,9 @@ func TestVerify_SecretsFindingWithoutProvableProducerIsUnknown(t *testing.T) {
 	}
 }
 
-// A grouped secrets-scanner finding is resolved only when every occurrence's
-// file no longer carries the rule.
+// A grouped secrets-scanner finding stays present while any occurrence's file
+// still carries the rule. Round 6 (D4 Option A): once every occurrence is gone the
+// fold is unknown, never resolved.
 func TestVerify_GroupedSecretsScannerFindingNeedsEveryOccurrence(t *testing.T) {
 	root := producerFixture(t)
 	// A real scan groups EVERY secrets/AWS_ACCESS_KEY finding into one
@@ -309,7 +311,7 @@ func TestVerify_GroupedSecretsScannerFindingNeedsEveryOccurrence(t *testing.T) {
 	}
 	writeFile(t, root, "app/other.py", "import os\n")
 	r = verifyAll(t, root, []models.Finding{f})[f.ID]
-	if r.Status != StatusResolved {
-		t.Fatalf("both occurrences removed: status %s, want resolved: %s", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Fatalf("both occurrences removed: status %s, want unknown (D4 Option A: the fold never resolves): %s", r.Status, r.Reason)
 	}
 }

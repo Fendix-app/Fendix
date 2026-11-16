@@ -1,6 +1,7 @@
 package textscan
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,7 @@ func TestScanCoverage_NamesASymlinkToCodeOutsideTheRoot(t *testing.T) {
 	writeFile(t, root, "main.go", "package main\n")
 	_ = os.Symlink("main.go", filepath.Join(root, "inside.go"))
 
-	fs, cov, err := ScanCoverage(root, AllRules(), nil)
+	fs, cov, err := ScanCoverage(context.Background(), root, AllRules(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +57,7 @@ func TestScanCoverage_ADiffNamesAChangedSymlinkOutsideTheRoot(t *testing.T) {
 		t.Skipf("symlink unsupported: %v", err)
 	}
 	writeFile(t, root, "a.go", "package a\n")
-	_, cov, err := ScanCoverage(root, AllRules(), gitdiff.NewAllowlist(root, []string{"a.go", "linked.go"}))
+	_, cov, err := ScanCoverage(context.Background(), root, AllRules(), gitdiff.NewAllowlist(root, []string{"a.go", "linked.go"}))
 	if err != nil {
 		t.Fatal(err)
 	}

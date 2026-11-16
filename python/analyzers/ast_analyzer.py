@@ -11,12 +11,10 @@ is not a Python stdlib dependency.
 from __future__ import annotations
 
 import ast
-import io
 import os
 import posixpath
 import re
 import sys
-import tokenize
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -30,7 +28,9 @@ from analyzers.scope_evidence import (
     SYMLINK_REASON,
     NotRegularFile,
     SourceWalk,
+    UndecodableSource,
     is_regular_file,
+    read_python_source,
     read_regular,
 )
 
@@ -48,32 +48,26 @@ _SOURCE_SUFFIXES_JS = frozenset({".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", "
 
 
 def _read_python_source(path: Path) -> str:
-    """The text of a Python source file decoded as CPython decodes it: a
-    UTF-8 byte-order mark is dropped and a PEP 263 coding declaration is
-    honoured (redteam2-py-01: a BOM file kept U+FEFF, failed to parse and was
-    skipped silently while the server runs it). Bytes the encoding cannot
-    decode are replaced, as before, so a stray byte in a comment never loses
-    the file; line endings are translated as `read_text` did. Raises OSError
-    when the file cannot be read."""
-    data = read_regular(path)
-    try:
-        encoding, _lines = tokenize.detect_encoding(io.BytesIO(data).readline)
-    except SyntaxError:
-        # An unknown or conflicting declaration: decoded as UTF-8, as before.
-        encoding = "utf-8"
-    try:
-        text = data.decode(encoding, errors="replace")
-    except LookupError:
-        text = data.decode("utf-8", errors="replace")
-    if text.startswith("\ufeff"):
-        text = text[1:]
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    """The text of a Python source file as CPython runs it (R5-01, R6-E1, R6-E6):
+    the shared PEP 263 predicate (`scope_evidence.python_source_encoding`) reads
+    the cookie on line 1 or 2 with CPython's line model (\\r\\n, \\r, \\n; no byte
+    limit; `python -x`), resolves the name through the generated codec table, and
+    the file is decoded with the codec CPython applies. A UTF-8 byte-order mark is
+    dropped (redteam2-py-01). A name only a run-time registration could supply, a
+    cookie only `python -x` reads, or a foreign file that does not decode raises
+    `UndecodableSource`, an OSError every caller records as lost evaluation: the
+    old UTF-8 fallback analysed text that was not the program and read ok. No
+    codec error ever escapes (a `# coding: idna` or `rot13` file used to abort
+    the whole tree). Raises OSError when the file cannot be read."""
+    return read_python_source(path)
 
 
 def _os_error_reason(exc: OSError) -> str:
     """A short reason naming why a path could not be read."""
     if isinstance(exc, NotRegularFile):
         return _NOT_REGULAR_REASON
+    if isinstance(exc, UndecodableSource):
+        return exc.reason
     return f"unreadable: {type(exc).__name__}"
 
 # Hard cap on taint-chain hops (F-H5b). A crafted "assignment bomb" — a long

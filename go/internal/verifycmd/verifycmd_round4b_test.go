@@ -116,7 +116,8 @@ func orDefault(s, d string) string {
 }
 
 // An archive verify cannot open is unknown, never resolved; a clean tree with
-// opened archives and an image is resolved and says what was searched and not.
+// opened archives and an image is unknown too (Round 6, D4 Option A: it was
+// resolved) and says what was searched and not.
 func TestVerify_AnArchiveItCannotOpenIsUnknownAndACleanTreeIsResolved(t *testing.T) {
 	f, root := baselineOf(t, "secrets/HARDCODED_PASSWORD", "app/settings.py", `DB_PASSWORD = "`+vsPW+`"`+"\n")
 	rewrite(t, root, map[string]string{
@@ -132,24 +133,26 @@ func TestVerify_AnArchiveItCannotOpenIsUnknownAndACleanTreeIsResolved(t *testing
 		"img/logo.png": "\x89PNG\r\n\x1a\n\x00\x00nothing",
 	}, "pkg/s.xz")
 	r := verifyIn(t, f, root)
-	if r.Status != StatusResolved {
-		t.Fatalf("status %s, want resolved: %s", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Fatalf("status %s, want unknown (D4 Option A: never resolved): %s", r.Status, r.Reason)
 	}
 	for _, want := range []string{"raw bytes", "archives", "including directories a scan prunes", "version-control history", "not covered"} {
 		if !strings.Contains(r.Reason, want) {
-			t.Errorf("a resolved reason must say %q: %s", want, r.Reason)
+			t.Errorf("the reason must say %q: %s", want, r.Reason)
 		}
 	}
 }
 
 // With no marker to search for, the rule is the only witness; it does not read
-// binary files or pruned directories, so a rule-only resolved needs them absent.
+// binary files or pruned directories. Round 6 (D4 Option A): a clean tree is
+// unknown (it was resolved), and a binary file leaves it unknown for its own
+// reason, which the reason names.
 func TestVerify_ARuleOnlyResolvedNeedsNothingLeftUnread(t *testing.T) {
 	f, root := baselineOf(t, "secrets/AWS_ACCESS_KEY", "app/cfg.py", `AWS_ACCESS_KEY_ID = "`+vsKey+`"`+"\n")
 	f.Evidence = "AWS_ACCESS_KEY_ID = \"AKIA...\"" // an older baseline: no redaction marker
 	rewrite(t, root, map[string]string{"app/cfg.py": `AWS_ACCESS_KEY_ID = os.environ["X"]` + "\n"})
-	if r := verifyIn(t, f, root); r.Status != StatusResolved {
-		t.Fatalf("clean tree: status %s, want resolved: %s", r.Status, r.Reason)
+	if r := verifyIn(t, f, root); r.Status != StatusUnknown || strings.Contains(r.Reason, "binary") {
+		t.Fatalf("clean tree: status %s, want unknown for the rule-only absence (D4 Option A): %s", r.Status, r.Reason)
 	}
 	rewrite(t, root, map[string]string{"img/logo.png": "\x89PNG\r\n\x1a\n"})
 	if r := verifyIn(t, f, root); r.Status != StatusUnknown || !strings.Contains(r.Reason, "binary") {

@@ -155,7 +155,9 @@ func TestC4B06_BackendRuleAgreesWithTheEngineOnEveryShape(t *testing.T) {
 		if a != e+i+u+f {
 			return true // counts that do not add up
 		}
-		return l != nil || u+f > 0 || (a > 0 && e == 0)
+		// Policy 2.6.0 (A-D5): any unevaluated required probe is lost
+		// coverage, with no threshold (2.5.0 read only a > 0 && e == 0).
+		return l != nil || u+f > 0 || (a > 0 && e == 0) || e < a
 	}
 	type shape struct {
 		name  string
@@ -214,7 +216,7 @@ func TestC4B06_BackendRuleAgreesWithTheEngineOnEveryShape(t *testing.T) {
 		default:
 			t.Errorf("%s: state %s", sh.name, st.State)
 		}
-		want := sh.phase.Probes.Evaluated > 0 && sh.phase.Probes.UnknownOrigin+sh.phase.Probes.ScannerFailed == 0
+		want := sh.phase.Probes.Evaluated > 0 && sh.phase.Probes.NotEvaluated() == 0 // A-D5
 		if (st.State == reporters.ScannerOK) != want {
 			t.Errorf("%s: state %s, want ok=%v", sh.name, st.State, want)
 		}

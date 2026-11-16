@@ -176,6 +176,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// don't include leftovers from a previous run in the same process
 	// (long-running tests, future server mode).
 	scanner.ResetGlobalAuditLog()
+	// --verbose writes every per-probe line; otherwise they stop at a byte
+	// budget and one exact line counts the rest (OR-28).
+	scanner.GlobalProbeLog().SetVerbose(o.cfg.Verbose)
 
 	// --debug-bundle wiring (TASK-102). Setup is a no-op when disabled.
 	// When enabled, install a slog tee that captures DEBUG-and-above
@@ -303,6 +306,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// configured: budget.Stats() covers the check phase because Reset() ran
 	// after discovery, and the probe audit log holds every active probe sent.
 	_, rejected := budget.Stats()
+	scanner.GlobalProbeLog().Flush()
 	probePhase := summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), rejected)
 	recordBlackbox(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr, probePhase)
 
@@ -667,11 +671,23 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		// recorded diff_unchanged above
 	default:
 		started := time.Now()
-		textFindings, textCov, err := textscan.ScanCoverage(codeRoot, textscan.AllRules(), allow)
+		// textscan honours the run's deadline to the entry, so a run whose
+		// budget an earlier stage spent would give it nothing: it is given a
+		// small floor, then stops (R5-19; see textscanFloor).
+		textCtx, stopText := withStageFloor(ctx, textscanFloor)
+		textFindings, textCov, err := textscan.ScanCoverage(textCtx, codeRoot, textscan.AllRules(), allow)
+		stopText()
 		o.recordAnalyzerTime(AnalyzerTextscan, started)
 		switch {
 		case err != nil:
-			slog.Warn("native textscan failed", "error", err)
+			// R5-19: textscan now honours --max-duration, and a scan that stops
+			// (the deadline, or any other error mid-walk) returns what it found
+			// first. Those findings are real, so they are kept; the run is
+			// recorded failed, never ok, and what it left unread so far is
+			// still listed.
+			slog.Warn("native textscan failed", "error", err, "partial_findings", len(textFindings))
+			evid = append(evid, textFindings...)
+			scopeNotes = append(scopeNotes, textCov.Limitations(AnalyzerTextscan)...)
 			scanStatus.fail(AnalyzerTextscan, classifyErr(err), err)
 		default:
 			if len(textFindings) > 0 {
@@ -823,6 +839,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		PolicyVersion:        decision.PolicyVersion,
 		Imports:              importedTools,
 	}
+	// R5-09: a SARIF producer's failed or partial run is a gap of its own, so
+	// `scan --import` never reads configured_complete over a run that did not finish.
+	addImportGaps(meta.Coverage, importedTools)
 
 	// Steps 5.2–12 (cross-tool correlation → escalate → collapse → dedup →
 	// consistency → sort → IDs/fingerprints → ignore → baseline →
@@ -892,9 +911,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		return 2
 	}
 
-	if o.cfg.FailOnCoverageGap && !cov.ConfiguredComplete {
-		slog.Error("coverage gap recorded and --fail-on-coverage-gap set — exiting non-zero", "gaps", strings.Join(cov.Gaps, ","))
-		fmt.Fprintf(os.Stderr, "fendix: coverage incomplete and --fail-on-coverage-gap is set: %s\n", describeGaps(scanStatus, cov.Gaps))
+	if o.cfg.FailOnCoverageGap && !meta.Coverage.ConfiguredComplete {
+		slog.Error("coverage gap recorded and --fail-on-coverage-gap set — exiting non-zero", "gaps", strings.Join(meta.Coverage.Gaps, ","))
+		fmt.Fprintf(os.Stderr, "fendix: coverage incomplete and --fail-on-coverage-gap is set: %s\n", describeAllGaps(scanStatus, meta.Coverage.Gaps, importedTools))
 		return 2
 	}
 	if len(cov.RequiredGaps) > 0 {
@@ -1214,6 +1233,17 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 	if ec != 0 {
 		return ec
 	}
+	// R5-09 (decision D6): a producer's failed or partial run is incomplete
+	// coverage. Under a gate (--fail-on, --fail-on-coverage-gap) a run nobody
+	// finished cannot pass, so the import exits 2, and that coverage exit takes
+	// precedence over the findings exit 1, as it does in Run (OR-11).
+	if why := describeImportGaps(importedTools); why != "" {
+		fmt.Fprintf(os.Stderr, "fendix: the imported run is incomplete: %s\n", why)
+		if o.cfg.FailOn != "" || o.cfg.FailOnCoverageGap {
+			fmt.Fprintln(os.Stderr, "fendix: a gate was requested and the coverage is not complete — exiting 2")
+			return 2
+		}
+	}
 	return decision.ExitCode(decisions)
 }
 
@@ -1225,14 +1255,7 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 // limitation (verification pass 1: R5DB5-01, redteam5-02).
 func importCoverage(tools []reporters.ImportedTool) *reporters.Coverage {
 	c := reporters.BuildCoverage(nil, nil, false)
-	for _, t := range tools {
-		if t.ExecutionSuccessful != nil && !*t.ExecutionSuccessful {
-			c.Limitations = append(c.Limitations, "import/"+t.Tool+": the producer reported a failed run; an absent result is not evidence that a finding is gone")
-		}
-		if t.ErrorNotifications != nil && *t.ErrorNotifications > 0 {
-			c.Limitations = append(c.Limitations, fmt.Sprintf("import/%s: the producer reported %d error notification(s); the run may be partial", t.Tool, *t.ErrorNotifications))
-		}
-	}
+	addImportGaps(&c, tools)
 	return &c
 }
 
@@ -1561,9 +1584,19 @@ type checkPhaseOutcome struct {
 // it was evaluated or who is at fault when it was not), the budget counters,
 // and the context.
 func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, rejected int64) checkPhaseOutcome {
+	// The scan-wide log keeps a bounded prefix of its records, each clipped to a
+	// bounded size (OR-13); when the records given are the log's own, the account
+	// comes from its exact streaming ledger, which saw every probe whole, never
+	// from counting a truncated or clipped list.
+	var probes models.ActiveProbeCoverage
+	if log := scanner.GlobalProbeLog(); len(records) > 0 && log.Attempted() >= len(records) && log.Retained() == len(records) {
+		probes = scanner.SummarizeGlobalProbes()
+	} else {
+		probes = scanner.SummarizeProbes(records, scanner.GlobalProbeLog())
+	}
 	return checkPhaseOutcome{
-		Attempted: len(records),
-		Probes:    scanner.SummarizeProbes(records, scanner.GlobalProbeLog()),
+		Attempted: probes.Attempted,
+		Probes:    probes,
 		Rejected:  rejected,
 		Deadline:  errors.Is(ctx.Err(), context.DeadlineExceeded),
 	}
@@ -1608,6 +1641,10 @@ func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints
 		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, probeDetail(phase.Probes, true, fmt.Sprintf("scan limit --max-requests=%d exhausted: %d requests refused before the probe pass completed", cfg.MaxRequests, phase.Rejected)))
 	case phase.Attempted == 0:
 		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no probe-eligible parameters on the discovered endpoints")
+	case !phase.Probes.Consistent():
+		// Counts that do not add up are unreadable: the pass cannot be read as
+		// complete (A-D5, fail closed).
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonMalformedOutput, probeDetail(phase.Probes, true, probeInconsistentSegment))
 	case phase.Probes.UnknownOrigin+phase.Probes.ScannerFailed > 0:
 		// Fail closed: a probe the engine failed to send or whose failure no
 		// evidence attributes to the target was not evaluated, and neither may
@@ -1621,10 +1658,16 @@ func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints
 		// --fail-on-coverage-gap / --require-analyzers active-probes agree with
 		// it. no_endpoints is a target-owned reason: never a scanner failure.
 		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNoEndpoints, probeDetail(phase.Probes, true, probeNoneEvaluatedSegment(phase.Probes)))
+	case phase.Probes.NotEvaluated() > 0 || phase.Probes.ListingCeilingReached:
+		// A-D5 (no threshold): required-probe coverage is complete only when
+		// every planned probe was evaluated. What remains here is target-side
+		// (gated 401/403/404/410, or not answered): not a scanner failure, so
+		// the reason is the target-owned no_endpoints, and the account says
+		// exactly what was not evaluated. Configure authentication for gated
+		// endpoints, or make the target reachable, to evaluate them.
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNoEndpoints, probeTargetIncompleteDetail(phase.Probes))
 	default:
-		// ok: every probe was evaluated, or its only non-answers are confirmed
-		// target-side. The counts are always stated: a complete entry is not
-		// proof that every probe was evaluated.
+		// ok: every probe was evaluated. The counts are always stated.
 		status.okDetail(AnalyzerActiveProbes, probeDetail(phase.Probes, false, ""))
 	}
 }

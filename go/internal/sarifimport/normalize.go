@@ -109,17 +109,34 @@ type RunRecord struct {
 // recordOf reads one run's record. A run with no invocation says nothing about
 // success or errors; an invocation without executionSuccessful says nothing
 // about success.
+//
+// Failure signals (R5-09; every one fails the run, and one invocation among
+// several is enough):
+//   - executionSuccessful false;
+//   - a process that ended on a signal (exitSignalName or a non-zero
+//     exitSignalNumber): it did not run to its end whatever else is recorded;
+//   - a non-zero exitCode when the invocation does not say it succeeded.
+//
+// A non-zero exitCode beside an explicit executionSuccessful true is not read as
+// a failure: SARIF 2.1.0 lets a tool exit non-zero because it found results and
+// say so with executionSuccessful true. It is not read as success either: the
+// producer contradicts itself, so the run is left unrecorded (never "fine"),
+// which the backend reads as "no later import may close a finding on it".
 func recordOf(run Run) RunRecord {
 	var rec RunRecord
 	if len(run.Invocations) > 0 {
 		successful, known := true, true
 		errs := 0
 		for _, inv := range run.Invocations {
+			exitNonZero := inv.ExitCode != nil && *inv.ExitCode != 0
+			signalled := strings.TrimSpace(inv.ExitSignalName) != "" || (inv.ExitSignalNumber != nil && *inv.ExitSignalNumber != 0)
 			switch {
-			case inv.ExecutionSuccessful == nil:
-				known = false
-			case !*inv.ExecutionSuccessful:
+			case inv.ExecutionSuccessful != nil && !*inv.ExecutionSuccessful, signalled:
 				successful = false
+			case inv.ExecutionSuccessful == nil && exitNonZero:
+				successful = false
+			case inv.ExecutionSuccessful == nil, exitNonZero:
+				known = false
 			}
 			for _, group := range [][]Notification{inv.ToolExecutionNotifications, inv.ToolConfigurationNotifications} {
 				for _, n := range group {
@@ -174,8 +191,8 @@ func analysedRole(roles []string) bool {
 
 // FoldRecord folds record b into a. first is true while a holds nothing yet.
 // It fails closed: a failed run fails the fold, a run that did not say whether it
-// succeeded (or how many errors it raised) leaves the fold unrecorded, and
-// error counts add up. Listed files are the union of what the runs listed; a
+// succeeded (or how many errors it raised) leaves the fold unrecorded, error
+// counts add up, and a positive error count is never dropped. Listed files are the union of what the runs listed; a
 // run that lists none adds none.
 func FoldRecord(a, b RunRecord, first bool) RunRecord {
 	if first {
@@ -190,8 +207,18 @@ func FoldRecord(a, b RunRecord, first bool) RunRecord {
 		t := true
 		out.ExecutionSuccessful = &t
 	}
-	if a.ErrorNotifications != nil && b.ErrorNotifications != nil {
+	// The counts add up. A run that raised errors is never made to read clean by
+	// a run that said nothing: an error count above zero on either side survives
+	// the fold (R5-09); only zero and unrecorded stay unrecorded.
+	switch {
+	case a.ErrorNotifications != nil && b.ErrorNotifications != nil:
 		n := *a.ErrorNotifications + *b.ErrorNotifications
+		out.ErrorNotifications = &n
+	case a.ErrorNotifications != nil && *a.ErrorNotifications > 0:
+		n := *a.ErrorNotifications
+		out.ErrorNotifications = &n
+	case b.ErrorNotifications != nil && *b.ErrorNotifications > 0:
+		n := *b.ErrorNotifications
 		out.ErrorNotifications = &n
 	}
 	set := map[string]bool{}

@@ -1,6 +1,7 @@
 package textscan
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func TestScanCoverageOfADiffReadsAChangedFileUnderAnInstalledPackageTree(t *test
 		}
 	}
 	allow := gitdiff.NewAllowlist(root, []string{"a.go", "node_modules/lib/i.go"})
-	got, cov, err := ScanCoverage(root, AllRules(), allow)
+	got, cov, err := ScanCoverage(context.Background(), root, AllRules(), allow)
 	if err != nil {
 		t.Fatal(err)
 	}

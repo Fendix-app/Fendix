@@ -57,9 +57,14 @@ type Run struct {
 
 // Invocation is one execution of the tool within a run. ExecutionSuccessful is
 // a pointer because a document that does not say is not a document that says
-// true.
+// true. ExitCode, ExitSignalName and ExitSignalNumber are the process's own end
+// (SARIF 2.1.0 3.20.14 to 3.20.17); recordOf reads them as failure signals
+// (R5-09).
 type Invocation struct {
 	ExecutionSuccessful            *bool          `json:"executionSuccessful"`
+	ExitCode                       *int           `json:"exitCode"`
+	ExitSignalName                 string         `json:"exitSignalName"`
+	ExitSignalNumber               *int           `json:"exitSignalNumber"`
 	ToolExecutionNotifications     []Notification `json:"toolExecutionNotifications"`
 	ToolConfigurationNotifications []Notification `json:"toolConfigurationNotifications"`
 }

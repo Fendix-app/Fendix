@@ -558,7 +558,12 @@ func ssrfTimingProbe(ctx context.Context, cc *CheckContext, ep Endpoint, param s
 		resp.Body.Close()
 		record.Status = resp.StatusCode
 		cc.Audit.Record(record)
-		samples = append(samples, elapsed)
+		// The target's time only, like the baseline's (measureBaseline): the
+		// pauses probeDo took before a retry of a 429/502/503/504 are the
+		// engine's own, and counting them here but not in the baseline made
+		// every endpoint behind a limiter look like a blocking fetch (C4B-09
+		// neighbour; record.Duration stays the whole time).
+		samples = append(samples, pi.targetTime(elapsed))
 	}
 
 	probe := medianDuration(samples)

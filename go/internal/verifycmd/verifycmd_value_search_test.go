@@ -131,16 +131,16 @@ func TestVerify_LiteralInAnotherShapeIsStillPresent(t *testing.T) {
 	}
 }
 
-// Resolved needs positive evidence: the value found nowhere, and the reason
-// says what was searched.
+// The value found nowhere is unknown (Round 6, D4 Option A; it was resolved), and
+// the reason says what was searched.
 func TestVerify_ResolvedSaysWhatWasSearched(t *testing.T) {
 	f, root := baselineOf(t, "secrets/HARDCODED_PASSWORD", "app/settings.py", `DB_PASSWORD = "`+vsPW+`"`+"\n")
 	writeFile(t, root, "Dockerfile", "FROM alpine\n")
 	writeFile(t, root, "logo.png", "png")
 	rewrite(t, root, map[string]string{"app/settings.py": `DB_PASSWORD = os.environ["DB_PASSWORD"]` + "\n"})
 	r := verifyIn(t, f, root)
-	if r.Status != StatusResolved {
-		t.Fatalf("status %s, want resolved: %s", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Fatalf("status %s, want unknown (D4 Option A: never resolved): %s", r.Status, r.Reason)
 	}
 	for _, want := range []string{"searched 2 text files", "under --code", "string literals", "backslash escapes", "1 binary files"} {
 		if !strings.Contains(r.Reason, want) {

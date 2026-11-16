@@ -138,37 +138,46 @@ In `scanner_status`:
   produce a finding), so the reason is never written today.
 
 `fendix verify` searches more widely than a scan reads, so that a credential
-moved or reshaped is found; see below. When that search left any in-scope
-content unread or undecoded it cannot show a moved credential is nowhere under
-`--code`, so it reports `unknown`, never `resolved`.
+moved or reshaped is found; see below. It never reports `resolved`: a credential
+found nowhere is `unknown` (Round 6, decision D4 Option A).
 
 ## `fendix verify` and secrets
 
 `fendix verify <id> --baseline <report>` re-tests a finding from a saved
-report. **`resolved` is allowed only for a finding of the secrets scanner**
-(rule id `secrets/<PATTERN>`, no `source_tier`, white-box), and only when the
-whole verification scope was read and decoded (decision D5-3, contract C8). For
-such a finding it answers from evidence, never from the absence of a rule match.
-Every other file-anchored finding (Semgrep, textscan, the Python engine, imported
+report. **Round 6, decision D4 (Option A): `verify` never answers `resolved`.**
+Not finding a credential in an enumerated list of representations cannot prove it
+is gone, because the list of ways to write a value down is open (encodings,
+archives, media containers, a file name, history, a value built at run time).
+The answer is `still-present` when the problem is seen again and `unknown`
+otherwise, for every finding, every occurrence of a grouped finding and the fold
+over a group (exit 1 and exit 2; verify never exits 0). Earlier releases (decision
+D5-3, contract C8) resolved a secrets-scanner finding (rule id `secrets/<PATTERN>`,
+no `source_tier`, white-box) when its whole verification scope was read and
+decoded and the value was found nowhere, and a no-marker finding whose
+provider-anchored rule fired nowhere; both are now `unknown`, and the sections
+below describe the search that still decides `still-present`. To learn that a
+finding is gone, re-run `fendix scan` and diff against the baseline. Every other
+file-anchored finding (Semgrep, textscan, the Python engine, imported
 SARIF, a baseline row with no `rule_id`) is `unknown`, exit 2, whatever the file
 now holds. An active-probe finding is `unknown` whatever HTTP status the URL returns, and a
 correlated finding is never `resolved` on one (a 401, 403, 404 or 410 is `unknown`): **an HTTP status alone never resolves anything** (a
 401, 403, 404 or 410 on a correlated finding's endpoint used to read `resolved`
-while the credential was still committed). **No other re-test resolves.** A
+while the credential was still committed). **No re-test resolves.** A
 URL-anchored passive finding (`Missing Content-Security-Policy`, a version string,
 a CORS wildcard) whose observation now differs, and a dependency finding the
 manifest scan no longer lists, are `unknown`, exit 2, and the reason says so
 (`this is what one re-test observed, not proof that the vulnerability is fixed`):
-one response is an observation, not a remediation. A `resolved` verdict on a
-finding that is not the secrets scanner's is turned into `unknown` by a backstop
-in `verifyOne` (no rule id, a rule outside `secrets/`, a source tier, or a source
-that is not white-box), so a future re-test cannot resolve one by accident. A CORS
+one response is an observation, not a remediation. A `resolved` verdict from any
+verifier is turned into `unknown` by a backstop in `verifyOne`, and the fold over a
+group's occurrences cannot reach `resolved` either, so a future re-test cannot
+resolve one by accident. A CORS
 finding is re-tested with the scanner's own attacker `Origin`, so a server that
 answers `Access-Control-Allow-Origin: *` only to a request that carries one is
 `still-present` (before the change `verify` sent none and called it `resolved`).
 The hosted backend reads a `resolved` from any producer other than the secrets
 scanner as `unknown` as well (and from the secrets scanner only for an engine at or
-above its `VERIFY_RESOLVED_MIN_ENGINE_VERSION`, which is unset by default).
+above its `VERIFY_RESOLVED_MIN_ENGINE_VERSION`, which is unset by default and
+moot while the engine never answers `resolved`).
 
 1. It re-reads the finding's file with the scanner. If the same rule still
    fires anywhere in that file, the finding is `still-present`.
@@ -221,8 +230,8 @@ above its `VERIFY_RESOLVED_MIN_ENGINE_VERSION`, which is unset by default).
      the change wrapped, split, escaped-break, double-layer-wrapped and wrapped-hex
      copies all read `resolved` while the credential was committed (10 of 11);
      after it all read `still-present`, and the key removed or rotated elsewhere
-     still reads `resolved`.
-   - **A second guard.** Before any `resolved`, verify runs the secrets scanner
+     reads `unknown` (it read `resolved` until Round 6).
+   - **A second guard.** Before it will answer anything but `still-present`, verify runs the secrets scanner
      over the whole tree. A sighting that carries the baseline's marker
      anywhere is `still-present`, so verify is at least as permissive as the
      scanner by construction.
@@ -234,10 +243,11 @@ above its `VERIFY_RESOLVED_MIN_ENGINE_VERSION`, which is unset by default).
    secret does not remove it from the repository.` (the place reads
    `enc.txt:1 (base64-decoded)` for a base64 copy and `x.zip!a.txt:1 (as
    written)` for one inside a zip).
-3. Only when the file was re-read completely, the rule no longer fires in it, the
-   whole scope was read and decoded, and the value is found nowhere is the finding
-   `resolved`, exit 0. The reason names what was and was not covered and always
-   ends with the same warning. Its shape (the counts depend on the tree):
+3. When the file was re-read completely, the rule no longer fires in it, the
+   whole scope was read and decoded, and the value is found nowhere, the finding
+   is `unknown`, exit 2 (it was `resolved`, exit 0, before Round 6). The reason
+   names what was and was not covered and always ends with the same warning. Its
+   shape (the counts depend on the tree):
    `secrets scanner re-read all of settings.py and no longer reports
    secrets/HARDCODED_PASSWORD there, and the credential ([REDACTED len=22
    sha256:0a8636d8...]) was found nowhere: searched 3 text files (251.5 KB) and 1
@@ -249,13 +259,18 @@ above its `VERIFY_RESOLVED_MIN_ENGINE_VERSION`, which is unset by default).
    and the value written backwards; not covered: a value built at run time
    (case-changed, concatenated from variables, shifted or otherwise computed),
    encrypted, held in an image or another recognised media payload, or only in
-   version-control history. Not detected is not the same as fixed: verify cannot
-   see the repository's history or a value built at run time, so rotate or revoke
-   the credential rather than rely on this result.` A `; not searched: <n> git
-   object stores` follows the scope sentence when `<root>/.git/objects` was
-   skipped. **A value built at run time is out of scope, and `resolved` says so:
+   version-control history. Not detected is not the same as fixed: the ways a
+   committed credential can be written down are open, and verify cannot see the
+   repository's history, an encrypted copy or a value built at run time, so it
+   answers unknown, never resolved. Rotate or revoke the credential, then re-run
+   `fendix scan --code <path>` and diff against the baseline.` A `; not searched:
+   <n> git object stores` follows the scope sentence when `<root>/.git/objects` was
+   skipped. **A value built at run time is out of scope, and the reason says so:
    "not detected" is never worded as "fixed".** Rotate or revoke a committed
-   credential whatever verify says.
+   credential whatever verify says. A no-marker baseline (a non-primary
+   occurrence of a group, a signature-only rule, an older baseline) is `unknown` on
+   the same terms: the value was never searched for, and a provider-anchored rule
+   firing nowhere is absence, not proof (R6-E3 resolved it before Round 6).
 4. Everything else is `unknown`, exit 2, and the reason lists what could not be
    read: a finding that is not of this scanner (above), a source file that no
    longer exists (`missing or inaccessible source is not proof of remediation`), a
@@ -268,14 +283,21 @@ above its `VERIFY_RESOLVED_MIN_ENGINE_VERSION`, which is unset by default).
    least 7.2 bits per byte over its first 8000 bytes, and not a recognised media
    container by its content: a PNG whose chunk types and CRCs parse, a JPEG whose
    segment chain is well formed (`APP0` must be `JFIF`, a long segment must name
-   itself Exif, ICC or XMP), a GIF whose blocks parse (a comment must be text),
+   itself Exif, ICC or XMP), a GIF whose screen, extensions and images are
+   well formed and lie inside the screen (a comment must be valid UTF-8 text; the
+   trailer is the last byte when the length is known; Round 6, OR-14: a `GIF89a`
+   header over noise read as a picture in 8 of 1,000 seeded runs),
    RIFF (WEBP/WAV) and WOFF/WOFF2 lengths that agree with the file size, a
-   TrueType/OpenType table directory, ID3, Ogg, FLAC `STREAMINFO`, ISO-BMFF boxes
-   (MP4), an ICO directory; a file only *named* `.png`, or one that starts with a
+   TrueType/OpenType table directory, ID3, Ogg, FLAC `STREAMINFO`, ISO-BMFF
+   (MP4, MOV, HEIC) top-level boxes (an `ftyp` box of whole four-letter brands,
+   then boxes of the types a base media file carries, with consistent sizes and
+   zero-filled `free`/`skip`/`wide` padding; Round 6, R5-12: an `ftyp` box
+   followed by any box with a printable type read as video in 1.9 % of seeded
+   noise files and always for a hand-typed `free` box), an ICO directory; a file only *named* `.png`, or one that starts with a
    magic number and holds noise, is not one: round 5 made the check read the
    container, because a forged `GIF89a` header used to turn the opaque-binary rule
    off. A container can still carry arbitrary bytes in a comment or application
-   segment: the check recognises framing, not pictures); a compressed stream cut before its end or past the bound, and a file
+   segment, or in `mdat`: the check recognises framing, not pictures); a compressed stream cut before its end or past the bound, and a file
    with more than 4096 stream-header candidates; a `\N{...}` name outside the ASCII
    table; xz, zstd, 7z, rar, lz4, lzip, cab, an encrypted or undecodable zip or
    gzip; an archive nested deeper than 4; the search budget; and any git object
@@ -285,13 +307,10 @@ above its `VERIFY_RESOLVED_MIN_ENGINE_VERSION`, which is unset by default).
    `?`: `binary?content?that?is?compressed?or?encrypted`); a value that is itself
    one long encoded value after two layers is also unread
    (`an encoding nested more than two layers deep`). No new status, enum or report
-   field. With no marker the credential cannot be searched for, so
-   `resolved` additionally needs a rule that matches the credential's own token
-   shape and fires nowhere under `--code`, and nothing left unread (no binary
-   file, no pruned directory); an assignment-shaped rule
-   (`HARDCODED_PASSWORD`, for example) stays `unknown`.
+   field. With no marker the credential cannot be searched for, and the answer is
+   `unknown` whatever the rule.
 
-**What `resolved` does not cover.** A value built at run time or split over
+**What the search does not cover.** A value built at run time or split over
 variables (including one case-changed, shifted or otherwise computed from a
 literal), encrypted, held in a recognised media payload (an image or a font: a
 credential inside one is not found), or in a tiny (under 1 KiB) encrypted file,
@@ -299,15 +318,13 @@ and a value that exists only in version-control history (`<root>/.git/objects`).
 The list of decoded forms is closed: uuencode, ascii85 or base85, rot13, hex of
 base64 of hex, a
 credential written as a file name and a tiny random file are not searched for, and
-cannot be detected from content without calling ordinary text unreadable; the
-`resolved` reason lists what was covered and the rest is the "not covered" text.
-`resolved` means "not found in the forms listed in the reason", and the reason
-says which. A runtime-built value is out of scope; if the owner wants any unread
-binary at all to make the answer `unknown`, every repository with an image
-becomes `unknown`, so that stricter reading is not applied.
+cannot be detected from content without calling ordinary text unreadable; that is
+why `verify` no longer treats "not found in the forms listed in the reason" as
+`resolved` (D4 Option A): the reason lists what was covered, the rest is the "not
+covered" text, and the answer is `unknown`.
 
-Exit codes: `resolved` 0, `still-present` 1, `unknown` and
-`not-found-in-baseline` 2; no other status exits 0.
+Exit codes: `still-present` 1, `unknown` and `not-found-in-baseline` 2; `verify`
+never exits 0.
 
 ## Evidence redaction (v2.0)
 
