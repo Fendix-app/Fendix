@@ -765,7 +765,10 @@ func (lx *jsLexer) code(st *jsState) {
 	case c == '[' || c == ',' || c == ';' || c == ':' || c == '@' || c == '~':
 		st.pos = i + 1
 		st.tok(pExpr)
-		st.blockNext = c == ';'
+		// A `;` ends a statement, so a `{` after it opens a block, except inside a
+		// parenthesised head (`for (;{} / x / 1;)`), where it opens an object literal:
+		// leaving blockNext false there makes its `}` read both ways.
+		st.blockNext = c == ';' && (st.top == nil || st.top.kind != fParen)
 	case c == '.':
 		if i+2 < n && src[i+1] == '.' && src[i+2] == '.' {
 			st.pos = i + 3

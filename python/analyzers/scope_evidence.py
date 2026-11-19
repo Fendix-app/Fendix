@@ -853,7 +853,9 @@ class _JSLexer:
         elif c in "[,;:@~":
             st.pos = i + 1
             st.tok(_P_EXPR)
-            st.block_next = c == ";"
+            # A `;` inside a parenthesised head (`for (;{} / x / 1;)`) is followed by an
+            # object literal, not a block: its `}` must be read both ways (Go twin).
+            st.block_next = c == ";" and (st.top is None or st.top.kind != _F_PAREN)
         elif c == ".":
             if i + 2 < n and src[i + 1] == "." and src[i + 2] == ".":
                 st.pos = i + 3

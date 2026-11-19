@@ -241,3 +241,16 @@ def test_the_python_engine_records_an_escaped_identifier_as_lost_evaluation(tmp_
     files = dict(caught.value.files)
     assert "app.js" in files and files["app.js"] == se.JS_ESCAPE_UNREADABLE, files
     assert "ok.js" not in files, files
+
+
+def test_an_object_literal_in_a_parenthesised_head_is_not_a_block() -> None:
+    """Go twin: TestJSEscapeObjectLiteralInAParenthesisedHeadIsNotABlock. A `;` inside
+    `for (...)` is followed by an expression, so `{} / \\u0065val(x) / 1` divides and the
+    escaped call is code (Node runs it)."""
+    for src in (
+        'for (;{} / \\u0065val("x") / 1;) break;\n',
+        'for (var i = 0;i < 1;{} / \\u0065val("x") / 1) break;\n',
+        'for (;({}) / \\u0065val("x") / 1;) break;\n',
+    ):
+        assert se.js_identifier_escape(src, "a.js").lost, src
+    assert not se.js_identifier_escape('x = 1; {} /\\u0065val/.test(s);\n', "a.js").lost
