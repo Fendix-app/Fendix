@@ -24,7 +24,7 @@ jobs:
       # binary, so a different toolchain would test a different scanner.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
 
       - name: Bundle Python engine
         run: cd .. && make embed-engine
@@ -180,7 +180,7 @@ jobs:
       # Same exact patch as the release build (see the go job).
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -233,7 +233,7 @@ jobs:
       # builds bin/fendix-parity from source with it.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
 
       # 3.11 is the version python/requirements.lock was compiled with;
       # `make parity-venv` installs it with --require-hashes.
