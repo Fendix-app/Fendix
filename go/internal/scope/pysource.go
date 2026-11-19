@@ -24,25 +24,33 @@ package scope
 // Verdicts:
 //
 //	plain         no cookie: every reader reads the file as UTF-8
-//	transparent   an ASCII-transparent codec (under the compiled-in policy): read
-//	              as UTF-8, which gives the program's own text
+//	transparent   a takeover-immune spelling of utf-8, latin-1 or ascii (under the
+//	              compiled-in policy): read as UTF-8, which gives the program's
+//	              own text
 //	foreign       a codec CPython knows that is not: the Python engine decodes the
 //	              file with it, Semgrep and secrets record lost evaluation
 //	unknown       no codec of that name in a fresh interpreter, which only a
 //	              run-time registration could supply: lost in every reader
-//	refused       CPython refuses the file on every path: any outcome is allowed
+//	refused       CPython refuses the file on every path, whatever the registry holds
+//	              (a UTF-8 byte-order mark beside a cookie naming another codec): any
+//	              outcome is allowed. A cookie that names a non-text transform codec
+//	              (hex, base64, zlib, ...) is not this: the registry refuses it and a
+//	              module of the scanned repository can rewrite the registry, so it
+//	              reads foreign
 //	undeterminable  the bytes read so far cannot decide (a prefix; or a file that
 //	              changed under the read): lost
 //
-// The codec policy. Owner decision D2 (approved) treats every ASCII-transparent
-// codec as UTF-8-equivalent. OWNER-DECISIONS §0.8 (D2-A, not ruled) shows that
-// any module in the scanned repository can rebind such a name at run time by
-// writing encodings._cache, so a file declaring it can run a program every
-// analyzer reads as a comment; D2-A keeps only the takeover-immune spellings
+// The codec policy. Owner decision D2 treated every ASCII-transparent codec as
+// UTF-8-equivalent. D2-A (OWNER-DECISIONS §0.8; approved by the owner in the
+// Release Closure Sprint, OR-85: "implement the approved codec policy") shows
+// that any module in the scanned repository can rebind such a name at run time
+// by writing encodings._cache, so a file declaring it can run a program every
+// analyzer reads as a comment. D2-A keeps only the takeover-immune spellings
 // (utf-8, latin-1 and ascii, in the exact spellings the generated table marks
-// immune) transparent. Until the owner rules, codecPolicy is PolicyD2.
-// Switching to D2-A is the one-line change of that constant; the Python module
-// carries the same one-line constant (PEP263_POLICY).
+// immune, matched without regard to case) transparent; every other cookie is
+// foreign, and Semgrep and secrets record the file as lost evaluation. The
+// switch is the one constant below; the Python module carries the same one
+// (PEP263_POLICY).
 
 import (
 	"bytes"
@@ -58,17 +66,19 @@ import (
 type CodecPolicy int
 
 const (
-	// PolicyD2 is owner decision D2 as approved: every ASCII-transparent codec.
+	// PolicyD2 is owner decision D2 as first approved: every ASCII-transparent
+	// codec. Superseded by D2-A (a documented false clean); kept so that a tree
+	// can be built to reproduce it.
 	PolicyD2 CodecPolicy = iota
-	// PolicyD2A is the corrected D2-A (OWNER-DECISIONS §0.8): only the
-	// takeover-immune spellings.
+	// PolicyD2A is the corrected D2-A (OWNER-DECISIONS §0.8, approved in the
+	// Release Closure Sprint, OR-85): only the takeover-immune spellings.
 	PolicyD2A
 )
 
-// codecPolicy is the one place the codec policy is chosen. To adopt D2-A once
-// the owner rules, change PolicyD2 to PolicyD2A here and PEP263_POLICY to "d2a"
-// in python/analyzers/scope_evidence.py; nothing else changes.
-const codecPolicy = PolicyD2
+// codecPolicy is the one place the codec policy is chosen: the owner's D2-A. The
+// Python module's PEP263_POLICY must say "d2a" too; the policy tests of both
+// languages fail when either one does not.
+const codecPolicy = PolicyD2A
 
 // PyVerdict is what CPython makes of a Python file's source encoding.
 type PyVerdict string
@@ -244,11 +254,24 @@ func pyResolve(spec string, skipFirstLine bool) PySource {
 		if !ok {
 			continue
 		}
-		out := PySource{Verdict: PyVerdict(entry.Class), Declared: spec, SkipFirstLine: skipFirstLine}
-		if entry.Class == string(PyTransparent) || entry.Class == string(PyForeign) {
+		cls := PyVerdict(entry.Class)
+		if cls == PyRefused {
+			// Stock CPython refuses a cookie that names a non-text transform codec (hex,
+			// base64, zlib, uu, bz2, quopri, rot13, undefined and their aliases) because the
+			// registry says it is not a text encoding. The registry is what a module of the
+			// scanned repository rewrites: a codec info written under that name is a text
+			// encoding by default, and the import then decodes the file with it and runs the
+			// program. Under D2-A it is therefore foreign, lost like every other cookie that is
+			// not a takeover-immune spelling (CL-2, A-2). The refusal that is a property of the
+			// tokenizer and not of the registry, a byte-order mark beside another codec, stays
+			// refused (ClassifyPythonSource).
+			cls = PyForeign
+		}
+		out := PySource{Verdict: cls, Declared: spec, SkipFirstLine: skipFirstLine}
+		if cls == PyTransparent || cls == PyForeign {
 			out.Codec = entry.Codec
 		}
-		out.Immune = entry.Class == string(PyTransparent) && pyTable.fast[norm]
+		out.Immune = cls == PyTransparent && pyTable.fast[norm]
 		return out
 	}
 	return PySource{Verdict: PyUnknown, Declared: spec, SkipFirstLine: skipFirstLine}

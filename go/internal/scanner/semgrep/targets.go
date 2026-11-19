@@ -397,6 +397,14 @@ func inScopeTargets(root string, allow *gitdiff.Allowlist) (t Targets) {
 			// Semgrep still reports what it finds in it.
 			t.Coverage.NotParsed(rel)
 		}
+		if _, lost := scope.EscapeLostFile(rel, f); lost {
+			// An identifier spelled with a unicode escape (`\u0065val(x)` is
+			// `eval(x)` to the runtime) matches no pattern: the file is not
+			// evaluated, whatever Semgrep reports in it (R6-E7a). It stays a
+			// target, as a PEP 263 loss does, and is named as not parsed, the
+			// existing reason.
+			t.Coverage.NotParsed(rel)
+		}
 		_ = f.Close()
 		t.files = append(t.files, rel)
 		if !semgrepSelects(rel) {

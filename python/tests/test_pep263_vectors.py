@@ -11,15 +11,18 @@ Two generated files drive this test and the Go readers' tests
   verdict, codec and run-time takeover immunity of ``# coding: <name>``, and a
   plain control file that must keep its finding in every tree (OR-53).
 
-A taken-over, non-immune name (``d2_documented_false_clean``) is D2's
-documented false clean: an expected failure under D2, asserted only under D2-A
-(OR-59).
+A taken-over, non-immune name (``d2_documented_false_clean``) was D2's
+documented false clean (OR-59). The owner approved D2-A (OR-85: "implement the
+approved codec policy"), under which only the takeover-immune spellings stay
+UTF-8-equivalent, so the vector is now a real assertion: the name is foreign and
+Semgrep and secrets record the file as lost evaluation.
 
 Both are written by ``go/internal/scope/testdata/gen_pep263_vectors.py`` on the
-engine image's CPython 3.14.5 and never edited by hand. The policy is owner
-decision D2; set ``FENDIX_PEP263_POLICY=d2a`` to assert the corrected D2-A
-(OWNER-DECISIONS §0.8, not yet ruled), under which only takeover-immune
-spellings stay UTF-8-equivalent.
+engine image's CPython 3.14.5 and never edited by hand. The policy asserted is
+D2-A; set ``FENDIX_PEP263_POLICY=d2`` to assert the superseded D2 reading, which
+holds only in a tree whose ``PEP263_POLICY`` was switched back to ``"d2"``. The
+shipped policy itself is pinned, whatever the variable says, by
+``test_shipped_policy_*`` below.
 
 Checked here:
 
@@ -60,7 +63,7 @@ NAMES = json.loads(NAMES_PATH.read_text(encoding="utf-8"))
 VECTORS = DOC["vectors"]
 REFERENCE = DOC["reference_interpreter"]["version"]
 SHELL_ID = "SEC-PY_SUBPROCESS_SHELL"
-D2A = os.environ.get("FENDIX_PEP263_POLICY") == "d2a"
+D2A = os.environ.get("FENDIX_PEP263_POLICY") != "d2"
 
 
 def _ids(v: dict) -> str:
@@ -207,12 +210,14 @@ def _allowed(got: str, want: list) -> bool:
 
 
 def _d2_false_clean(v: dict) -> None:
-    """A taken-over, non-immune name is D2's documented false clean (OR-59):
-    recorded as an expected failure, never a pass, unless D2-A is asserted."""
+    """A taken-over, non-immune name was D2's documented false clean (OR-59).
+    Under the shipped D2-A it is a real assertion (OR-85); only when the
+    superseded D2 reading is asserted (FENDIX_PEP263_POLICY=d2) is it recorded
+    as an expected failure, never a pass."""
     if v.get("d2_documented_false_clean") and not D2A:
         pytest.xfail(
             f"D2_DOCUMENTED_FALSE_CLEAN (OR-59): {v['id']} is taken over at run time and CPython runs its hidden "
-            "program; D2 as written reads it clean. Asserted only with FENDIX_PEP263_POLICY=d2a"
+            "program; D2 as first approved reads it clean. Asserted under the shipped D2-A"
         )
 
 
@@ -271,3 +276,93 @@ def test_runtime_registered_codec_is_lost_evaluation() -> None:
     v = next(x for x in VECTORS if x["id"] == "custom-codec")
     got, _, incomplete = _python_engine(_files(v), v["target"], None)
     assert got == "lost", f"custom-codec: {got}; incomplete {incomplete}"
+
+
+# ---------------------------------------------------------------------------
+# The shipped policy (Release Closure Sprint, WS-C2: D2-A, owner ruling OR-85).
+# These do not read FENDIX_PEP263_POLICY: a tree left at "d2" cannot pass them.
+# ---------------------------------------------------------------------------
+
+_IMMUNE = [
+    "utf-8", "utf_8", "utf8", "UTF-8", "Utf-8", "UTF8", "utf-8-sig", "utf-8-x", "UTF-8-SIG",
+    "latin-1", "latin1", "latin_1", "iso-8859-1", "iso8859-1", "iso8859_1", "iso_8859_1", "iso_8859_1_1987",
+    "iso-latin-1", "latin-1-x", "LATIN-1", "Latin1", "ISO-8859-1", "ISO8859_1",
+    "ascii", "us-ascii", "us_ascii", "ASCII", "US-ASCII", "Us_Ascii",
+]  # fmt: skip
+_TAKEOVER_ABLE = [
+    "utf", "UTF", "u8", "U8", "cp65001", "latin", "l1", "8859", "cp819", "646", "us", "cp367", "iso8859", "ibm819",
+    "csisolatin1", "iso_ir_100", "ansi_x3.4_1968", "iso646_us", "utf8_ucs2",
+    "cp1252", "CP1252", "windows-1252", "cp1250", "cp1251", "cp437", "cp850", "koi8-r", "koi8_u", "mac_roman",
+    "iso8859_15", "iso-8859-15", "latin2", "latin9", "euc_jp", "euc_kr", "gb2312", "cp866", "tis_620",
+]  # fmt: skip
+
+
+def test_shipped_policy_is_d2a() -> None:
+    assert scope_evidence.PEP263_POLICY == "d2a"
+
+
+@pytest.mark.parametrize("name", _IMMUNE)
+def test_shipped_policy_keeps_an_immune_spelling_transparent(name: str) -> None:
+    got = scope_evidence.python_source_encoding(f"# coding: {name}\nx = 1\n".encode())
+    assert got.verdict == "transparent" and not got.lost, f"# coding: {name}: {got}"
+
+
+@pytest.mark.parametrize("name", _TAKEOVER_ABLE)
+def test_shipped_policy_reads_a_takeover_able_spelling_as_foreign(name: str) -> None:
+    got = scope_evidence.python_source_encoding(f"# coding: {name}\nx = 1\n".encode())
+    assert got.verdict == "foreign" and got.lost, f"# coding: {name}: {got}"
+
+
+def test_shipped_policy_matches_the_measured_immune_table() -> None:
+    immune = [r["name"] for r in NAMES["names"] if r.get("takeover_immune") is True]
+    assert len(immune) == 37, "the 37 spellings measured takeover-immune on CPython 3.14.5"
+    for r in NAMES["names"]:
+        data = f"# coding: {r['name']}\n".encode() + NAMES["body"].encode()
+        got = scope_evidence.python_source_encoding(data)
+        if r.get("takeover_immune") is True:
+            assert got.verdict == "transparent", r["name"]
+        elif r["verdict"] == "transparent":
+            assert got.verdict == "foreign" and got.lost, f"{r['name']}: {got}"
+
+
+def test_the_python_engine_still_decodes_a_takeover_able_file_it_cannot_trust_semgrep_with() -> None:
+    """Foreign is lost for Semgrep and secrets only: the Python engine decodes
+    the file with the codec CPython names and analyses it (D2-A keeps D2's
+    other clause)."""
+    body = b"import subprocess\nsubprocess.call(cmd, shell=True)\n"
+    got, findings, incomplete = _python_engine({"a.py": b"# coding: cp1252\n" + body}, "a.py", SHELL_ID)
+    assert got in ("finding", "decoded"), f"{got}; incomplete {incomplete}"
+
+
+# ---------------------------------------------------------------------------
+# Correction loop CL-2, finding A-2: a cookie naming one of CPython's non-text
+# transform codecs (hex, base64, zlib, uu, bz2, quopri, rot13, undefined and
+# their aliases) is refused by the registry, and the registry is what a module of
+# the scanned repository rewrites. It is lost evaluation like any other
+# non-immune cookie; only a refusal that does not go through the registry (a
+# byte-order mark beside another codec) stays a refusal.
+# ---------------------------------------------------------------------------
+
+REFUSED_ROWS = [r for r in NAMES["names"] if r["verdict"] == "refused"]
+
+
+def test_the_generated_table_has_66_refused_spellings() -> None:
+    assert len(REFUSED_ROWS) == 66
+
+
+@pytest.mark.parametrize("row", REFUSED_ROWS, ids=lambda r: r["name"])
+def test_a_refused_codec_spelling_is_lost_evaluation(row: dict) -> None:
+    got = scope_evidence.python_source_encoding(f"# coding: {row['name']}\n".encode() + NAMES["body"].encode())
+    assert got.lost, f"# coding: {row['name']}: {got}"
+
+
+@pytest.mark.parametrize("name", ["hex", "base64", "zlib", "uu", "bz2", "quopri", "quoted-printable", "rot13", "undefined", "zip"])
+def test_the_python_engine_records_a_refused_codec_file_as_lost(name: str) -> None:
+    got, _findings, incomplete = _python_engine({"n.py": f"# coding: {name}\nx = 1\n".encode()}, "n.py", None)
+    assert got == "lost", f"# coding: {name}: {got}; incomplete {incomplete}"
+
+
+def test_a_byte_order_mark_beside_another_codec_is_still_not_lost() -> None:
+    for cookie in ("latin-1", "cp1252", "utf-7", "hex"):
+        got = scope_evidence.python_source_encoding(b"\xef\xbb\xbf# coding: " + cookie.encode() + b"\nx = 1\n")
+        assert got.verdict == "refused" and not got.lost, f"BOM beside {cookie}: {got}"

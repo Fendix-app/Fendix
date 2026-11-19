@@ -110,6 +110,8 @@ func CleanText(s string) string {
 type names struct {
 	n   int
 	all []string
+	// once, when a kind records a file at most once (addOnce), holds what it has seen.
+	once map[string]struct{}
 }
 
 func (l *names) add(name string) {
@@ -117,6 +119,18 @@ func (l *names) add(name string) {
 	if len(l.all) < maxKept {
 		l.all = append(l.all, name)
 	}
+}
+
+// addOnce is add that records a name once: the same file reported again is not a second file.
+func (l *names) addOnce(name string) {
+	if _, dup := l.once[name]; dup {
+		return
+	}
+	if l.once == nil {
+		l.once = map[string]struct{}{}
+	}
+	l.once[name] = struct{}{}
+	l.add(name)
 }
 
 // first is at most k kept names, cleaned.
@@ -165,8 +179,11 @@ func (c *Coverage) NotText(rel string) { c.notText.add(rel) }
 func (c *Coverage) NotScanned(rel string) { c.notScanned.add(rel) }
 
 // NotParsed records an in-scope file the tool could not parse, or parsed in
-// part and skipped a line of code in (decision D1', C4B-27).
-func (c *Coverage) NotParsed(rel string) { c.notParsed.add(rel) }
+// part and skipped a line of code in (decision D1', C4B-27), or that the engine
+// itself cannot show Semgrep read as its program (a foreign source encoding, an
+// identifier spelled with a unicode escape). A file reported twice by those sources
+// is one file.
+func (c *Coverage) NotParsed(rel string) { c.notParsed.addOnce(rel) }
 
 // Exclude records a file or directory left unread as declared out of scope,
 // with the evidence that says so. A directory's rel ends in '/'.

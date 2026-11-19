@@ -7,9 +7,10 @@ package scope_test
 // takeover immunity on every transparent name, its prefix behaviour, and the
 // stream reader the secrets scan and Semgrep target selection use.
 //
-// The policy is compiled in (scope.codecPolicy, default D2). With
-// FENDIX_PEP263_POLICY=d2a these tests assert the D2-A readings, which holds
-// only in a tree whose constant was switched to PolicyD2A (the one-line change).
+// The policy is compiled in (scope.codecPolicy) and is the owner's D2-A (OR-85):
+// these tests assert the D2-A readings by default. FENDIX_PEP263_POLICY=d2
+// asserts the superseded D2 readings, which holds only in a tree whose constant
+// was switched back to PolicyD2.
 
 import (
 	"bytes"
@@ -134,7 +135,7 @@ func TestPythonSourcePredicateOnEveryCodecName(t *testing.T) {
 			got := scope.ClassifyPythonSource([]byte("# coding: "+n.Name+"\n"+tbl.Body), true)
 			wse1CheckPredicate(t, "# coding: "+n.Name, got, wse1PredicateAllowed(n.PredicateVerdicts, n.PredicateVerdictsUnderD2), n.Codec)
 			// The spelling's takeover immunity is measured per name, never listed.
-			if n.Verdict == "transparent" && n.TakeoverImmune != nil && !wse1PolicyD2A() && got.Verdict == scope.PyTransparent && got.Immune != *n.TakeoverImmune {
+			if n.Verdict == "transparent" && n.TakeoverImmune != nil && got.Verdict == scope.PyTransparent && got.Immune != *n.TakeoverImmune {
 				t.Errorf("# coding: %s: predicate Immune=%v, measured takeover immunity %v", n.Name, got.Immune, *n.TakeoverImmune)
 			}
 		})

@@ -348,6 +348,16 @@ func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule, cov *scope
 		cov.NotText(secrets.LostName(rel))
 		return nil
 	}
+	// A unicode escape the language translates before it reads the program
+	// (an identifier spelled `\u0065val` in JavaScript or TypeScript, R6-E7a) is
+	// invisible to every pattern here: the file is lost evaluation, under the
+	// existing "unreadable" reason with the cause after its name. It is still
+	// scanned, and what it holds in clear is reported.
+	// A file that cannot be read for the check (swapped for a pipe, grown past the cap)
+	// is lost too: EscapeLostPath never answers "no escape" for a file it did not read.
+	if why, lost := scope.EscapeLostPath(rel, path, textMaxFileBytes); lost {
+		cov.Unreadable(secrets.LostName(rel) + " (" + why + ")")
+	}
 	got, err := scanFile(rootDir, path, applicable)
 	if err != nil {
 		// What was read is kept; the rest of the file is lost evaluation.

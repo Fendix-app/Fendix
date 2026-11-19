@@ -16,9 +16,13 @@ package scope_test
 //   - a name only a run-time registration supplies: lost in every reader;
 //   - a file CPython refuses on every path: any outcome.
 //
-// "expect" is owner decision D2. Set FENDIX_PEP263_POLICY=d2a to assert the
-// corrected D2-A instead ("expect_under_d2a": only takeover-immune spellings
-// stay UTF-8-equivalent), which OWNER-DECISIONS §0.8 has not ruled yet.
+// The policy asserted is the owner's D2-A (OR-85: "implement the approved codec
+// policy"): "expect_under_d2a", under which only the takeover-immune spellings
+// stay UTF-8-equivalent and every other cookie is foreign. "expect" is D2 as
+// first approved, whose takeover vectors are a documented false clean; it is
+// asserted only when FENDIX_PEP263_POLICY=d2 is set, which holds only in a tree
+// whose codecPolicy constant was switched back to PolicyD2. The shipped policy
+// itself is pinned, whatever the variable says, by d2a_policy_test.go.
 //
 // A lost file still reports what it holds in clear (E1-B6), and a plain ok.py
 // beside each vector stays evaluated.
@@ -85,17 +89,18 @@ type wse1PepVector struct {
 	Expect              map[string][]string `json:"expect"`
 	ExpectUnderD2A      map[string][]string `json:"expect_under_d2a"`
 	// D2DocumentedFalseClean marks a taken-over, non-immune name: under D2 as
-	// written every reader evaluates a file whose program it cannot see. It is
-	// asserted (lost) only under D2-A (OR-59).
+	// first approved every reader evaluates a file whose program it cannot see.
+	// Under the shipped D2-A it is asserted lost (OR-59, OR-85).
 	D2DocumentedFalseClean bool `json:"d2_documented_false_clean"`
 }
 
 // skipD2FalseClean records a D2-documented false clean as what it is, never as
-// a pass, unless the tests assert D2-A.
+// a pass, when the tests are told to assert the superseded D2 reading
+// (FENDIX_PEP263_POLICY=d2); under the shipped D2-A nothing is skipped.
 func (v wse1PepVector) skipD2FalseClean(t *testing.T) {
 	t.Helper()
 	if v.D2DocumentedFalseClean && !wse1PolicyD2A() {
-		t.Skipf("D2_DOCUMENTED_FALSE_CLEAN (OR-59): %s is taken over at run time and CPython runs its hidden program; D2 as written reads it clean. Asserted only with FENDIX_PEP263_POLICY=d2a", v.ID)
+		t.Skipf("D2_DOCUMENTED_FALSE_CLEAN (OR-59): %s is taken over at run time and CPython runs its hidden program; D2 as first approved reads it clean. Asserted lost under the shipped D2-A", v.ID)
 	}
 }
 
@@ -149,8 +154,9 @@ func wse1LoadPEP263Vectors(t *testing.T) wse1PepVectors {
 	return doc
 }
 
-// wse1PolicyD2A reports whether the tests assert the corrected D2-A.
-func wse1PolicyD2A() bool { return os.Getenv("FENDIX_PEP263_POLICY") == "d2a" }
+// wse1PolicyD2A reports whether the tests assert the shipped D2-A (the default).
+// FENDIX_PEP263_POLICY=d2 asserts the superseded D2 reading instead.
+func wse1PolicyD2A() bool { return os.Getenv("FENDIX_PEP263_POLICY") != "d2" }
 
 func wse1Pick(expect, d2a map[string][]string) map[string][]string {
 	if wse1PolicyD2A() && d2a != nil {
@@ -545,7 +551,7 @@ func TestPEP263VectorsSecretsRetest(t *testing.T) {
 // wse1PayloadCredential is the credential the generator's payload holds
 // (gen_pep263_vectors.py SECRET); a vector's secret_in_bytes says whether its
 // target holds it in clear.
-const wse1PayloadCredential = "AKIAQWERTYUIOPASDFGH"
+const wse1PayloadCredential = "AKIA" + "QWERTYUIOPASDFGH"
 
 // The verify value search (search.go): for every vector whose program holds a
 // credential, the search finds it or says it could not search the file. A
