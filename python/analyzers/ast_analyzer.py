@@ -11,6 +11,8 @@ is not a Python stdlib dependency.
 from __future__ import annotations
 
 import ast
+import bisect
+import heapq
 import os
 import posixpath
 import re
@@ -25,11 +27,13 @@ from analyzers import status_detail
 from analyzers.interpreter import syntax_reason
 from analyzers.reaching_defs import ENTRY, ReachingDefs
 from analyzers.scope_evidence import (
+    JS_ESCAPE_UNREADABLE,
     SYMLINK_REASON,
     NotRegularFile,
     SourceWalk,
     UndecodableSource,
     is_regular_file,
+    js_identifier_escape,
     read_python_source,
     read_regular,
 )
@@ -112,6 +116,11 @@ _JS_PATTERNS: list[tuple[str, str, re.Pattern[str], str, str, str]] = [
     (
         "JS_EVAL",
         "Unsafe use of eval() in JavaScript",
+        # The raw-text form, and the FLOOR of the rule (OR-88): every line it
+        # matches is reported. `_analyze_js_heuristic` reads the file as tokens
+        # (`_js_eval_lines`, E-1) only to decide the GRADE: a call a complete
+        # reading puts in code keeps this HIGH/HIGH, every other match is reported
+        # at `_JS_EVAL_UNCONFIRMED_GRADE`.
         re.compile(r"\beval\s*\("),
         "HIGH",
         "HIGH",
@@ -201,6 +210,522 @@ def _js_template_only_constants(
                 return False
             checked = True
     return checked
+
+
+# ---------------------------------------------------------------------------
+# JS_EVAL: which `eval` sites are confirmed code (E-1, RC-9 (1a)+V2+E-1), and the
+# floor under it (OR-88)
+# ---------------------------------------------------------------------------
+#
+# The raw-text pattern in `_JS_PATTERNS` graded HIGH wherever `\beval\s*\(`
+# appeared, and the collapse let that HIGH vouch for another rule's finding on
+# the same line. `_js_eval_lines` reads the file as tokens instead, with the one
+# lexer this analyzer has (there is no other JS comment/string lexer in
+# `python/analyzers/`). It is a lexer, not a parser: it knows exactly enough to
+# tell code from comment, string, template text and regex literal, and to read
+# the few tokens around an `eval` identifier.
+#
+# THE FLOOR (OR-88, "the recognisers may lower a finding, never remove it"). The
+# tokenizer decides only the GRADE of a site, never whether it is reported.
+# Rounds 2 and 3 of independent verification each found shapes (an HTML-like
+# comment, a hashbang ended by U+2028, a division after a function or class
+# expression, a regex after `extends`, `default` or `for await`, `</`, JSX text
+# with an apostrophe, a URL or a backtick) that made it read executed code as
+# text and drop the call, where v3.7.0 reported every `eval(`. Shape-by-shape
+# fixes were not converging, so the rule is structural:
+#   * every line the v3.7.0 pattern `\beval\s*\(` matches is reported, always;
+#   * a call a COMPLETE reading puts in code is reported at HIGH/HIGH, which can
+#     corroborate textscan's finding on the same line (D20), exactly as before;
+#   * every other match a complete reading puts outside code is reported at
+#     `_JS_EVAL_UNCONFIRMED_GRADE` (MEDIUM/LOW): a WARN that earns no
+#     deterministic-detection delta and lends no confidence to any other finding.
+#     That covers a comment, a string, template or JSX text, a regex literal,
+#     `$eval` and `x.eval`;
+#   * when the tokenizer GIVES UP (no reading of the file completes, the readings
+#     outgrow their budget, or it crashes) it has decided nothing: every raw match is
+#     reported at HIGH/HIGH, as in rc.3 and v3.7.0. A budget an adversary can
+#     exhaust must not be a way to lower a BLOCK (rc.4 brief, "no unsafe reduction
+#     in BLOCK severity"), so a doubt reports.
+# A fooled tokenizer therefore yields a WARN, never a clean scan. The accepted
+# residual: crafted syntax that makes a COMPLETE reading wrong can lower a v3.7.0
+# BLOCK to a WARN.
+#
+# What it confirms (the approved reading, additions above the floor):
+#   * bare `eval(`, also `eval (x)`, `eval /* c */ (x)` and `eval` + newline + `(`;
+#   * `window.eval(`, `globalThis.eval(`, `self.eval(` and `global.eval(` (Node's
+#     global object; `global` is the one addition to the approved three, the
+#     same indirect eval in the runtime that has no `window`);
+#   * `eval?.(x)`;
+#   * the indirect forms `(0, eval)(x)` and `(eval)(x)`, also on a global's
+#     member: `(0, window.eval)(x)`;
+#   * an identifier written with unicode escapes that spells the name
+#     (`\u0065val(x)`), because the runtime reads it as `eval`.
+# The forms the old pattern never matched (the indirect and the optional-call
+# forms, a name split from its parenthesis, an escaped name) are reported only
+# when their argument is not a single constant string: that exemption sits on top
+# of the floor and never touches a site the old pattern matched.
+# What it does not confirm: the word inside a comment, a string, the text of a
+# template literal (code inside `${...}` IS code), a regex literal, the identifier
+# `$eval`, or `.eval` on any other object. Those are the demoted sites.
+#
+# It reads a file the way a script is read where two readings exist. When the
+# file cannot be read reliably (an unterminated comment or template, a closing
+# bracket nothing opened, brackets left open at the end, or a run of unmatched
+# `/` that would make the pass superlinear) the result is None and every match of
+# the raw pattern is demoted. A construct with two readings that put code on
+# different sides of a comment, string or regex (a `/` after `}`, `await`,
+# `yield`, `of` or a postfix `!`; `<!--` and `-->`, which are comments in a script
+# and code in a module) is followed both ways (`_js_eval_offsets`), and a call
+# either reading puts in code is confirmed.
+
+_JS_EVAL_GLOBALS = frozenset({"window", "globalThis", "self", "global"})
+# After these keywords an expression starts, so a following `/` opens a regex.
+_JS_EXPR_KEYWORDS = frozenset(
+    {
+        "return", "typeof", "instanceof", "in", "new", "delete", "void", "throw",
+        "case", "do", "else", "yield", "await", "extends", "default",
+    }
+)  # fmt: skip
+# `if (...)`, `while (...)`, `for (...)`: after the closing paren a statement
+# starts, so a following `/` opens a regex, not a division.
+_JS_CONTROL_KEYWORDS = frozenset({"if", "while", "for", "with", "switch", "catch"})
+# A `{` after one of these opens a block (a function body, a class body, an
+# `else` branch), not an object literal; so does a `{` after a plain name.
+_JS_BLOCK_BEFORE = frozenset({")", "=>", ";", "{", "}", "", "else", "do", "try", "finally"})
+
+# What ends a line, as `str.splitlines` counts it. Between `eval` and `(` the old
+# per-line pattern could only match white space on the same line.
+_JS_LINE_BREAKS = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+
+_JS_LEX = re.compile(
+    r"(?P<ws>\s+)"
+    r"|(?P<id>(?:[\w$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})+)"
+    r"|(?P<lc>//[^\n\u2028\u2029]*)"
+    r"|(?P<bc>/\*)"
+    r"|(?P<sl>/)"
+    # An unterminated string ends at the newline, as a syntax error would.
+    r"|(?P<str>'(?:[^'\\\n]+|\\[\s\S])*'?|\"(?:[^\"\\\n]+|\\[\s\S])*\"?)"
+    r"|(?P<tpl>`)"
+    r"|(?P<op>\?\.(?!\d)|=>|\+\+|--|\.\.\.|[(){}\[\],;])"
+    r"|(?P<other>[\s\S])"
+)
+# Text of a template literal up to its closing backtick or its next `${`.
+_JS_TEMPLATE_TEXT = re.compile(r"(?:[^`\\$]+|\\[\s\S]|\$(?!\{))*")
+# A regex literal: no newline, a `/` inside a character class does not end it.
+# Single-character alternatives only, so a failed attempt backtracks linearly.
+_JS_REGEX_LITERAL = re.compile(r"/(?:[^/\\\n\[]|\\[^\n]|\[(?:[^\]\\\n]|\\[^\n])*\])+/[A-Za-z]*")
+_JS_ID_ESCAPE = re.compile(r"\\u(?:\{([0-9A-Fa-f]+)\}|([0-9A-Fa-f]{4}))")
+
+
+def _js_unescape_identifier(text: str) -> str:
+    def one(m: re.Match[str]) -> str:
+        try:
+            return chr(int(m.group(1) or m.group(2), 16))
+        except (ValueError, OverflowError):
+            return "\ufffd"
+
+    return _JS_ID_ESCAPE.sub(one, text)
+
+
+def _js_template_text_end(source: str, pos: int) -> tuple[int, bool] | None:
+    """Past the text of a template literal that continues at `pos`: (index after
+    the closing backtick, False), or (index after a `${`, True) when an
+    expression starts. None when the template never ends."""
+    end = _JS_TEMPLATE_TEXT.match(source, pos).end()
+    if source.startswith("`", end):
+        return end + 1, False
+    if source.startswith("${", end):
+        return end + 2, True
+    return None
+
+
+def _js_value_token(tok: str) -> bool:
+    """True when the significant token `tok` (as `_js_eval_offsets` keeps it) ends
+    a value: a name that is not an expression keyword, a number, a string, a
+    template or regex literal, or a closing paren or bracket."""
+    if tok in (")", "]", "0", '"', "`", "/re/"):
+        return True
+    return bool(tok) and (tok[0].isalnum() or tok[0] in "_$") and tok not in _JS_EXPR_KEYWORDS
+
+
+class _JSLexState:
+    """One reading of a file in progress (`_js_eval_offsets`): where it is, the
+    paren and brace stacks, the three latest tokens, whether a `/` here starts a
+    regex, the pending `eval` call and the offsets found so far. `force` is the
+    reading to apply to the construct this state is stopped at."""
+
+    __slots__ = (
+        "i", "parens", "braces", "t1", "t2", "t3", "regex_ok", "pend", "pend_pos",
+        "pend_end", "pend_prev", "pend_escaped", "hits", "force",
+    )  # fmt: skip
+
+    def __init__(self, i: int = 0) -> None:
+        self.i = i
+        self.parens: list[str] = []  # "g" group, "c" call or declaration, "k" control
+        self.braces: list[str] = []  # "b" block, "e" object literal, "t" template expression
+        # The three latest significant tokens; a literal is its marker, never text a
+        # name could equal ('"', '`', '0', '/re/').
+        self.t1 = self.t2 = self.t3 = ""
+        self.regex_ok = True  # does a `/` here start a regex literal?
+        # 1 eval reference seen, 2 after `?.`, 3 after `)` of a group; 4 after the
+        # `(` of a call the old pattern did not match, 5 after that call's one string
+        # literal
+        self.pend = 0
+        self.pend_pos = 0
+        self.pend_end = 0
+        self.pend_prev = ""
+        self.pend_escaped = False
+        self.hits: set[int] = set()
+        self.force: str | None = None
+
+    def fork(self, force: str) -> _JSLexState:
+        other = _JSLexState(self.i)
+        other.parens = list(self.parens)
+        other.braces = list(self.braces)
+        other.t1, other.t2, other.t3 = self.t1, self.t2, self.t3
+        other.regex_ok = self.regex_ok
+        other.pend, other.pend_pos, other.pend_end = self.pend, self.pend_pos, self.pend_end
+        other.pend_prev, other.pend_escaped = self.pend_prev, self.pend_escaped
+        other.hits = set(self.hits)
+        other.force = force
+        return other
+
+    def key(self) -> tuple:
+        return (
+            self.i, tuple(self.parens), tuple(self.braces), self.t1, self.t2, self.t3,
+            self.regex_ok, self.pend, self.pend_pos, self.pend_end, self.pend_prev,
+            self.pend_escaped,
+        )  # fmt: skip
+
+
+def _js_line_end(source: str, pos: int) -> int:
+    """The offset of the first line terminator at or after `pos` (U+2028 and
+    U+2029 end a line as a line feed does), or the end of the source."""
+    ends = [k for k in (source.find("\n", pos), source.find("\u2028", pos), source.find("\u2029", pos)) if k >= 0]
+    return min(ends) if ends else len(source)
+
+
+def _js_lex_run(source: str, st: _JSLexState, shared: list[int]) -> str:
+    """Advance one reading to the end of the file ("done"), to a point it cannot
+    be read past ("dead": an unterminated comment or template, a bracket nothing
+    opened or left open), or to a construct with two readings ("fork": `st`
+    stops before it, `st.force` is None). A state with `st.force` set reads that
+    construct as told, then goes on."""
+    n = len(source)
+    match = _JS_LEX.match
+    i = st.i
+    parens, braces = st.parens, st.braces
+    t1, t2, t3 = st.t1, st.t2, st.t3
+    regex_ok = st.regex_ok
+    pend, pend_pos, pend_end = st.pend, st.pend_pos, st.pend_end
+    pend_prev, pend_escaped = st.pend_prev, st.pend_escaped
+    hits = st.hits
+    force, st.force = st.force, None
+
+    def stop(at: int, outcome: str) -> str:
+        st.i = at
+        st.t1, st.t2, st.t3 = t1, t2, t3
+        st.regex_ok = regex_ok
+        st.pend, st.pend_pos, st.pend_end = pend, pend_pos, pend_end
+        st.pend_prev, st.pend_escaped = pend_prev, pend_escaped
+        return outcome
+
+    while i < n:
+        m = match(source, i)
+        g = m.lastgroup
+        j = m.end()
+        if g == "ws" or g == "lc":
+            i = j
+            continue
+        if g == "bc":
+            close = source.find("*/", j)
+            if close < 0:
+                return stop(i, "dead")
+            i = close + 2
+            continue
+        start = i
+        i = j
+        new_ref = False
+        ref_prev = ""
+        closed = ""
+        escaped = False
+        if g == "id":
+            text = m.group()
+            if "\\" in text:
+                escaped = True
+                text = _js_unescape_identifier(text)
+            if text[0].isdigit():
+                tok = "0"
+                regex_ok = False
+            else:
+                tok = text
+                prop = t1 == "." or t1 == "?."
+                regex_ok = not prop and text in _JS_EXPR_KEYWORDS
+                if text == "eval":
+                    if not prop:
+                        new_ref, ref_prev = True, t1
+                    elif t2 in _JS_EVAL_GLOBALS and t3 != "." and t3 != "?.":
+                        new_ref, ref_prev = True, t3
+        elif g == "sl":
+            tok = "/"
+            regex_ok_next = True
+            # Where this `/` could be a regex start or a division and the tokens
+            # before it do not decide, both readings are followed (verifier A-1):
+            # a wrong reading can turn the code after it into regex or string text,
+            # and a real `eval(` into text. An offset is reported when either
+            # reading puts it in code.
+            #   * after `}`: a function, class or object expression is a value
+            #     (division), a block after a statement, a label or a `case` is
+            #     not (regex), and the token before it cannot tell which;
+            #   * after `await`, `yield` or `of`: a keyword or a name;
+            #   * after a postfix `!` (TypeScript's non-null assertion).
+            if source[start - 1 : start] != "<" and (
+                t1 == "}"
+                or (t1 in ("await", "yield", "of") and t2 != "." and t2 != "?.")
+                or (t1 == "!" and _js_value_token(t2))
+            ):
+                if force is None:
+                    return stop(start, "fork")
+                reading, force = force, None
+                if reading == "re":
+                    rx = _JS_REGEX_LITERAL.match(source, start)
+                    if rx is None:
+                        return stop(start, "dead")
+                    i = rx.end()
+                    tok = "/re/"
+                    regex_ok_next = False
+            # `</div>` and `</>`: a closing tag, not a regex.
+            elif regex_ok and source[start - 1 : start] != "<":
+                rx = _JS_REGEX_LITERAL.match(source, start)
+                if rx is not None:
+                    i = rx.end()
+                    tok = "/re/"
+                    regex_ok_next = False
+                else:
+                    nl = source.find("\n", start)
+                    shared[0] -= (n if nl < 0 else nl) - start
+                    if shared[0] < 0:
+                        return stop(start, "dead")
+            regex_ok = regex_ok_next
+        elif g == "str":
+            tok = '"'
+            regex_ok = False
+        elif g == "tpl":
+            end = _js_template_text_end(source, j)
+            if end is None:
+                return stop(start, "dead")
+            i, expr = end
+            if expr:
+                braces.append("t")
+                tok = "${"
+                regex_ok = True
+            else:
+                tok = "`"
+                regex_ok = False
+        elif g == "op":
+            tok = m.group()
+            if tok == "(":
+                if t1 == ")" or t1 == "]":
+                    kind = "c"
+                elif t1[:1].isalnum() or t1[:1] == "_" or t1[:1] == "$":
+                    named = t2 != "." and t2 != "?."
+                    if named and t1 in _JS_CONTROL_KEYWORDS:
+                        kind = "k"
+                    elif named and t1 == "await" and t2 == "for":
+                        kind = "k"  # `for await (...)`: a statement follows the paren
+                    elif named and t1 in _JS_EXPR_KEYWORDS:
+                        kind = "g"
+                    else:
+                        kind = "c"
+                elif t1 in ('"', "`", "/re/"):
+                    kind = "c"
+                else:
+                    kind = "g"
+                parens.append(kind)
+                regex_ok = True
+            elif tok == ")":
+                if not parens:
+                    return stop(start, "dead")
+                closed = parens.pop()
+                regex_ok = closed == "k"
+            elif tok == "{":
+                after_name = (
+                    (t1[:1].isalnum() or t1[:1] == "_" or t1[:1] == "$")
+                    and t1 not in _JS_EXPR_KEYWORDS
+                )
+                braces.append("b" if t1 in _JS_BLOCK_BEFORE or after_name else "e")
+                regex_ok = True
+            elif tok == "}":
+                if not braces:
+                    return stop(start, "dead")
+                kind = braces.pop()
+                if kind == "t":
+                    end = _js_template_text_end(source, j)
+                    if end is None:
+                        return stop(start, "dead")
+                    i, expr = end
+                    if expr:
+                        braces.append("t")
+                        tok = "${"
+                        regex_ok = True
+                    else:
+                        tok = "`"
+                        regex_ok = False
+                else:
+                    regex_ok = kind == "b"
+            elif tok == "]":
+                regex_ok = False
+            elif tok == "--" and source.startswith(">", i):
+                # `-->`: a line comment in a script, code in a module: both readings.
+                if force is None:
+                    return stop(start, "fork")
+                reading, force = force, None
+                if reading == "comment":
+                    i = _js_line_end(source, start)
+                    continue
+            elif tok == "++" or tok == "--":
+                pass  # postfix keeps "a value was just read"; prefix keeps "an operand is due"
+            else:
+                regex_ok = True
+        else:
+            tok = m.group()
+            if tok == "<" and source.startswith("!--", i):
+                # `<!--`: a line comment in a script, code in a module: both readings.
+                if force is None:
+                    return stop(start, "fork")
+                reading, force = force, None
+                if reading == "comment":
+                    i = _js_line_end(source, start)
+                    continue
+            regex_ok = True
+        if pend >= 4:
+            # The argument list of a call the old pattern never matched: exactly
+            # one string literal with no substitution is a constant, nothing
+            # to inject; every other shape is reported.
+            if pend == 4 and (tok == '"' or tok == "`"):
+                pend = 5
+            elif pend == 5 and tok == ")":
+                pend = 0
+            else:
+                hits.add(pend_pos)
+                pend = 0
+        elif pend:
+            if tok == "(":
+                gap = source[pend_end:start]
+                plain = not gap or (gap.isspace() and not any(c in gap for c in _JS_LINE_BREAKS))
+                if pend == 1 and not pend_escaped and plain:
+                    # `eval(` or `eval (` on one line, spelled plainly: what the
+                    # old pattern matched, reported whatever its argument.
+                    hits.add(pend_pos)
+                    pend = 0
+                else:
+                    pend = 4
+            elif tok == "?." and pend != 2:
+                pend = 2
+            elif tok == ")" and pend == 1 and closed == "g" and pend_prev in ("(", ","):
+                pend = 3
+            else:
+                pend = 0
+        if new_ref:
+            pend = 1
+            pend_pos = start
+            pend_end = i
+            pend_prev = ref_prev
+            pend_escaped = escaped
+        t3 = t2
+        t2 = t1
+        t1 = tok
+    return stop(n, "dead" if parens or braces else "done")
+
+
+# Most readings alive at once, most forks followed (the characters in the file
+# bound them), and most characters read across all readings (as a multiple of the
+# file's size) before the file is given up on: its sites are then all demoted.
+_JS_MAX_READINGS = 256
+_JS_MAX_FORKS_BASE = 4096  # forks followed: this many, plus one per 4 characters
+_JS_MAX_WORK_FACTOR = 16
+
+
+def _js_eval_offsets(source: str) -> list[int] | None:
+    """Offsets of every real `eval` identifier in call position, in order, or
+    None when no reading of the file is reliable (see the section comment).
+
+    Where a construct has two readings that put code on different sides of a
+    comment, string or regex (`_js_lex_run`), both are followed, as two states
+    that continue side by side and merge when they meet in the same state. A
+    reading that cannot be read to the end (an unbalanced bracket, an unterminated
+    comment) is dropped: a valid program is read correctly by one of the readings.
+    An offset found by any reading that completes is reported. When no reading
+    completes, or the readings outgrow their budget, the result is None."""
+    n = len(source)
+    root = _JSLexState()
+    if source.startswith("#!"):
+        # A hashbang is a comment to the end of its line, and U+2028 and U+2029
+        # end a line exactly as a line feed does (V8 reads them so).
+        root.i = _js_line_end(source, 0)
+    shared = [4 * n + 4096]  # work a failed regex attempt may cost in total
+    work_left = _JS_MAX_WORK_FACTOR * n + 65536
+    order = 0
+    heap: list[tuple[int, int, _JSLexState, bool]] = [(root.i, order, root, False)]
+    waiting: dict[tuple, _JSLexState] = {}
+    survivors: set[int] = set()
+    completed = False
+    forks = 0
+    while heap:
+        _pos, _o, st, stopped = heapq.heappop(heap)
+        if stopped:
+            # Every reading behind this construct has run to it: follow both.
+            forks += 1
+            if forks > _JS_MAX_FORKS_BASE + n // 4:
+                return None
+            waiting.pop(st.key(), None)
+            readings = ("comment", "code") if source.startswith(("<!--", "-->"), st.i) else ("div", "re")
+            for reading in readings:
+                if reading == "re" and _JS_REGEX_LITERAL.match(source, st.i) is None:
+                    continue
+                child = st.fork(reading)
+                order += 1
+                heapq.heappush(heap, (child.i, order, child, False))
+            continue
+        before = st.i
+        outcome = _js_lex_run(source, st, shared)
+        work_left -= max(st.i - before, 1)
+        if work_left < 0 or shared[0] < 0 or len(heap) > _JS_MAX_READINGS:
+            return None
+        if outcome == "done":
+            completed = True
+            survivors |= st.hits
+        elif outcome == "fork":
+            key = st.key()
+            twin = waiting.get(key)
+            if twin is not None:
+                twin.hits |= st.hits
+            else:
+                waiting[key] = st
+                order += 1
+                heapq.heappush(heap, (st.i, order, st, True))
+    return sorted(survivors) if completed else None
+
+
+def _js_eval_lines(source: str) -> set[int] | None:
+    """The 1-based lines (as `str.splitlines` numbers them, which is how the
+    analyzer walks a file) holding a real `eval` call, or None when the file
+    could not be read reliably, in which case no site is confirmed (every match of
+    the raw pattern is reported, demoted)."""
+    # Without the word or a unicode escape (`\u0065val`) there is nothing to find.
+    if "eval" not in source and "\\u" not in source:
+        return set()
+    offsets = _js_eval_offsets(source)
+    if offsets is None:
+        return None
+    if not offsets:
+        return set()
+    starts: list[int] = []
+    pos = 0
+    for piece in source.splitlines(keepends=True):
+        starts.append(pos)
+        pos += len(piece)
+    return {bisect.bisect_right(starts, offset) for offset in offsets}
 
 
 class AnalysisIncomplete(RuntimeError):
@@ -568,15 +1093,65 @@ class ASTAnalyzer:
             self._record_incomplete(rel, _os_error_reason(exc))
             return
 
+        # R6-E7a: an identifier spelled with a unicode escape is read by the runtime as the
+        # name it spells (an escaped eval is eval), but by every pattern below as written, so
+        # the file is lost evaluation, whatever the patterns report in it.
+        #
+        # A lexer that raises is lost evaluation too (WS-C2's give-up audit): it never
+        # aborts the file's analysis or the walk, and the file never reads as analysed.
+        try:
+            if js_identifier_escape(source, filepath.name).lost:
+                self._record_incomplete(rel, JS_ESCAPE_UNREADABLE)
+        except Exception as exc:  # noqa: BLE001 — never let one file abort the pass
+            print(
+                f"[fendix-engine] ast_analyzer: identifier-escape lexer failed on {rel}: "
+                f"{type(exc).__name__}",
+                file=sys.stderr,
+            )
+            self._record_incomplete(rel, _exc_reason(exc))
+
         lines = source.splitlines()
         # The module-level string constants of the file, read once: every
         # SQL-template line asks, and a megabyte of such lines (a minified or
         # generated file is scanned like any other, D5-2) would otherwise read
         # the whole file once per line.
         constants: set[str] | None = None
+        # The GRADE of a JS_EVAL site is decided on tokens, not on the line's text
+        # (E-1): the lines holding an `eval` call a complete reading puts in code,
+        # or None when the file cannot be tokenised reliably. Whether the site is
+        # reported is not: every line the raw pattern matches is (OR-88).
+        try:
+            eval_lines = _js_eval_lines(source)
+        except Exception as exc:  # noqa: BLE001 — the same guard as the escape lexer above
+            # No site is confirmed (every match of the raw pattern is reported,
+            # demoted) and the file is lost evaluation: its indirect forms were not read.
+            print(
+                f"[fendix-engine] ast_analyzer: eval tokenizer failed on {rel}: "
+                f"{type(exc).__name__}",
+                file=sys.stderr,
+            )
+            self._record_incomplete(rel, _exc_reason(exc))
+            eval_lines = None
         for lineno, line in enumerate(lines, start=1):
             for pat_id, title, pattern, severity, confidence, cwe in _JS_PATTERNS:
-                if pattern.search(line):
+                fix = _JS_FIX.get(pat_id, "Review and sanitize this usage.")
+                if pat_id == "JS_EVAL" and eval_lines is not None and lineno in eval_lines:
+                    found = True  # a complete reading puts the call in code: HIGH/HIGH
+                else:
+                    found = pattern.search(line) is not None
+                    if found and pat_id == "JS_EVAL" and eval_lines is not None:
+                        # The v3.7.0 pattern matches this line and a complete reading
+                        # of the file puts no call in code here (a comment, a string,
+                        # `x.eval(`): reported all the same, demoted (OR-88). When the
+                        # tokenizer gave up (`eval_lines` is None: no reading completes,
+                        # the budget is spent, or it crashed) it decided nothing, so the
+                        # match keeps the grade it always had, HIGH/HIGH: a doubt
+                        # reports, and a budget an adversary can exhaust is no way to
+                        # lower a BLOCK (rc.4 brief, "no unsafe reduction in BLOCK
+                        # severity").
+                        severity, confidence = _JS_EVAL_UNCONFIRMED_GRADE
+                        fix = _JS_EVAL_UNCONFIRMED_FIX + fix
+                if found:
                     if pat_id == "JS_SQL_TEMPLATE":
                         if constants is None:
                             constants = _js_module_string_constants(source)
@@ -597,9 +1172,7 @@ class ASTAnalyzer:
                             "category": "injection",
                             "endpoint": f"{rel}:{lineno}",
                             "evidence": line.strip()[:200],
-                            "fix": _JS_FIX.get(
-                                pat_id, "Review and sanitize this usage."
-                            ),
+                            "fix": fix,
                             "references": [cwe],
                             "confidence": confidence,
                             "line": f"{rel}:{lineno}",
@@ -607,7 +1180,37 @@ class ASTAnalyzer:
                     )
 
 
+# The `fix` prefix of a path-traversal finding LOWERED by a recognised containment
+# guard (OR-88): the finding is reported at WARN with the guard named.
+_PATH_GUARD_LOWERED = (
+    "A path-containment guard ({guards}) covers this path, so it is reported at WARN "
+    "rather than as a proven traversal: Fendix cannot show the guard holds on every "
+    "path to the sink (a rebound or patched helper, a root that is a symlink or a "
+    "parent of the base, or a check on a different value would defeat it). "
+)
+
 # Fixes for JS patterns
+#
+# `JS_EVAL` sites no complete reading of the file puts in code (a comment, a
+# string, template or JSX text, a regex literal, `$eval`, `x.eval`, or a file the
+# lexer could not read) are still reported (OR-88, "the recognisers may lower a
+# finding, never remove it"), at MEDIUM severity and LOW confidence. LOW is the
+# one confidence that WARNs under every `--fail-on` (the decision layer's
+# `held_confidence_low`), that the collapse's `strongestClaim` can never copy onto
+# another finding (it only adopts a HIGHER claim), and that cannot earn the
+# deterministic-detection delta; textscan's own grade for the same call, HIGH
+# severity at MEDIUM confidence, WARNs too but could lift a LOWER claim made by
+# another analyzer on the same line. A call a complete reading does put in code
+# keeps HIGH/HIGH and so still corroborates textscan's finding (D20). Id, rule_id,
+# title, category and references are the confirmed finding's, so a baseline entry
+# and a finding's identity do not move when a site changes grade.
+_JS_EVAL_UNCONFIRMED_GRADE = ("MEDIUM", "LOW")
+_JS_EVAL_UNCONFIRMED_FIX = (
+    "Fendix could not confirm this `eval(` is executed code (it may be the word in a "
+    "comment, a string, template or JSX text, or a regex literal, or the file could "
+    "not be read reliably), so it is reported at reduced confidence and does not "
+    "block on its own. "
+)
 _JS_FIX: dict[str, str] = {
     "JS_EVAL": (
         "Replace eval() with safer alternatives. Never pass user-controlled input to eval()."
@@ -773,6 +1376,12 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         self._lost_listed: list[str] = []
         self._lost_essential: list[str] = []
         self._definition_values_cache: dict[int, tuple[ast.AST, dict, dict, dict]] = {}
+        # OR-88: the path-containment recognisers may LOWER a finding, never remove
+        # it. `_guards_off` is non-zero while a sink is re-read as if no guard were
+        # recognised; `_guard_trace` lists the guards the recognisers accepted since
+        # `_path_traversal_report` last cleared it (`_note_guard`).
+        self._guards_off = 0
+        self._guard_trace: list[str] = []
         self._input_functions: dict[int, tuple[ast.AST, bool]] = {}
         self._ambiguity_names: dict[int, set[str]] = {}
         self._lost_overflow = 0
@@ -838,6 +1447,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # `from pickle import loads as pl; pl(x)` resolve back to os.system /
         # pickle.loads despite the call being a bare ast.Name (audit #8-13).
         self._from_imports: dict[str, tuple[str, str]] = {}
+        # The leading-dot count of each `from <module> import <name>` (0 for an
+        # absolute import), beside `_from_imports`, which keeps no level: the
+        # containment-helper lookup resolves a relative import against this
+        # file's package (`_g_absolute_module`).
+        self._from_import_levels: dict[str, int] = {}
         # Every `from <module> import *` in the file, as the module written
         # (a relative one keeps its leading dots), collected once from the
         # whole module on first need (`_star_import_modules`).
@@ -2599,6 +3213,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         *,
         aliases_are_sole: bool = True,
         file_sink: bool = True,
+        _use: ast.AST | None = None,
     ) -> bool:
         """Return True when `arg` cannot carry directory traversal into a
         filesystem sink, either because it was reduced to a bare filename or
@@ -2637,6 +3252,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 arg.id, sink_line, arg
             ):
                 return True
+            # RC-11 G: a recognised guard (a project helper, or an inline test,
+            # anywhere that dominates the sink) checks this name. `_use` is the
+            # name as the sink reads it, kept through the alias hops below.
+            if aliases_are_sole and self._g_name_is_guarded(arg.id, _use or arg):
+                return True
             for scope in reversed(self._scopes):
                 if arg.id in scope:
                     bound = scope[arg.id]
@@ -2649,7 +3269,11 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                         or self._is_sole_binding(arg.id, bound)
                     )
                     return self._path_is_contained(
-                        bound, sink_line, aliases_are_sole=sole, file_sink=file_sink
+                        bound,
+                        sink_line,
+                        aliases_are_sole=sole,
+                        file_sink=file_sink,
+                        _use=_use or arg,
                     )
         return False
 
@@ -3160,7 +3784,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         one definition of `name` that reaches it is the top-level
         `name = <resolved path>` (`_guard_covers(only=...)`), and every
         definition that reaches the use also reached the guard."""
-        if not self._func_stack:
+        if self._guards_off or not self._func_stack:
             return None
         bound = self._resolve_binding(ast.Name(id=name, ctx=ast.Load()))
         if bound is None or not self._is_resolved_path(bound):
@@ -3208,12 +3832,23 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 name, tested, use, (stmt.lineno, stmt.col_offset), only=resolved_def
             )
 
-        return self._dominating_exit_guard(
+        guard = self._dominating_exit_guard(
             sink_line,
             rejects_uncontained,
             before_sink="body_ends",
             try_pred=asserts_relative,
         )
+        # RC-11 G criterion 4 and the path-library check apply to this older
+        # recogniser too (verifier A-1, C-8): the root it accepts must be the base
+        # the path was joined from or one below it, never a parent or a sibling,
+        # and a module that patches `os.sep` and the like is not trusted.
+        if guard is not None and (self._g_patched() or not self._g_inline_root_ok(name, guard, bound)):
+            return None
+        if isinstance(guard, ast.If):
+            self._note_guard(guard.test)
+        elif guard is not None:
+            self._note_guard(guard, f"`relative_to` check on `{name}`")
+        return guard
 
     def _resolved_join_is_guarded(self, join: ast.Call) -> bool:
         """True when the `os.path.join(...)` sink `join` is resolved in place
@@ -3575,6 +4210,567 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
             return
         if inner is not None and self._is_os_path_call(inner, "join"):
             self._resolved_joins[inner] = node
+
+    # ─── RC-11 G: containment guards read by what they do ───────────────
+    #
+    # See the section "RC-11 G" above `_TEST_PATH_RE`. These methods find the
+    # guards that dominate a sink, read each one (a project helper's body, or an
+    # inline test), and check that it covers the value the sink receives.
+
+    def _g_reader(self, fn: ast.AST) -> _ContainmentReader:
+        cache = self.__dict__.setdefault("_g_reader_cache", {})
+        got = cache.get(id(fn))
+        if got is None or got[0] is not fn:
+            got = cache[id(fn)] = (fn, _ContainmentReader(self._callee_qualname, fn))
+        return got[1]
+
+    def _g_names(self) -> dict[str, str]:
+        names = getattr(self, "_g_module_names_cache", None)
+        if names is None:
+            names = _g_module_names(self._module_root) if self._module_root is not None else {}
+            self._g_module_names_cache = names
+        return names
+
+    def _g_patched(self) -> bool:
+        """True when this module patches the path libraries (`_g_patches_path_library`)."""
+        patched = getattr(self, "_g_patched_cache", None)
+        if patched is None:
+            patched = self._module_root is not None and _g_patches_path_library(
+                self._module_root, self._g_names()
+            )
+            self._g_patched_cache = patched
+        return patched
+
+    def _g_name_bound_once(self, name: str) -> bool:
+        """True when the module binds `name` exactly once anywhere (`_g_bindings`)
+        and no `from m import *` could bind it again: a star import binds names no
+        static read can list, wherever it sits (CL2-1, verifier x15)."""
+        cache = self.__dict__.setdefault("_g_bindings_cache", {})
+        if name not in cache:
+            cache[name] = (
+                self._module_root is not None
+                and _g_bindings(self._module_root, name) == 1
+                and not _g_has_star_import(self._module_root)
+            )
+        return cache[name]
+
+    def _g_locally_bound(self, name: str) -> bool:
+        """True when an enclosing function binds `name` (a parameter or a
+        store), so it is not the module-level function of that name."""
+        return any(
+            name in _param_names(f) or bool(_stores_of(f, name)) for f in self._func_stack
+        )
+
+    def _g_absolute_module(self, module: str, level: int) -> str:
+        """The dotted module an import names, resolved against this file's own
+        package when it is relative."""
+        if not level:
+            return module
+        package = self._module_dotted.split(".") if self._module_dotted else []
+        if not self._rel.replace("\\", "/").endswith("__init__.py"):
+            package = package[:-1]
+        if level > 1:
+            package = package[: max(len(package) - (level - 1), 0)]
+        if not package:
+            return module
+        return ".".join([*package, *([module] if module else [])])
+
+    def _g_function_of_call(
+        self, func: ast.AST
+    ) -> tuple[ast.FunctionDef, dict[str, str], bool] | None:
+        """The project function a call names, with the import table of its
+        module: a top-level def of this file, or one the call index finds in the
+        project module the file imports it from. None for anything else (a
+        library function, a method, a rebound name, a file that does not
+        parse)."""
+        root = self._module_root
+        if root is None:
+            return None
+        if isinstance(func, ast.Name):
+            name = func.id
+            if self._g_locally_bound(name) or not self._g_name_bound_once(name):
+                return None
+            if name in self._file_defined_names():
+                fdef = _g_unique_function(root, name)
+                return (fdef, self._g_names(), self._g_patched()) if fdef is not None else None
+            origin = self._from_imports.get(name)
+            if origin is None or self._call_index is None:
+                return None
+            module, symbol = origin
+            absolute = self._g_absolute_module(module, self._from_import_levels.get(name, 0))
+            return self._call_index.function_def(absolute, symbol) if absolute else None
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and self._call_index is not None
+        ):
+            head = func.value.id
+            if self._g_locally_bound(head) or not self._g_name_bound_once(head):
+                return None
+            module = self._imported_modules.get(head)
+            if module is not None:
+                return self._call_index.function_def(module, func.attr)
+            origin = self._from_imports.get(head)
+            if origin is not None:
+                base = self._g_absolute_module(origin[0], self._from_import_levels.get(head, 0))
+                return self._call_index.function_def(
+                    f"{base}.{origin[1]}" if base else origin[1], func.attr
+                )
+        return None
+
+    def _g_call_summary(self, call: ast.Call) -> tuple[str, int, int] | None:
+        """("bool"|"raises", root_param, target_param) when `call` names a
+        project helper whose body is a containment check, else None."""
+        found = self._g_function_of_call(call.func)
+        if found is None:
+            return None
+        fdef, names, patched = found
+        if patched:
+            return None  # the module holding the helper patches the path libraries
+        cache = self.__dict__.setdefault("_g_summary_cache", {})
+        got = cache.get(id(fdef))
+        if got is None or got[0] is not fdef:
+            got = cache[id(fdef)] = (fdef, _g_summarize_helper(fdef, names))
+        return got[1]
+
+    def _g_stmt_of(self, node: ast.AST) -> ast.stmt | None:
+        cur: ast.AST | None = node
+        while cur is not None and not isinstance(cur, ast.stmt):
+            cur = self._parent_of(cur)
+        return cur
+
+    def _g_guard_forms(self, stmt: ast.stmt) -> list[tuple[str, ast.AST, ast.stmt]]:
+        """The guards a statement can be: `if <test>: <exit>` with no `else`,
+        or a bare call (a helper that raises). An `assert` is not one: it is
+        gone under `python -O`."""
+        if isinstance(stmt, ast.If) and not stmt.orelse and self._body_ends_control_flow(stmt.body):
+            return [("if_exit", stmt.test, stmt)]
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+            return [("bare", stmt.value, stmt)]
+        return []
+
+    def _g_guards_before(
+        self, stmt: ast.stmt, fn: ast.AST
+    ) -> list[tuple[str, ast.AST, ast.stmt]]:
+        """The guards that dominate `stmt` on every path to it: the statements
+        before it in its block and in each enclosing block of the function, and
+        every enclosing `if` whose positive test is the containment. A guard in
+        a sibling branch, after the statement, or in a `try` body the statement
+        is not part of is never listed; neither is anything before a handler
+        or a `finally` block."""
+        found: list[tuple[str, ast.AST, ast.stmt]] = []
+        cur: ast.AST = stmt
+        while cur is not fn:
+            parent = self._parent_of(cur)
+            if parent is None:
+                return []
+            field = None
+            siblings: list | None = None
+            for name in ("body", "orelse", "finalbody", "handlers"):
+                lst = getattr(parent, name, None)
+                if isinstance(lst, list) and any(cur is s for s in lst):
+                    field, siblings = name, lst
+                    break
+            if siblings is not None and field in ("body", "orelse"):
+                for s in siblings[: next(i for i, x in enumerate(siblings) if x is cur)]:
+                    found.extend(self._g_guard_forms(s))
+            if isinstance(parent, ast.If) and field == "body":
+                found.append(("if_pos", parent.test, parent))
+            elif isinstance(parent, ast.If) and field == "orelse":
+                negated = _g_negated(parent.test)
+                if negated is not None:
+                    found.append(("if_pos", negated, parent))
+            cur = parent
+        return found
+
+    def _g_const_part(self, expr: ast.AST, reader: _ContainmentReader) -> bool:
+        """A join part that cannot leave the directory it is joined to: a
+        relative string constant without `..`, or a module-level name bound once
+        to one."""
+        if isinstance(expr, ast.Name) and expr.id not in reader.params:
+            if reader.stores_at_or_after(expr.id, 0):
+                return False
+            bound = self._module_binding(expr.id)
+            expr = bound if bound is not None else expr
+        return (
+            isinstance(expr, ast.Constant)
+            and isinstance(expr.value, str)
+            and bool(expr.value)
+            and not expr.value.startswith("/")
+            and ".." not in expr.value
+        )
+
+    def _g_narrower_root(self, reader: _ContainmentReader, root: ast.AST, base: str) -> bool:
+        """True when `root` is `join(<the base>, <relative constants>)`: a
+        directory below the base the path was joined from, so containment in it
+        implies containment in the base."""
+        e = root
+        for _ in range(3):
+            if isinstance(e, ast.Name) and e.id not in reader.params:
+                value = reader.sole(e.id)
+                if value is None:
+                    break
+                e = value
+            else:
+                break
+        inner = reader.strip_resolve(e)
+        e = inner if inner is not None else e
+        return (
+            isinstance(e, ast.Call)
+            and reader.qual(e.func) in ("os.path.join", "posixpath.join")
+            and len(e.args) >= 2
+            and not e.keywords
+            and all(self._g_const_part(a, reader) for a in e.args[1:])
+            and reader.canon(e.args[0]) == base
+        )
+
+    def _g_use_reads_local(self, name: str, use: ast.AST, fn: ast.AST) -> bool:
+        """True when the read of `name` at `use` is the function's own local
+        and not a name an inner lambda, def or comprehension rebinds (R-pf25b):
+        `(lambda full: open(full))(x)` reads its argument, not the checked path."""
+        cur = self._parent_of(use)
+        while cur is not None and cur is not fn:
+            if isinstance(cur, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
+                if name in _param_names(cur):
+                    return False
+                if not isinstance(cur, ast.Lambda) and _stores_of(cur, name):
+                    return False
+            elif isinstance(cur, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                if any(
+                    isinstance(n, ast.Name) and n.id == name
+                    for g in cur.generators
+                    for n in ast.walk(g.target)
+                ):
+                    return False
+            cur = self._parent_of(cur)
+        return cur is fn
+
+    def _g_value_of_name(
+        self, name: str, reader: _ContainmentReader, guard_line: int
+    ) -> ast.AST | None:
+        """The value a base `name` holds when the guard at `guard_line` runs: its
+        one assignment in the function (before the guard), or, for a name the
+        function never stores, the module's single binding of it. None for a
+        parameter, a name an enclosing function binds, or a name stored any other
+        way: the caller or another function may have chosen it."""
+        if name in reader.params:
+            return None
+        if reader.stores_at_or_after(name, 0):
+            value = reader.sole(name)
+            if value is None or reader.stores_at_or_after(name, guard_line):
+                return None
+            return value
+        for enclosing in self._func_stack:
+            if name in _param_names(enclosing) or (
+                enclosing is not reader.fn and _stores_of(enclosing, name)
+            ):
+                return None
+        return self._module_binding(name)
+
+    def _g_base_is_trusted(
+        self, expr: ast.AST, reader: _ContainmentReader, guard_line: int, _depth: int = 0
+    ) -> bool:
+        """True when `expr` is a base directory the code fixes: a string constant
+        narrower than the filesystem root, a configuration attribute of an
+        imported object (`settings.MEDIA_ROOT`), a call of a project function (a
+        per-tenant directory), or a join, resolution or `Path` of those with
+        relative constants, through names bound once. A parameter, an
+        environment read, a rebound or `global` name and anything else is not:
+        containment in a directory the caller or the environment picks bounds
+        nothing (RC-11 G keeps `_is_fixed_base`'s refusals)."""
+        if _depth > 4:
+            return False
+        inner = reader.strip_resolve(expr)
+        if inner is not None:
+            return self._g_base_is_trusted(inner, reader, guard_line, _depth + 1)
+        if isinstance(expr, ast.Constant):
+            return isinstance(expr.value, str) and _is_bounding_dir(expr.value)
+        if isinstance(expr, ast.Name):
+            value = self._g_value_of_name(expr.id, reader, guard_line)
+            return value is not None and self._g_base_is_trusted(
+                value, reader, guard_line, _depth + 1
+            )
+        if isinstance(expr, ast.Attribute):
+            parts = []
+            head: ast.AST = expr
+            while isinstance(head, ast.Attribute):
+                parts.append(head.attr)
+                head = head.value
+            return (
+                isinstance(head, ast.Name)
+                and (head.id in self._imported_modules or head.id in self._from_imports)
+                and not self._g_locally_bound(head.id)
+                and all(part.isupper() for part in parts)
+            )
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+            return self._g_base_is_trusted(
+                expr.left, reader, guard_line, _depth + 1
+            ) and self._g_const_part(expr.right, reader)
+        if isinstance(expr, ast.Call):
+            qual = reader.qual(expr.func)
+            if qual in ("os.path.join", "posixpath.join") and len(expr.args) >= 2 and not expr.keywords:
+                return self._g_base_is_trusted(
+                    expr.args[0], reader, guard_line, _depth + 1
+                ) and all(self._g_const_part(a, reader) for a in expr.args[1:])
+            if qual in _G_PATH_CTORS and len(expr.args) == 1 and not expr.keywords:
+                return self._g_base_is_trusted(expr.args[0], reader, guard_line, _depth + 1)
+            return self._g_function_of_call(expr.func) is not None
+        return False
+
+    def _g_const_str(
+        self, expr: ast.AST, reader: _ContainmentReader, guard_line: int, _depth: int = 0
+    ) -> str | None:
+        """The string a constant path expression holds, through names bound once,
+        resolvers and joins of constants; None when it is not one."""
+        if _depth > 4:
+            return None
+        inner = reader.strip_resolve(expr)
+        if inner is not None:
+            return self._g_const_str(inner, reader, guard_line, _depth + 1)
+        if isinstance(expr, ast.Constant):
+            return expr.value if isinstance(expr.value, str) else None
+        if isinstance(expr, ast.Name):
+            value = self._g_value_of_name(expr.id, reader, guard_line)
+            return None if value is None else self._g_const_str(value, reader, guard_line, _depth + 1)
+        if (
+            isinstance(expr, ast.Call)
+            and reader.qual(expr.func) in ("os.path.join", "posixpath.join")
+            and expr.args
+            and not expr.keywords
+        ):
+            parts = [self._g_const_str(a, reader, guard_line, _depth + 1) for a in expr.args]
+            return None if any(p is None for p in parts) else posixpath.join(*parts)
+        if (
+            isinstance(expr, ast.Call)
+            and reader.qual(expr.func) in _G_PATH_CTORS
+            and len(expr.args) == 1
+            and not expr.keywords
+        ):
+            return self._g_const_str(expr.args[0], reader, guard_line, _depth + 1)
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div):
+            left = self._g_const_str(expr.left, reader, guard_line, _depth + 1)
+            right = self._g_const_str(expr.right, reader, guard_line, _depth + 1)
+            return None if left is None or right is None else posixpath.join(left, right)
+        return None
+
+    def _g_root_within_base(
+        self, reader: _ContainmentReader, root: ast.AST, base: ast.AST, guard_line: int
+    ) -> bool:
+        """Criterion 4: the root a guard checks against is the base the path was
+        joined from, or a directory below it; never a parent or a sibling. Equal
+        or narrower by expression, or, when both are constants, by value after
+        normalisation (`/srv/uploads/` and `/srv/uploads/../uploads` are
+        `/srv/uploads`; `/srv` and `/srv/uploads2` are not within it)."""
+        base_canon = reader.canon(base)
+        if reader.canon(root) == base_canon or self._g_narrower_root(reader, root, base_canon):
+            return True
+        root_s = self._g_const_str(root, reader, guard_line)
+        base_s = self._g_const_str(base, reader, guard_line)
+        if root_s is None or base_s is None or not root_s.startswith("/") or not base_s.startswith("/"):
+            return False
+        root_n, base_n = posixpath.normpath(root_s), posixpath.normpath(base_s)
+        return root_n == base_n or root_n.startswith(base_n.rstrip("/") + "/")
+
+    def _g_guard_root(self, guard: ast.stmt, name: str) -> ast.AST | None:
+        """The root the guard `guard` (an `if` or a `try`) compares `name` with:
+        the shapes `_test_rejects_uncontained` and `_try_asserts_relative` accept."""
+        if isinstance(guard, ast.Try):
+            for s in guard.body:
+                if self._is_relative_to_call(s, name, guard.lineno):
+                    return s.value.args[0]
+            return None
+        test = guard.test
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            call = test.operand
+            if self._is_one_arg_method_call(call, name):
+                if call.func.attr == "startswith":
+                    return self._component_prefix_base(call.args[0])
+                if call.func.attr == "is_relative_to":
+                    return call.args[0]
+            return None
+        if isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.NotEq):
+            for common, base in ((test.left, test.comparators[0]), (test.comparators[0], test.left)):
+                if self._is_commonpath_with(common, name, base):
+                    return base
+        return None
+
+    def _g_inline_root_ok(self, name: str, guard: ast.stmt, bound: ast.AST) -> bool:
+        """The inline recogniser's guard (`_path_containment_guard`) must check
+        the root the resolved path `bound` was joined from, or one below it.
+        A path with no join base, or a guard shape this cannot read, is left to
+        the recogniser's own fixed-base rule."""
+        if not self._func_stack:
+            return True
+        reader = self._g_reader(self._func_stack[-1])
+        base = reader.join_base_node(bound)
+        if base is None:
+            return True
+        root = self._g_guard_root(guard, name)
+        if root is None:
+            return True
+        return self._g_root_within_base(reader, root, base, guard.lineno)
+
+    def _g_match(
+        self,
+        reader: _ContainmentReader,
+        root: ast.AST,
+        target: ast.AST,
+        guard: ast.stmt,
+        sink_value: ast.AST,
+    ) -> bool:
+        """True when a containment test of (`root`, `target`) at `guard` covers
+        `sink_value`: criteria 3, 4 and 5 of the "RC-11 G" section."""
+        line = guard.lineno
+        for expr in (root, target, sink_value):
+            for n in ast.walk(expr):
+                if isinstance(n, ast.Name) and reader.stores_at_or_after(n.id, line):
+                    return False  # rebound at or after the guard: same text, another value
+        if reader.canon(target) != reader.canon(sink_value):
+            return False
+        base = reader.join_base_node(sink_value)
+        if base is None:
+            return False
+        if not self._g_root_within_base(reader, root, base, line):
+            return False
+        if not self._g_base_is_trusted(root, reader, line):
+            return False
+        if _references_request_input(root):
+            return False
+        return self._collect_taint_chain(root, line, "containment root", sink_class="path") is None
+
+    def _note_guard(self, test: ast.AST, what: str = "") -> None:
+        """Remember that a recogniser accepted the guard whose test is `test` (OR-88),
+        so a sink it lets through can be reported at WARN, naming the guard."""
+        text = _ast_expr_text(test)
+        if len(text) > 100:
+            text = text[:97] + "..."
+        line = getattr(test, "lineno", 0)
+        note = f"`{text}`, line {line}" if not what else f"{what}, line {line}"
+        if note not in self._guard_trace:
+            self._guard_trace.append(note)
+
+    def _g_guard_covers(
+        self,
+        guard: tuple[str, ast.AST, ast.stmt],
+        reader: _ContainmentReader,
+        sink_value: ast.AST,
+    ) -> bool:
+        if self._guards_off:
+            return False  # OR-88: the sink is being re-read as if no guard were recognised
+        covers = self._g_guard_covers_value(guard, reader, sink_value)
+        if covers:
+            self._note_guard(guard[1])
+        return covers
+
+    def _g_guard_covers_value(
+        self,
+        guard: tuple[str, ast.AST, ast.stmt],
+        reader: _ContainmentReader,
+        sink_value: ast.AST,
+    ) -> bool:
+        if self._g_patched():
+            return False  # this module patches the path libraries
+        kind, test, stmt = guard
+        inner = test
+        if kind == "if_exit":
+            negated = _g_negated(test)
+            if negated is None:
+                return False
+            inner = negated
+        if isinstance(inner, ast.Call):
+            summary = self._g_call_summary(inner)
+            if summary is not None:
+                form, root_i, target_i = summary
+                if form != ("raises" if kind == "bare" else "bool"):
+                    return False  # the helper does not behave the way the call uses it
+                if (
+                    inner.keywords
+                    or any(isinstance(a, ast.Starred) for a in inner.args)
+                    or max(root_i, target_i) >= len(inner.args)
+                ):
+                    return False
+                return self._g_match(
+                    reader, inner.args[root_i], inner.args[target_i], stmt, sink_value
+                )
+        if kind == "bare":
+            return False
+        pair = reader.pair(inner)
+        return pair is not None and self._g_match(reader, pair[0], pair[1], stmt, sink_value)
+
+    def _g_name_is_guarded(self, name: str, use: ast.AST) -> bool:
+        """True when a guard recognised by `_g_guard_covers` dominates `use`, a
+        read of the local `name`, and checks `name`."""
+        if not self._func_stack:
+            return False
+        fn = self._func_stack[-1]
+        reader = self._g_reader(fn)
+        if name in reader.params or reader.sole(name) is None:
+            return False
+        stmt = self._g_stmt_of(use)
+        if stmt is None or not self._g_use_reads_local(name, use, fn):
+            return False
+        sink_value = ast.Name(id=name, ctx=ast.Load())
+        return any(
+            self._g_guard_covers(g, reader, sink_value) for g in self._g_guards_before(stmt, fn)
+        )
+
+    def _g_join_is_guarded(self, join: ast.Call) -> bool:
+        """True when the `os.path.join(...)` sink `join` is bound to a local
+        name and EVERY read of that name is behind a recognised guard (or is the
+        guard's own test), with at least one such guard. The join itself builds
+        a string; the traversal happens where the name is used, and a guard that
+        dominates each use makes the join safe, however the guards are nested."""
+        # `realpath(join(...))` and `Path(join(...)).resolve()` are the join's
+        # value once resolved in place (`_resolved_joins`): the name is bound to that.
+        value = self._resolved_joins.get(join, join)
+        parent = self._parent_of(value)
+        if not (
+            isinstance(parent, ast.Assign)
+            and parent.value is value
+            and len(parent.targets) == 1
+            and isinstance(parent.targets[0], ast.Name)
+            and self._func_stack
+        ):
+            return False
+        name = parent.targets[0].id
+        fn = self._func_stack[-1]
+        reader = self._g_reader(fn)
+        if name in reader.params or reader.sole(name) is not value:
+            return False
+        sink_value = ast.Name(id=name, ctx=ast.Load())
+        loads = [
+            n
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Name)
+            and n.id == name
+            and isinstance(n.ctx, ast.Load)
+            and self._g_use_reads_local(name, n, fn)
+        ]
+        if not loads:
+            return False
+        for use in loads:
+            stmt = self._g_stmt_of(use)
+            if stmt is None:
+                return False
+            if any(
+                self._g_guard_covers(g, reader, sink_value)
+                for g in self._g_guards_before(stmt, fn)
+            ):
+                continue
+            # A read inside the test of a covering guard is the check itself.
+            cur: ast.AST | None = stmt
+            inside = False
+            while cur is not None and cur is not fn and not inside:
+                if isinstance(cur, ast.stmt):
+                    inside = any(
+                        any(n is use for n in ast.walk(g[1]))
+                        and self._g_guard_covers(g, reader, sink_value)
+                        for g in self._g_guard_forms(cur)
+                    )
+                cur = self._parent_of(cur)
+            if not inside:
+                return False
+        return True
 
     def _has_dominating_exit_guard(
         self,
@@ -4421,91 +5617,46 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         #     correlator then escalates severity for the
         #     correlated-reachable case (TASK-114) and step 5.4
         #     escalates the non-correlated-reachable case (TASK-125).
-        elif self._is_path_traversal_sink(node):
-            chain = None
-            sink_expr = ""
-            sink_name = self._path_traversal_sink_name(node)
-            # The user-controlled arg is usually the FIRST positional
-            # except for os.path.join(base, x), where it's the second, and
-            # send_from_directory(dir, name), where only the directory can
-            # carry traversal (R-006). _path_traversal_target handles that.
-            target = self._path_traversal_target(node)
-            if target is not None:
-                sink_expr = f"{sink_name}({_ast_expr_text(target)})"
-                file_sink, target_lenient = self._path_sink_context(node, sink_name)
-                # A join whose request-carrying parts are contained is proven
-                # only through its other parts (R-006): `join(request.args["d"],
-                # basename(f))` by the directory. Each part is traced under the
-                # class its position allows: a basename-reduced caller value
-                # contains only the last part of a file path (`path`), never a
-                # directory or a middle part (`path_strict`, redteam-r006-01).
-                parts = self._path_join_parts(target)
-                if parts is None:
-                    chain = self._collect_taint_chain(
-                        target,
-                        node.lineno,
-                        sink_expr,
-                        sink_class="path" if target_lenient else "path_strict",
-                    )
-                else:
-                    for part, contained, lenient in self._join_part_statuses(
-                        parts, node.lineno, file_sink
-                    ):
-                        if contained:
-                            continue
-                        chain = self._collect_taint_chain(
-                            part,
-                            node.lineno,
-                            sink_expr,
-                            sink_class="path" if lenient else "path_strict",
-                        )
-                        if chain is not None:
-                            break
-            # `os.path.*` sinks (join/abspath/expanduser/expandvars) only
-            # become path-traversal vulns when the argument actually
-            # carries user input. They appear constantly in library code
-            # over fixed paths (e.g. `os.path.expanduser(fixed_param)`),
-            # so emitting on a bare non-constant argument generated noisy
-            # FPs on clean codebases like `psf/requests`. For the open()
-            # / Path() / send_file() family the conservative posture (emit
-            # on any non-constant arg) still holds — passing user input
-            # to those is suspicious enough to be worth flagging even
-            # without a proven taint flow.
-            if sink_name.startswith("os.path.") and chain is None:
-                pass
-            else:
-                # Two claims, two gradings. Without a chain, all Fendix has
-                # observed is that a NON-CONSTANT value reaches a filesystem
-                # API — it has not established that the value is externally
-                # controlled, and a dynamic path is not automatically a
-                # traversal. Saying "path traversal" there names a
-                # vulnerability class the evidence has not reached, so the
-                # unproven form says what was actually seen and stays MEDIUM,
-                # below the default --fail-on HIGH, i.e. non-blocking.
-                #
-                # With a chain, request data demonstrably reaches path
-                # construction past the recognised guards, and the finding
-                # takes the traversal wording and HIGH. The chain also ships as
-                # taint_chain, which the SARIF exporter renders as codeFlows —
-                # the same source→sink representation SSRF gets.
-                self._emit_finding(
-                    "PY_PATH_TRAVERSAL",
-                    "Potential unsafe dynamic filesystem path",
-                    "MEDIUM",
-                    "MEDIUM",
-                    "CWE-22",
-                    (
-                        "Validate the path against an allow-list of permitted filenames or a "
-                        "base directory. Use pathlib.Path.resolve() and confirm the resolved "
-                        "path is still under the intended root before opening. Reject any "
-                        "input containing '..' or absolute paths."
-                    ),
-                    node.lineno,
-                    taint_chain=chain,
-                    proven_title="Path traversal — user-controlled input reaches filesystem path",
-                    proven_severity="HIGH",
-                    sink=sink_expr,
-                )
+        elif (path_report := self._path_traversal_report(node)) is not None:
+            sink_expr, chain, guard_notes = path_report
+            # Two claims, two gradings. Without a chain, all Fendix has
+            # observed is that a NON-CONSTANT value reaches a filesystem
+            # API — it has not established that the value is externally
+            # controlled, and a dynamic path is not automatically a
+            # traversal. Saying "path traversal" there names a
+            # vulnerability class the evidence has not reached, so the
+            # unproven form says what was actually seen and stays MEDIUM,
+            # below the default --fail-on HIGH, i.e. non-blocking.
+            #
+            # With a chain, request data demonstrably reaches path
+            # construction past the recognised guards, and the finding
+            # takes the traversal wording and HIGH. The chain also ships as
+            # taint_chain, which the SARIF exporter renders as codeFlows —
+            # the same source→sink representation SSRF gets.
+            #
+            # OR-88: a sink a recognised containment guard covers is reported in
+            # the unproven form (a WARN), with the guard named, never removed.
+            fix = (
+                "Validate the path against an allow-list of permitted filenames or a "
+                "base directory. Use pathlib.Path.resolve() and confirm the resolved "
+                "path is still under the intended root before opening. Reject any "
+                "input containing '..' or absolute paths."
+            )
+            if guard_notes:
+                fix = _PATH_GUARD_LOWERED.format(guards="; ".join(guard_notes[:3])) + fix
+            self._emit_finding(
+                "PY_PATH_TRAVERSAL",
+                "Potential unsafe dynamic filesystem path",
+                "MEDIUM",
+                "MEDIUM",
+                "CWE-22",
+                fix,
+                node.lineno,
+                taint_chain=chain,
+                proven_title="Path traversal — user-controlled input reaches filesystem path",
+                proven_severity="HIGH",
+                sink=sink_expr,
+            )
 
         # LLM prompt-injection sink (Sanad A1/A2). An untrusted value reaching
         # an LLM chat-completion call / prompt arg is prompt injection. Request
@@ -5267,6 +6418,7 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         for alias in node.names:
             local_name = alias.asname or alias.name
             self._from_imports[local_name] = (module, alias.name)
+            self._from_import_levels[local_name] = node.level
         self.generic_visit(node)
 
     def visit_If(self, node: ast.If) -> None:  # noqa: N802
@@ -7983,6 +9135,92 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
                 return node.func.attr
         return ""
 
+    def _path_traversal_report(
+        self, node: ast.Call
+    ) -> tuple[str, list | None, list[str]] | None:
+        """`(sink_expr, chain, guards)` for the path-traversal finding to emit at
+        `node`, or None. `guards` is empty for a finding as the evidence stands, and
+        names the recognised containment guards when the finding is LOWERED (OR-88,
+        "the recognisers may lower a finding, never remove it"): a sink the
+        recognisers let through is re-read as if no guard were recognised, and when
+        that reading would report it, it is reported anyway, in the unproven form
+        (no taint chain, MEDIUM/MEDIUM, a WARN), naming the guards."""
+        self._guard_trace = []
+        report = self._path_traversal_evidence(node)
+        if report is not None:
+            return report[0], report[1], []
+        guards = list(self._guard_trace)
+        if not guards:
+            return None
+        self._guards_off += 1
+        try:
+            reread = self._path_traversal_evidence(node)
+        finally:
+            self._guards_off -= 1
+            self._guard_trace = guards
+        if reread is None:
+            return None
+        return reread[0], None, guards
+
+    def _path_traversal_evidence(self, node: ast.Call) -> tuple[str, list | None] | None:
+        """`(sink_expr, chain)` when `node` is a path-traversal sink to report: the
+        sink, the evidence that a request value reaches it (None when unproven), and
+        for an `os.path.*` sink only when there is such a chain."""
+        if not self._is_path_traversal_sink(node):
+            return None
+        chain = None
+        sink_expr = ""
+        sink_name = self._path_traversal_sink_name(node)
+        # The user-controlled arg is usually the FIRST positional
+        # except for os.path.join(base, x), where it's the second, and
+        # send_from_directory(dir, name), where only the directory can
+        # carry traversal (R-006). _path_traversal_target handles that.
+        target = self._path_traversal_target(node)
+        if target is not None:
+            sink_expr = f"{sink_name}({_ast_expr_text(target)})"
+            file_sink, target_lenient = self._path_sink_context(node, sink_name)
+            # A join whose request-carrying parts are contained is proven
+            # only through its other parts (R-006): `join(request.args["d"],
+            # basename(f))` by the directory. Each part is traced under the
+            # class its position allows: a basename-reduced caller value
+            # contains only the last part of a file path (`path`), never a
+            # directory or a middle part (`path_strict`, redteam-r006-01).
+            parts = self._path_join_parts(target)
+            if parts is None:
+                chain = self._collect_taint_chain(
+                    target,
+                    node.lineno,
+                    sink_expr,
+                    sink_class="path" if target_lenient else "path_strict",
+                )
+            else:
+                for part, contained, lenient in self._join_part_statuses(
+                    parts, node.lineno, file_sink
+                ):
+                    if contained:
+                        continue
+                    chain = self._collect_taint_chain(
+                        part,
+                        node.lineno,
+                        sink_expr,
+                        sink_class="path" if lenient else "path_strict",
+                    )
+                    if chain is not None:
+                        break
+        # `os.path.*` sinks (join/abspath/expanduser/expandvars) only
+        # become path-traversal vulns when the argument actually
+        # carries user input. They appear constantly in library code
+        # over fixed paths (e.g. `os.path.expanduser(fixed_param)`),
+        # so emitting on a bare non-constant argument generated noisy
+        # FPs on clean codebases like `psf/requests`. For the open()
+        # / Path() / send_file() family the conservative posture (emit
+        # on any non-constant arg) still holds — passing user input
+        # to those is suspicious enough to be worth flagging even
+        # without a proven taint flow.
+        if sink_name.startswith("os.path.") and chain is None:
+            return None
+        return sink_expr, chain
+
     def _is_path_traversal_sink(self, node: ast.Call) -> bool:
         """Return True if node is a path-handling sink with a non-literal path arg.
 
@@ -8012,7 +9250,9 @@ class _PythonSecurityVisitor(ast.NodeVisitor):
         # A join resolved in place and checked by a containment guard before
         # any use is safe; the guard sits below the join's line, so it could
         # never dominate the join itself (`_resolved_join_is_guarded`).
-        if sink_name == "os.path.join" and self._resolved_join_is_guarded(node):
+        if sink_name == "os.path.join" and (
+            self._resolved_join_is_guarded(node) or self._g_join_is_guarded(node)
+        ):
             return False
         target = self._path_traversal_target(node)
         if target is None:
@@ -9508,15 +10748,559 @@ def _loads_of(node: ast.AST, name: str) -> list[ast.Name]:
     ]
 
 
-# Path fragments that mark a file as test/fixture code (confidence demotion).
+# ---------------------------------------------------------------------------
+# RC-11 G: a containment guard recognised by what its body does
+# ---------------------------------------------------------------------------
+#
+# The recogniser in `_path_containment_guard` accepts one inline shape: a
+# top-level `name = realpath(...)` and a top-level `if commonpath(...)` against
+# a constant base. Correctly guarded code written any other way BLOCKed: a
+# project-local helper (`if not _path_is_within(root, target): return`), the
+# same guard inside a `try:` or a `with`, a base computed by a call or read from
+# settings. Approved G (decision package RC-11, "evidence-based guard
+# recognition") accepts those, and only on evidence; a name that merely sounds
+# like a guard proves nothing.
+#
+# A guard is recognised when ALL hold (the sink is the use being judged, `T` the
+# path it receives):
+#   1. The guard dominates the sink on every path to it: a statement of the
+#      same block, or of an enclosing block, before the statement holding the
+#      sink, or an enclosing `if` whose test is the containment. Never a guard
+#      in a sibling branch, after the sink, or in a `try` whose handler lets
+#      control continue.
+#   2. Its test is, or calls a project-local helper whose BODY is, a containment
+#      check: both sides resolved with `os.path.realpath` / `Path.resolve()`
+#      (never `abspath` or `normpath`: a symlink inside the base would pass) and
+#      compared by `commonpath(...) ==` the root, `startswith(root + os.sep)`,
+#      `is_relative_to(root)` or a `try: relative_to(root) / except ValueError`.
+#      A helper is a `bool` helper (`if not helper(...)`) or one that `raises`
+#      (a bare call); the call has to use it the way it behaves.
+#   3. The path it checks is the value that reaches the sink (the same value
+#      once single assignments and resolvers are looked through), and `T` is
+#      bound once and not rebound at or after the guard.
+#   4. The root it checks against is the base the path was joined from, or a
+#      directory below it (`join(base, "sub")`): containment in a narrower
+#      directory implies containment in the base.
+#   5. That root carries no request input.
+#
+# A helper in another module is read from the project call index. Whatever
+# cannot be read (a helper outside the project, a file that does not parse) is
+# not recognised, and the finding stays.
+
+_G_PATH_CTORS = frozenset({"pathlib.Path"})
+_G_RESOLVE_FUNCS = frozenset({"os.path.realpath", "posixpath.realpath"})
+
+
+def _g_module_names(tree: ast.Module) -> dict[str, str]:
+    """Local name -> dotted qualified name for the module-level imports of
+    `tree` (`import os.path as p` -> `p: os.path`, `from pathlib import Path`
+    -> `Path: pathlib.Path`). A name the module also defines or assigns is
+    dropped: it may not be the import."""
+    names: dict[str, str] = {}
+    other: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                local = alias.asname or alias.name.split(".")[0]
+                names[local] = alias.name if alias.asname else local
+        elif isinstance(stmt, ast.ImportFrom):
+            if stmt.level or not stmt.module:
+                continue
+            for alias in stmt.names:
+                names[alias.asname or alias.name] = f"{stmt.module}.{alias.name}"
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            other.add(stmt.name)
+        else:
+            for n in _same_scope_nodes(stmt):
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                    other.add(n.id)
+    return {k: v for k, v in names.items() if k not in other}
+
+
+def _g_qualified(expr: ast.AST, names: dict[str, str]) -> str:
+    """The dotted name a Name / Attribute chain stands for through `names`, or ""."""
+    parts: list[str] = []
+    while isinstance(expr, ast.Attribute):
+        parts.append(expr.attr)
+        expr = expr.value
+    if not isinstance(expr, ast.Name) or expr.id not in names:
+        return ""
+    return ".".join([names[expr.id], *reversed(parts)])
+
+
+def _g_is_sep(expr: ast.AST, qual) -> bool:
+    return (isinstance(expr, ast.Constant) and expr.value == "/") or (
+        isinstance(expr, (ast.Attribute, ast.Name)) and qual(expr) in ("os.sep", "os.path.sep")
+    )
+
+
+class _ContainmentReader:
+    """Reads containment expressions inside one function. `qual` maps a Name or
+    Attribute chain to its dotted name through the imports of the file the
+    function is in; `fn` is the function. Pure: it never touches the visitor."""
+
+    def __init__(self, qual, fn: ast.AST, *, allow_param_rebind: bool = False) -> None:
+        self.qual = qual
+        self.fn = fn
+        # A helper's `root = realpath(root)` rebinds a parameter once, straight
+        # line, before the test; the function under judgement never gets that
+        # leniency (a parameter is whatever the caller chose).
+        self.allow_param_rebind = allow_param_rebind
+        self._stores: dict[str, list[ast.Name]] = {}
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                self._stores.setdefault(n.id, []).append(n)
+        self._sole: dict[str, ast.AST | None] = {}
+        self.params: list[str] = []
+        args = getattr(fn, "args", None)
+        if args is not None:
+            self.params = [a.arg for a in (*args.posonlyargs, *args.args)]
+
+    # -- bindings -------------------------------------------------------
+    def stores_at_or_after(self, name: str, line: int) -> bool:
+        return any(n.lineno >= line for n in self._stores.get(name, ()))
+
+    def sole(self, name: str) -> ast.AST | None:
+        """The value of the one `name = value` statement of the function, or
+        None when the name is stored any other way or more than once."""
+        if name not in self._sole:
+            value = None
+            if len(self._stores.get(name, ())) == 1:
+                for st in ast.walk(self.fn):
+                    if (
+                        isinstance(st, ast.Assign)
+                        and len(st.targets) == 1
+                        and isinstance(st.targets[0], ast.Name)
+                        and st.targets[0].id == name
+                    ):
+                        value = st.value
+                        break
+            self._sole[name] = value
+        return self._sole[name]
+
+    # -- resolvers, bases, canonical forms ---------------------------------
+    def strip_resolve(self, e: ast.AST) -> ast.AST | None:
+        """`x` for `os.path.realpath(x)` or `Path(x).resolve()`, else None."""
+        if not isinstance(e, ast.Call) or e.keywords:
+            return None
+        if self.qual(e.func) in _G_RESOLVE_FUNCS and len(e.args) == 1:
+            return e.args[0]
+        f = e.func
+        if isinstance(f, ast.Attribute) and f.attr == "resolve" and not e.args:
+            v = f.value
+            if (
+                isinstance(v, ast.Call)
+                and self.qual(v.func) in _G_PATH_CTORS
+                and len(v.args) == 1
+                and not v.keywords
+            ):
+                return v.args[0]
+        return None
+
+    def canon(self, e: ast.AST | None, depth: int = 0) -> str:
+        """`ast.dump` of `e` with single assignments inlined (3 hops) and
+        resolver wrappers stripped."""
+        if e is None:
+            return ""
+        if depth > 3:
+            return ast.dump(e)
+        inner = self.strip_resolve(e)
+        if inner is not None:
+            return self.canon(inner, depth + 1)
+        if isinstance(e, ast.Name) and e.id not in self.params:
+            value = self.sole(e.id)
+            if value is not None:
+                return self.canon(value, depth + 1)
+        return ast.dump(e)
+
+    def join_base_node(self, e: ast.AST | None, depth: int = 0) -> ast.AST | None:
+        """The base expression `e` was joined from, when `e` (after inlining and
+        stripping resolvers) is `os.path.join(base, ...)`, `Path(base) / x` or
+        `Path(base).joinpath(x)`."""
+        if e is None or depth > 3:
+            return None
+        inner = self.strip_resolve(e)
+        if inner is not None:
+            return self.join_base_node(inner, depth + 1)
+        if isinstance(e, ast.Name) and e.id not in self.params:
+            value = self.sole(e.id)
+            return self.join_base_node(value, depth + 1) if value is not None else None
+        if isinstance(e, ast.Call):
+            if self.qual(e.func) in ("os.path.join", "posixpath.join") and len(e.args) >= 2:
+                return e.args[0]
+            if isinstance(e.func, ast.Attribute) and e.func.attr == "joinpath":
+                return e.func.value
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Div):
+            return e.left
+        return None
+
+    def join_base(self, e: ast.AST | None) -> str | None:
+        """The canonical form of the base `e` was joined from (`join_base_node`)."""
+        node = self.join_base_node(e)
+        return None if node is None else self.canon(node)
+
+    # -- containment tests --------------------------------------------------
+    def res(self, x: ast.AST, depth: int = 0) -> ast.AST | None:
+        """The unresolved value behind a symlink-resolved one: `x` itself
+        stripped of `realpath` / `.resolve()`, or the same through a name bound
+        once; None when `x` is not resolved."""
+        inner = self.strip_resolve(x)
+        if inner is not None:
+            return inner
+        if (
+            isinstance(x, ast.Name)
+            and depth < 3
+            and (x.id not in self.params or self.allow_param_rebind)
+        ):
+            value = self.sole(x.id)
+            if value is not None:
+                return self.res(value, depth + 1)
+        return None
+
+    def root_form(self, x: ast.AST) -> ast.AST:
+        r = self.res(x)
+        return r if r is not None else x
+
+    def same(self, a: ast.AST, b: ast.AST) -> bool:
+        return self.canon(a) == self.canon(b)
+
+    def _prefix_root(self, a: ast.AST) -> ast.AST | None:
+        """`R` for `R + os.sep`, `R + "/"` or `os.path.join(R, "")` (also through
+        a name bound once): a prefix that ends at a path component."""
+        if isinstance(a, ast.Name) and a.id not in self.params:
+            value = self.sole(a.id)
+            a = value if value is not None else a
+        if isinstance(a, ast.BinOp) and isinstance(a.op, ast.Add) and _g_is_sep(a.right, self.qual):
+            return self.root_form(a.left)
+        if (
+            isinstance(a, ast.Call)
+            and self.qual(a.func) in ("os.path.join", "posixpath.join")
+            and len(a.args) == 2
+            and not a.keywords
+            and isinstance(a.args[1], ast.Constant)
+            and a.args[1].value == ""
+        ):
+            return self.root_form(a.args[0])
+        return None
+
+    def pair(self, e: ast.AST) -> tuple[ast.AST, ast.AST] | None:
+        """(root, target) when `e` is True exactly when the symlink-resolved
+        target is under the root: separator-safe, both sides resolved (the root
+        may be raw, the target may not). The expressions are the unresolved
+        values. None otherwise."""
+        if isinstance(e, ast.BoolOp) and isinstance(e.op, ast.Or) and len(e.values) == 2:
+            # `t == r or t.startswith(r + os.sep)`
+            a, b = e.values
+            for eq, other in ((a, b), (b, a)):
+                if (
+                    isinstance(eq, ast.Compare)
+                    and len(eq.ops) == 1
+                    and isinstance(eq.ops[0], ast.Eq)
+                ):
+                    got = self.pair(other)
+                    if got is None:
+                        continue
+                    root, target = got
+                    left, right = eq.left, eq.comparators[0]
+                    for tt, rr in ((left, right), (right, left)):
+                        t_in = self.res(tt)
+                        if (
+                            t_in is not None
+                            and self.same(t_in, target)
+                            and self.same(self.root_form(rr), root)
+                        ):
+                            return root, target
+            return None
+        if isinstance(e, ast.BoolOp):
+            return None
+        if isinstance(e, ast.Compare) and len(e.ops) == 1 and isinstance(e.ops[0], ast.Eq):
+            for cp, base in ((e.left, e.comparators[0]), (e.comparators[0], e.left)):
+                if (
+                    isinstance(cp, ast.Call)
+                    and self.qual(cp.func) == "os.path.commonpath"
+                    and len(cp.args) == 1
+                    and not cp.keywords
+                    and isinstance(cp.args[0], (ast.List, ast.Tuple))
+                    and len(cp.args[0].elts) == 2
+                ):
+                    x1, x2 = cp.args[0].elts
+                    for r_el, t_el in ((x1, x2), (x2, x1)):
+                        t_in = self.res(t_el)
+                        if (
+                            t_in is not None
+                            and self.same(self.root_form(r_el), self.root_form(base))
+                            and not self.same(t_in, self.root_form(base))
+                        ):
+                            return self.root_form(base), t_in
+            return None
+        if (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Attribute)
+            and len(e.args) == 1
+            and not e.keywords
+            and not isinstance(e.args[0], ast.Starred)
+        ):
+            target = self.res(e.func.value)
+            if target is None:
+                return None
+            if e.func.attr == "startswith":
+                root = self._prefix_root(e.args[0])
+                return (root, target) if root is not None and not self.same(root, target) else None
+            if e.func.attr == "is_relative_to":
+                root = self.root_form(e.args[0])
+                return (root, target) if not self.same(root, target) else None
+        return None
+
+
+def _g_negated(e: ast.AST) -> ast.AST | None:
+    """The positive test behind `not X` or `a != b`."""
+    if isinstance(e, ast.UnaryOp) and isinstance(e.op, ast.Not):
+        return e.operand
+    if isinstance(e, ast.Compare) and len(e.ops) == 1 and isinstance(e.ops[0], ast.NotEq):
+        return ast.Compare(left=e.left, ops=[ast.Eq()], comparators=e.comparators)
+    return None
+
+
+def _g_param_index(reader: _ContainmentReader, e: ast.AST) -> int | None:
+    return reader.params.index(e.id) if isinstance(e, ast.Name) and e.id in reader.params else None
+
+
+def _g_summarize_helper(fdef: ast.AST, names: dict[str, str]) -> tuple[str, int, int] | None:
+    """What a helper's body establishes: ("bool"|"raises", root_param,
+    target_param), or None when it is not a containment check. "bool": the
+    helper returns True exactly when the resolved target is under the root.
+    "raises": it raises when it is not and returns nothing."""
+    if (
+        not isinstance(fdef, ast.FunctionDef)
+        or fdef.decorator_list
+        or fdef.args.vararg
+        or fdef.args.kwarg
+        or fdef.args.kwonlyargs
+        or any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(fdef))
+    ):
+        return None
+
+    def qual(e: ast.AST) -> str:
+        return _g_qualified(e, names)
+
+    # A parameter named like a name the module imports (`os`, `realpath`, `commonpath`)
+    # shadows it in the body, and its default or its argument can be anything: the body
+    # no longer says what it appears to say (CL2-1, verifier x10).
+    params = [a.arg for a in (*fdef.args.posonlyargs, *fdef.args.args, *fdef.args.kwonlyargs)]
+    if any(p in names for p in params):
+        return None
+    reader = _ContainmentReader(qual, fdef, allow_param_rebind=True)
+    body = [s for s in fdef.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
+
+    def indexed(pair: tuple[ast.AST, ast.AST] | None, form: str) -> tuple[str, int, int] | None:
+        if pair is None:
+            return None
+        root_i, target_i = _g_param_index(reader, pair[0]), _g_param_index(reader, pair[1])
+        if root_i is None or target_i is None or root_i == target_i:
+            return None
+        return form, root_i, target_i
+
+    original = body
+    # A `try` whose handlers only `return False` fails closed: transparent.
+    if (
+        len(body) == 1
+        and isinstance(body[0], ast.Try)
+        and body[0].handlers
+        and not body[0].orelse
+        and not body[0].finalbody
+        and all(
+            len(h.body) == 1
+            and isinstance(h.body[0], ast.Return)
+            and isinstance(h.body[0].value, ast.Constant)
+            and h.body[0].value.value is False
+            for h in body[0].handlers
+        )
+    ):
+        body = [s for s in body[0].body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
+    # Form A: straight-line assignments, then `return <containment>`.
+    if body and isinstance(body[-1], ast.Return) and body[-1].value is not None:
+        if all(isinstance(s, (ast.Assign, ast.Return)) for s in body):
+            got = indexed(reader.pair(body[-1].value), "bool")
+            if got is not None:
+                return got
+    # Form A2: `try: <target>.relative_to(<root>); return True / except ValueError: return False`.
+    if (
+        original
+        and isinstance(original[-1], ast.Try)
+        and all(isinstance(s, ast.Assign) for s in original[:-1])
+    ):
+        t = original[-1]
+        rel = [
+            s.value
+            for s in t.body
+            if isinstance(s, ast.Expr)
+            and isinstance(s.value, ast.Call)
+            and isinstance(s.value.func, ast.Attribute)
+            and s.value.func.attr == "relative_to"
+            and len(s.value.args) == 1
+            and not s.value.keywords
+        ]
+        returns_true = any(
+            isinstance(s, ast.Return) and isinstance(s.value, ast.Constant) and s.value.value is True
+            for s in t.body
+        )
+        falls_false = (
+            len(t.handlers) == 1
+            and isinstance(t.handlers[0].type, ast.Name)
+            and t.handlers[0].type.id == "ValueError"
+            and bool(t.handlers[0].body)
+            and all(
+                isinstance(s, ast.Return) and isinstance(s.value, ast.Constant) and s.value.value is False
+                for s in t.handlers[0].body
+            )
+        )
+        if rel and returns_true and falls_false:
+            call = rel[0]
+            target = reader.res(call.func.value)
+            root = reader.res(call.args[0])
+            if target is not None and root is not None:
+                got = indexed((root, target), "bool")
+                if got is not None:
+                    return got
+    # Form B: `if not <containment>: raise ...`; the function returns nothing.
+    if not any(isinstance(n, ast.Return) and n.value is not None for n in ast.walk(fdef)):
+        for i, s in enumerate(body):
+            if (
+                isinstance(s, ast.If)
+                and not s.orelse
+                and s.body
+                and isinstance(s.body[-1], ast.Raise)
+                and all(isinstance(p, ast.Assign) for p in body[:i])
+            ):
+                inner = _g_negated(s.test)
+                if inner is not None:
+                    got = indexed(reader.pair(inner), "raises")
+                    if got is not None:
+                        return got
+    return None
+
+
+_G_PATH_LIBRARIES = frozenset({"os", "posixpath", "ntpath", "genericpath", "pathlib"})
+
+
+def _g_has_star_import(tree: ast.Module) -> bool:
+    """True when the module has a `from m import *` anywhere: it can bind a helper's
+    name, or a library function the helper calls, to anything."""
+    return any(
+        isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names) for n in ast.walk(tree)
+    )
+
+
+def _g_bindings(tree: ast.Module, name: str) -> int:
+    """How many times the module binds `name` anywhere: an import, a def or
+    class, an assignment target of any shape (tuple unpacking, augmented, loop,
+    `with`, walrus), a `del`, an `except ... as`, a `global` or `nonlocal`
+    declaration, a pattern capture. Parameters are not counted: a function's
+    own parameter is checked at the call's scope (`_g_locally_bound`). A
+    helper name that is bound exactly once, by its import or its def, is the
+    one function that binding names."""
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
+                count += 1
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            count += node.name == name
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            count += sum(1 for a in node.names if (a.asname or a.name.split(".")[0]) == name)
+        elif isinstance(node, ast.ExceptHandler):
+            count += node.name == name
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            count += name in node.names
+        elif getattr(node, "rest", None) == name or (
+            type(node).__name__ in ("MatchAs", "MatchStar") and getattr(node, "name", None) == name
+        ):
+            count += 1
+    return count
+
+
+def _g_patches_path_library(tree: ast.Module, names: dict[str, str]) -> bool:
+    """True when the module assigns, deletes or `setattr`s an attribute of the
+    path libraries (`os.sep = ""`, `os.path.realpath = ...`, `os.path = ...`,
+    `pathlib.Path = ...`): the containment tests it holds then no longer mean
+    what they say, so none of them is trusted. `names` is the module's import
+    table (`_g_module_names`)."""
+
+    def library(expr: ast.AST) -> bool:
+        while isinstance(expr, ast.Attribute):
+            expr = expr.value
+        return isinstance(expr, ast.Name) and names.get(expr.id, "").split(".")[0] in _G_PATH_LIBRARIES
+
+    def targets(node: ast.AST):
+        if isinstance(node, ast.Assign) or isinstance(node, ast.Delete):
+            yield from node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            yield node.target
+
+    for node in ast.walk(tree):
+        for t in targets(node):
+            stack = [t]
+            while stack:
+                cur = stack.pop()
+                if isinstance(cur, (ast.Tuple, ast.List)):
+                    stack.extend(cur.elts)
+                elif isinstance(cur, ast.Starred):
+                    stack.append(cur.value)
+                elif isinstance(cur, ast.Attribute) and library(cur):
+                    return True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("setattr", "delattr")
+            and node.args
+            and library(node.args[0])
+        ):
+            return True
+    return False
+
+
+def _g_unique_function(tree: ast.Module, name: str) -> ast.FunctionDef | None:
+    """The top-level `def name` of `tree` when it is the module's only binding of it."""
+    found = None
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef) and stmt.name == name:
+            if found is not None:
+                return None
+            found = stmt
+    if found is None:
+        return None
+    for stmt in tree.body:
+        if stmt is found:
+            continue
+        for n in _same_scope_nodes(stmt):
+            if _binds_name(n, name):
+                return None
+    return found
+
+
+# Path fragments that mark a file as test/fixture code (confidence demotion, and
+# "test code is never a caller" for the call index). The Go twin is
+# `models.testPathRe` (go/internal/models/testpath.go): the two are one
+# expression and change together. `tests/test_rc10_test_paths.py` reads the Go
+# source and fails when they differ, and both sides answer the vectors in
+# `tests/fixtures/test_path_vectors.json`.
+#
+# The first line is the Python conventions. The rest is RC-10 (a): the other
+# ecosystems' conventions, so JS, TS, Go, Java and Ruby test code is not read as
+# production. Only the directory names apply to a `.py` file, but the set is the
+# same on both sides.
 _TEST_PATH_RE = re.compile(
-    r"(^|/)(tests?|testing|conftest)([_/.]|$)|(^|/)test_[^/]*\.py$|_test\.py$|/fixtures?/",
+    r"(^|/)(tests?|testing|conftest)([_/.]|$)|(^|/)test_[^/]*\.py$|_test\.py$|/fixtures?/"
+    r"|(^|/)(fixtures?|__tests__|__mocks__|__fixtures__|mocks?|specs?|e2e|cypress|testdata|test-?utils?|testutils)(/|$)"
+    r"|\.(test|spec|cy|e2e)\.[cm]?[jt]sx?$|_test\.go$|_spec\.rb$|_test\.rb$"
+    r"|(^|/)[^/]*(Test|Tests|IT|ITCase)\.(java|kt|scala|groovy)$|(^|/)Test[A-Z][^/]*\.(java|kt)$",
 )
 
 
 def _is_test_path(rel_path: str) -> bool:
     """True if `rel_path` looks like test / fixture code, per common layout
-    conventions (tests/ dir, test_*.py, *_test.py, conftest.py, fixtures/)."""
+    conventions (tests/ dir, test_*.py, *_test.py, conftest.py, fixtures/, and
+    the JS/TS, Go, Ruby and JVM conventions of `_TEST_PATH_RE`)."""
     return bool(_TEST_PATH_RE.search(rel_path.replace("\\", "/")))
 
 

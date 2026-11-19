@@ -87,6 +87,10 @@ from analyzers.ast_analyzer import (
     _call_argument,
     _dotted,
     _file_visitor,
+    _g_module_names,
+    _g_has_star_import,
+    _g_patches_path_library,
+    _g_unique_function,
     _is_test_path,
     _ProjectMentions,
     _PythonSecurityVisitor,
@@ -110,6 +114,10 @@ _PARSE_CACHE_MAX_BYTES = 256 * 1024
 # for the next one, least recently used out first; the latest is always kept.
 # A query stops at the first proving caller, so few are needed.
 _CALLER_CACHE_MAX_BYTES = 256 * 1024
+
+# Total source size of the project modules `function_def` keeps parsed, least
+# recently used out first: the modules a containment helper is read from.
+_HELPER_CACHE_MAX_BYTES = 256 * 1024
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
@@ -208,6 +216,14 @@ class ProjectCallIndex:
         # it after its walk and reports the lost cross-file evaluation
         # (`ast_analyzer.AnalysisIncomplete`, redteam-py-01).
         self.incomplete: list[tuple[str, str]] = []
+        # dotted module -> its file (None when two files claim the name), for
+        # `function_def`, and the parsed modules it has read, least recently
+        # used first: (module tree, its import table, source size).
+        self._module_paths: dict[str, Path | None] = {}
+        self._helper_modules: OrderedDict[
+            Path, tuple[ast.Module, dict[str, str], int, bool] | None
+        ] = OrderedDict()
+        self._helper_bytes = 0
         # The project's files (`_ProjectMentions`), for an allowlist another
         # file may change, judged by the caller visitors (`_caller`); set by
         # `build`.
@@ -234,8 +250,11 @@ class ProjectCallIndex:
         index = cls(route_table, root)
         files = list(_python_files(index._root, walk))
         index.project_mentions = _ProjectMentions(files)
-        for _path, rel in files:
-            index._learn_module(index.module_of(rel))
+        for path, rel in files:
+            module = index.module_of(rel)
+            index._learn_module(module)
+            if module:
+                index._module_paths[module] = None if module in index._module_paths else path
         index._learn_key_prefixes()
         handler_files = index._handler_files(rel for _path, rel in files)
         for path, rel in files:
@@ -291,6 +310,66 @@ class ProjectCallIndex:
             if any(".".join(parts[k:]) in view_modules for k in range(len(parts))):
                 found.add(rel)
         return found
+
+    def function_def(
+        self, module: str, name: str
+    ) -> tuple[ast.FunctionDef, dict[str, str], bool] | None:
+        """The top-level `def name` of the project module `module`, that
+        module's import table (`_g_module_names`) and whether the module patches
+        the path libraries (`_g_patches_path_library`) or holds a star import
+        (`_g_has_star_import`), or None: the module is not
+        one of the project's (or two files claim the name), the file cannot be
+        read or parsed, or `name` is not bound exactly once, by a def. The
+        analyzer reads a containment helper's body from it (RC-11 G); nothing
+        else asks. The module is the dotted name as imported; like
+        `tainted_args`, it also matches a suffix of exactly one scanned module
+        with at least two components."""
+        path = self._module_paths.get(module)
+        if path is None and module not in self._module_paths and "." in module:
+            if self._suffix_owners.get(module) == 1:
+                owners = [m for m in self._module_paths if m.endswith("." + module)]
+                if len(owners) == 1:
+                    path = self._module_paths[owners[0]]
+        if path is None:
+            return None
+        entry = self._helper_modules.get(path, False)
+        if entry is False:
+            entry = self._read_helper_module(path)
+        else:
+            self._helper_modules.move_to_end(path)
+        if entry is None:
+            return None
+        tree, names, _size, patched = entry
+        fdef = _g_unique_function(tree, name)
+        return (fdef, names, patched) if fdef is not None else None
+
+    def _read_helper_module(self, path: Path):
+        """Parse the project module at `path` for `function_def`; None when it
+        cannot be read or parsed. Kept up to `_HELPER_CACHE_MAX_BYTES`."""
+        entry = None
+        try:
+            if path.stat().st_size <= _MAX_FILE_BYTES:
+                source = _read_python_source(path)
+                tree = ast.parse(source, filename=str(path))
+                names = _g_module_names(tree)
+                # "patched": the module's names cannot be taken at face value, because it
+                # patches the path libraries or a star import can rebind any of them.
+                entry = (
+                    tree,
+                    names,
+                    len(source),
+                    _g_patches_path_library(tree, names) or _g_has_star_import(tree),
+                )
+        except (OSError, SyntaxError, ValueError, RecursionError, MemoryError):
+            entry = None
+        self._helper_modules[path] = entry
+        if entry is not None:
+            self._helper_bytes += entry[2]
+        while self._helper_bytes > _HELPER_CACHE_MAX_BYTES and len(self._helper_modules) > 1:
+            _old, dropped = self._helper_modules.popitem(last=False)
+            if dropped is not None:
+                self._helper_bytes -= dropped[2]
+        return entry
 
     def _is_project_module(self, module: str) -> bool:
         """True when a query can reach call sites keyed by `module`: a scanned

@@ -1,0 +1,491 @@
+{
+ "v8_fuzz_misses": [
+  {
+   "name": "p1707.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\neval(code);\n// y\nif (a) /(a|b)*$/.test(b);\n// y\nvar b/* c */= (x)=>{ return void ff(3.5) };\n// y\nswitch (1) {\rcase 1: {\ntry { a='(' \n/* x */\n\nvoid eval(code);\n(function(){ a=d + +d \n })(); } catch (e) { do { function g29(){// c \u2028a=[1e3,'{']; }\r/a\\/b/i.test(a);\r\n} while (0);\nswitch (1) { case 1: { <!-- html comment;\n\n{ a=2;\r\na=(function(){}\u2028/ 1);\r\na=ff('}'); } } /ab+c/g.test(a); case 2: while (0) a=!0; default: { class C84 { m() { a=d > / /;\n/* x */\na=/(a|b)*$/;\n/* x */\na=(function(){ return \"/re/\" })(); } static { a=d / a;\ra=`}`; } get x() {// c\na=c < c;\n/* x */\na=void 3.5; } }\n/[/*]/.test(a);\n} }\t}\tfinally {/*\r*/var k28 = function(){ class C44 { m() { a=[/ /,/\\u{41}/u][0];\n// y\na=[/\\)/,/'/][0]; } static {\ta=/\"/; } get x() { a=`//`;\u2028a=(class{}\n/ 3.5);\u2028a=(function(){ return 10 })(); } }\n/ab+c/g.test(a); } / 0;\r/\\u{41}/u.test(a);\u2028} } /a\\/b/i.test(a); case 2:\r\nswitch (1) { case 1: {\r\nif (a) {\r\n{/* c */eval(code);;\na=(function(){} / 0x1f);;\na=c && /[\\u0041-\\u0043]/.test(a);;\na=a + +a; }\u2028while (0)\u2029a=b && /\\//.test(a); } /\\//.test(b);\n/* x */\nfunction g23(){/* a\nb */do// c \u2028{\u2028a=d++ / 2;\na=void\t'('; }\u2028while (0); }\n/* x */\n/a\\/b/i.test(a); } /\"/.test(a);// c\rcase 2: b++// c \u2028/\u20281e3; default: { while (0) /* c */;\n } } default: {// c\rswitch (1) { case 1:\r{ var b = e && /[(]/.test(a); }// c\r/[`]/.test(a); case 2: L20:/* a\nb */if (1)/*\r*/a=typeof\r\nd \n// y\n// c\ndefault: {\r\n(()=>// c\n{// c \u2028var s8=`t`; })();\n/* x */\nfunction g78(){ class C23 { m() {/*\r*/a=(function(){ return \"/*\" })();\ra=!b;\r} static { a=()=>c;\n// y\na=(class{} /\r1);\u2029} get x() {// c\na=void 10;\na=()=>'/';\na=typeof c;// c\r} }\n/'/.test(a);\u2029}\u2028/\\{/.test(a);\n/* x */\ntry { void eval(code);\n/* x */\n/* \n */\n\n/* x */\nswitch (1) { case 1: {/* c */a=(0 ? '/' : 1);\ra=typeof a; } /'/.test(a);\u2028case 2: a=c / a; default: { a=(0)\r\n/ 3.5;\n/* x */\na=('{') / 3.5;\n/* x */\na=({a:10}); } } } catch (e)\r\n{ while (0);// c\r/\\//.test(a) }\u2028finally\r\n{ do {\ta=`\\${x}`;\na=[c,\"`\"];/* c */} while (0); } }\r\n}\n/* x */\nwhile (0); /ab+c/g.test(a)\n/* x */\nfor (var i=0;i<1;i++)/*\r*/if (a) /}/.test(b);/* a\nb */} }\n",
+   "real_calls": [
+    3,
+    14,
+    47,
+    95
+   ]
+  },
+  {
+   "name": "p1860.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar s86=`/*`;\nvar s61=`a b`;\n/`/.test(a);\ntry {/* c */a=/{/ \n/* x */\n } catch (e) { // c\u2028 }\nfinally// c \u2028{ if (1) switch (1) {/* a\nb */case 1: { var k86 = function(){ a=ff(c);// c\n} / 0;;\neval(code) ; } /[`]/.test(a); case 2: if (a) /[^\"']/.test(b); default:\n{ if (a) {// c\ra=(function(){ return '/' })();\na=/ /;\na=10; } / /.test(b); } } else\r\n-->\n\n/* x */\n{ L21: {\r\nfunction g69(){ a=(c ? b : a); };\n/[(]/.test(a);\u2028({a:/ab+c/g});\u2028eval(code); }\n// y\n(function(){ var s70=`a b${e// c \u2028/ e}x`; })();\n// y\nfunction g8(){ for (var i=0;i<1;i++) a=a &&\r\n/[^\"']/.test(a); }\n// y\n/\\//.test(a);\t}\n/* x */\nfor (var i=0;i<1;i++) if (a) /{/.test(b);/* c */}\nfunction g31(){ { function g29(){ o.if(({a:\"/re/\"})); }\n/[`]/.test(a); } }\n/* x */\n/\\u0041/.test(a);\neval(code);\n",
+   "real_calls": [
+    14,
+    26,
+    41
+   ]
+  },
+  {
+   "name": "p2815.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nif (1) { while (0) for (var i=0;i<1;i++)\r\na=('\\'') / 2;/* a\nb */} else// c\r{ switch (1) { case 1:\r{ /{/.test(a);\r\neval(code) ; } /[/]/.test(a); case 2:// c\r(function(){// c\na=!0;// c \u2028})(); default:\u2029{ function g82(){ a=a > /`/; }\r\n/\"/.test(a);\n// y\n(()=>/* a\nb */{// c\ra=(function(){ return e })();\na=d /\u2029c / a; })();\n// y\n(()=> {\u2028a=[/ab+c/g,/[(]/][0];\nvar _t = [eval(code)];\t})(); } }/*\r*/}\u2028while (0) while (0); /\\u{41}/u.test(a)\u2028var k27// c \u2028= function(){ function g88(){ var s20=`\\u0041${typeof a}x`; }\n// y\n/\\/\\//.test(a); } / .5;\u2028try { (eval(code)); } finally { }\u2028a/* a\nb */> /[/]/;\n",
+   "real_calls": [
+    8,
+    23,
+    30
+   ]
+  },
+  {
+   "name": "p5070.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nif (a) /\\//.test(b);\n// y\nvar e =// c\r0x1f;\n// y\ntry { void eval(code); } finally { }\n// y\n10;\n// y\n{ do { if (0)\n/[(]/.test(a); else do {/*\r*/a=d </*\r*/c;\n// y\na=c++ / 0;\n// y\na=(a , /\\)/); }\rwhile (0);\ndo { var s28=`'${[o.yield/* c *// 1,typeof e]}`;\n/* x */\ntry {// c\ra=e/* c *// b;\u2028var _t = [eval(code)];\u2028a=!.5;\u2028a=b++ /\u20292; } catch (e) { a=(.5 ? '//' : \"\\u0041\");\na=typeof e;/*\r*/} finally\n{// c \u2028a=\"/re/\";\na=[e,'//'];\na='(';/* c */}\n/* x */\nif (a) { a=e + +c;\r\na=(class{} / 0);\r\na=`a b`;\r\n} /{/.test(b); } while (0); }\u2028while (0);\nclass C40 { m() { if (0) switch (1) { case 1: {// c\na=a\u2029> /\\{/; } /[/*]/.test(a); case 2: a=typeof// c \u2028e;// c\ndefault: { a=void 3.5;\u2028a='/'; }// c \u2028} else if (1) a=void '{'; } static { while (0) if (1) a=(class{} / 1);\rfor (var i=0;i<1;i++) switch (1) { case 1: { a=[/[/*]/,/\\u0041/][0];\na=e\r\n< d;\neval(code) ;\na=d++ / 0x1f; } /ab+c/g.test(a);/*\r*/case 2: a=c >// c\n/[^\"']/; default: {\u2029a=(function(){ return \"/re/\" })();\n/* x */\na=(function(){} /\r\n3.5); } }\rswitch (1) {/*\r*/case 1: { a=[/\\)/,/`/][0]\r\n// y\n\nvoid eval(code);\nif (a) /\\)/.test(b);/* a\nb */} /\\/\\//.test(a);\r\ncase 2: switch (1) { case 1: { a=e < a;\n// y\na=!'{'; } /=/.test(a); case 2:// c\na=a / e; default:\r\n{ a=(1e3) / 10;\ra=o.of / 0;\ra=3.5;\u2029} }\tdefault: { (ff(('/' ? 10 : \"</div>\")))\t/// c\r10;\n[/[^\"']/,/a\\/b/i][0]; } } } get x() { do { /[/]/.test(a); } while (0);;\nvar d =\r\n(function(){}/*\r*// 3.5); } }\r/\\)/.test(a); }\n// y\nvar d = (a ,\t/[/*]/);\n",
+   "real_calls": [
+    8,
+    25,
+    51,
+    63
+   ]
+  },
+  {
+   "name": "p5378.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n<!-- html comment\r\n\u2028/\"/.test(a);\u2028if (1)  {eval(code)// c \u2028;}\n",
+   "real_calls": []
+  },
+  {
+   "name": "p5847.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n(()=> {// c\ndo {/* a\nb */if (a) /`/.test(b);\r\n}\rwhile (0);\nvar _t = [eval(code)];\t})();\u2028var k70 = function(){ while (0)\r\nvar c/*\r*/= a <\ra; } / .5;\u2028switch (1) { case 1: { void eval(code); } /\\//.test(a) }\u2028/'/.test(a);\u2028(()=>/*\r*/{\twhile (0); /ab+c/g.test(a)\t})();\n",
+   "real_calls": [
+    8,
+    13
+   ]
+  },
+  {
+   "name": "p5937.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nif (1)\u2028try {\neval(code);\n/* x */\n// c\n\n/* x */\nif (1) while (0);\u2029/'/.test(a) }// c\ncatch (e) { if (a) /{/.test(b);\r\nwhile (0); /[/*]/.test(a) } finally { a=a / c / b\u2028\n\n// y\nvar k27 = function(){ switch (1) { case 1: { a=typeof d;\nvoid eval(code); } /ab+c/g.test(a); case 2: a=({a:\"/*\"}); default:/* a\nb */{\na=(c) / 0x1f;// c\n}\t} } / 0x1f;\n// y\ndo {\u2028a=a < d ;\n\r(function(){// c\na=a// c\r/ e; })(); } while (0); }\u2028(function(){ while (0); /\\u0041/.test(a)/* a\nb */})();\u2028-->\n/* x */\n\u2028c && /'/.test(a);\u2028({a:[/[/]/,/[/]/][0]});\u2028if (a)\u2028{ function g68(){ try { /}/.test(a);\rswitch (1) { case 1: {\u2029a=`'`;\u2028a=c\u2028&& /=/.test(a);\u2028a=o.return / 10; }\u2029/[`]/.test(a); case 2: a=(0)/* c *// 1; default: { a=[e,e]; } } } catch (e) { do\u2028{\na=10; } while (0);\r\nL7: if (1)\u2029a='\u2028'; } finally { if (a)/* a\nb */{ a=[/\\u0041/,/\\//][0];\na=()=>1; } /\\u0041/.test(b);;\no.if((o.return / 1e3 ? (b ? 0x1f : 2) : 'a\\\nb'));;\nswitch (1) {\tcase 1: { a=typeof c;\u2028a=({a:0x1f});\u2028eval(code)/*\r*/; } /[`]/.test(a); case 2: a=void .5; default:/* a\nb */{ a=o.of /// c\n0x1f; } } } }\n/[\\u0041-\\u0043]/.test(a);\r\n/* c */\n\r\n// c\n/* x */\n } /'/.test(b);\u2028for (var i=0;i<1;i++)/* a\nb */(()=> { if (1) if (1) a=({a:1e3}); else a=(e) /\u20293.5;\n/\\)/.test(a);\n{ while (0); /[(]/.test(a)/*\r*/}/* c */})();\u2028(function(){ var _t = [eval(code)]; })();\n",
+   "real_calls": [
+    5,
+    18,
+    55,
+    71
+   ]
+  },
+  {
+   "name": "p6358.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\na=(function(){ return c// c\r< b })() ;\n\u2028while (0); /[/]/.test(a)\u2028switch (1) { case 1: { function g30(){ o.in((c=c < d)); }\u2028/}/.test(a);\n}/* a\nb *//`/.test(a); case 2: if (0) (()=> { L19:\n{ a='{';\n// y\na=1e3;\n// y\na=(e ,\u2028/\\u0041/);\n// y\neval(code) ; };\na && eval(code); })(); else if (a)\n{ /\\/\\//.test(a); } /[`]/.test(b);\ndefault: { while (0) if (a) /a\\/b/i.test(b);\r\na=`//${/[/]/}/` ;\r/*\r*/}// c \u2028}\u2028(function(){ eval(code) ; })();\u2028d && /[`]/.test(a);\u2028var b =\u2029'<';\n",
+   "real_calls": [
+    18,
+    19,
+    26
+   ]
+  },
+  {
+   "name": "p6561.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k7 =\rfunction(){ if (a) /{/.test(b); } / .5;\u2028{ eval(code) ; }\u2028if (a) /[\\u0041-\\u0043]/.test(b);\n",
+   "real_calls": [
+    5
+   ]
+  },
+  {
+   "name": "p8162.js",
+   "suffix": ".js",
+   "src": "#!/usr/bin/env node\nvar code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n[/=/,/\\//][0];\u2028var k75 = function(){ do// c \u2028{\tff(d);\n{ (function(){} / 1);;\nif (a) /'/.test(b);;\nif (a) { a=o.if\u2028/ .5;\u2028a=`\\${x}`;\u2029}\r/ /.test(b); } } while (0); } / 2;\u2028if (1)  {a && eval(code);}\u2028for (var i=0;i<1;i++) var s28=`}`;\u2028if (a) /[^\"']/.test(b);\n",
+   "real_calls": [
+    14
+   ]
+  },
+  {
+   "name": "p8810.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n(function(){ var s88=`/*${((b='}')) / .5}`; })();\n/* x */\nfor (var i=0;i<1;i++) while (0);// c \u2028/\\//.test(a)\n/* x */\nswitch (1) {// c\rcase 1: {\rfunction g53(){ if (a) {\ra = b;\n/}/.test(c);\n/\\//.test(a); } /\\{/.test(b); }\n/[/]/.test(a); } /\\{/.test(a);/* c */case 2: L59:\u2028{ void eval(code);\u2028while (0); /\\u{41}/u.test(a) } default:\u2028{ if (1)\r\nvar s28=`t${()=>{ return [c,\"`\"] }}/`; else for (var i=0;i<1;i++) while (0)\u2028a=c++ / 2; } }\n/* x */\n{ var _t = [eval(code)]; }\n",
+   "real_calls": [
+    15,
+    21
+   ]
+  },
+  {
+   "name": "p10107.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k43 =/*\r*/function(){\r\n{ (function(){ if (1)\r\na=void b;/* c */})();\n(eval(code)); } } /\t3.5;\u2028{ eval(code)/* c */; }\u2028// c\r\n",
+   "real_calls": [
+    7,
+    8
+   ]
+  },
+  {
+   "name": "p11304.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nif (1) if (a) /[\\u0041-\\u0043]/.test(b);\u2028var k64 = function(){ /* c */\n } / 0;\u2028(function(){ eval(code); })();\u2028// c\n\u2028(()=> { var c = (c=c);\r\neval(code)// c\r;\r\nvar b =\r\nb++ /\u20290; })();\u2028/* \n */\n\u2028typeof e;\n",
+   "real_calls": [
+    6,
+    10
+   ]
+  },
+  {
+   "name": "p11355.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nfunction g58(){ { <!-- html comment\u2028;\nwhile (0) (function(){ a=/[/*]/; })();;\nfunction g63(){ /=/.test(a); }\n// y\n/\\{/.test(a); }/*\r*/}\u2028/=/.test(a);\u2028var k3 = function(){\n/* \n */\n\r\n} /\t0x1f;\u2028if (1) /* a\nb */{eval(code) ;}\u2028if (a) /[/]/.test(b);\n",
+   "real_calls": [
+    17
+   ]
+  },
+  {
+   "name": "p11695.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k83/*\r*/= function(){ var c =// c\n[(x)=>{ return a /\re /\ne },!(e)\u2028/ 1];// c \u2028} / 0x1f;\u2028{ eval(code); }\u2028if (a) /\\/\\//.test(b);\n",
+   "real_calls": [
+    10
+   ]
+  },
+  {
+   "name": "p11811.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n{ var c = .5;\neval(code);\na=(b=\"\\u0041\") ;;\n// c\n}\u2028for (var i=0;i<1;i++) /\\u{41}/u.test(a);\u2028if (0) var k70\r\n= function(){\u2028(function(){ switch (1) { case 1: { a=('//' ? '/' : 0x1f);\r\na=c > /\\//;\r\na=b &&\u2028/{/.test(a); } /\\/\\//.test(a); case 2: a='/'; default: { a=!2; } }// c\n})(); } / 1; else/* c */var k0 =// c\nfunction(){ { // c;\n\n/* x */\n(function(){ a=!0; })(); } } / 2;\u2028{ var _t = [eval(code)]; }\u2028for (var i=0;i<1;i++) while (0); /[\\u0041-\\u0043]/.test(a)\u2028/* \n */\n// y\n\u2028a < e;\n",
+   "real_calls": [
+    4,
+    20
+   ]
+  },
+  {
+   "name": "p12009.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k29// c \u2028= function(){ for (var i=0;i<1;i++) var e = '}'; } / 2;\u2028for (var i=0;i<1;i++) while (0); /\\{/.test(a)\u2028eval(code) ;\u2028var k76 = function(){ /a\\/b/i.test(a); } / .5;\n",
+   "real_calls": [
+    6
+   ]
+  },
+  {
+   "name": "p12241.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nfor (var i=0;i<1;i++) var d = void (class{}\u2028/\u20282);\rwhile (0);// c\r/{/.test(a)\rdo { class C21 { m() {\n// c\n// y\n\u2028e++ //*\r*/2; } static {// c\rdo { try {\r\na=(function(){} / 1);\u2028(eval(code));\u2028a=(class{} / 0);\u2028a=c; } catch (e) { a=(a\t, /{/); } finally { a=b && /ab+c/g.test(a);\ra=(x)=>{ return ')' }; }\u2028o.in(c +\u2029+c);\u2028var s41=`a b`; } while (0); } get x() { while (0) var c = (function(){ return ({a:(c) / 0}) })();\u2028/[(]/.test(a); } }\r\n/'/.test(a); } while (0);\r{ var _t = [eval(code)]; }\n",
+   "real_calls": [
+    16,
+    25
+   ]
+  },
+  {
+   "name": "p13462.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n(()=> { do { try {\rvar s85=`/*`;\rif (a)// c\r/[/]/.test(b);\rif (0)// c \u2028a=!'*/'; else a=['\\'',0]; } catch (e)// c \u2028{ if (a) /[/]/.test(b); } finally {\u2028-->;\n\nvar a = b /\r\nd / b; }\ndo/*\r*/{ <!-- html comment\n// y\n;\nvar s25=`//`;;\nif (1)// c \u2028a=a/* a\nb *// c; } while (0);\n(e / b// c \u2028/ e)\r\n/ 1; } while (0); })();\nswitch (1) { case 1: { (eval(code)); } /[`]/.test(a) }\ntry\r\n{\rvar _t = [eval(code)];\na = b;\n/=/.test(c);\nd\u2029&& /[/*]/.test(a); } catch (e) { for (var i=0;i<1;i++) while (0) for (var i=0;i<1;i++) a=b + +d;\r\n/[`]/.test(a);// c\r}/* c */finally { (()=> { a=e / c \u2028;\ndo {// c\r/* \n */\u2028\n/* x */\nif (1) a=(function(){ return '/' })(); else a=b / c\u2029/ d;\n/* x */\nif (1) a=!c; } while (0); })(); }\n",
+   "real_calls": [
+    25,
+    28
+   ]
+  },
+  {
+   "name": "p13549.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nwhile (0) while (0); /[/*]/.test(a)\u2028var k48 = function(){ if (1) var k11 = function(){ var s58=`\\u0041`; } / 2;// c\n} / 1e3;\u2028if (1)  {a && eval(code);}\u2028do { while (0);/* a\nb *//[(]/.test(a) } while (0);\n",
+   "real_calls": [
+    6
+   ]
+  },
+  {
+   "name": "p15380.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k9 = function(){ /'/.test(a); } / 0;\u2028(eval(code));\u2028a=o.in / 10\n;\n\u2028while (0) if (1) o.return// c \u2028/ 3.5;\n",
+   "real_calls": [
+    4
+   ]
+  },
+  {
+   "name": "p15993.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k9 = function(){\u2029var k50 = function(){/*\r*/while (0); /\\u{41}/u.test(a) } /\u20293.5;/* a\nb */} /\u20281;\n/* x */\nif (0) L3: if (1) switch (1) { case 1: { if (0) a=`t`; else a=(function(){}// c\r/\n2); }\u2029/}/.test(a);\tcase 2: (function(){ return a })(); default: { function g29(){ a=void 10; }\u2028/\\/\\//.test(a);\n/* x */\nff(typeof a);\n/* x */\nvar k41 = function(){ a=(c ? 2 : \"b\"); }// c\n/ 1e3; }\u2028} else var s32=`//`;\n/* x */\n(function(){ eval(code); })();\n/* x */\nwhile (0); /ab+c/g.test(a)\n/* x */\nwhile (0) var s34=`//${`a b${void\u2028d}x`}`;\n/* x */\nvar k94 = function(){ /\\/\\//.test(a);/* c */} / 2;\n",
+   "real_calls": [
+    22
+   ]
+  },
+  {
+   "name": "p16345.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n(function(){ eval(code) ; })();;\nwhile (0); /\\)/.test(a);\nclass C41 { m() {\r\n(function(){} / 1e3);\r\n} static {/* c */{ (()=> { var k80 = function(){ a=(b='\\''); } / .5;\u2028(eval(code)); })();\u2028(function(){\u2029var k43\u2029= function(){ a=`a b`;\u2029} / 1e3; })();/* a\nb */} } get x() { if (a) /\\)/.test(b);\nfunction g65(){ a = b;\n/[(]/.test(c); }\r/ab+c/g.test(a);\nwhile (0); /\\//.test(a) } }\u2028/{/.test(a);\n",
+   "real_calls": [
+    3,
+    8
+   ]
+  },
+  {
+   "name": "p18342.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\na / a;\n// y\nswitch (1) { case 1: { for (var i=0;i<1;i++)/*\r*/var s66=`//${d + +e}/`;\r\nif (a)\n{ if (a) {\rif (a) /'/.test(b);\rvar d =// c \u2028[(/\\u0041/) / 2,`\\${x}${('*/' ? 0 : 0)}x`];\rclass C19 { m() {\ra=(function(){} /\r3.5);\na=void\u20291e3; } static { a=!d;\u2028a=typeof b; } get x() {\na=(\"`\")\u2029/ 3.5;\na=/\\{/;/* a\nb */} }\n// y\n/\"/.test(a); } /\"/.test(b); } /ab+c/g.test(b); } /[`]/.test(a);/* a\nb */case 2: { a=c / e ;\n } default: {\nvar s90=`\\u0041`;\na=d / c / c\n\r\nif (1) var d =/* c */c\t/\u2028b / b;/* c */} }\n// y\nif (1)  {(eval(code));}\n// y\nfor (var i=0;i<1;i++) // c;\n\n// y\nfor (var i=0;i<1;i++) var e// c \u2028= ff(`//${typeof\nb}`);\n// y\nif (a) /[`]/.test(b);\n// y\nif (a) /[`]/.test(b);\n",
+   "real_calls": [
+    32
+   ]
+  },
+  {
+   "name": "p18412.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k60 =\u2028function(){/* c */var a = ff(`\\${x}`); } / 10;\n/* x */\n/}/.test(a);\n/* x */\n-->\n\n/* x */\nif (0)\r\na=3.5/*\r*/\n else switch (1) { case 1: { /(a|b)*$/.test(a);\n// y\n/* c */\u2028\n// y\n(function(){ while (0); /[/]/.test(a)// c\r})(); } /`/.test(a); case 2:// c \u2028a=ff((/ /) / 0x1f) ;\n default:// c\n{ var s34=`\\u0041${(()=>d ? [/{/,/(a|b)*$/][0] : o.in / 0)}`; } }\n/* x */\nswitch (1) { case 1: { (eval(code)); } /[`]/.test(a) }\n/* x */\n/* c */\r\n",
+   "real_calls": [
+    25
+   ]
+  },
+  {
+   "name": "p18659.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar c// c\n= a < e;\nclass C71 { m() { do { { eval(code) ;\nif (a)/*\r*//\\)/.test(b); }// c \u2028} while (0); } static { var e = `/*${/'/}x`; } get x() {\r\na=!`\\${x}${(x)=>{ return void '\u2028' }}x` ;\n\r\nswitch (1) {\tcase 1: { if (a)// c \u2028/[(]/.test(b); }/* a\nb *//(a|b)*$/.test(a); case 2:\nvar s80=`\"`; default: { L75: { eval(code);\nc / c / e;\nwhile (0) a=[d,\"/*\"]; }/* c */} }/*\r*/} }\n/\\u0041/.test(a);\nvar k64 = function(){\n{ `}${(function(){} / 1)}/`;\u2028} } / 1e3;\nif (1)  {var _t = [eval(code)];}\n(()=> { while (0); /'/.test(a)\ndo { {\r\nif (a) /ab+c/g.test(b);\u2028var s53=`\"`;\n}\u2028function g57(){/* c */function g70(){ a=ff('\u2028'); }\n/\\//.test(a); }\n// y\n/ab+c/g.test(a);\u2028/[`]/.test(a); } while (0); })();\n",
+   "real_calls": [
+    5,
+    15,
+    23
+   ]
+  },
+  {
+   "name": "p19876.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nwhile (0); /\"/.test(a)\nswitch (1) { case 1: { a && eval(code); } /[/*]/.test(a) }\nswitch (1) { case 1:\r{ var s38=`/*`;\u2028var k75 = function(){ do {\rL42: if (1) a=(function(){ return 1 })();\rdo\u2028{ a=/\\)/;\na=c > /\\u{41}/u;\na=typeof\r\ne;// c\r} while (0);\rvar b = !d + +d;\r\n} while (0); } / 1e3;\u2028(eval(code)); } /[/]/.test(a); case 2: a=b/* c *// a //* c */a ;\n default: { if (a) /\\u{41}/u.test(b); } }\n",
+   "real_calls": [
+    4,
+    17
+   ]
+  },
+  {
+   "name": "p19977.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k65 = function(){ (()=> {\u2029(e ? ff(({a:a})) : [/\\/\\//,/'/][0]);\r\na=void void o.of\u2029/ 0x1f ;\r\n })(); } / 1e3;\u2028void eval(code);\u2028for (var i=0;i<1;i++) /\\/\\//.test(a);\n",
+   "real_calls": [
+    8
+   ]
+  },
+  {
+   "name": "p23466.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nif (0) (function(){// c \u2028var s30=`'${e < b}x`;// c\n})(); else void b\u2028+ +e;\n/* x */\nif (a) /=/.test(b);\n/* x */\n{ try\n{ while (0); /}/.test(a)\u2028switch (1) { case 1:\u2029{ function g37(){ a=b / a; }\n/* x */\n/\\u0041/.test(a);\u2028var a\r\n= a\n/ c;\u2028var s90=`\\u0041${!(b , /=/)}/`;/*\r*/}\t/`/.test(a);\r\ncase 2: /[^\"']/.test(a); default: {/*\r*/function g69(){ a=void 0; }\n/a\\/b/i.test(a);\r(()=>// c \u2028{/* c */var _t = [eval(code)];\na=e /\nd// c\n/ b; })();// c \u2028} }\u2028(()=>\n{ class C10 { m() {// c\ra=[/[^\"']/,/ab+c/g][0];\n// y\na=o.typeof\n/ 3.5;\n// y\na=o.of / .5; } static { a=b / e;\na=(c , /a\\/b/i); } get x() { a=3.5;\n// y\na=`a b`;\n// y\na=(function(){} / 0x1f); } }\n/[^\"']/.test(a);\nvar c = e + +d;\n(eval(code)); })(); }// c\ncatch (e) { a=(function(){ return (class{} / 2) })() ;\n\rvar s72=`//${({a:void '//'})}`; }/* c */finally { do { var b/* a\nb */=// c\r`/*${void a / e / b}`; } while (0); }\n/* x */\n()=>(function(){ return e// c \u2028>/* c *//ab+c/g })();\n/* x */\neval(code) ;\n/* x */\nfor (var i=0;i<1;i++) if (0) var d =// c\nff(e / a); else\na=b && /\\)/.test(a) \n }\n/* x */\n-->\u2028\n/* x */\n<!-- html comment\n/* x */\n\n/* x */\nswitch (1) { case 1: { (eval(code)); } /(a|b)*$/.test(a) }\n",
+   "real_calls": [
+    25,
+    45,
+    55,
+    69
+   ]
+  },
+  {
+   "name": "p24315.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n(function(){ a && eval(code); })();\nif (a) { var c =\r\nd < a; } /=/.test(b);\ntry/* a\nb */{\r\neval(code) ;;\nif (a) { do\n{ function g7(){\r\na=(b=.5); }\r/[`]/.test(a);\nvar s85=`t${typeof\tb}`;\r} while (0);;\nif (1) a=e++ / 1 ;\n// y\n\r\n} /\\{/.test(b);;\nif (a) /[/]/.test(b);\u2028} catch (e) { var k27 = function(){ if (a) /[(]/.test(b); } / .5;\n/* x */\nif (a) /\\//.test(b);\n/* x */\na=`a b${[`/*${[.5,e]}`,e\n<// c\ra]}/` ;\n/* x */\n } finally { try { do { var d/* a\nb */= a +\u2029+e;\rif (1) a=(class{}/*\r*// 1e3);\rswitch (1) { case 1:\r{ a=typeof b;\r\na=e++// c\n/\t0;\r\na=(10) / .5;/* a\nb */} /`/.test(a); case 2: a=a < a; default:\r\n{ a=e && /a\\/b/i.test(a);\u2028a=(d=c); } } }\u2029while (0);\r(()=> { { a=ff(b);\r\na=(function(){} / 3.5);\r\n(eval(code)); }\nvar b = (function(){ return `t${/\\{/}` })();\n})();\r(function(){ while (0) a=c; })();/* a\nb */} catch (e) { if (a) /{/.test(b);\n{ try {\u2028a=e &&/* a\nb *//{/.test(a);\na=o.p// c\n/// c \u2028.5; } catch (e) { a=()=>{ return '\\'' };\n} finally\r\n{ a=()=>\"`\";\n/* x */\na=ff('*/'); } }\nfor (var i=0;i<1;i++) a=d / c// c\r/ b \n/* x */\n } finally {// c\ra = b;\n/[`]/.test(c);\r\nif (a)/*\r*/{ <!-- html comment\n/* x */\n\rif (0) a=10; else a=void 'a'; }\r\n/ab+c/g.test(b); };\nif (a) /=/.test(b);;\nvar k58\n= function(){ // c\u2028 } / 10; }\nif (a) /}/.test(b);\n",
+   "real_calls": [
+    3,
+    8,
+    44
+   ]
+  },
+  {
+   "name": "p25380.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\ndo {// c\rif (a) { (()=> { if (a) / /.test(b);\n})();\n`//${typeof d}`;/* a\nb */} /{/.test(b);\nwhile (0); /\\/\\//.test(a)// c \u2028}\u2028while (0);\n/* x */\ntry\t{ var d\r\n= (d=typeof\na);\n{// c\nfor (var i=0;i<1;i++) var k40 = function(){/* a\nb */a=({a:c}); }\n/ 0;\n(eval(code)); }\neval(code); } catch (e) {\r(a ,\n/\"/);\n(function(){ function g12(){ while (0) a=\"</div>\";// c\r}\n/'/.test(a); })();\n/* \n */\n } finally/* c */{// c\n/* \n */\u2028\nfunction g77(){ .5; }\r\n/a\\/b/i.test(a); }\n/* x */\nwhile (0); /a\\/b/i.test(a)\n/* x */\nvar k81 = function(){ o.return((b=void '\\''));\u2029} / 3.5;\n/* x */\nfor (var i=0;i<1;i++) { (function(){ function g76(){\r\na=d++ / 1;// c\r}\u2028/(a|b)*$/.test(a); })();\u2028var k17 =\nfunction(){ a //* c */e;\u2029} / 0x1f;\u2028eval(code);// c\n}\n/* x */\n/[/]/.test(a);\n/* x */\na=e / e /// c\rc \n// y\n\n/* x */\nvoid eval(code);\n",
+   "real_calls": [
+    19,
+    20,
+    47,
+    57
+   ]
+  },
+  {
+   "name": "p25525.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\na=e++ //* c */1e3 \n/* x */\n\r\n<!-- html comment\n/* x */\n\r\nif (a) {// c \u2028function g53(){ var s32=`a b`;/* a\nb */}\n// y\n/`/.test(a);// c\n}/* c *//(a|b)*$/.test(b);\r\n{ eval(code) ; }\r\nvar k91 =\r\nfunction(){ /* \n */\n } / 0;\r\nL77: if (1) while (0)// c\rtry { (function(){\na=(function(){}/* a\nb *// .5); })();\u2028void eval(code);\u2028try {\u2029a=(d , /\\)/);\r\na=1e3;\r\na=()=>{ return c }; } catch (e) { a=(function(){ return 1e3 })();\n// y\na=b// c\n&&// c\r/}/.test(a);\n// y\na=c/*\r*/&& /=/.test(a);/*\r*/} finally { a=(c=')');\n/* x */\na=[\"\\u0041\",'a']; }\u2028if (a) { a=`/*`;\na=b /\ne / a; } /ab+c/g.test(b); } catch (e) { a=e/*\r*/> /\\/\\// \r\n// c\n}\rfinally\u2028{ function g82(){\u2029a=(function(){ return e })();\r\n};\n/[(]/.test(a); }\r\nelse var s12=`}${(()=>{ return d })\u2029/\u20290}`;\r\nif (a) {\u2028var e = (d , /}/);\n// y\nfor (var i=0;i<1;i++) var d = (d ,\u2028/a\\/b/i);\n// y\nwhile (0)/* c */var e\u2029= o.if / .5;\r} /(a|b)*$/.test(b);\n",
+   "real_calls": [
+    15,
+    24
+   ]
+  },
+  {
+   "name": "p26200.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n/=/.test(a);;\nwhile (0) L54:\nif (1) do { var a = [o.of\n/ 10,b +\n+e];\u2028var k77 = function(){ a=b; } / 1e3;\u2028var s90=`'${/(a|b)*$/}/`; } while (0); else if (a) {\nd && /}/.test(a);\n/* x */\nfor (var i=0;i<1;i++)\na=0; } /\\//.test(b);;\n(eval(code));;\n/}/.test(a);;\nvar s36=`\\u0041`;;\n// c;\n;\nif (0) if (0) var k74 =\u2029function(){ var s92=`//`; } / 0x1f; else if (a) /(a|b)*$/.test(b); else\nwhile (0) for (var i=0;i<1;i++) if (a) /\\u{41}/u.test(b);\n",
+   "real_calls": [
+    14
+   ]
+  },
+  {
+   "name": "p27422.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k52 =\nfunction(){ var d = !2; } / 1e3;\u2028{ (eval(code)); }\u2028var b = (0) / 2;\n",
+   "real_calls": [
+    5
+   ]
+  },
+  {
+   "name": "p28254.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar s18=`/*`;\r\nswitch (1) { case 1: { void eval(code); } /[/]/.test(a) }\r\n(()=> { for (var i=0;i<1;i++) var k57\n= function(){ if (0)/* c */a=(e , /a\\/b/i); else a=e + +e; } / 3.5;\u2028eval(code);\u2028/* \n */\n// y\n })();\n",
+   "real_calls": [
+    4,
+    7
+   ]
+  },
+  {
+   "name": "p28949.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n(function(){ // c;\n })();\r{ while (0); /ab+c/g.test(a)\u2028L32:\u2028if (1) var k54 =// c \u2028function(){ (function(){/*\r*/a=({a:e}); })(); } /\n1; else for (var i=0;i<1;i++) var k14 = function(){ a=({a:0x1f}); } / 2;\u2028eval(code) ;\u2028var c\u2028= c++ / 0x1f; }\r{ a && eval(code); }\n",
+   "real_calls": [
+    11,
+    14
+   ]
+  },
+  {
+   "name": "p29194.js",
+   "suffix": ".js",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nwhile (0); /\\{/.test(a)\n// y\nvar k26 = function(){ a = b\n/\\u{41}/u.test(c); } / 1e3;\n// y\nvar d = a++// c\r/ 10;\n// y\n(function(){ (eval(code)); })();\n// y\nvar k70// c\r= function(){ while (0)/* c *//'/.test(a); } / .5;\n// y\nwhile (0) while (0) { if (a)// c \u2028/\\u{41}/u.test(b);\na=`${`/* c */\n// y\n\neval(code)\n;\nvar s0=`}`; }\n// y\nwhile (0); /(a|b)*$/.test(a)\n",
+   "real_calls": [
+    11
+   ]
+  },
+  {
+   "name": "p267.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k59 =/*\r*/function(){ while (0); / /.test(a) } / 10;\u2028eval(code);\u2028a=ff(e >\u2028/\"/)/* a\nb */;\n\u2028/* \n */\r\n",
+   "real_calls": [
+    5
+   ]
+  },
+  {
+   "name": "p1530.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k77 = function(){/* c */var k33 = function(){ while (0); /'/.test(a) } / 1e3;// c\n} / 1;\u2028if (1)  {a && eval(code);}\u2028/* \n */\r\n",
+   "real_calls": [
+    5
+   ]
+  },
+  {
+   "name": "p3496.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k74 = function(){/* c */if (a) { if (1) if (1) a=(d , /[^\"']/); else a=('*/' ? '*/' : .5);\nL28: { var c = 'a';\r\n(function(){ a=({a:10}); })(); }\nwhile (0)/* c */if (a) /(a|b)*$/.test(b); } /\\/\\//.test(b);\u2029} / .5;\u2028try { void eval(code); } finally { }\u2028var d = d / d/* a\nb *// c;\n",
+   "real_calls": [
+    8
+   ]
+  },
+  {
+   "name": "p5428.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nswitch (1) { case 1: { function g33(){ { while (0); /[`]/.test(a)\neval(code) ;\nif (0) a=e + +e; else a=o.p / 0;\nL14: { a=a < a; }\u2029}\r}\n/* x */\n/[(]/.test(a); } /ab+c/g.test(a); case 2: do { L26: if (1) var k83 =// c\rfunction(){\na=!0; } / 0;\u2028a=o.if / 1 \u2028\u2028while (0) o.typeof((d=(b=0))); } while (0); default: { while (0); /(a|b)*$/.test(a) }\r\n}\u2028var k22 = function(){ (function(){ if (a) {\u2029if (a)/*\r*/{ a=[/`/,/ab+c/g][0];\na=(2 ? '\u2028' : e);\na=[/\\{/,/ab+c/g][0]; } /[`]/.test(b);;\nif (a) { a=[/\\//,/{/][0];\n/* x */\na=[/[/*]/,/}/][0];\n/* x */\na=a; } /a\\/b/i.test(b); } /[`]/.test(b); })(); } / 2;\u2028var s94=`}${d\t>// c \u2028/'/}`;\u2028if (1)  {eval(code) ;}\n",
+   "real_calls": [
+    4,
+    30
+   ]
+  },
+  {
+   "name": "p5776.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nwhile (0);// c \u2028/a\\/b/i.test(a)\n/* x */\nfor (var i=0;i<1;i++) do { if (1) var k21 = function(){ a=typeof// c\ra; }\r/ 0x1f; else try { a=(c ? \"\\\"\" : '(');\u2028eval(code); }// c \u2028catch (e) {// c\na=c + +a;\t} finally { a=!10;\ra=e + +b;\ra=c; }\u2028} while (0);\n/* x */\n{ void eval(code); }\n",
+   "real_calls": [
+    9,
+    16
+   ]
+  },
+  {
+   "name": "p6124.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k84\n= function(){ while (0) switch (1) { case 1:\t{\u2029function g83(){ a=c / d; }\u2028/`/.test(a); } /\\/\\//.test(a); case 2:\n/ /.test(a); default: { { a=(e , /\\u{41}/u);\n// y\n(eval(code)); }\ntry { a=d / d;;\na='*/'; } catch (e) { a=a; } finally { a=o.return / 10; }\t} } }\n/ 1;\u2028var s47=`t`;\u2028switch (1) { case 1: { (eval(code)); } /\\//.test(a) }\n",
+   "real_calls": [
+    9,
+    14
+   ]
+  },
+  {
+   "name": "p10362.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\na=[/`/,/[(]/][0] ;\n\u2028(function(){} / .5);\u2028try { void eval(code); } finally { }\u2028while (0); /\\)/.test(a)\u2028L9: { b < c;;\nvar _t = [eval(code)]; }\u2028var k64/* c */=\u2029function(){\u2029(function(){ function g43(){ var k5 =/* c */function(){ a=[e,b];/* a\nb */}\u2028/ 1e3;\r}\n/* x */\n/\\u0041/.test(a); })(); } / 2;\u2028a=[(c , /ab+c/g),(class{}\u2028/ 2)] ;;\n\n",
+   "real_calls": [
+    6,
+    9
+   ]
+  },
+  {
+   "name": "p10917.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k74 =\u2029function(){ if (a) { (()=>/* a\nb */{\u2029var s47=`\"`;\n/* x */\ndo { a=(e)\n/\u20293.5;\na=({a:\"\\\"\"}); }/* a\nb */while (0);\n/* x */\nwhile (0) a=(.5 ? \"`\" : b); })(); } /\"/.test(b); } / 0x1f;\u2028/[^\"']/.test(a);\u2028(function(){ (eval(code)); })();\u2028var s71=`'${(b , /[(]/)}/`;\n",
+   "real_calls": [
+    16
+   ]
+  },
+  {
+   "name": "p11697.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\n(()=> { a / b / d;\rvar a// c \u2028= void typeof c;\rclass C30 { m() { var e = c++ / 2; } static { switch (1) {\r\ncase 1:\r\n{ (function(){ a=(c , /[/]/);\t})();;\nvar d = (e , /}/);/* a\nb */}/* a\nb *//\\//.test(a); case 2: L38: { a=`'`;\na=d / b; } default:// c\r{ if (a) { a='{';\na=d <// c\ne; } /[\\u0041-\\u0043]/.test(b); } }\rwhile (0) while (0); /a\\/b/i.test(a) } get x() {/* a\nb */L62: { switch (1) { case 1: {\na=c// c \u2028+ +b;\u2028a=a / e / d;\u2028a=e;\u2028a && eval(code);\u2029} /[`]/.test(a);\ncase 2: a=ff(3.5); default: { a=(d=b); } };\na && eval(code);;\na=`\"`\u2028\r\n;\nvar b = typeof a; }\u2029} }\n/=/.test(a); })();\nwhile (0) if (a)/* a\nb */{ function g19(){\rvar k36 = function(){ a=(b ? c : b); }// c\n/\u20283.5; }\r/\\u{41}/u.test(a);;\nfunction g45(){ var s89=`a b${d++ /\r2}`; }\n/* x */\n/(a|b)*$/.test(a); } /`/.test(b);\nswitch (1) { case 1: { var _t = [eval(code)]; } /`/.test(a) }\nvar k71 = function(){ [/\\)/,/`/][0]; } /// c\r10;\n",
+   "real_calls": [
+    22,
+    25,
+    42
+   ]
+  },
+  {
+   "name": "p13462.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nif (1) \n{eval(code);};\na=typeof d \r;\nswitch (1) { case 1: { var d/* c */=\u2029(class{} / 1e3);\reval(code);\u2029}\n/`/.test(a); case 2:// c\rwhile (0) if (1) if (a) /{/.test(b); default:/*\r*/{ if (a) /\"/.test(b);\n(()=> { void eval(code);\n/* \n */\n// y\n\n`//`;\t})(); }// c \u2028}\n",
+   "real_calls": [
+    4,
+    9,
+    14
+   ]
+  },
+  {
+   "name": "p13611.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nfor (var i=0;i<1;i++) var s1=`a b${(e=ff(c))}`;\u2028var k46 =\u2029function(){ ((function(){ return a\u2028/ b })())// c\n/ 0x1f;// c\r} / 2;\u2028{ void eval(code); }\u2028/* \n */\n\n",
+   "real_calls": [
+    9
+   ]
+  },
+  {
+   "name": "p13705.mjs",
+   "suffix": ".mjs",
+   "src": "var code = \"__h = 1\";\nvar a=1,b=2,c=3,d=4,e=5,o={p:1,if:2,return:3,typeof:4,of:5,yield:6,await:7,\"in\":8},ff=function(x){return x},arr=[1,2,3];\nvar k51\n= function(){\u2029/* \n */\n/* x */\n/* c */} / 0;\u2028if (1)  {(eval(code));}\u2028/* \n */\n\n",
+   "real_calls": [
+    9
+   ]
+  }
+ ],
+ "repros": [
+  {
+   "name": "a0_control",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A0')\";\neval((userInput));\n",
+   "real_calls": [
+    2
+   ]
+  },
+  {
+   "name": "a1_htmlcomment_blockopen",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A1')\";\nvar x = 1; <!-- /*\neval((userInput));\n// */\n",
+   "real_calls": []
+  },
+  {
+   "name": "a2_hashbang_ls",
+   "src": "#!/usr/bin/env node\u2028var userInput = process.env.USER_CODE || \"console.log('HIT-A2')\"; eval((userInput));\n",
+   "real_calls": [
+    2
+   ]
+  },
+  {
+   "name": "a3_funcexpr_div",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A3')\";\nvar k = function(){} / 1; eval((userInput)); var z = 2 / 1;\n",
+   "real_calls": [
+    2
+   ]
+  },
+  {
+   "name": "a4_label_block_regex",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A4')\";\nvar s = '\"'; L: { } /\"/.test(s) && eval((userInput));\n",
+   "real_calls": [
+    2
+   ]
+  },
+  {
+   "name": "a5_classexpr_div",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A5')\";\nvar C = class {} / 1; eval((userInput)); var z = 2 / 1;\n",
+   "real_calls": [
+    2
+   ]
+  },
+  {
+   "name": "a6_close_comment",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A6')\";\nvar x = 1;\n-->/*\neval((userInput));\n// */\n",
+   "real_calls": []
+  },
+  {
+   "name": "a7_htmlcomment_quote_ls",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A7')\";\nvar q = 1 <!-- \"\u2028eval((userInput));\n",
+   "real_calls": []
+  }
+ ]
+}

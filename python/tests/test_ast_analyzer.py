@@ -3149,9 +3149,29 @@ class TestPathContainmentAssertion:
         'BASE = Path("/srv/reports")\n'
     )
 
+    # OR-88 (CL2-1): "the recognisers may lower a finding, never remove it". A sink a
+    # recognised containment guard covers used to produce NO finding, and every test in
+    # this class that says a guard "contains" asserted `not pt`. It now produces an
+    # unproven WARN-grade finding whose `fix` names the guard (`_LOWERED_MARK`).
+    #   old `_pt`: every SEC-PY_PATH_TRAVERSAL finding
+    #   new `_pt`: those that are NOT lowered by a recognised guard, so each
+    #              `assert not pt` / `assert not self._at(...)` keeps its meaning
+    #              ("the guard stops the finding being reported as traversal");
+    #              the lowered ones are `self.lowered`, and each such test also
+    #              asserts that the guard was reported, at WARN, not dropped.
+    _LOWERED_MARK = "A path-containment guard"
+
     def _pt(self, body: str, prefix: str | None = None) -> list[dict]:
         findings = _collect_src((self._PREFIX if prefix is None else prefix) + body)
-        return [f for f in findings if f["id"] == "SEC-PY_PATH_TRAVERSAL"]
+        every = [f for f in findings if f["id"] == "SEC-PY_PATH_TRAVERSAL"]
+        self.lowered = [f for f in every if f["fix"].startswith(self._LOWERED_MARK)]
+        return [f for f in every if not f["fix"].startswith(self._LOWERED_MARK)]
+
+    def _assert_lowered(self) -> None:
+        assert self.lowered, "OR-88: a recognised guard lowers the finding to a WARN, it does not remove it"
+        for f in self.lowered:
+            assert not f.get("taint_chain"), f
+            assert (f["severity"], f["confidence"]) == ("MEDIUM", "MEDIUM"), f
 
     @staticmethod
     def _at(findings: list[dict], line: int) -> list[dict]:
@@ -3171,6 +3191,7 @@ class TestPathContainmentAssertion:
             "        return fh.read()\n"
         )
         assert not pt, f"realpath + commonpath guard not honoured: {pt}"
+        self._assert_lowered()
 
     def test_startswith_base_plus_sep_contains(self) -> None:
         pt = self._pt(
@@ -3182,6 +3203,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"realpath + separator-checked startswith not honoured: {pt}"
+        self._assert_lowered()
 
     def test_pathlib_is_relative_to_contains(self) -> None:
         pt = self._pt(
@@ -3193,6 +3215,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"resolve() + is_relative_to guard not honoured: {pt}"
+        self._assert_lowered()
 
     def test_pathlib_relative_to_in_try_contains(self) -> None:
         pt = self._pt(
@@ -3206,6 +3229,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"resolve() + relative_to in try not honoured: {pt}"
+        self._assert_lowered()
 
     def test_startswith_without_separator_does_not_contain(self) -> None:
         # Review Focus 5: `/srv/reports_evil/x` starts with `/srv/reports`.
@@ -3256,6 +3280,7 @@ class TestPathContainmentAssertion:
         assert not self._at(pt, 10), (
             f"a guarded resolved join is checked where it is used, not at the join: {pt}"
         )
+        self._assert_lowered()
 
     # -- pinned by the plan's decisions -----------------------------------------
 
@@ -3305,6 +3330,7 @@ class TestPathContainmentAssertion:
         )
         assert not self._joins(pt, 9), pt
         assert not self._at(pt, 12), f"the guarded open is contained: {pt}"
+        self._assert_lowered()
 
     def test_unguarded_resolved_join_is_still_its_own_sink(self) -> None:
         pt = self._pt(
@@ -3411,6 +3437,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"`startswith({prefix_arg})` not honoured: {pt}"
+        self._assert_lowered()
 
     @pytest.mark.parametrize(
         "test",
@@ -3430,6 +3457,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"`{test}` not honoured: {pt}"
+        self._assert_lowered()
 
     def test_commonpath_against_inline_constant_contains(self) -> None:
         pt = self._pt(
@@ -3441,6 +3469,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"constant base not honoured: {pt}"
+        self._assert_lowered()
 
     def test_resolved_pathlib_base_contains(self) -> None:
         pt = self._pt(
@@ -3453,6 +3482,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"a resolved pathlib base not honoured: {pt}"
+        self._assert_lowered()
 
     @pytest.mark.parametrize(
         "clause",
@@ -3475,6 +3505,7 @@ class TestPathContainmentAssertion:
             "    return open(full).read()\n"
         )
         assert not pt, f"`{clause}` not honoured: {pt}"
+        self._assert_lowered()
 
     def test_sink_in_else_of_guard_contains(self) -> None:
         # The else branch runs only when the containment test passed.
@@ -3488,6 +3519,7 @@ class TestPathContainmentAssertion:
             "        return open(full).read()\n"
         )
         assert not pt, f"a sink in the guard's else branch is contained: {pt}"
+        self._assert_lowered()
 
     # -- rejected separators and arguments ----------------------------------------
 
@@ -3778,6 +3810,7 @@ class TestPathContainmentAssertion:
             "    return open(p).read()\n"
         )
         assert not pt, f"an alias bound once to the checked path is contained: {pt}"
+        self._assert_lowered()
 
     # -- module-level bases (R-pf25a) -------------------------------------------
 
@@ -6500,9 +6533,27 @@ class TestFileResponsePathSink:
     ``fastapi.responses``. Django's ``FileResponse`` takes an open file, whose
     ``open(...)`` is the sink, so it is never one itself."""
 
-    @staticmethod
-    def _pt(src: str) -> list[dict]:
-        return [f for f in _collect_src(src) if f["id"] == "SEC-PY_PATH_TRAVERSAL"]
+    # OR-88 (CL2-1): a sink a recognised containment guard covers is reported at WARN,
+    # naming the guard, not removed. `_pt` keeps its meaning for the tests below by
+    # leaving those lowered findings out (old: every SEC-PY_PATH_TRAVERSAL finding);
+    # `_lowered` is exactly them.
+    _LOWERED_MARK = "A path-containment guard"
+
+    @classmethod
+    def _pt(cls, src: str) -> list[dict]:
+        return [
+            f
+            for f in _collect_src(src)
+            if f["id"] == "SEC-PY_PATH_TRAVERSAL" and not f["fix"].startswith(cls._LOWERED_MARK)
+        ]
+
+    @classmethod
+    def _lowered(cls, src: str) -> list[dict]:
+        return [
+            f
+            for f in _collect_src(src)
+            if f["id"] == "SEC-PY_PATH_TRAVERSAL" and f["fix"].startswith(cls._LOWERED_MARK)
+        ]
 
     @classmethod
     def _file_response(cls, src: str) -> list[dict]:
@@ -6666,6 +6717,11 @@ class TestFileResponsePathSink:
         assert self._pt(src) == []
         # Control: open() on the same path is quiet under the same guard.
         assert self._pt(src.replace("return FileResponse(", "return open(")) == []
+        # OR-88: where a containment GUARD (not the `basename` sanitiser) stops the
+        # finding, the sink is lowered to a WARN that names it, not removed.
+        guarded = not any("basename" in line for line in lines)
+        assert bool(self._lowered(src)) is guarded
+        assert bool(self._lowered(src.replace("return FileResponse(", "return open("))) is guarded
 
     @pytest.mark.parametrize(
         "lines, line",

@@ -43,12 +43,45 @@ _NO_ABORT_HEAD = (
 _FLASK_ABORT = "from flask import abort\n"
 
 
-def _rules(src: str) -> set[str]:
+# OR-88 (CL2-1): a sink a recognised containment guard covers is reported at WARN,
+# naming the guard (the `fix` text starts `_LOWERED_MARK`), not removed.
+#   old `_rules`: the id of every finding
+#   new `_rules`: the id of every finding that is not lowered by a guard, so a test
+#                 that says a guard "covers" the sink (`PT not in _rules(...)`) keeps
+#                 its meaning; `_lowered` is exactly the lowered ones.
+_LOWERED_MARK = "A path-containment guard"
+
+
+def _findings(src: str) -> list[dict]:
     findings: list[dict] = []
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "app.py").write_text(src)
         ASTAnalyzer(d, "python").run(findings.append)
-    return {f["id"] for f in findings}
+    return findings
+
+
+def _rules(src: str) -> set[str]:
+    return {f["id"] for f in _findings(src) if not f.get("fix", "").startswith(_LOWERED_MARK)}
+
+
+def _lowered(src: str) -> list[dict]:
+    return [f for f in _findings(src) if f.get("fix", "").startswith(_LOWERED_MARK)]
+
+
+def _all_ids(src: str) -> set[str]:
+    """The id of EVERY finding, lowered ones included: a sink that is not reported at all."""
+    return {f["id"] for f in _findings(src)}
+
+
+# F-C6 (CL3): `PT not in _rules(...)` cannot tell a finding LOWERED by a guard from one
+# REMOVED, because `_rules` leaves the lowered ones out. Each such assertion is paired with
+# the OR-88 one that applies. Where a recognised containment guard covers the sink, the
+# finding is still reported, lowered, with the guard named (`_lowered`). Where none is
+# involved, `_all_ids` shows the sink is not reported at all, for this reason: a rejection
+# of `..` and absolute names, a membership allow-list, or a store that does not reach the
+# sink removes it as it did in v3.7.0 (a sanitiser, or no flow); none of the containment
+# recognisers took part (no guard was accepted, checked with `_note_guard`).
+_NO_GUARD = "removed, not lowered: no containment guard is involved (a sanitiser or no flow, as in v3.7.0)"
 
 
 def _app(prelude: str, body: str, head: str = _NO_ABORT_HEAD) -> str:
@@ -204,11 +237,13 @@ def test_a_guard_whose_body_provably_ends_control_flow_still_protects(
     template, label, exit_stmt, prelude, head
 ):
     assert PT not in _rules(_guarded(template, exit_stmt, prelude, head)), label
+    assert PT not in _all_ids(_guarded(template, exit_stmt, prelude, head)), _NO_GUARD
 
 
 def test_a_star_import_of_flask_still_supplies_abort():
     head = _NO_ABORT_HEAD + "from flask import *\n"
     assert PT not in _rules(_guarded(_TRAVERSAL, "abort(400)", "", head))
+    assert PT not in _all_ids(_guarded(_TRAVERSAL, "abort(400)", "", head)), _NO_GUARD
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +310,7 @@ def test_a_sink_in_the_else_of_the_guard_is_covered():
         head,
     )
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD
 
 
 def test_the_url_host_and_containment_guards_use_the_same_proof():
@@ -317,6 +353,9 @@ def test_the_url_host_and_containment_guards_use_the_same_proof():
         head,
     )
     assert PT not in _rules(ok)
+    # OR-88: the recognised guard lowers the finding to a WARN, it does not remove it.
+    assert {f["id"] for f in _lowered(ok)} == {PT}
+    assert any("startswith" in f["fix"] for f in _lowered(ok)), "the guard is named"
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +391,7 @@ def test_a_tuple_assignment_reads_its_right_side_before_it_binds(label, body):
 def test_the_control_without_a_swap_stays_guarded():
     ctrl = _app("", "other = request.args['g']\n" + _G + "return open(name).read()", _ABORT_HEAD)
     assert PT not in _rules(ctrl)
+    assert PT not in _all_ids(ctrl), _NO_GUARD
 
 
 def test_a_swap_of_two_route_parameters_is_tracked():
@@ -382,6 +422,7 @@ def test_a_swap_of_two_route_parameters_is_tracked():
         "    return open(name).read()\n"
     )
     assert PT not in _rules(safe)
+    assert PT not in _all_ids(safe), _NO_GUARD
 
 
 @pytest.mark.parametrize(
@@ -415,3 +456,4 @@ def test_rebinding_the_alias_target_is_not_taint():
         "name = request.args['f']\nbase = name\nbase = 'x'\nreturn open(base).read()",
     )
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD

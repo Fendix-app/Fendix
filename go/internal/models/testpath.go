@@ -8,16 +8,34 @@ import (
 // testPathRe recognises the file-path conventions that mark test / fixture
 // code. It mirrors the Python analyzer's `_is_test_path` markers
 // (python/analyzers/ast_analyzer.py) EXACTLY, so the Go decision layer and the
-// Python emitter agree on what "test code" means: a tests/ or testing/ dir, a
-// conftest, a test_*.py / *_test.py file, or a fixtures/ dir.
+// Python emitter agree on what "test code" means.
+//
+// Two groups, joined into one expression:
+//
+//   - the Python conventions: a tests/ or testing/ dir, a conftest, a
+//     test_*.py / *_test.py file, or a fixtures/ dir;
+//   - the conventions of the other ecosystems (RC-10 (a), decision package):
+//     fixture, mock, spec, e2e, cypress and testdata directories, the JS/TS
+//     __tests__ / __mocks__ / __fixtures__ directories and test-utils helpers,
+//     *.test / *.spec / *.cy / *.e2e script files, Go *_test.go, Ruby *_spec.rb
+//     and *_test.rb, and the JVM *Test / *Tests / *IT / *ITCase classes and
+//     Test<Name> helpers. A name has to be a whole path segment (or the file
+//     suffix itself): "specification", "mockups" and "Testimonial" are code.
 //
 // Keeping the two in lockstep is what lets Fendix derive test context in Go
 // from the finding's endpoint instead of threading a flag across the NDJSON
 // IPC boundary — the endpoint for a whitebox finding IS the `<rel path>:<line>`
 // the Python analyzer classified. TestIsTestPathMatchesPythonMarkers locks the
-// marker set.
+// Python marker set, TestIsTestPathSharedVectors locks the whole set against
+// the vector file python/tests/test_rc10_test_paths.py also reads, and that
+// test file checks this expression's source against the Python one. Change the
+// two together. No comment inside the call below may hold a backtick: the
+// Python test reads the literals out of it.
 var testPathRe = regexp.MustCompile(
-	`(^|/)(tests?|testing|conftest)([_/.]|$)|(^|/)test_[^/]*\.py$|_test\.py$|/fixtures?/`,
+	`(^|/)(tests?|testing|conftest)([_/.]|$)|(^|/)test_[^/]*\.py$|_test\.py$|/fixtures?/` +
+		`|(^|/)(fixtures?|__tests__|__mocks__|__fixtures__|mocks?|specs?|e2e|cypress|testdata|test-?utils?|testutils)(/|$)` +
+		`|\.(test|spec|cy|e2e)\.[cm]?[jt]sx?$|_test\.go$|_spec\.rb$|_test\.rb$` +
+		`|(^|/)[^/]*(Test|Tests|IT|ITCase)\.(java|kt|scala|groovy)$|(^|/)Test[A-Z][^/]*\.(java|kt)$`,
 )
 
 // methodPrefixRe matches the leading HTTP method token that black-box emitters

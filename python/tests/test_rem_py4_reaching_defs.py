@@ -417,12 +417,45 @@ def _handler(body: str, prelude: str = "") -> str:
     )
 
 
-def _rules(src: str) -> set[str]:
+# OR-88 (CL2-1): a sink a recognised containment guard covers is reported at WARN,
+# naming the guard (the `fix` text starts `_LOWERED_MARK`), not removed.
+#   old `_rules`: the id of every finding
+#   new `_rules`: the id of every finding that is not lowered by a guard, so a test
+#                 that says a guard "holds" (`PT not in _rules(...)`) keeps its
+#                 meaning; `_lowered` is exactly the lowered ones.
+_LOWERED_MARK = "A path-containment guard"
+
+
+def _findings(src: str) -> list[dict]:
     findings: list[dict] = []
     with tempfile.TemporaryDirectory() as d:
         (Path(d) / "app.py").write_text(src)
         ASTAnalyzer(d, "python").run(findings.append)
-    return {f["id"] for f in findings}
+    return findings
+
+
+def _rules(src: str) -> set[str]:
+    return {f["id"] for f in _findings(src) if not f.get("fix", "").startswith(_LOWERED_MARK)}
+
+
+def _lowered(src: str) -> list[dict]:
+    return [f for f in _findings(src) if f.get("fix", "").startswith(_LOWERED_MARK)]
+
+
+def _all_ids(src: str) -> set[str]:
+    """The id of EVERY finding, lowered ones included: a sink that is not reported at all."""
+    return {f["id"] for f in _findings(src)}
+
+
+# F-C6 (CL3): `PT not in _rules(...)` cannot tell a finding LOWERED by a guard from one
+# REMOVED, because `_rules` leaves the lowered ones out. Each such assertion is paired with
+# the OR-88 one that applies. Where a recognised containment guard covers the sink, the
+# finding is still reported, lowered, with the guard named (`_lowered`). Where none is
+# involved, `_all_ids` shows the sink is not reported at all, for this reason: a rejection
+# of `..` and absolute names, a membership allow-list, or a store that does not reach the
+# sink removes it as it did in v3.7.0 (a sanitiser, or no flow); none of the containment
+# recognisers took part (no guard was accepted, checked with `_note_guard`).
+_NO_GUARD = "removed, not lowered: no containment guard is involved (a sanitiser or no flow, as in v3.7.0)"
 
 
 PT = "SEC-PY_PATH_TRAVERSAL"
@@ -526,19 +559,23 @@ def test_a_definition_in_an_alias_chain_after_the_guard_invalidates_it():
 
 def test_the_guard_alone_still_contains_the_path():
     assert PT not in _rules(_traversal(""))
+    assert PT not in _all_ids(_traversal("")), _NO_GUARD
 
 
 def test_an_unrelated_store_between_does_not_invalidate():
     assert PT not in _rules(_traversal("other = 1"))
+    assert PT not in _all_ids(_traversal("other = 1")), _NO_GUARD
 
 
 def test_an_alias_taken_after_the_guard_is_guarded():
     assert PT not in _rules(_traversal("path = name", "return open(path).read()"))
+    assert PT not in _all_ids(_traversal("path = name", "return open(path).read()")), _NO_GUARD
 
 
 def test_a_store_after_the_sink_does_not_reach_it():
     src = _handler(_TRAVERSAL_GUARD + "data = open(name).read()\nname = unquote(name)\nreturn data")
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD
 
 
 def test_a_rebind_before_the_guard_is_what_the_guard_tests():
@@ -552,11 +589,13 @@ def test_a_rebind_before_the_guard_is_what_the_guard_tests():
         """
     )
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD
 
 
 def test_an_alias_taken_before_a_later_rebind_keeps_the_guarded_value():
     src = _handler(_TRAVERSAL_GUARD + "path = name\nname = unquote(name)\nreturn open(path).read()")
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD
 
 
 def test_an_alias_taken_after_the_rebind_does_not():
@@ -575,6 +614,7 @@ return open(name).read()
 """
     )
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD
 
 
 def test_the_two_halves_must_each_reach_the_sink_unchanged():
@@ -606,6 +646,7 @@ def test_branch_assigned_before_the_guard_is_tested_as_a_whole():
         """
     )
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD
 
 
 def test_guard_in_the_helper_does_not_protect_a_nested_function_rebind():
@@ -636,6 +677,7 @@ def _membership(after: str) -> str:
 
 def test_membership_guard_alone_holds():
     assert PT not in _rules(_membership(""))
+    assert PT not in _all_ids(_membership("")), _NO_GUARD
 
 
 @pytest.mark.parametrize(
@@ -656,6 +698,7 @@ def test_membership_guard_is_invalidated_by_a_later_definition(after):
 def test_membership_guard_survives_a_store_after_the_sink():
     src = _handler(_MEMBERSHIP + "data = open(name).read()\nname = 'x'\nreturn data")
     assert PT not in _rules(src)
+    assert PT not in _all_ids(src), _NO_GUARD
 
 
 # --- URL-host allowlist guard ---------------------------------------------
@@ -735,6 +778,9 @@ def _contained(after: str) -> str:
 
 def test_containment_guard_alone_holds():
     assert PT not in _rules(_contained(""))
+    # OR-88: held, and reported at WARN with the guard named, not removed.
+    assert {f["id"] for f in _lowered(_contained(""))} == {PT}
+    assert any("startswith" in f["fix"] for f in _lowered(_contained(""))), "the guard is named"
 
 
 @pytest.mark.parametrize(
