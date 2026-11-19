@@ -1,7 +1,7 @@
 # Fendix Decision Policy
 
 **Status:** shipped in the decision-integrity change (RC-1 / RC-2 / RC-3)
-**Policy version:** `1.0.0` — stamped into every report as `metadata.policy_version` (`decision.PolicyVersion`). Bumped when a rule in `applyConfidenceGate` or the corroboration taxonomy changes meaning; the report schema version does not move for that.
+**Policy version:** `1.0.0` — stamped into every report as `metadata.policy_version` (`decision.PolicyVersion`). Bumped when a rule in `applyConfidenceGate` or the corroboration taxonomy changes meaning; the report schema version does not move for that. **In this build the version stays `1.0.0`** although the context rules below (the test-path conventions of RC-10, the documentation rule of RC-10b, and the occurrence grouping of RC-9 and RC-9e) change which status some findings earn: the bump is held for an owner decision on the managed-CI contract, which records the finding policy version of the producer. This file describes the behaviour the build has.
 **Authoritative implementation:** `go/internal/decision/decision.go`
 **Escape hatch:** `--enforce-confidence=false` restores the pre-policy
 severity-only mapping byte-for-byte.
@@ -74,7 +74,7 @@ have disagreed.
 | Signal | Set by |
 |---|---|
 | `direct observation of a live response` | a deterministic read: a header, cookie attribute or CORS value present or absent |
-| `deterministic detection in production code` | a high-confidence pattern match in non-test, non-fixture source |
+| `deterministic detection in production code` | a high-confidence pattern match in non-test, non-fixture source; for a credential, also not in documentation unless it can be shown real from the file alone (see "Test code and documentation") |
 | `imported high-precision rule` | an external tool declaring its own rule high-precision (SARIF import) |
 
 ### Not a signal
@@ -121,7 +121,12 @@ BLOCK + in test/fixture code + no independent signal     → WARN
 WARN  + below --fail-on + in test/fixture code           → INFO
 ```
 
-A finding whose severity met `--fail-on` is never reported below WARN.
+A finding whose severity met `--fail-on` is never reported below WARN, with two
+deliberate exceptions for a credential whose path and value agree it is a sample:
+`test-fixture-corroborated` (test or fixture code and a fixture-shaped value) and
+`documentation-synthetic` (documentation and a synthetic value), both described below.
+In each the finding keeps its id, severity, endpoint and redacted evidence; only
+`Status` and `Reason` move.
 
 ### Why self-evident signals still gate at HIGH
 
@@ -140,6 +145,67 @@ claim:
   "authentication was bypassed". It is missing the premise *authentication was
   expected here*, which no status code can supply. It scores no signal at all
   and is held at WARN until a declared expectation supplies that premise.
+
+---
+
+## Test code and documentation
+
+Two classes of file change how much a pattern match proves. Both are decided from the
+finding's endpoint alone, as a pure function of the path (Constitution Rule 8), and both
+de-escalate; neither suppresses.
+
+**Test code (RC-10).** `models.IsTestPath` and the Python analyzer's `_is_test_path` are
+one set of conventions, kept in lockstep and pinned by one shared vector file. A path is
+test code when it holds, as a whole path segment or as the file suffix itself:
+
+- a `tests/`, `test/` or `testing/` directory, `conftest`, `test_*.py` or `*_test.py`, or
+  a `fixture`/`fixtures` directory;
+- a `mock`/`mocks`, `spec`/`specs`, `e2e`, `cypress` or `testdata` directory, the
+  JavaScript and TypeScript `__tests__`, `__mocks__` and `__fixtures__` directories, and
+  `test-utils`/`testutils` helpers;
+- `*.test`, `*.spec`, `*.cy` and `*.e2e` script files (`.js`, `.ts`, `.jsx`, `.tsx`,
+  `.mjs`, `.cjs`, `.mts`, `.cts`), Go `*_test.go`, Ruby `*_spec.rb` and `*_test.rb`;
+- the JVM `*Test`, `*Tests`, `*IT` and `*ITCase` classes (`.java`, `.kt`, `.scala`,
+  `.groovy`) and `Test<Name>` helpers (`.java`, `.kt`).
+
+A name must be a whole segment: `specification`, `mockups` and `Testimonial` are code. The
+rule is the test-fixture de-escalation above (`--deescalate-tests`): an uncorroborated
+BLOCK is held at WARN, a below-threshold WARN becomes INFO, a finding with an independent
+signal still blocks. It is a decision by path name, which is why it never excludes a file
+and never drops a finding: a vulnerable handler under such a directory stays visible but
+cannot block a confidence-gated scan.
+
+**Documentation (RC-10b).** `models.IsDocPath` decides by the file and never by a
+directory name alone, because a directory called `docs/` also holds what ships with the
+documentation. A file is documentation when its own form says so: prose markup
+(Markdown, MDX, reStructuredText, AsciiDoc) anywhere; a `.txt` file under a docs
+directory or named like a document (README, CHANGELOG, NOTES, ...) unless its name says
+what it holds (`credentials.txt`, `secrets.txt`); an extension-less file named like a
+document, or any other extension-less file under a docs directory except a build or deploy
+file (`Makefile`, `Dockerfile`, ...); and an HTML page under a docs directory that is not
+inside a served root (`public/`, `static/`, `templates/`, `dist/`, ...). Everything else is
+not documentation, every deployable or runnable format under `docs/` (YAML, properties,
+JSON, scripts, a compose file) included, and a route is never documentation. The test is
+positive on purpose: a file the rule does not recognise keeps the weight it always had, so
+a misclassification can only leave a sample at BLOCK, never hide a real credential.
+
+For a credential (`secrets` category) in documentation:
+
+- it earns no `deterministic detection in production code` signal (and so no +30 in the
+  scorer), unless it is **provable offline** (`OfflineProvable`): a GitHub token whose
+  checksum is valid, a private key whose PEM body parses, or an AWS access key id with its
+  secret beside it. Those keep the full weight, and the path never lowers a value the bytes
+  prove. Any other real-format credential there is held at WARN;
+- if its value is also **demonstrably synthetic** (`SyntheticValue`: a placeholder word,
+  a dominant-character run, an implausibly short value, a sequential or periodic run, a
+  published documentation example, a template marker, or a common sample password such as
+  `password123`; value evidence only, never the variable name), the path and the bytes are
+  two independent observations that it is a sample, and it drops to INFO
+  (`documentation-synthetic`). Independent corroboration vetoes the drop, as it does for the
+  test-fixture arms;
+- this does not depend on `--deescalate-tests`: documentation is not test code. The
+  synthetic-value classifier and the common-placeholder list apply in every file, not only
+  in documentation.
 
 ---
 
@@ -182,6 +248,42 @@ distinguishable from one evaluated to false. In the SARIF export the evidence
 sub-object is a `map`, not a struct, precisely so an unevaluated key can be
 **absent** — a struct field is either true or false, and `omitempty` on a bool
 would make a genuinely-evaluated `false` unrepresentable.
+
+---
+
+## Grouping and identity
+
+**Same-construct collapse (RC-9).** `engine.CollapseDuplicateLocations` folds findings
+from different analyzers on one `file:line` only when they describe the same construct.
+Identity is reviewed and conservative: a rule in a reviewed family (an `eval`/`exec`
+family, a hardcoded credential whoever found it, a fast hash used for a password,
+server-side template injection, a dynamic `require`) is in that family whatever CWE it
+cites; any other rule is identified by the CWE ids it references; a finding is also
+identified by its exact title; and a finding identified by none of these is never
+folded (kept twice is a duplicate, folded wrongly is a lost finding). Two constructs on
+one line, such as an `eval` and a `require` in a minified file, stay two findings, each with
+its own title, rule, fingerprint and confidence, and neither inherits the other's
+confidence or proof. **Fingerprints of constructs that earlier folded into another
+finding appear again;** same-construct findings (the secrets scanner and Semgrep on one
+hardcoded password) still merge.
+
+**Occurrence grouping (RC-9e).** `engine.Deduplicate` groups findings that share a title,
+category and severity into one finding that lists every endpoint. A group's status is
+computed from the whole group, so one file's evidence must not set another's. The group
+key therefore also carries the part of an occurrence's own evidence that decides its
+status: the confidence its analyzer asserted, its proof (reachable, proven path, confirmed
+route), its analyzer tier, whether its file is test code or documentation, and, for a
+credential, the scanner's own judgement of the value (fixture-shaped, demonstrably
+synthetic, provable offline, provider-signed). Occurrences of one title that differ in that
+evidence are different findings, so each occurrence is reported under the status its own
+evidence earns, and none that would BLOCK on its own evidence is grouped under a finding
+that does not. A placeholder or synthetic credential occurrence never shares a finding, or
+a status, with a stronger one; the synthetic and offline-provable judgements also survive
+correlation in hybrid (`--url` with `--code`) scans. Only whitebox and imported findings
+have such a class; a blackbox finding (one observation of one URL) and a correlated
+finding (already a reviewed merge) group as before. **Positional finding ids (`SEC-nnn`)
+and finding counts change** (a group with many test-file occurrences and a few
+production ones becomes two findings); **occurrence fingerprints do not.**
 
 ---
 

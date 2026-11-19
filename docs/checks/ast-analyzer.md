@@ -31,7 +31,7 @@ heuristics. They do not enumerate the current analyzer.
 
 | Pattern | What It Catches | Severity |
 |---|---|---|
-| `eval()` calls | Dynamic code execution | HIGH |
+| a real `eval` call (`SEC-JS_EVAL`) | Dynamic code execution; read from tokens, so the word in a comment, string, template text or regular expression, `$eval` and `x.eval(...)` are not reported | HIGH |
 | `innerHTML` assignment | Cross-site scripting (XSS) | MEDIUM |
 | `document.write()` | DOM-based XSS | MEDIUM |
 | SQL template literals | SQL injection via template strings | HIGH |
@@ -45,9 +45,66 @@ heuristics. They do not enumerate the current analyzer.
 4. Reports file path and line number
 
 ### JavaScript
-1. Uses regex-based heuristic matching (not a full JS parser)
-2. Scans `.js` files for known dangerous function/property usage
+1. Uses regex-based heuristic matching (not a full JS parser), except for `eval`
+2. Scans the JavaScript-family files (below) for known dangerous function/property usage
 3. Reports matches with file and line number
+4. **`SEC-JS_EVAL`: a lexer grades the site, it never removes it (E-1, OR-88).** Every line
+   the old pattern `\beval\s*\(` matches is reported. A lexer that knows exactly enough to
+   tell code from a comment, a string, the text of a template literal (code inside `${...}`
+   is code) and a regular expression literal reads the file, and decides only the grade. A call
+   a complete reading puts in code stays **HIGH/HIGH** (and so still corroborates textscan's
+   finding on the same line, decision D20): bare `eval(` (also `eval (x)`, or with a comment or
+   line break before the parenthesis), `window.eval(`, `globalThis.eval(`, `self.eval(` and
+   `global.eval(`, `eval?.(`, `(0, eval)(`, `(eval)(`, and an identifier that spells `eval`
+   through escapes. Every other match (the word in a comment, string, template or JSX text or a
+   regular expression, `$eval`, `.eval` on another object) that a complete reading of the file
+   puts outside code is reported at **MEDIUM severity and LOW confidence**: a WARN under every
+   `--fail-on` (`held_confidence_low`), which earns no deterministic-detection delta and lends
+   no confidence to another finding (the collapse only adopts a higher claim). Its id, rule id,
+   title and references are the confirmed finding's, so a baseline entry does not move when a
+   site changes grade; its `fix` text says the call could not be confirmed. The lexer was the
+   single point two rounds of independent verification found shapes for (an HTML-like comment,
+   a hashbang ended by U+2028, a division after a function or class expression, a regular
+   expression after `extends`, `default` or `for await`, `</`, JSX text with an apostrophe, a
+   URL or a backtick) that made it read executed code as text and drop the call; a recogniser
+   that only lowers a grade turns each of them into a WARN instead of a clean scan. The
+   accepted residual: crafted syntax that makes a complete reading wrong can lower a v3.7.0
+   BLOCK `eval` to a WARN. **When the lexer gives up** (no reading completes, its budget is
+   spent, or it crashes) it has decided nothing, and every match of the old pattern is
+   reported at HIGH/HIGH, as in v3.7.0: a doubt reports, and a budget an adversary can
+   exhaust is no way to lower a BLOCK. In the forms
+   other than a plain `eval(`, a call whose only argument is a plain string literal (or a
+   template literal with no substitution) is a constant and is not reported; that exemption,
+   like the newly matched forms, sits on top of the floor and never touches a site the old
+   pattern matched. Where a construct has two readings (a `/` after `}`, `await`, `yield`,
+   `of` or a postfix `!`; `<!--` and `-->`) both are followed and a call either reading puts in
+   code is confirmed; a `/` after `extends`, `default` or the parenthesis of `for await` opens a
+   regular expression. JSX text is read as code, so a call after an apostrophe, a URL or an odd
+   backtick in element text is reported at the lower grade. A lexer that raises
+   (this one or the identifier-escape lexer) makes the file lost evaluation (an
+   `internal error: <type>` reason) and never aborts the walk.
+5. **A file with an identifier written as a unicode escape is lost evaluation (R6-E7a).**
+   The runtime reads an identifier spelled with `\u` escapes as the name it spells,
+   and every pattern here reads it as written, so such a file is recorded under
+   `python-engine/injection` as `lost evaluation, not fully analysed: <path>
+   (unreadable: an identifier spelled with a unicode escape, which the pattern checks
+   do not read as written)`; the findings of the file are kept and the scan reads
+   incomplete. An escape in a string, template text, a regular expression, a comment or
+   JSX text is not an identifier and costs nothing. The check is
+   `scope_evidence.js_identifier_escape`, the same lexer as `go/internal/scope/jsescape.go`,
+   pinned by the same vectors (the TypeScript scanner is the ground truth); where the token
+   before a `/` cannot decide between a regular expression and a division, or where
+   a `<!--` may be a comment, it reads both ways and reports when either reading finds an
+   escape; where a `<` could open a type parameter list (`<T,>(x) => x`, `<T extends U>(x) => x`,
+   `<const T,>(x) => x`, Flow's `<T>(x) => x`) it reads the text as an element and as a
+   comparison, and a generic JSX element's type arguments (`<Select<string> />`) are
+   skipped, so an escape in code that either reading finds makes the file lost evaluation. The
+   lexer fails closed: a type argument list is read to its end whatever its length, and a file it
+   cannot decide (a template with a substitution inside a type argument list, nesting past 20,000
+   levels, more readings or work than its budget allows) is lost evaluation too, because no limit may
+   make it read on as if code were text (R3-SEC-A2). A list that nothing closes is in no valid file: its
+   reading ends, as an unterminated comment ends one, and the other reading of a doubtful `<` is still read. Applies to
+   `.js .jsx .mjs .cjs .ts .tsx .mts .cts`. Remedy: write the identifier in plain characters.
 
 ## Scope, parse failures and the interpreter (decisions D6, D1', D5-2, DE-03)
 
@@ -125,13 +182,22 @@ out of scope, not scanned:`, never cut mid-list, file names sanitised); see
   packages, 1.6 million JavaScript lines) at about 5 s; neither was re-measured for
   these docs.
 - **A finding under a test-named path is demoted, not excluded.** The file is
-  analysed like any other, and a finding in a path that looks like test code
-  (`tests/`, `test_*.py`, `*_test.py`, `conftest.py`, `fixtures/`) is reported with
-  `confidence` forced to `LOW` and `in_test: true` (`ast_analyzer._is_test_path`), so
-  under the default confidence gating it warns and does not block. That is a decision
-  by directory name, which the scope rule above forbids for exclusion: a vulnerable
-  handler placed under `tests/` stays visible but cannot block. It is unchanged in
-  round 5 and its removal for confidence-gated blocking is an open owner decision.
+  analysed like any other, and a finding in a path that looks like test code is
+  reported with `confidence` forced to `LOW` and `in_test: true`
+  (`ast_analyzer._is_test_path`), so under the default confidence gating it warns and
+  does not block. The conventions (RC-10 (a), Release Closure Sprint; kept in lockstep
+  with `models.IsTestPath` in Go and pinned by one shared vector file) are: a `tests/`,
+  `test/` or `testing/` directory, `conftest`, `test_*.py` and `*_test.py`, a `fixture`
+  or `fixtures` directory, and now also mock, spec, e2e, cypress and testdata
+  directories, the JavaScript and TypeScript `__tests__`, `__mocks__` and `__fixtures__`
+  directories and test-utils helpers, `*.test`, `*.spec`, `*.cy` and `*.e2e` script
+  files, Go `*_test.go`, Ruby `*_spec.rb` and `*_test.rb`, and the JVM `*Test`, `*Tests`,
+  `*IT` and `*ITCase` classes and `Test<Name>` helpers. A name has to be a whole path
+  segment (or the file suffix itself): `specification`, `mockups` and `Testimonial` are
+  code. That is a decision by path name, which the scope rule above forbids for
+  exclusion: a vulnerable handler placed under such a directory stays visible but cannot
+  block. The owner kept the demotion and extended the conventions; it is not an
+  exclusion.
 - **An ambiguous binding is lost evaluation (C4B-23).** The visitor resolves a name
   from its last binding in source order, so `if c: name = request.args['g']; else:
   name = 'safe'` followed by `open(name)` hid a path traversal. After a call whose
@@ -194,10 +260,24 @@ out of scope, not scanned:`, never cut mid-list, file names sanitised); see
   `python-engine/<check>: lost evaluation, not fully analysed`. No codec error ever
   escapes (a `# coding: idna` or `rot13` file used to abort the whole tree), and a
   file CPython itself refuses never costs another file its analysis. The codec
-  policy is owner decision D2 as approved, one constant
-  (`PEP263_POLICY = "d2"` here, `codecPolicy` in `go/internal/scope/pysource.go`);
-  D2-A, which keeps only the takeover-immune spellings (`utf-8`, `latin-1`, `ascii`)
-  transparent, is a one-line change pending the owner.
+  policy is the owner's D2-A (ruled and implemented in the Release Closure Sprint), one
+  constant (`PEP263_POLICY = "d2a"` here, `codecPolicy = PolicyD2A` in
+  `go/internal/scope/pysource.go`): only the takeover-immune spellings of `utf-8`,
+  `latin-1`/`iso-8859-1` and `ascii` (`utf-8`, `utf_8`, `utf8`, `utf-8-*`; `latin-1`,
+  `latin1`, `latin_1`, `iso-8859-1`, `iso8859-1`, `iso8859_1`, `iso_8859_1`,
+  `iso_8859_1_1987`, `iso-latin-1`, `latin-1-*`; `ascii`, `us-ascii`, `us_ascii`, in any
+  letter case) read as transparent, because a module in a scanned repository can redefine
+  any other codec name at run time. Every other cookie is **foreign**, including aliases
+  of those codecs (`utf`, `u8`, `cp65001`, `latin`, `l1`) and the legacy code pages
+  (`cp1252`, `euc-jp`): Semgrep and the secrets scan record the file as lost evaluation
+  and this engine decodes it strictly with the codec the cookie names (a file that does not
+  decode is lost evaluation too). That includes the non-text transform codecs (`hex`, `base64`, `zlib`, `uu`, `bz2`,
+  `quopri`, `rot13`, `undefined` and their aliases): CPython refuses them from its own
+  registry, but the registry is what a module in the scanned repository rewrites, so a
+  file that names one is lost evaluation like any other foreign cookie. A byte order mark
+  beside another codec is refused by the tokenizer and stays a refusal (not lost). Decision D2 as first approved (every ASCII-transparent
+  codec reads as UTF-8) is superseded. Remedy: save the file as UTF-8 and declare `utf-8`,
+  or drop the declaration.
 
 ### Guards and reaching definitions (redteam3-py-01)
 
@@ -242,6 +322,38 @@ and 400 nodes per value). A name with no binding that is not a route parameter
 (a plain helper parameter) is still resolved lazily. A swap that moves a
 guarded value (`name, other = other, name; open(other)`) reports, a false
 positive.
+
+**A containment guard is recognised by what a project helper does, and lowers a finding to a WARN (RC-11 G, OR-88).** A
+path-traversal finding used to block correctly guarded code when the guard was a
+project-local helper called as `if not helper(base, target): return`, because the guard
+search covered only a function's top-level statements and accepted only an inline
+`realpath` and `commonpath` against a constant base. A helper now counts by its body and
+never by its name: it must resolve both sides (`realpath`, `Path.resolve`; never
+`abspath`) and test containment separator-safely (`commonpath` equality, `startswith`
+with a separator, `is_relative_to`, `relative_to` in a `try`). The guard has to dominate
+the sink on every path to it, check the value that reaches the sink, check it against the
+base the path was built from (or a narrower one), and not take that base from request
+input. A helper is read from its module through the project call index
+(`ProjectCallIndex.function_def`; the parsed modules are kept in a cache bounded at
+256 KiB of source); a name bound twice, a module two files claim, a module with a
+`from m import *`, a helper with a parameter named like a name its module imports, or a
+helper that cannot be read is not a guard. Anything else keeps reporting: `startswith(base)`
+without a separator, a guard on one branch only, a guard on another variable, a guard
+before a rebinding, a helper whose result is ignored, and a trusted root that is wider
+than the base.
+
+**A recogniser lowers a finding, it never removes it.** Each recogniser (the helper and
+inline one and the older inline one) can be fooled by code a static read cannot follow: a
+guard rebound through `setattr`, `globals()` or `exec`, a library patched from another
+module, a root that is a parent directory or a symlink out of the base, a path built by
+concatenation or a multi-part join. So a sink a recognised guard covers is re-read as if no
+guard were recognised (`_path_traversal_report`), and when that reading would report it, it
+is reported anyway, in the unproven form: `Potential unsafe dynamic filesystem path`, MEDIUM
+severity and MEDIUM confidence, no taint chain, a WARN under every `--fail-on`. Its `fix`
+text starts `A path-containment guard (<the guard>, line N) covers this path` and names the
+guard. A finding with no recognised guard is unchanged (a proven chain still blocks), a
+sink v3.7.0 never reported stays unreported, and a safe package with a correct guard shows a
+WARN where it used to show nothing.
 
 ## Example Finding
 

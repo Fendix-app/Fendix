@@ -398,6 +398,37 @@ Stripe's documentation key, a 48-character OpenAI key, or a database password.
 > this can change an exit code — see
 > [`--enforce-confidence`](../../README.md#common-scan-flags).
 
+## References and documentation (Release Closure Sprint)
+
+**A reference to a secret is not a credential, and only the value decides (NEW-E1).**
+A value that is a well-formed reference to a secret held elsewhere is not reported: an
+AWS ARN of Secrets Manager, SSM Parameter Store or KMS (partitions `aws`, `aws-cn`,
+`aws-us-gov`, with a region, a 12-digit account and the service's own resource form), an
+RDS-managed secret name (`rds!db-<uuid>`, `rds!cluster-<uuid>`) or a GCP Secret Manager
+resource name (`projects/<id>/secrets/<name>`, optionally with a location and a version).
+The check reads the credential's own value and nothing else on the line, and the whole
+value has to be the reference: a resource name elsewhere on the line, a value that only
+contains one or starts like one and carries other text, and one with another string glued
+to its front are reported as the credential they are. Before this change the check read the
+whole line, so a real credential on a line that also named such a resource (a link to a
+project board, say) was not reported.
+
+**A credential in documentation is a sample unless it can be shown real (RC-10b).** In a
+documentation file (`models.IsDocPath`: prose markup, README-style files, text and HTML
+under a docs directory that are not served; never a deployable file under `docs/` and
+never a file named for what it holds, such as `credentials.txt`) a pattern match earns
+no deterministic-detection weight unless the bytes of the file prove it real without the
+provider: a GitHub token whose checksum is valid, a private key whose body parses, or an
+AWS access key id with its secret beside it. Those keep their weight and can block. Any
+other real-format credential in documentation is WARN, and one whose value is also
+demonstrably synthetic (a placeholder, a published example, a sequence, a template, or a
+common sample password such as `password123`) is INFO. The finding, its evidence and its
+severity are kept; only the status moves
+([`DECISION_POLICY.md`](../DECISION_POLICY.md), "Test code and documentation"). The
+synthetic-value classifier and the common-placeholder list now apply in every file, and the
+findings of a file are grouped by that judgement, so a sample never shares a finding, or a
+status, with a stronger credential.
+
 ## Example Finding
 
 ```json

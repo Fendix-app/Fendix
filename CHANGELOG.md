@@ -66,12 +66,14 @@ mislead:**
 - **Smaller fixes:** a deadline that fired is never trusted even if the process
   exited 0, and the process tree is frozen before it is killed; the strongest
   non-Semgrep confidence wins when findings at one location collapse (`eval` of a
-  non-literal now blocks at HIGH/HIGH in `.js`, `.mts`, `.cts` and `.es6` whenever the
+  non-literal now blocks at HIGH/HIGH in `.js`, `.mts` and `.cts` whenever the
   Python engine's rule also reports it, where the textscan finding's MEDIUM won and it
-  warned; a release-note item, and whether to narrow it is an open owner decision); a file
+  warned; a release-note item, approved by the owner with release documentation (D20),
+  whose final wording is the `SEC-JS_EVAL` item of the Release Closure Sprint below); a file
   Semgrep cannot list no longer fails the whole Semgrep run; a named pipe called
-  `*.js` no longer hangs the scan; a Python file with a non-ASCII-transparent PEP 263
-  coding line is lost Semgrep evaluation.
+  `*.js` no longer hangs the scan; a Python file with a PEP 263 coding line that is not
+  a takeover-immune spelling of UTF-8, Latin-1 or ASCII is lost Semgrep evaluation (first
+  written for non-ASCII-transparent codecs; narrowed by D2-A, below).
 
 **Round 6 of the remediation program (2026-11-15), engine verify, coverage and
 contracts (WS-E2). Nothing here is released; every item has a failing test that
@@ -144,16 +146,17 @@ was written first (`*_round6_test.go`, `*_wse2_test.go`).**
   scan, the `fendix verify` re-test and the Python engine: the cookie is read from line
   1 or 2 with CPython's line model (`\r\n`, `\r`, `\n`, no byte limit, `python -x`),
   the name is resolved through a codec table measured on CPython 3.14.5, and a file whose
-  codec is not ASCII-transparent, whose name only a run-time registration could supply,
+  codec is not a takeover-immune spelling (D2-A, below), whose name only a run-time registration could supply,
   or whose cookie only `python -x` reads is lost evaluation in every reader. The Python
   engine no longer falls back to UTF-8, and no codec error aborts the tree. Semgrep's
-  partial-parse judge reads the language's own lines. **The codec policy defaults to
-  decision D2 as approved (every ASCII-transparent codec reads as UTF-8), behind one
-  compiled-in constant (`codecPolicy` in `go/internal/scope/pysource.go`,
-  `PEP263_POLICY` in the Python module); D2-A, which keeps only the takeover-immune
-  spellings transparent because a scanned repository can rebind a transparent name at run
-  time, is a one-line switch and is pending the owner's ruling.** `docs/checks/semgrep.md`
-  and `docs/checks/ast-analyzer.md` describe it.
+  partial-parse judge reads the language's own lines. **The codec policy is the owner's
+  D2-A, ruled and implemented in the Release Closure Sprint (below): only the
+  takeover-immune spellings of UTF-8, Latin-1 and ASCII read as UTF-8, because a scanned
+  repository can rebind any other name at run time. It is behind one compiled-in constant
+  (`codecPolicy` in `go/internal/scope/pysource.go`, `PEP263_POLICY` in the Python
+  module). Round 6 first shipped decision D2 as approved (every ASCII-transparent codec
+  reads as UTF-8) behind the same constant; that reading is superseded.**
+  `docs/checks/semgrep.md` and `docs/checks/ast-analyzer.md` describe it.
 - **Media framing is stricter (R5-11, R5-12, OR-14).** An ISO-BMFF file needs an `ftyp`
   box of whole four-letter brands followed by boxes of the types a base media file
   carries, with consistent sizes and zero-filled padding (an `ftyp` box followed by
@@ -162,6 +165,302 @@ was written first (`*_round6_test.go`, `*_wse2_test.go`).**
   comment that is text, and a trailer that is the last byte (a forged header over noise
   read as a picture in 8 of 1,000 seeded runs). A container can still carry a payload
   in `mdat`, an application extension or image data: the check recognises framing.
+
+**Release Closure Sprint (2026-11-17): scope, scoring and analyzer corrections,
+under the owner's rulings of the closure sprint. Nothing here is released. Every
+behaviour change below has a failing test that was written first (the `conditional_escape`
+item documents an earlier change and adds none), and the three scope items (source
+encodings and the two unicode-escape cases) were also run end to end on a binary built
+from this tree. The finding-decision policy version stays `1.0.0` in this build (last
+item).**
+
+- **Python source encodings: only the takeover-immune spellings read as UTF-8
+  (D2-A, ruled and implemented).** The predicate described under Round 6 above
+  now runs under the owner's D2-A ruling, which replaces decision D2 as first
+  approved. A Python file whose PEP 263 cookie names `utf-8`, `latin-1` or
+  `iso-8859-1`, or `ascii`, in the spellings the generated table measures as
+  immune, is still read as UTF-8; matching is case-insensitive: `utf-8`, `utf_8`,
+  `utf8`, `utf-8-*`; `latin-1`, `latin1`, `latin_1`, `iso-8859-1`, `iso8859-1`,
+  `iso8859_1`, `iso_8859_1`, `iso_8859_1_1987`, `iso-latin-1`, `latin-1-*`; `ascii`,
+  `us-ascii`, `us_ascii`. **Every other cookie is foreign:** Semgrep and the
+  secrets scan record the file as lost evaluation (`<k> not parsed by semgrep`,
+  `<k> unreadable`), the scan reads incomplete, and the Python engine still decodes
+  the file with the codec the cookie names. That now includes aliases of those same
+  codecs (`utf`, `u8`, `cp65001`, `latin`, `l1`, `cp819`, `646`) and the legacy
+  code pages (`cp1252`, `euc-jp`, `koi8-r`). That includes the non-text transform codecs (`hex`, `base64`, `zlib`, `uu`, `bz2`,
+  `quopri`, `rot13`, `undefined` and their aliases): CPython refuses them from its own
+  registry, but the registry is what a module in the scanned repository rewrites, so a
+  file that names one is lost evaluation like any other foreign cookie. A byte order mark
+  beside another codec is refused by the tokenizer and stays a refusal (not lost). **Why:** a module in the scanned
+  repository can redefine any other codec name at run time and run a program that
+  every analyzer reads only as a comment; D2 as first approved left that as a
+  documented false clean. **Customer remedy:** save the file as UTF-8 and declare
+  `utf-8`, or remove the declaration; the report names each file. **Measured:** the
+  immune set is the same on CPython 3.8 to 3.14 (1,473 spellings measured on each),
+  and in the 106-repository corpus one file in one repository changes (a `utf`
+  cookie in flaskbb). The policy is still one compiled-in constant per language
+  (`codecPolicy` in `go/internal/scope/pysource.go`, `PEP263_POLICY` in
+  `python/analyzers/scope_evidence.py`, both D2-A); the 51 hijacked-name vectors
+  that were expected failures under D2 are ordinary assertions now, and
+  `FENDIX_PEP263_POLICY=d2` asserts the superseded readings in the tests only.
+- **JavaScript and TypeScript files with an identifier written as a unicode escape
+  are not fully evaluated (R6-E7a).** The runtime reads an identifier spelled with
+  `\u` escapes as the name it spells, but Semgrep's patterns, textscan's regular
+  expressions and the Python engine's JavaScript checks match names as written. A
+  file in which an identifier (a name, a property, a label) is written that way is
+  now lost evaluation, under the existing reasons and with no new enum or schema
+  change: Semgrep `<k> not parsed by semgrep (<path>)`, textscan `<k> unreadable
+  (<path> (identifier escape))`, and `python-engine/injection` `lost evaluation, not
+  fully analysed: <path> (unreadable: an identifier spelled with a unicode escape,
+  ...)`. The scan reads incomplete and the findings of the file are kept. An escape
+  inside a string, the text of a template literal (code inside `${...}` is code), a
+  regular expression literal, a comment or JSX text is not an identifier and costs
+  nothing; a regular expression literal is told apart from a division by the token
+  before it, and where that token cannot decide the lexer reads the spot both ways
+  and reports the file when either reading finds an escape; where a `<` could open a type parameter list (`<T,>(x) => x`, `<T extends U>(x) => x`,
+  `<const T,>(x) => x`, Flow's `<T>(x) => x`) it reads the text as an element and as a
+  comparison, and a generic JSX element's type arguments (`<Select<string> />`) are
+  skipped, so an escape in code that either reading finds makes the file lost evaluation. **The lexer
+  fails closed:** a type argument list is read to its end whatever its length (a union of 40,000 members is
+  valid), and when the lexer cannot decide a file (a template with a substitution inside a type argument
+  list, nesting past 20,000 levels, or more readings or work than its budget allows) it gives up and the
+  file is lost evaluation; no limit ever makes it resume a reading that can skip code (verifier finding
+  R3-SEC-A2, owner ruling OR-88). A list that nothing closes is in no valid file: its reading ends, as an
+  unterminated comment ends one, and the other reading of a doubtful `<` is still read. It covers `.js`, `.jsx`, `.mjs`, `.cjs`,
+  `.es6`, `.ts`, `.tsx`, `.mts` and `.cts` in any letter case; a `.vue` file was
+  already lost evaluation. **Customer remedy:** write the identifier in plain
+  characters; for a generated bundle, emit identifiers as UTF-8 text (for example
+  esbuild's `charset: "utf8"`). **Measured:** the rule is checked against the
+  TypeScript scanner as ground truth (196 vectors, all from its token stream, 27 of
+  them also run in Node; a 27,000-program differential run found no valid program
+  the rule read as clean while the scanner saw an escape); on the 106-repository
+  corpus 1 of 27,382 JavaScript and TypeScript files is reported (a bundled
+  library whose object keys are escaped), against 249 files in 48 repositories for a
+  rule that does not tell a regular expression from a division.
+- **Java files with a unicode escape that changes the file's structure are not fully
+  evaluated (R6-E7b).** Java translates unicode escapes before it parses a file, so
+  an escape can end a comment, a string or a character literal, and what follows is
+  then code that the analyzers, which read the text as written, take for a comment.
+  A Java file that holds, anywhere, a unicode escape (one or more `u`, four hex digits
+  in either case, the backslash not itself escaped by an odd run of backslashes)
+  that translates to a line break, a quote, a backslash, a slash or an asterisk is now
+  lost evaluation for Semgrep (`<k> not parsed by semgrep`) and textscan (`<k>
+  unreadable (<path> (unicode escape))`): the scan reads incomplete, findings kept.
+  The rule follows the language specification (section 3.3) and was proved against a
+  real JDK (Temurin 21) before it was written: 36 vectors, each compiled and run, 13
+  of which execute a statement that the text-level view takes for a comment.
+  **Customer remedy:** write the character itself, or the ordinary Java escape
+  (`\n`, `\"`), instead of the unicode escape. **Measured:** none of the 14,172 Java
+  files of the 106-repository corpus holds such an escape. An escape for any other
+  character is not covered by this rule; on the Semgrep release this build pins, a
+  file that spells a name or punctuation that way already reads as partially parsed,
+  which is incomplete.
+- **A file named as not parsed by two sources is one file.** The engine's own
+  per-file check (a foreign source encoding, an identifier written as an escape) and
+  Semgrep's report that it could not parse the file both name the file under "not
+  parsed"; it is now counted and listed once instead of as two in-scope files.
+- **A credential is dropped as a reference only when its own value is one (NEW-E1).**
+  The secrets scanner's reference check read the whole line: a credential was not
+  reported when anything else on its line carried a secret-manager or key-service
+  resource name (for example a link to a project board), so a real credential on such
+  a line read as clean. The check now reads the credential's own value and nothing
+  else on the line, and a value is a reference only when the **whole value** is a
+  well-formed one: an AWS ARN of Secrets Manager, SSM Parameter Store or KMS (the
+  partitions `aws`, `aws-cn` and `aws-us-gov`, with a region, a 12-digit account and the
+  service's own resource form), an RDS-managed secret name (`rds!db-<uuid>` or
+  `rds!cluster-<uuid>`), or a GCP Secret Manager resource name
+  (`projects/<id>/secrets/<name>`, optionally with a location and a version). A value
+  that only contains one of these, starts like one and carries other text, or has one
+  glued to its front is reported as the credential it is. A value that is itself such a
+  reference is still not reported as a credential. Credentials that were not reported
+  before are now reported, so a scan can find more.
+- **Findings from different analyzers on one line merge only when they describe the
+  same construct (RC-9).** The cross-analyzer collapse used to fold every finding at
+  one `file:line` into the most trusted one, so two different constructs on a line
+  (an `eval` and a `require`, in a minified file) became one finding that carried
+  one title, one rule and one fingerprint, and that was graded on the evidence of the
+  other. Findings now merge only when they describe the same construct (the
+  reviewed rule families first, then the CWE ids they cite, then an identical title);
+  a finding that none of these identifies is never merged. Different constructs stay
+  separate findings, each with its own title, rule, fingerprint and confidence, and
+  neither takes the other's confidence or proof. **Fingerprints of constructs that were
+  previously merged into another finding appear again**, so a baseline can see them as
+  new findings once; same-construct findings (the secrets scanner and Semgrep on one
+  hardcoded password) still merge.
+- **Occurrences group only with occurrences of the same evidence (RC-9e).** Findings
+  that share a title are grouped into one finding with several endpoints. A group's
+  status was computed from the whole group (the highest confidence, the union of
+  proof), so one file's evidence set the status of every other file's occurrence: a
+  `require()` graded MEDIUM blocked because another file's was HIGH, and hundreds of
+  test-file passwords blocked because a few production ones did. The group key now
+  includes the part of an occurrence's own evidence that decides its status (the
+  confidence its analyzer asserted, its proof, its analyzer tier, and whether its file
+  is test code or documentation), so each occurrence is reported under the status its
+  own evidence earns. Occurrences are also kept apart when the scanner's own judgement of
+  their value differs: a fixture-shaped value, a demonstrably synthetic value, a value that
+  can be shown real offline, or a provider-signed value, and an imported SARIF result's cross-tool corroboration
+  counts only for the occurrence it was found on. A placeholder or synthetic
+  credential occurrence therefore never shares a finding, or a status, with a stronger
+  one (a sample password in a form's field map is its own finding), and the synthetic and
+  offline-provable judgements now also survive correlation in hybrid (`--url` with
+  `--code`) scans. **Positional finding ids (`SEC-nnn`) and finding counts change** (a
+  group with many test-file occurrences and a few production ones is now two findings);
+  **occurrence fingerprints do not.**
+- **A credential in documentation is not a deterministic detection unless it can be
+  shown real from the file alone (RC-10b).** Documentation shows credentials to be
+  read, and a pattern match there is far more often a sample than a secret. A file is
+  documentation by its own form and not by a directory name: prose markup (Markdown,
+  reStructuredText, AsciiDoc, MDX) anywhere, text files under a docs directory or
+  named like documentation (README, CHANGELOG, NOTES), and HTML pages under a docs
+  directory that are not in a served root. A deployable file under `docs/` (YAML,
+  properties, JSON, scripts, a compose file) and a file named for what it holds
+  (`credentials.txt`) are not documentation and keep their weight. A credential in
+  documentation no longer earns the deterministic-detection weight unless it can be
+  shown real offline: a GitHub token whose checksum is valid, a private key whose body
+  parses, or an AWS key id with its secret beside it. Those keep their status (BLOCK
+  when otherwise warranted); any other real-format credential there is WARN, and one
+  whose value is also demonstrably synthetic (a placeholder, a published example, a
+  sequence, a template, or a common sample password such as `password123`) is INFO.
+  The finding, its id, severity, endpoint and redacted evidence are kept; only the
+  status moves. The synthetic-value classifier and the common-placeholder list now
+  apply in every file, not only documentation. A provider token is judged on its own
+  value: a value that carries a Slack, npm, Google, GitHub, Stripe, OpenAI, Anthropic
+  or AWS key id is classed synthetic only when every token in it is, so a real token
+  with a digit run or other junk appended in the same string literal keeps the status
+  v3.7.0 gave it (a real Slack, npm or Google key had been lowered from BLOCK to WARN,
+  exit 1 to 0, by the judgement of the generic password rule's value), and a provider
+  finding that a generic or Semgrep finding at the same place absorbs is never graded
+  below what its own value earns, and neither is a real generic value that a sample
+  token is folded with: a folded finding is a sample only when every credential it
+  covers is one. A sample token keeps its sample status, and a real value beside a
+  published sample token (`password = "<real>"; tok = "<sample>"`, or one literal that
+  holds both) keeps BLOCK: findings bound to different names are never folded, and a
+  credential value is a sample (a published example, a sequence, a repeated or periodic
+  body, a template, a placeholder, a common sample password) only when the WHOLE literal
+  value is that form: the value is the full string the scanner extracted, quotes
+  stripped, not the provider pattern's match, and each of those signals is anchored to
+  all of it, so a match on part of a longer value makes nothing synthetic (the
+  placeholder-word, repeated-character and short-value signals v3.7.0 already had read
+  the value exactly as they did). The only text allowed
+  beside a sample form is a closed list: a placeholder word the scanner already lists, a
+  template marker, or one run of separators between two such parts. A value with
+  anything else in it, of any length (a short password, a real token glued to a sample,
+  real characters that continue a sample's own sequence, a separator before or after the
+  sample), keeps the status v3.7.0 gave it, so it can BLOCK where the previous release
+  candidate warned. A sample token on a line that also holds a credential-named JSON
+  member whose whole value is not a sample form or closed-list junk
+  (`{"password": "<real>", "tok": "<sample>"}`, which no pattern reads) keeps v3.7.0's
+  BLOCK. Which of two otherwise identical findings
+  represents a location no longer depends on the order they arrive in.
+- **More test-code conventions are recognised, in Go and Python together (RC-10 (a)).**
+  The path convention for test code (`models.IsTestPath` and the Python analyzer's
+  `_is_test_path`, kept in lockstep and pinned by one shared vector file) used to know
+  only `test/`, `tests/`, `testing`, `conftest`, Python `test_*.py` and `*_test.py` and
+  `fixtures/`, so JavaScript, TypeScript, Go and JVM test code arrived at full severity.
+  It now also recognises fixture, mock, spec, e2e, cypress and testdata directories; the
+  JavaScript and TypeScript `__tests__`, `__mocks__` and `__fixtures__` directories and
+  test-utils helpers; `*.test`, `*.spec`, `*.cy` and `*.e2e` script files; Go
+  `*_test.go`; Ruby `*_spec.rb` and `*_test.rb`; and the JVM `*Test`, `*Tests`, `*IT`
+  and `*ITCase` classes and `Test<Name>` helpers. A name must be a whole path segment
+  (or the file suffix itself), so `specification`, `mockups` and `Testimonial` are
+  code. This remains a demotion by path and never an exclusion: the file is analysed,
+  the finding is kept, and the decision layer only holds an uncorroborated one at WARN
+  (`--deescalate-tests`); a vulnerable handler placed under such a directory stays
+  visible but cannot block a confidence-gated scan. The owner decision that was open
+  for this demotion is closed: kept, and extended.
+- **`SEC-JS_EVAL` grades a real `eval` HIGH and reports every other `eval(` at reduced
+  confidence, never not at all (E-1, OR-88), and the Python engine records an
+  escaped-identifier file as lost.** The Python engine's JavaScript `eval` check used
+  to match the text `eval(` on every line, so it also fired, at HIGH, in comments,
+  strings, template text, regular expressions, Angular's `scope.$eval(...)` and any
+  `x.eval(...)` member call, and the collapse let that grade vouch for another rule's
+  finding on the line. It now reads the file as tokens, and the tokens decide only the
+  **grade**: every line the v3.7.0 pattern `\beval\s*\(` matches is reported. A call a
+  complete reading puts in code, bare `eval(` (also `eval (x)`, with a comment or line
+  break before the parenthesis), `window.eval(`, `globalThis.eval(`, `self.eval(` and
+  `global.eval(`, `eval?.(`, `(0, eval)(` and `(eval)(`, or an identifier that spells
+  `eval` through escapes, stays HIGH/HIGH; every other match (the word in a comment, a
+  string, template or JSX text or a regular expression, `$eval`, `x.eval(`) that a
+  complete reading of the file puts outside code is reported at MEDIUM severity and LOW
+  confidence, a WARN under every `--fail-on` that earns no deterministic-detection delta
+  and lends no confidence to another finding. **When the lexer gives up** (no reading of
+  the file completes, its budget is spent, or it crashes) it has decided nothing, and every
+  match of the old pattern is reported at HIGH/HIGH as before: a doubt reports, and a
+  budget an adversary can exhaust is no way to lower a BLOCK. Its id, rule id and title are the confirmed finding's, so
+  no fingerprint or baseline entry moves, and its `fix` text says the call could not be
+  confirmed. This replaces a recogniser that decided whether a site was reported at all:
+  two rounds of independent verification found eleven shapes (an HTML-like comment, a
+  hashbang ended by U+2028, a division after a function or class expression, a regular
+  expression after `extends`, `default` or `for await`, `</`, JSX text with an apostrophe,
+  a URL or a backtick) that made it read executed code as text and drop the call, a
+  regression from v3.7.0 that scanned clean. Now each is at least a WARN; the accepted
+  residual is that crafted syntax that makes a complete reading wrong can lower a v3.7.0
+  BLOCK `eval` to a WARN. **A call in
+  one of the newly matched forms whose only argument is a plain string literal, or a
+  template literal with no substitution, is not reported** (a constant, nothing to inject;
+  the newly matched forms and this exemption sit on top of the floor and never touch a
+  site the old pattern matched); a plain `eval(` is reported whatever its argument, as
+  before. Where a construct has two readings (a `/` that may start a regular expression or
+  divide, a `<!--` or `-->` that may be a comment), both are followed and an `eval` that
+  any complete reading puts in code is confirmed. Measured on 95,000 generated programs
+  with V8 as ground truth, no executed `eval` call is without a finding. The check reads
+  `.js .jsx .mjs .cjs .ts .tsx .mts .cts`; an `eval` in `.es6` or `.vue` is reported by
+  textscan alone and, with RC-9e, warns. A lexer that raises (this one or the
+  identifier-escape lexer) makes the file lost evaluation instead of aborting the walk.
+  `python-engine/injection` also records a JavaScript or TypeScript file with an
+  escaped identifier as lost evaluation (see the JavaScript item above).
+  **`eval` of a non-literal still blocks at HIGH/HIGH where textscan and the Python
+  engine both report the same real `eval`** (owner decision D20, approved with this
+  release note); the word `eval` in a comment, a string or `$eval` no longer lends its
+  grade to anything.
+- **A path-traversal guard is recognised by what a project helper does, and lowers a finding to a WARN, never removes it (RC-11 G, OR-88).** A
+  reachable path-traversal finding used to block correctly guarded code when the guard
+  was a project-local helper (`if not _path_is_within(base, target): return` inside a
+  `try`), because the analyzer looked for a guard only among a function's top-level
+  statements and accepted only an inline `realpath` and `commonpath` against a
+  constant base. A helper now counts by its body and never by its name: it must resolve
+  both sides (`realpath` or `Path.resolve`, never `abspath`) and test containment
+  separator-safely (`commonpath` equality, `startswith` with a separator,
+  `is_relative_to`, or `relative_to` in a `try`). The guard must dominate the sink on
+  every path, check the value that reaches the sink, check it against the base the path
+  was built from (or a narrower one), and not take that base from request input; a
+  helper the module rebinds (`_path_is_within = lambda *a: True`), a module that
+  patches `os`, `os.path` or `pathlib`, a module with a `from m import *`, and a helper
+  with a parameter named like a name its module imports (`realpath`) are no guard;
+  anything else keeps reporting. **A sink a recognised guard covers is reported, not
+  dropped:** the recognisers may lower a finding, never remove it, because a recogniser
+  that can be fooled (a guard rebound through `setattr`, `globals()` or `exec`, patched
+  from another module, rooted at a parent directory or at a symlink) turned a
+  vulnerable package into a clean scan in the first release candidates. Such a sink is
+  reported as `Potential unsafe dynamic filesystem path` at MEDIUM severity and
+  MEDIUM confidence with no taint chain, a WARN that never blocks, and its `fix` text
+  starts `A path-containment guard (<the guard>, line N) covers this path`; a sink no
+  guard is recognised for is reported exactly as before. The finding appears where the
+  unguarded code would have been reported, so a safe package with a correct guard now
+  shows a WARN where it used to show nothing. Measured at engine level on 164 packages
+  (the 52 adversarial packages, 23 hold-outs, and the independent verifier's 50 and 39
+  decoys and controls, each judged by a runtime oracle that tries hostile inputs against
+  a real directory tree): vulnerable or conditional packages with no finding fall from
+  24 to 2 (the two v3.7.0 never reported either); vulnerable packages that block
+  stay or rise (90 to 92); safe packages that block stay 9 of 46 (6 of 27 and 0 of 7 on
+  the two original sets). `scanning/validators.py:701` of this repository is now a WARN
+  naming `_path_is_within`.
+- **Django's `conditional_escape` is an HTML escaper (G1.7-U, commit `6ae2418`).** The
+  sanitiser typing by sink class that is described under "Python sanitisers count only
+  for the sink they protect" lists `django.utils.html.conditional_escape` as an HTML
+  escaper, so `mark_safe(f'<pre>{value}</pre>')` after `value` went through
+  `conditional_escape` is no longer reported as an XSS sink (v3.7.0 matched the escape
+  only by a name list that did not hold it, and warned). Like `html.escape`, it is
+  treated as protecting every HTML context, an unquoted attribute and a `javascript:`
+  URL included, so it does not protect those; a `mark_safe` with no escape, or with
+  request input, is still reported (`WARN` and `BLOCK` respectively).
+- **The finding-decision policy version stays `1.0.0` in this build.** RC-9, RC-9e,
+  RC-10 and RC-10b change which status some findings earn, which would normally be a
+  bump of `decision.PolicyVersion` and of `metadata.policy_version`. The managed-CI
+  contract records the finding policy version of the producer, so the bump is held for
+  the owner's decision on that contract; until it is taken this build reports `1.0.0`
+  and `docs/DECISION_POLICY.md` describes the behaviour it has. The report schema does
+  not change.
 
 ### Added
 
@@ -3134,12 +3433,14 @@ made above. They take precedence over the entries above where the two differ.
     imports' dots; `from flask import *` plus `from helpers import *` (a returning
     `abort`) hid a path traversal. The proof now needs every `from X import *` in the
     module to be a known never-returning supplier of the name.
-  - **Test-path confidence demotion is unchanged and open.** `_is_test_path` (a
-    finding under `tests/`, `fixtures/` or `test_*.py` is forced to LOW confidence
-    and tagged `in_test`) is a name-based influence on blocking: a repository can put
-    a vulnerable handler under a directory called `tests/` and a confidence-gated
-    scan warns instead of blocking. It is not an exclusion, but it conflicts in
-    spirit with C6; keep or remove is an owner decision.
+  - **Test-path confidence demotion is kept and extended (RC-10 (a), Release Closure
+    Sprint).** `_is_test_path` (a finding under `tests/`, `fixtures/` or `test_*.py` is
+    forced to LOW confidence and tagged `in_test`) is a name-based influence on
+    blocking: a repository can put a vulnerable handler under a directory called
+    `tests/` and a confidence-gated scan warns instead of blocking. It is not an
+    exclusion, and it conflicts in spirit with C6; the owner kept it and extended the
+    conventions it knows, in Go and Python together (see "More test-code conventions
+    are recognised" in the Release Closure Sprint above).
   - **Letter case and extensions.** `.py`, `.js`, `.jsx`, `.ts` and `.tsx` are
     matched without regard to case (`Server.Py`, `APP.JS` were skipped without
     a trace), and `.mjs`, `.cjs`, `.mts` and `.cts` are scanned.

@@ -50,6 +50,21 @@ the provenance records that could justify it are written by the scanned reposito
   `/`). The findings from the rest of the tree are kept, and the scan reads
   incomplete. The hosted backend treats this lead as repository-caused (incomplete,
   no automatic refund).
+- **A JavaScript, TypeScript or Java file whose text the rules cannot read as the
+  program is lost evaluation too (Release Closure Sprint, R6-E7a, R6-E7b).** The rules
+  here are line regular expressions, and two languages translate or normalise source
+  before they run it: a JavaScript or TypeScript identifier written as a unicode escape
+  (read by the runtime as the name it spells; an escape in a string, template text, a
+  regular expression, a comment or JSX text does not count) and a Java unicode escape
+  that translates to a line break, a quote, a backslash, a slash or an asterisk (Java
+  translates it before it parses the file). Such a file is listed under the existing
+  reason with the cause after its name, `<k> unreadable (<path> (identifier escape))` or
+  `<k> unreadable (<path> (unicode escape))`; it is still scanned, and what it holds in
+  plain form is reported. The scan reads incomplete. Customer remedy: write the
+  identifier, or the character, in plain form. The lexer and the Java rule are
+  `go/internal/scope/jsescape.go` and `javaescape.go` (`scope.EscapeLost`), shared with
+  Semgrep's target selection; a `.vue` file is not read by them (Semgrep records it lost
+  already).
 - A link to something outside the scan root is declared out of scope and never a
   gap. `textscan` stays `ok`, and its detail lists it with the reason: `declared
   out of scope, not scanned: symbolic link 1 (src/linkdir/)` (measured), and,
