@@ -286,7 +286,7 @@ func TestScan_EnvVariantNames(t *testing.T) {
 func TestScan_EnvPatternNotAppliedOutsideEnvFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Same content as .env, but in a .py file → ENV_SECRET must not fire.
-	writeFile(t, dir, "config.py", "DB_PASSWORD=produ" + "ction-password-123\n")
+	writeFile(t, dir, "config.py", "DB_PASSWORD=produ"+"ction-password-123\n")
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -304,7 +304,7 @@ func TestScan_GithubTokenRejectsAlnumNeighbour(t *testing.T) {
 	dir := t.TempDir()
 	// Adjacent alnum char on the right → Python's (?![A-Za-z0-9]) would
 	// reject this; Go must reject too via boundaryOK.
-	writeFile(t, dir, "code.py", `token = "ghp_` + `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAX"`)
+	writeFile(t, dir, "code.py", `token = "ghp_`+`AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAX"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -330,7 +330,7 @@ func TestScan_AWSKeyRejectsAlnumNeighbour(t *testing.T) {
 
 func TestScan_OpenAIDoesNotMatchAnthropicKey(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "code.py", `ANT = "sk-ant-api03-ExampleFakeAn` + `thropicKeyForTesting123456"`)
+	writeFile(t, dir, "code.py", `ANT = "sk-ant-api03-ExampleFakeAn`+`thropicKeyForTesting123456"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -364,7 +364,7 @@ func TestScan_OpenAIDoesNotMatchAnthropicKey(t *testing.T) {
 
 func TestScan_FindingShape(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -473,7 +473,7 @@ func TestScan_ReadsADirectoryThatIsOnlyNamedLikeADependencyTree(t *testing.T) {
 func TestScan_ReadsNodeModulesEvenWithNpmsMarker(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "node_modules/.package-lock.json", `{"name":"x","lockfileVersion":3}`)
-	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIA` + `IOSFODNN7EXAMPLE";`)
+	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIA`+`IOSFODNN7EXAMPLE";`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -539,7 +539,7 @@ func TestScan_ScansALongJSLine(t *testing.T) {
 func TestScan_ReadsEveryTextFile(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"doc.md", "app.properties", "credentials", "Dockerfile", "notes.txt"} {
-		writeFile(t, dir, name, `aws_secret_access_key = "wJalrXUtnFEMI/K7MDEN` + `G/bPxRfiCYQ9fG2kLmNp"`)
+		writeFile(t, dir, name, `aws_secret_access_key = "wJalrXUtnFEMI/K7MDEN`+`G/bPxRfiCYQ9fG2kLmNp"`)
 	}
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -552,8 +552,8 @@ func TestScan_ReadsEveryTextFile(t *testing.T) {
 
 func TestScan_DoesNotReadABinaryFile(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "blob", "\x00\x01"+`AKIA` + `IOSFODNN7EXAMPLE`)
-	writeFile(t, dir, "logo.png", `AKIA` + `IOSFODNN7EXAMPLE`)
+	writeFile(t, dir, "blob", "\x00\x01"+`AKIA`+`IOSFODNN7EXAMPLE`)
+	writeFile(t, dir, "logo.png", `AKIA`+`IOSFODNN7EXAMPLE`)
 	fs, cov, err := ScanCoverage(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -612,7 +612,7 @@ func TestScan_ContextCanceledStopsWalk(t *testing.T) {
 	// Spray files so the walk would visit several entries.
 	for i := 0; i < 50; i++ {
 		writeFile(t, dir, filepath.Join("sub", "f"+string(rune('a'+i%26))+".py"),
-			`x = "AKIA` + `IOSFODNN7EXAMPLE"`)
+			`x = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -629,7 +629,7 @@ func TestScan_ContextCanceledStopsWalk(t *testing.T) {
 func TestScan_EndpointUsesForwardSlashes(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, filepath.Join("sub", "deep", "code.py"),
-		`AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`)
+		`AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -831,8 +831,8 @@ func TestIsEnvFile(t *testing.T) {
 
 func TestScan_MultiFileEmitsPerEndpoint(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "a.py", `KEY = "AKIA` + `IOSFODNN7EXAMPLE"`)
-	writeFile(t, dir, "b.py", `KEY = "AKIA` + `IOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "a.py", `KEY = "AKIA`+`IOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "b.py", `KEY = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -901,7 +901,7 @@ func TestScan_DoesNotOverSuppressRealSecrets(t *testing.T) {
 	// that merely CONTAIN "example" must still be detected — "EXAMPLE" shows
 	// up inside real leaked keys, so suppressing on the substring would be a
 	// false negative.
-	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`+"\n")
+	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`+"\n")
 
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -976,7 +976,7 @@ func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 func TestScanWithAllowlist_RefusesSymlinkedParent(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
-	writeFile(t, outside, "creds.env", `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`)
+	writeFile(t, outside, "creds.env", `AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
@@ -1120,7 +1120,7 @@ func findingFor(t *testing.T, evs []evidence.Evidence, id string) evidence.Evide
 func TestScan_ProviderKeyUnderTestNameStaysAnchored(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, tmp, "tests/test_billing.py",
-		"TEST_STRIPE_KEY = \"sk_live_" + "abcdefghijklmnopqrstuvwxyz\"\n")
+		"TEST_STRIPE_KEY = \"sk_live_"+"abcdefghijklmnopqrstuvwxyz\"\n")
 
 	found, err := Scan(context.Background(), tmp)
 	if err != nil {
@@ -1268,7 +1268,7 @@ func TestJDBCURLWithPlaceholderPasswordIsMarkedPlaceholder(t *testing.T) {
 func TestDBConnectionStringIdentityUnchangedByJDBCForm(t *testing.T) {
 	// Same id and rule id as before: the JDBC form is an alternative of the
 	// existing detector, not a new rule.
-	got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://h/app?password=Xk2mQ` + `9vLp4Zt7RwB5nHc`)
+	got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://h/app?password=Xk2mQ`+`9vLp4Zt7RwB5nHc`)
 	if len(got) != 1 || got[0].RuleID != "secrets/DB_CONNECTION_STRING" {
 		t.Errorf("want one finding with rule id secrets/DB_CONNECTION_STRING, got %+v", got)
 	}
