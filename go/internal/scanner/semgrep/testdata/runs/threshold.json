@@ -1,0 +1,169 @@
+{
+ "version": "1.182.1",
+ "results": [],
+ "errors": [
+  {
+   "code": 2,
+   "level": "warn",
+   "type": "Timeout",
+   "rule_id": "tmp.fendix-semgrep-rules-1234.java-open_redirect-taint",
+   "message": "Timeout when running tmp.fendix-semgrep-rules-1234.java-open_redirect-taint on /fx/java300/src/main/java/app/ItemController.java:\n ",
+   "path": "/fx/java300/src/main/java/app/ItemController.java"
+  },
+  {
+   "code": 2,
+   "level": "warn",
+   "type": "Timeout",
+   "rule_id": "tmp.fendix-semgrep-rules-1234.java-sqli-taint",
+   "message": "Timeout when running tmp.fendix-semgrep-rules-1234.java-sqli-taint on /fx/java300/src/main/java/app/ItemController.java:\n ",
+   "path": "/fx/java300/src/main/java/app/ItemController.java"
+  },
+  {
+   "code": 2,
+   "level": "warn",
+   "type": "Timeout",
+   "rule_id": "tmp.fendix-semgrep-rules-1234.java-ssti-taint",
+   "message": "Timeout when running tmp.fendix-semgrep-rules-1234.java-ssti-taint on /fx/java300/src/main/java/app/ItemController.java:\n ",
+   "path": "/fx/java300/src/main/java/app/ItemController.java"
+  }
+ ],
+ "paths": {
+  "scanned": [
+   "/fx/java300/src/main/java/app/ItemController.java"
+  ]
+ },
+ "time": {
+  "rules": [
+   "tmp.fendix-semgrep-rules-1234.java-weak_password_hash-taint",
+   "tmp.fendix-semgrep-rules-1234.java-jwt_no_verify-taint",
+   "tmp.fendix-semgrep-rules-1234.java-weak_random_token-taint",
+   "tmp.fendix-semgrep-rules-1234.java-sqli-taint",
+   "tmp.fendix-semgrep-rules-1234.java-sqli-sink",
+   "tmp.fendix-semgrep-rules-1234.java-cmdi-taint",
+   "tmp.fendix-semgrep-rules-1234.java-ssti-taint",
+   "tmp.fendix-semgrep-rules-1234.java-xss-taint",
+   "tmp.fendix-semgrep-rules-1234.java-xss-sink",
+   "tmp.fendix-semgrep-rules-1234.java-ssrf-taint",
+   "tmp.fendix-semgrep-rules-1234.java-ssrf-sink",
+   "tmp.fendix-semgrep-rules-1234.java-path_traversal-taint",
+   "tmp.fendix-semgrep-rules-1234.java-path_traversal-sink",
+   "tmp.fendix-semgrep-rules-1234.java-open_redirect-taint",
+   "tmp.fendix-semgrep-rules-1234.java-open_redirect-sink"
+  ],
+  "rules_parse_time": 0.21447014808654785,
+  "profiling_times": {
+   "config_time": 3.519979238510132,
+   "core_time": 18.732765436172485,
+   "ignores_time": 0.0004241466522216797,
+   "total_time": 22.262827396392822
+  },
+  "parsing_time": {
+   "total_time": 0.0,
+   "per_file_time": {
+    "mean": 0.0,
+    "std_dev": 0.0
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_files": []
+  },
+  "scanning_time": {
+   "total_time": 18.15877604484558,
+   "per_file_time": {
+    "mean": 18.15877604484558,
+    "std_dev": 0.0
+   },
+   "very_slow_stats": {
+    "time_ratio": 1.0,
+    "count_ratio": 1.0
+   },
+   "very_slow_files": [
+    {
+     "fpath": "/fx/java300/src/main/java/app/ItemController.java",
+     "ftime": 18.15877604484558
+    }
+   ]
+  },
+  "matching_time": {
+   "total_time": 0.0,
+   "per_file_and_rule_time": {
+    "mean": 0.0,
+    "std_dev": 0.0
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_rules_on_files": []
+  },
+  "tainting_time": {
+   "total_time": 0.0,
+   "per_def_and_rule_time": {
+    "mean": 0.0,
+    "std_dev": 0.0
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_rules_on_defs": []
+  },
+  "fixpoint_timeouts": [],
+  "prefiltering": {
+   "project_level_time": 0.0,
+   "file_level_time": 0.0,
+   "rules_with_project_prefilters_ratio": 0.0,
+   "rules_with_file_prefilters_ratio": 0.0,
+   "rules_selected_ratio": 0.0,
+   "rules_matched_ratio": 0.0
+  },
+  "targets": [
+   {
+    "path": "/fx/java300/src/main/java/app/ItemController.java",
+    "num_bytes": 147637,
+    "match_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "parse_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "run_time": 18.15877604484558
+   }
+  ],
+  "total_bytes": 147637,
+  "max_memory_bytes": 726843456
+ },
+ "engine_requested": "OSS",
+ "skipped_rules": [],
+ "profiling_results": []
+}

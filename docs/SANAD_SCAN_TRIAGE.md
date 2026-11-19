@@ -27,7 +27,7 @@ The dynamic SQLi the security agent flagged (f-string table/column names in `que
 | Fendix **True Positives** | **0** | no confirmed real vuln matched |
 | Fendix **False Positives** | **0** confirmed | none of the 34 was triaged as a concrete FP against agent ground truth |
 | **Precision (on confirmed-real basis)** | **0 / 0 = N/A** | engine produced 0 confirmed-real TPs and 0 confirmed FPs; its 34 raw hits are unreachable/unconfirmed noise |
-| **Recall (security-relevant, in-scope)** | **~0%** | 4 in-scope-detectable real vulns (2 prompt-injection, SSRF, partial JWT/secrets) all missed |
+| **Recall on this Python target (security-relevant, in-scope)** | **~0%** | 4 in-scope-detectable real vulns (2 prompt-injection, SSRF, partial JWT/secrets) all missed |
 
 **Headline for the engine team:** On Sanad, fendix's *deterministic taint core did not falsely fire on real code* (good — 0 confirmed FPs), but it **caught zero of the real vulnerabilities**, because every real flaw on this target lives in a **source or sink category the engine does not model**: LLM-prompt sinks, datastore/config/env sources, and client-*constructor* SSRF sinks. Sanad is therefore primarily a **recall-gap target**, the mirror image of a noisy-FP target.
 
@@ -128,7 +128,7 @@ Root-causes verified directly against `python/analyzers/ast_analyzer.py` (v0.16.
 | Fendix confirmed FPs | (low) | **0** |
 | Fendix confirmed TPs | caught the 1 SSRF (in-wheelhouse) | **0** (SSRF was constructor-shaped + config-sourced → missed) |
 | Fendix **precision** | high (1 real SSRF surfaced) | **N/A (0 TP / 0 FP)** — 0 confirmed-real signal |
-| Fendix **recall** | caught its 1 SSRF | **~0%** — every real vuln is out of the modeled source/sink set |
+| Fendix **recall** on this Python target | caught its 1 SSRF | **~0%** — every real vuln is out of the modeled source/sink set |
 | **AI-specific risk (NEW dimension)** | **none** — no LLM layer | **dominant**: direct + indirect prompt injection, RAG context poisoning, LLM-output XSS, cost-runaway, model/base_url injection |
 | Top vuln class | SSRF | **Prompt injection (direct + indirect/RAG)** |
 | Engine takeaway | engine's SSRF call-sink rule *worked* (URL → `requests.get`) | engine's SSRF rule *failed* on the **constructor `base_url=` shape + config source**; and has **no concept of LLM-prompt sinks** |
@@ -213,7 +213,7 @@ passes a tainted (or, for shape-based SQLi, a non-constant string-building)
 argument at that position/keyword. Bounded to 1 hop (`_interproc_depth`), so no
 recursion into callers' callers and no RecursionError surface.
 
-**Measured impact (labeled benchmark):** `cmdi-interprocedural` flips to
+**Measured impact (labeled Python benchmark corpus):** `cmdi-interprocedural` flips to
 **NOW DETECTED ✓**; HONEST F1 **0.889 → 0.919** (recall 0.80 → 0.85), precision
 stays 1.000. **Zero new false positives** on the real corpora (TwiScope 35, Sanad
 40, vulpy 8, dvpwa 5 — all unchanged), confirming the single-hop bound + the

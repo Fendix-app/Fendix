@@ -174,6 +174,207 @@ def find_matches(content: str) -> list[tuple[str, re.Match[str]]]:
     return matches
 
 
+# ---------------------------------------------------------------------------
+# Accuracy claims must name what they were measured on.
+#
+# A bare "F1 = 1.000" reads as a statement about every language Fendix scans.
+# Fendix's numbers differ by language and by corpus (development set versus the
+# blind holdout), so a figure is only publishable in a sentence that also names
+# a language, framework or corpus. See benchmarks/frameworks/ and
+# docs/accuracy.md.
+# ---------------------------------------------------------------------------
+
+ACCURACY_METRIC = re.compile(
+    r"\bF1\b|\bprecision\b|\brecall\b|\baccuracy\b|\baccurate\b", re.IGNORECASE
+)
+# A ratio (0.944, 1.000, .75) or a percentage (94%, 94.4 %) anywhere near a
+# metric word. A ratio needs two decimals and must not touch another dot-digit
+# group, so versions such as 3.6.2 or 1.141.0 and short numbers such as 3.6
+# stay out.
+ACCURACY_FIGURE = re.compile(
+    r"(?<![\w.])(?:[01]?\.\d{2,}|\d{1,3}(?:\.\d+)?[ ]?%)(?![\w]|\.\d)"
+)
+# A bare integer or one-decimal value ("F1 = 1.0", "F1 of 1", "recall: 94")
+# only counts when it follows the metric word directly, so "recall ... 10
+# findings" and "precision on Track 4" stay out.
+ACCURACY_FIGURE_AFTER_METRIC = re.compile(
+    r"\b(?:F1|precision|recall|accuracy)\b(?:[\s*_`|]|\b(?:score|rate|of|is|was|at|reaches|hits)\b|[=:≥>~≈])*"
+    r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w]|\.\d)",
+    re.IGNORECASE,
+)
+# "0.5% lower than expected" is a difference, not a measurement.
+ACCURACY_RELATIVE = re.compile(
+    r"^[ ]?%?\s*(?:points?\s+)?(?:lower|higher|less|more|better|worse|smaller|larger|faster|slower)\b",
+    re.IGNORECASE,
+)
+ACCURACY_WINDOW = 80
+# Scope: a language or framework, or an explicitly named corpus. Generic words
+# such as "cases", "samples", "benchmark", "dataset" or "dev" name nothing.
+ACCURACY_SCOPE = re.compile(
+    r"\b(?:python|django|flask|fastapi|javascript|typescript|node\.?js|"
+    r"golang|net/http|kotlin|php|js/ts|"
+    r"java|"
+    r"synthetic(?:\s+python)?\s+corpus|juliet|holdout|hold-out|"
+    r"(?:development|dev)\s+(?:corpus|set)|parity\s+(?:corpus|gate|holdout)|"
+    r"heavy-eval\s+corpus|twiscope|pygoat|juice\s+shop|dvwa|webgoat|bwapp)\b",
+    re.IGNORECASE,
+)
+# Names that are ordinary words in lower case count only capitalised.
+ACCURACY_SCOPE_CAPITALISED = re.compile(r"\b(?:Go|Express|NestJS|Next\.js|Spring|Gin|Rust|Ruby)\b")
+# An F1 of 1 is the strongest claim Fendix makes, and the one that was
+# repeated without its scope: it must carry the language and the known gaps.
+ACCURACY_F1_ONE = re.compile(
+    r"\bF1\b(?:[\s*_`|]|\b(?:score|of|is|was|at|reaches|hits)\b|[=:≥>~≈])*"
+    r"(?<![\w.])1(?:\.0+)?(?![\w]|\.\d)"
+    r"|(?<![\w.])1\.0+(?![\w]|\.\d)[\s*_`|]*F1\b",
+    re.IGNORECASE,
+)
+# A table row's F1 label followed by a cell holding exactly 1.
+ACCURACY_F1_ROW_ONE = re.compile(r"\bF1\b[^|]*\|[\s*]*1(?:\.0+)?[\s*]*(?:\||$)", re.IGNORECASE)
+# A confidence interval's upper bound ("[0.953, 1.000]", "0.953–1.000") is not
+# an F1 of 1.
+ACCURACY_F1_INTERVAL = re.compile(r"\[[^\]]*\]|[\d.]+\s*[–-]\s*[\d.]+")
+ACCURACY_F1_PYTHON = re.compile(r"\bpython\b", re.IGNORECASE)
+ACCURACY_F1_GAPS = re.compile(r"\bknown[- ]gaps?\b", re.IGNORECASE)
+_BLOCK_START = re.compile(r"^\s*(?:\||#{1,6}\s|[-*+]\s|\d+[.)]\s)")
+_QUOTE_MARKER = re.compile(r"^\s*(?:>\s?)+")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z`*(\[\"'])")
+
+
+def _accuracy_units(text: str) -> list[tuple[int, str]]:
+    """Split markdown into (line, sentence) units, skipping fenced code.
+
+    A table row, heading or list item starts its own unit; a wrapped paragraph
+    is joined and split on sentence ends, so a scope in the previous sentence
+    does not carry over.
+    """
+    units: list[tuple[int, str]] = []
+    paragraph: list[str] = []
+    start = 0
+    in_fence = False
+
+    def flush() -> None:
+        if paragraph:
+            joined = " ".join(part.strip() for part in paragraph)
+            units.extend((start, part) for part in _SENTENCE_END.split(joined))
+            paragraph.clear()
+
+    for number, raw in enumerate(text.splitlines(), start=1):
+        # A blockquote continues its sentence over lines, so judge its text.
+        line = _QUOTE_MARKER.sub("", raw)
+        if line.lstrip().startswith(("```", "~~~")):
+            flush()
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if not line.strip():
+            flush()
+            continue
+        if _BLOCK_START.match(line):
+            flush()
+            if line.lstrip().startswith("|"):
+                units.append((number, line))
+                continue
+            start = number
+        elif not paragraph:
+            start = number
+        paragraph.append(line)
+    flush()
+    return units
+
+
+def _has_accuracy_figure(sentence: str) -> bool:
+    metrics = list(ACCURACY_METRIC.finditer(sentence))
+    if not metrics:
+        return False
+    for figure in ACCURACY_FIGURE.finditer(sentence):
+        if ACCURACY_RELATIVE.match(sentence[figure.end():]):
+            continue
+        if any(abs(m.start() - figure.start()) <= ACCURACY_WINDOW for m in metrics):
+            return True
+    for figure in ACCURACY_FIGURE_AFTER_METRIC.finditer(sentence):
+        if not ACCURACY_RELATIVE.match(sentence[figure.end():]):
+            return True
+    return False
+
+
+def _is_scoped(sentence: str) -> bool:
+    return bool(
+        ACCURACY_SCOPE.search(sentence) or ACCURACY_SCOPE_CAPITALISED.search(sentence)
+    )
+
+
+def _is_unscoped_f1_one(sentence: str) -> bool:
+    """An F1 of 1 without both the language (Python) and the known gaps."""
+    if not re.search(r"\bF1\b", sentence, re.IGNORECASE):
+        return False
+    sentence = ACCURACY_F1_INTERVAL.sub(" ", sentence)
+    claims_one = ACCURACY_F1_ONE.search(sentence) or (
+        # A table row: "| F1 (scope) | 1.000 |".
+        sentence.lstrip().startswith("|") and ACCURACY_F1_ROW_ONE.search(sentence)
+    )
+    if not claims_one:
+        return False
+    return not (
+        ACCURACY_F1_PYTHON.search(sentence) and ACCURACY_F1_GAPS.search(sentence)
+    )
+
+
+def find_unscoped_accuracy(text: str) -> list[tuple[int, str]]:
+    """Return (line, sentence) for every accuracy figure with no scope.
+
+    Two rules: any accuracy figure needs a language, framework or named corpus
+    in its sentence; an F1 of 1 also needs "Python" and "known gaps" there.
+    """
+    found: list[tuple[int, str]] = []
+    for line, sentence in _accuracy_units(text):
+        if _is_unscoped_f1_one(sentence) or (
+            _has_accuracy_figure(sentence) and not _is_scoped(sentence)
+        ):
+            found.append((line, sentence.strip()))
+    return found
+
+
+# Dated records and design history describe a past measurement; they are not
+# current product claims.
+ACCURACY_SCOPE_EXEMPT_PREFIXES = (
+    "docs/superpowers/",
+    "docs/plans/",
+    "docs/reviews/",
+)
+
+
+def is_accuracy_surface(path: Path) -> bool:
+    value = path.as_posix()
+    if value.startswith(ACCURACY_SCOPE_EXEMPT_PREFIXES):
+        return False
+    if value in {"README.md", "BENCHMARKS.md"}:
+        return True
+    return value.startswith("docs/") and path.suffix.lower() in {".md", ".markdown"}
+
+
+def scan_accuracy_scope(files: list[Path]) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
+    for relative in files:
+        if not is_accuracy_surface(relative):
+            continue
+        try:
+            content = (ROOT / relative).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for line, sentence in find_unscoped_accuracy(content):
+            findings.append(
+                {
+                    "path": relative.as_posix(),
+                    "detector": "unscoped_accuracy_figure",
+                    "match": sentence[:160],
+                    "line": line,
+                }
+            )
+    return findings
+
+
 def scan(files: list[Path]) -> list[dict[str, object]]:
     findings: list[dict[str, object]] = []
     for relative in files:
@@ -295,6 +496,75 @@ def self_test() -> None:
         ("obsolete_action_claim", "whole files, so existing issues in them are reported", False),
         ("obsolete_action_claim", "Use a baseline to report only new findings.", False),
     )
+    accuracy_cases = (
+        # An accuracy figure with no language or corpus scope in its sentence.
+        ("Fendix reaches F1 = 1.000.", 1),
+        ("Precision is 0.97 across the board.", 1),
+        ("We catch 94% of vulnerabilities, a recall of 0.94.", 1),
+        ("Overall accuracy: 99%.", 1),
+        ("| recall | 0.944 |", 1),
+        # Scoped by a language, framework or corpus in the same sentence.
+        ("Python recall is 0.756 on the blind holdout.", 0),
+        ("Dev recall 1.000 on the development corpus.", 0),
+        ("HANDLED F1 == 1.000 on the Python synthetic corpus, excluding documented known gaps.", 0),
+        ("| JS/TS | 0.889 | recall |", 0),
+        ("Java (Spring) precision was 0.11 on real-world code.", 0),
+        ("Go precision 0.09.", 0),
+        # A scope in the previous sentence does not carry over.
+        ("This is the Python layer. Recall is 0.99.", 1),
+        # A paragraph wrapped over lines is one sentence.
+        ("Recall on the\nholdout corpus is 0.756.", 0),
+        # A blockquote wrapped over lines is one sentence.
+        ("> Recall is 0.99 on the\n> Python corpus.", 0),
+        ("> Recall is 0.99 on\n> the full set.", 1),
+        # (a) A generic word is not a scope: name a language, framework or corpus.
+        ("Overall F1 of 0.97 across all cases.", 1),
+        ("The benchmark shows precision of 0.99.", 1),
+        ("recall of 94 across the dataset", 1),
+        ("Recall is 0.92 on these samples, in dev.", 1),
+        ("Precision is 0.9 for js and ts.", 1),
+        ("Recall is 0.99 on the development corpus.", 0),
+        ("Recall is 0.75 on the parity holdout.", 0),
+        ("Precision is 0.04 on TWISCOPE.", 0),
+        ("Recall is 0.99 on the Juliet-style Python corpus.", 0),
+        ("Recall is 0.9 for JS/TS.", 0),
+        # (b) Integers and one-decimal values count as figures.
+        ("F1 = 1.0", 1),
+        ("F1 of 1 across the board.", 1),
+        ("Precision is 0.9 everywhere.", 1),
+        ("Recall: 94 everywhere.", 1),
+        ("F1 **1** everywhere.", 1),
+        ("Python recall is 0.9.", 0),
+        # (c) An F1 of 1 needs Python and the known gaps in the same sentence.
+        ("F1 = 1.000 on the Python synthetic corpus.", 1),
+        ("F1 = 1.000 on the synthetic corpus, excluding documented known gaps.", 1),
+        ("F1 = 1.000 on the Go development corpus, excluding documented known gaps.", 1),
+        ("F1 = 1.000 on the Python synthetic corpus, excluding documented known gaps.", 0),
+        ("1.000 F1 on the Python synthetic corpus, excluding documented known gaps.", 0),
+        ("| F1 (Python synthetic corpus, excluding documented known gaps) | 1.000 |", 0),
+        ("| F1 (Python synthetic corpus) | 1.000 |", 1),
+        ("| F1 (Python synthetic corpus) | **1.000** |", 1),
+        ("| 4a Juliet | F1 = 0.987 (P 0.974 / R 1.000) |", 0),
+        ("F1 95% bootstrap CI [0.953, 1.000] on the Juliet-style Python corpus.", 0),
+        ("1.000 F1 on the Python corpus (CI 0.953–1.000, bootstrapped).", 1),
+        ("F1 is 0.987 on the Juliet-style Python corpus.", 0),
+        ("Python recall is 1.000 on the development corpus.", 0),
+        # (d) A relative difference is not an accuracy figure.
+        ("recall is 0.5% lower than expected value", 0),
+        # Not accuracy claims.
+        ("Fendix v3.6.2 ships a precision-focused gate.", 0),
+        ("Requires Python 3.11 and Semgrep 1.141.0.", 0),
+        ("CVSS 9.8 findings are critical; 100% of CI runs are cached.", 0),
+        ("Recall matters because a miss hides a vulnerability.", 0),
+        ("Raise the confidence threshold to 0.80 to cut noise.", 0),
+        ("```\nrecall = 0.94\n```", 0),
+    )
+    for sample, expected in accuracy_cases:
+        actual = len(find_unscoped_accuracy(sample))
+        if actual != expected:
+            raise AssertionError(
+                f"unscoped accuracy regression for {sample!r}: {actual} != {expected}"
+            )
     detectors = {detector.name: detector.expression for detector in DETECTORS}
     for detector_name, sample, expected in cases:
         actual = detectors[detector_name].search(sample) is not None
@@ -317,6 +587,15 @@ def self_test() -> None:
         Path("examples/github-actions/fendix-scan.yml"),
         Path("scripts/release/mirror-pages-bootstrap/index.html"),
     }
+    for path, expected in (
+        ("README.md", True),
+        ("BENCHMARKS.md", True),
+        ("docs/accuracy.md", True),
+        ("docs/superpowers/plans/x.md", False),
+        ("CHANGELOG.md", False),
+    ):
+        if is_accuracy_surface(Path(path)) != expected:
+            raise AssertionError(f"accuracy-surface regression for {path}")
     for sample in public_samples:
         if not is_public_surface(sample):
             raise AssertionError(f"public-surface regression for {sample}")
@@ -350,6 +629,7 @@ def self_test() -> None:
         raise AssertionError(f"invalid app deployment accepted: {invalid_manifest!r}")
     print(
         f"public-claims self-test passed ({len(cases)} detector cases, "
+        f"{len(accuracy_cases)} accuracy-scope cases, "
         f"{len(public_samples)} surface cases, 5 application-image cases)"
     )
 
@@ -370,12 +650,14 @@ def main() -> int:
         APP_MANIFEST_PATH.read_text(encoding="utf-8"), contract
     )
     findings = scan(files)
+    scope_violations = scan_accuracy_scope(files)
     violations, counts = classify(findings, allowlist)
     stale = [
         entry
         for entry in allowlist
         if counts[str(entry["id"])] != entry["expected_count"]
     ]
+    violations = violations + scope_violations
     if violations or stale:
         for finding in violations:
             print(

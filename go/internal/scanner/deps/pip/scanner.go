@@ -143,6 +143,8 @@ const osvMaxConcurrentBatches = 4
 // the orchestrator logs + continues; the Python deps.py path provides
 // fallback coverage until Phase 17b removes it.
 func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
+	ctx, itemLines := withItemLog(ctx) // per-package stderr lines are bounded in bytes (OR-13)
+	defer itemLines.flush()
 	abs, err := filepath.Abs(codePath)
 	if err != nil {
 		return nil, fmt.Errorf("pip: resolve path: %w", err)
@@ -155,7 +157,7 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 		return nil, fmt.Errorf("pip: stat requirements.txt: %w", err)
 	}
 
-	content, err := os.ReadFile(reqFile)
+	content, err := readManifest(reqFile)
 	if err != nil {
 		return nil, fmt.Errorf("pip: read requirements.txt: %w", err)
 	}
@@ -176,7 +178,7 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 			// to stderr and move on — pip-audit has the same posture.
 			// The failure is still counted: a total wipeout must surface
 			// as a typed LookupError, not a quiet "ok" with zero findings.
-			fmt.Fprintf(os.Stderr, "[fendix] pip: query %s==%s failed: %v\n", p.name, p.version, err)
+			logItem(ctx, "[fendix] pip: query %s==%s failed: %v\n", p.name, p.version, err)
 			lf.Note(err)
 			continue
 		}
@@ -276,7 +278,7 @@ func ScanOffline(codePath string, maxDepth int, snap *offline.Snapshot) ([]evide
 
 	var findings []evidence.Evidence
 	for _, m := range manifests {
-		content, err := os.ReadFile(m)
+		content, err := readManifest(m)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[fendix] pip: read %s failed: %v\n", m, err)
 			continue
@@ -346,6 +348,8 @@ func advisoryToOSV(a offline.Advisory) osvVuln {
 // the batch path is a throughput optimisation over the package SET rather
 // than a downgrade of the records themselves.
 func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.Evidence, error) {
+	ctx, itemLines := withItemLog(ctx) // per-package stderr lines are bounded in bytes (OR-13)
+	defer itemLines.flush()
 	if maxDepth < 0 {
 		maxDepth = 0
 	}
@@ -367,7 +371,7 @@ func scanViaOSV(ctx context.Context, codePath string, maxDepth int) ([]evidence.
 	// each pair so each finding's Endpoint correctly attributes ownership.
 	var allPairs []pkgWithManifest
 	for _, m := range manifests {
-		content, err := os.ReadFile(m)
+		content, err := readManifest(m)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[fendix] pip: read %s failed: %v\n", m, err)
 			continue
@@ -471,7 +475,7 @@ func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, 
 	}
 	results, err := queryOSVBatch(ctx, client, pkgs)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[fendix] pip: querybatch failed (%v); falling back to per-package /v1/query for %d packages\n", err, len(chunk))
+		logItem(ctx, "[fendix] pip: querybatch failed (%v); falling back to per-package /v1/query for %d packages\n", err, len(chunk))
 		return runSerialFallback(ctx, client, cache, chunk, lf)
 	}
 	var findings []evidence.Evidence
@@ -505,7 +509,7 @@ func runBatchOrFallback(ctx context.Context, client *http.Client, cache string, 
 			// record, and deliberately do NOT cache it — a poisoned entry
 			// would serve alias-less, fix-less records to every path
 			// (including the serial one) for the full 24h TTL.
-			fmt.Fprintf(os.Stderr,
+			logItem(ctx,
 				"[fendix] pip: alias/fix hydration for %s==%s failed (%v); emitting the degraded batch record\n",
 				p.pkg.name, p.pkg.version, err)
 		} else {
@@ -528,7 +532,7 @@ func runSerialFallback(ctx context.Context, client *http.Client, cache string, c
 	for _, p := range chunk {
 		vulns, err := queryOSV(ctx, client, cache, p.pkg.name, p.pkg.version)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[fendix] pip: query %s==%s failed: %v\n", p.pkg.name, p.pkg.version, err)
+			logItem(ctx, "[fendix] pip: query %s==%s failed: %v\n", p.pkg.name, p.pkg.version, err)
 			lf.Note(err)
 			continue
 		}
@@ -1638,4 +1642,19 @@ func writeCache(dir, pkg, version string, vulns []osvVuln) {
 	}
 	tmp.Close()
 	_ = os.Rename(tmp.Name(), p)
+}
+
+// readManifest reads a manifest the scan found in the tree. A path that is a
+// named pipe or a device once links are followed is refused instead of read: an
+// open of a pipe waits for a writer that never comes and would hang the scan
+// (round 5, redteam5-11). A link to a regular file is still followed.
+func readManifest(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return os.ReadFile(path)
 }

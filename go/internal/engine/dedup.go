@@ -2,12 +2,14 @@ package engine
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/Fendix-app/Fendix/go/internal/models"
 )
 
-// Deduplicate collapses findings with the same (Title, Category, Severity)
-// into a single finding whose AffectedEndpoints lists every distinct endpoint.
+// Deduplicate collapses findings with the same (Title, Category, Severity) AND
+// the same own-evidence class (occurrenceClass) into a single finding whose
+// AffectedEndpoints lists every distinct endpoint.
 //
 // This addresses the "missing CSP header × 21 endpoints" problem from the
 // 2026-04-28 real-world test pass: a passive header check fired once per
@@ -17,6 +19,16 @@ import (
 //
 // Dedup runs AFTER correlation so correlated findings (which already merged
 // black-box + white-box pairs) are deduped against each other too.
+//
+// Occurrences in different files that share a title are grouped only when their
+// own evidence is the same (RC-9e). A group's status is computed from the group
+// as a whole (the maximum confidence, the union of proof, the agreement of the
+// path flags), so without that one file's evidence set the status of every
+// occurrence in every other file: a require() graded MEDIUM BLOCKed because
+// another file's require() was HIGH, and 708 test-file passwords BLOCKed
+// because 5 production ones did. With the class in the key every group is
+// uniform in the fields that decide its status, so the max, the union and the
+// agreement below can only return what each member already had.
 //
 // Merge rules:
 //   - Primary kept = the total-order-minimum finding in the group (F-L6).
@@ -45,6 +57,15 @@ import (
 // the dedupKey itself as a total-order tiebreaker so the output sequence is
 // fully determined by the input SET (F-L6) rather than the input permutation.
 func Deduplicate(findings []models.Finding) []models.Finding {
+	return DeduplicateWith(findings, nil)
+}
+
+// DeduplicateWith is Deduplicate with an extra occurrence class appended to every
+// finding's key. The production pipeline passes the provenance index's
+// OccurrenceClass, so the flags only the producer knows (a fixture-shaped value, a
+// synthetic one, an offline-provable one) keep occurrences apart exactly as the
+// finding's own fields do (C1-1). A nil extra is Deduplicate.
+func DeduplicateWith(findings []models.Finding, extra func(models.Finding) string) []models.Finding {
 	if len(findings) == 0 {
 		return findings
 	}
@@ -75,7 +96,7 @@ func Deduplicate(findings []models.Finding) []models.Finding {
 	order := make([]string, 0, len(findings))
 
 	for i, f := range findings {
-		key := dedupKey(f)
+		key := dedupKeyWith(f, extra)
 		g, ok := groups[key]
 		if !ok {
 			g = &groupState{
@@ -211,7 +232,60 @@ func dedupKey(f models.Finding) string {
 	if f.Source == models.SourceImported {
 		key += "|imported"
 	}
-	return key
+	return key + occurrenceClass(f)
+}
+
+// dedupKeyWith is dedupKey plus the extra class, when there is one.
+func dedupKeyWith(f models.Finding, extra func(models.Finding) string) string {
+	k := dedupKey(f)
+	if extra != nil {
+		k += extra(f)
+	}
+	return k
+}
+
+// occurrenceClass is the part of an occurrence's own evidence that decides the
+// status it is reported under, read from the finding alone: the confidence its
+// analyzer asserted, the proof it carries (Reachable, ProvenPath,
+// RouteConfirmed), the tier that produced it, and whether its file is test code
+// or documentation (a credential in documentation is judged differently: RC-10b).
+// Two occurrences of one title with different classes are different findings
+// (RC-9e, "cross-file deduplication isolation").
+//
+// The invariant it buys: the status an occurrence is reported under is the one
+// its own evidence earns. No occurrence is raised by a file it does not share
+// evidence with, and (the one that matters more) no occurrence whose own
+// evidence BLOCKs is grouped under a finding that does not, which would be a
+// missed BLOCK. A file's own evidence never moves another's.
+//
+// Only whitebox findings have a file whose evidence this is. A blackbox
+// finding is one observation of one URL (one header check across 21 endpoints
+// stays one finding), and a correlated finding already is a reviewed merge.
+// An imported finding carries its tool's declared precision as its confidence,
+// which is its own evidence in the same way.
+func occurrenceClass(f models.Finding) string {
+	if f.Source != models.SourceWhitebox && f.Source != models.SourceImported {
+		return ""
+	}
+	flags := [5]byte{'0', '0', '0', '0', '0'}
+	for i, set := range [5]bool{f.Reachable, f.ProvenPath, f.RouteConfirmed, models.IsTestPath(f.Endpoint), models.IsDocPath(f.Endpoint)} {
+		if set {
+			flags[i] = '1'
+		}
+	}
+	if f.Confidence == "" && f.SourceTier == "" && string(flags[:]) == "00000" {
+		// A finding that asserts no evidence at all has no class: it groups as
+		// it always did, including with the other sources' findings.
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("|class:")
+	b.WriteString(string(f.Confidence))
+	b.WriteByte('/')
+	b.WriteString(string(f.SourceTier))
+	b.WriteByte('/')
+	b.Write(flags[:])
+	return b.String()
 }
 
 // findingLess is the total order used to pick a group's primary

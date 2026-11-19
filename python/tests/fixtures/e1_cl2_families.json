@@ -1,0 +1,131 @@
+{
+ "source": "independent verifier rc.3 cases (verify-sec/rc3/cases-a1), each one executed under Node/V8",
+ "cases": [
+  {
+   "name": "js2_a0_control",
+   "round": "control",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A0')\";\neval((userInput));\n",
+   "eval_line": 2
+  },
+  {
+   "name": "js2_a1_htmlcomment_blockopen",
+   "round": "rc2",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A1')\";\nvar x = 1; <!-- /*\neval((userInput));\n// */\n",
+   "eval_line": 3
+  },
+  {
+   "name": "js2_a2_hashbang_ls",
+   "round": "rc2",
+   "filename": "app.js",
+   "src": "#!/usr/bin/env node\u2028var userInput = process.env.USER_CODE || \"console.log('HIT-A2')\"; eval((userInput));\n",
+   "eval_line": 2
+  },
+  {
+   "name": "js2_a3_funcexpr_div",
+   "round": "rc2",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A3')\";\nvar k = function(){} / 1; eval((userInput)); var z = 2 / 1;\n",
+   "eval_line": 2
+  },
+  {
+   "name": "js2_a4_label_block_regex",
+   "round": "rc2",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A4')\";\nvar s = '\"'; L: { } /\"/.test(s) && eval((userInput));\n",
+   "eval_line": 2
+  },
+  {
+   "name": "js2_a5_classexpr_div",
+   "round": "rc2",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A5')\";\nvar C = class {} / 1; eval((userInput)); var z = 2 / 1;\n",
+   "eval_line": 2
+  },
+  {
+   "name": "js2_a6_close_comment",
+   "round": "rc2",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A6')\";\nvar x = 1;\n-->/*\neval((userInput));\n// */\n",
+   "eval_line": 4
+  },
+  {
+   "name": "js2_a7_htmlcomment_quote_ls",
+   "round": "rc2",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-A7')\";\nvar q = 1 <!-- \"\u2028eval((userInput));\n",
+   "eval_line": 3
+  },
+  {
+   "name": "new_for_await_mjs_plain_arg",
+   "round": "rc3",
+   "filename": "app.mjs",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-FA')\"; var s = '\"';\n(async () => {\n  for await (const x of [1]) /\"/.test(s) && eval(userInput);\n})();\n",
+   "eval_line": 3
+  },
+  {
+   "name": "new_jsx_apostrophe",
+   "round": "rc3",
+   "filename": "P.tsx",
+   "src": "import React from 'react';\nconst userInput = \"__h=1\";\nexport default function P() {\n  const a = <p>it's</p>; eval((userInput));\n  return a;\n}\n",
+   "eval_line": 4
+  },
+  {
+   "name": "new_jsx_apostrophe_plain_arg",
+   "round": "rc3",
+   "filename": "P.tsx",
+   "src": "import React from 'react';\nconst userInput = \"__h=1\";\nexport default function P() {\n  const a = <p>it's</p>; eval(userInput);\n  return a;\n}\n",
+   "eval_line": 4
+  },
+  {
+   "name": "new_jsx_backtick",
+   "round": "rc3",
+   "filename": "P.tsx",
+   "src": "import React from 'react';\nconst userInput = \"__h=1\";\nexport default function P() {\n  const a = <p>a ` b</p>;\n  eval((userInput));\n  const b = <p>` c</p>;\n  return [a, b];\n}\n",
+   "eval_line": 5
+  },
+  {
+   "name": "new_jsx_control",
+   "round": "control",
+   "filename": "P.tsx",
+   "src": "import React from 'react';\nconst userInput = \"__h=1\";\nexport default function P() {\n  const a = <p>plain</p>; eval((userInput));\n  return a;\n}\n",
+   "eval_line": 4
+  },
+  {
+   "name": "new_jsx_url",
+   "round": "rc3",
+   "filename": "P.tsx",
+   "src": "import React from 'react';\nconst userInput = \"__h=1\";\nexport default function P() {\n  const a = <a>http://x.example</a>; eval((userInput));\n  return a;\n}\n",
+   "eval_line": 4
+  },
+  {
+   "name": "new_lt_regex",
+   "round": "rc3",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-LT')\"; var s = '\"'; var a = 1;\nvar r = a </\"/.test(s) || eval((userInput));\n",
+   "eval_line": 2
+  },
+  {
+   "name": "new_x1_for_await",
+   "round": "rc3",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-X1')\"; var s = '\"';\n(async () => {\n  for await (const x of [1]) /\"/.test(s) && eval((userInput));\n})();\n",
+   "eval_line": 3
+  },
+  {
+   "name": "new_x2_extends",
+   "round": "rc3",
+   "filename": "app.js",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-X2')\";\nclass A extends /\"/.constructor {} eval((userInput));\n",
+   "eval_line": 2
+  },
+  {
+   "name": "new_x3_export_default",
+   "round": "rc3",
+   "filename": "app.mjs",
+   "src": "var userInput = process.env.USER_CODE || \"console.log('HIT-X3')\"; var s = '\"';\nexport default /\"/.test(s) && eval((userInput));\n",
+   "eval_line": 2
+  }
+ ]
+}

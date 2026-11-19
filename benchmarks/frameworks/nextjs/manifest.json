@@ -1,0 +1,75 @@
+{
+  "framework": "nextjs",
+  "language": "typescript",
+  "cases": [
+    {"id": "nextjs-sqli-direct", "class": "sqli", "variant": "direct", "vulnerable": true, "file": "app/api/sqli-direct/route.ts"},
+    {"id": "nextjs-sqli-indirect", "class": "sqli", "variant": "indirect", "vulnerable": true, "file": "app/api/sqli-indirect/route.ts"},
+    {"id": "nextjs-sqli-safe", "class": "sqli", "variant": "safe", "vulnerable": false, "file": "app/api/sqli-safe/route.ts"},
+    {"id": "nextjs-sqli-safe_lookalike", "class": "sqli", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/sqli-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-cmdi-direct", "class": "cmdi", "variant": "direct", "vulnerable": true, "file": "app/api/cmdi-direct/route.ts"},
+    {"id": "nextjs-cmdi-indirect", "class": "cmdi", "variant": "indirect", "vulnerable": true, "file": "app/api/cmdi-indirect/route.ts"},
+    {"id": "nextjs-cmdi-safe", "class": "cmdi", "variant": "safe", "vulnerable": false, "file": "app/api/cmdi-safe/route.ts"},
+    {"id": "nextjs-cmdi-safe_lookalike", "class": "cmdi", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/cmdi-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-xss-direct", "class": "xss", "variant": "direct", "vulnerable": true, "file": "app/api/xss-direct/route.ts"},
+    {"id": "nextjs-xss-indirect", "class": "xss", "variant": "indirect", "vulnerable": true, "file": "app/api/xss-indirect/route.ts"},
+    {"id": "nextjs-xss-safe", "class": "xss", "variant": "safe", "vulnerable": false, "file": "app/api/xss-safe/route.ts"},
+    {"id": "nextjs-xss-safe_lookalike", "class": "xss", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/xss-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-ssrf-direct", "class": "ssrf", "variant": "direct", "vulnerable": true, "file": "app/api/ssrf-direct/route.ts"},
+    {"id": "nextjs-ssrf-indirect", "class": "ssrf", "variant": "indirect", "vulnerable": true, "file": "app/api/ssrf-indirect/route.ts"},
+    {"id": "nextjs-ssrf-safe", "class": "ssrf", "variant": "safe", "vulnerable": false, "file": "app/api/ssrf-safe/route.ts"},
+    {"id": "nextjs-ssrf-safe_lookalike", "class": "ssrf", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/ssrf-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-path_traversal-direct", "class": "path_traversal", "variant": "direct", "vulnerable": true, "file": "app/api/path-traversal-direct/route.ts"},
+    {"id": "nextjs-path_traversal-indirect", "class": "path_traversal", "variant": "indirect", "vulnerable": true, "file": "app/api/path-traversal-indirect/route.ts"},
+    {"id": "nextjs-path_traversal-safe", "class": "path_traversal", "variant": "safe", "vulnerable": false, "file": "app/api/path-traversal-safe/route.ts"},
+    {"id": "nextjs-path_traversal-safe_lookalike", "class": "path_traversal", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/path-traversal-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-open_redirect-direct", "class": "open_redirect", "variant": "direct", "vulnerable": true, "file": "app/api/open-redirect-direct/route.ts"},
+    {"id": "nextjs-open_redirect-indirect", "class": "open_redirect", "variant": "indirect", "vulnerable": true, "file": "app/api/open-redirect-indirect/route.ts"},
+    {"id": "nextjs-open_redirect-safe", "class": "open_redirect", "variant": "safe", "vulnerable": false, "file": "app/api/open-redirect-safe/route.ts"},
+    {"id": "nextjs-open_redirect-safe_lookalike", "class": "open_redirect", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/open-redirect-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-hardcoded_secret-direct", "class": "hardcoded_secret", "variant": "direct", "vulnerable": true, "file": "app/api/hardcoded-secret-direct/route.ts"},
+    {"id": "nextjs-hardcoded_secret-indirect", "class": "hardcoded_secret", "variant": "indirect", "vulnerable": true, "file": "app/api/hardcoded-secret-indirect/route.ts"},
+    {"id": "nextjs-hardcoded_secret-safe", "class": "hardcoded_secret", "variant": "safe", "vulnerable": false, "file": "app/api/hardcoded-secret-safe/route.ts"},
+    {"id": "nextjs-hardcoded_secret-safe_lookalike", "class": "hardcoded_secret", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/hardcoded-secret-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-weak_password_hash-direct", "class": "weak_password_hash", "variant": "direct", "vulnerable": true, "file": "app/api/weak-password-hash-direct/route.ts"},
+    {"id": "nextjs-weak_password_hash-indirect", "class": "weak_password_hash", "variant": "indirect", "vulnerable": true, "file": "app/api/weak-password-hash-indirect/route.ts"},
+    {"id": "nextjs-weak_password_hash-safe", "class": "weak_password_hash", "variant": "safe", "vulnerable": false, "file": "app/api/weak-password-hash-safe/route.ts"},
+    {"id": "nextjs-weak_password_hash-safe_lookalike", "class": "weak_password_hash", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/weak-password-hash-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-jwt_no_verify-direct", "class": "jwt_no_verify", "variant": "direct", "vulnerable": true, "file": "app/api/jwt-no-verify-direct/route.ts"},
+    {"id": "nextjs-jwt_no_verify-indirect", "class": "jwt_no_verify", "variant": "indirect", "vulnerable": true, "file": "app/api/jwt-no-verify-indirect/route.ts"},
+    {"id": "nextjs-jwt_no_verify-safe", "class": "jwt_no_verify", "variant": "safe", "vulnerable": false, "file": "app/api/jwt-no-verify-safe/route.ts"},
+    {"id": "nextjs-jwt_no_verify-safe_lookalike", "class": "jwt_no_verify", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/jwt-no-verify-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-weak_random_token-direct", "class": "weak_random_token", "variant": "direct", "vulnerable": true, "file": "app/api/weak-random-token-direct/route.ts"},
+    {"id": "nextjs-weak_random_token-indirect", "class": "weak_random_token", "variant": "indirect", "vulnerable": true, "file": "app/api/weak-random-token-indirect/route.ts"},
+    {"id": "nextjs-weak_random_token-safe", "class": "weak_random_token", "variant": "safe", "vulnerable": false, "file": "app/api/weak-random-token-safe/route.ts"},
+    {"id": "nextjs-weak_random_token-safe_lookalike", "class": "weak_random_token", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/weak-random-token-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-ssti-direct", "class": "ssti", "variant": "direct", "vulnerable": true, "file": "app/api/ssti-direct/route.ts"},
+    {"id": "nextjs-ssti-indirect", "class": "ssti", "variant": "indirect", "vulnerable": true, "file": "app/api/ssti-indirect/route.ts"},
+    {"id": "nextjs-ssti-safe", "class": "ssti", "variant": "safe", "vulnerable": false, "file": "app/api/ssti-safe/route.ts"},
+    {"id": "nextjs-ssti-safe_lookalike", "class": "ssti", "variant": "safe_lookalike", "vulnerable": false, "file": "app/api/ssti-safe-lookalike/route.ts"},
+
+    {"id": "nextjs-sqli-cross_file", "class": "sqli", "variant": "cross_file", "vulnerable": true, "file": "lib/sqli-cross-file.ts", "entry_file": "app/api/sqli-cross-file/route.ts"},
+    {"id": "nextjs-sqli-alt_api", "class": "sqli", "variant": "alt_api", "vulnerable": true, "file": "app/api/sqli-alt-api/route.ts"},
+    {"id": "nextjs-cmdi-cross_file", "class": "cmdi", "variant": "cross_file", "vulnerable": true, "file": "lib/cmdi-cross-file.ts", "entry_file": "app/api/cmdi-cross-file/route.ts"},
+    {"id": "nextjs-cmdi-alt_api", "class": "cmdi", "variant": "alt_api", "vulnerable": true, "file": "app/api/cmdi-alt-api/route.ts"},
+    {"id": "nextjs-xss-cross_file", "class": "xss", "variant": "cross_file", "vulnerable": true, "file": "lib/xss-cross-file.ts", "entry_file": "app/api/xss-cross-file/route.ts"},
+    {"id": "nextjs-xss-alt_api", "class": "xss", "variant": "alt_api", "vulnerable": true, "file": "app/api/xss-alt-api/route.ts"},
+    {"id": "nextjs-ssrf-cross_file", "class": "ssrf", "variant": "cross_file", "vulnerable": true, "file": "lib/ssrf-cross-file.ts", "entry_file": "app/api/ssrf-cross-file/route.ts"},
+    {"id": "nextjs-ssrf-alt_api", "class": "ssrf", "variant": "alt_api", "vulnerable": true, "file": "app/api/ssrf-alt-api/route.ts"},
+    {"id": "nextjs-path_traversal-cross_file", "class": "path_traversal", "variant": "cross_file", "vulnerable": true, "file": "lib/path-traversal-cross-file.ts", "entry_file": "app/api/path-traversal-cross-file/route.ts"},
+    {"id": "nextjs-path_traversal-alt_api", "class": "path_traversal", "variant": "alt_api", "vulnerable": true, "file": "app/api/path-traversal-alt-api/route.ts"},
+    {"id": "nextjs-open_redirect-cross_file", "class": "open_redirect", "variant": "cross_file", "vulnerable": true, "file": "lib/open-redirect-cross-file.ts", "entry_file": "app/api/open-redirect-cross-file/route.ts"},
+    {"id": "nextjs-open_redirect-alt_api", "class": "open_redirect", "variant": "alt_api", "vulnerable": true, "file": "app/api/open-redirect-alt-api/route.ts"},
+    {"id": "nextjs-hardcoded_secret-cross_file", "class": "hardcoded_secret", "variant": "cross_file", "vulnerable": true, "file": "lib/hardcoded-secret-cross-file.ts", "entry_file": "app/api/hardcoded-secret-cross-file/route.ts"},
+    {"id": "nextjs-hardcoded_secret-alt_api", "class": "hardcoded_secret", "variant": "alt_api", "vulnerable": true, "file": "app/api/hardcoded-secret-alt-api/route.ts"}
+  ]
+}

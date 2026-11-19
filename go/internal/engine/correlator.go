@@ -350,6 +350,9 @@ func mergeFindings(bb, wb models.Finding, routeConfirmed bool) models.Finding {
 	// correlation up to CRITICAL — that would silently bypass the gate the
 	// roadmap explicitly protects. Empty tier (legacy/native) keeps the
 	// prior behaviour so this change can't regress existing escalations.
+	// A semgrep_taint finding takes this escalation: it is Reachable only for
+	// a language whose taint pack cleared its precision gate (ADR-011), and a
+	// non-correlated one takes the same bump in escalateNonCorrelatedReachable.
 	if wb.Reachable && wb.SourceTier != models.TierSemgrepShim {
 		severity = escalateSeverity(severity)
 	}
@@ -359,9 +362,13 @@ func mergeFindings(bb, wb models.Finding, routeConfirmed bool) models.Finding {
 	// request-input source. That combination — "DAST hit + SAST taint path +
 	// the exact route that reaches it" — is the strongest claim the engine
 	// makes, so force it to CRITICAL regardless of base severity and flag it.
-	// Tier gate still applies: a semgrep_shim finding that hasn't cleared the
-	// F1 gate must not ride a route match up to a Proven Path CRITICAL.
-	provenPath := routeConfirmed && wb.Reachable && wb.SourceTier != models.TierSemgrepShim
+	// Tier gate still applies: no semgrep finding rides a route match up to a
+	// Proven Path CRITICAL — not the shim, which never cleared the F1 gate, and
+	// not the taint tier either: Proven Path is reserved for analyzers that
+	// cleared it, and managed-ci/v2's consistency rule
+	// proven_path_requires_route_and_taint rejects proven_path with
+	// analyzer_implementation "semgrep" (ADR-011).
+	provenPath := routeConfirmed && wb.Reachable && !wb.SourceTier.IsSemgrep()
 	if provenPath {
 		severity = models.SeverityCritical
 	}

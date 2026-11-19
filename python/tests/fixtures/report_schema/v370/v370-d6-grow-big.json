@@ -1,0 +1,129 @@
+{
+  "metadata": {
+    "schema_version": 2,
+    "fingerprint_algorithm": "fendix/v2",
+    "target": "",
+    "started_at": "2026-11-12T12:11:11.365344342Z",
+    "duration": "4.772s",
+    "version": "v3.7.0",
+    "mode": "whitebox",
+    "endpoints_scanned": 0,
+    "active_probes": false,
+    "checks_run": [
+      "configleak",
+      "headers",
+      "cors",
+      "exposure",
+      "ratelimit",
+      "cookie-flags",
+      "secrets",
+      "semgrep"
+    ],
+    "scanner_status": [
+      {
+        "name": "dast",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --url"
+      },
+      {
+        "name": "spec",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --spec"
+      },
+      {
+        "name": "active-probes",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--enable-active not set"
+      },
+      {
+        "name": "secrets",
+        "state": "ok"
+      },
+      {
+        "name": "textscan",
+        "state": "ok"
+      },
+      {
+        "name": "semgrep",
+        "state": "ok"
+      },
+      {
+        "name": "govulncheck",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--no-native-deps"
+      },
+      {
+        "name": "pip",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--no-native-deps"
+      },
+      {
+        "name": "npm",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--no-native-deps"
+      },
+      {
+        "name": "python-engine",
+        "state": "ok"
+      },
+      {
+        "name": "python-engine/auth",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no spec supplied"
+      },
+      {
+        "name": "python-engine/injection",
+        "state": "ok"
+      },
+      {
+        "name": "python-engine/deps",
+        "state": "ok"
+      },
+      {
+        "name": "plugins",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no plugins configured"
+      }
+    ],
+    "coverage": {
+      "contract_version": 1,
+      "strict": false,
+      "configured_complete": true,
+      "gaps": [],
+      "limitations": [],
+      "required_analyzers": [],
+      "required_gaps": [],
+      "retried": []
+    },
+    "policy_version": "1.0.0"
+  },
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0
+  },
+  "sources": {
+    "blackbox": 0,
+    "whitebox": 0,
+    "correlated": 0
+  },
+  "total": 0,
+  "decisions": {
+    "total": 0,
+    "confirmed": 0,
+    "blocking": 0,
+    "warning": 0,
+    "informational": 0
+  },
+  "findings": []
+}

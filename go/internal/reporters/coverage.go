@@ -1,5 +1,7 @@
 package reporters
 
+import "github.com/Fendix-app/Fendix/go/internal/models"
+
 // ScannerReason is the closed, machine-readable explanation for a
 // non-ok scanner_status entry (coverage contract version 1). A skipped
 // entry carries a skip reason, a failed entry carries a fail reason, an
@@ -126,6 +128,12 @@ type Coverage struct {
 	RequiredAnalyzers  []string `json:"required_analyzers"`
 	RequiredGaps       []string `json:"required_gaps"`
 	Retried            []string `json:"retried"`
+	// ActiveProbes accounts for every active probe sent (attempted, evaluated,
+	// inconclusive, unknown-origin, scanner-failed, with structured reasons).
+	// Present when active probing was enabled; additive, no schema_version
+	// bump. A scan-wide configured_complete is never proof that every probe
+	// was evaluated: read this beside it.
+	ActiveProbes *models.ActiveProbeCoverage `json:"active_probes,omitempty"`
 }
 
 // BuildCoverage derives the coverage block from the recorded entries.

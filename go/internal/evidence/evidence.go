@@ -166,6 +166,44 @@ type Evidence struct {
 	// be carried explicitly by ScoringProvenance AND restored by
 	// engine.CorrelateEvidence. INTERNAL — never projected onto Finding.
 	Placeholder bool
+	// SyntheticValue marks credential evidence whose VALUE is demonstrably
+	// synthetic: a placeholder word, a dominant-character run, an implausibly
+	// short value, a sequential or periodic run, a published documentation
+	// example, a template marker, or a well-known sample credential
+	// ("password123"). It is value evidence only: unlike Placeholder it never
+	// counts the variable NAME, because a name records intent, not the value.
+	//
+	// The decision layer reads it together with InDoc: a credential in
+	// documentation whose value is also synthetic is two independent signals
+	// that it is a sample, and drops to INFO (RC-10b). Like Placeholder it
+	// cannot be re-derived from the endpoint, so it is carried by
+	// ScoringProvenance. INTERNAL — never projected onto Finding.
+	SyntheticValue bool
+	// OfflineProvable marks credential evidence whose validity can be shown
+	// from the bytes of the file alone, with no provider call: a GitHub token
+	// whose checksum is valid, a private key whose PEM body parses as DER, an
+	// AWS access key id with its secret beside it. Documentation is where a
+	// credential is most often a sample, so such a value keeps its full
+	// deterministic-detection weight there (RC-10b); a value that is not provable
+	// offline does not.
+	//
+	// It is computed only for files models.IsDocPath names, the one place the
+	// policy reads it. INTERNAL — never projected onto Finding.
+	OfflineProvable bool
+	// InDoc marks evidence whose file is documentation (models.IsDocPath). A
+	// credential read out of documentation earns no deterministic-detection
+	// weight unless OfflineProvable (RC-10b). NewProvenanceIndex derives it
+	// from the endpoint, as it does InTest, so every engine gets the same
+	// classification. INTERNAL — never projected onto Finding.
+	InDoc bool
+	// NotDocumentation marks evidence whose file is a SCRIPT whatever its name
+	// or directory says: its first line is a "#!" interpreter line. A file that
+	// runs is deployable, so a credential in it is as real as one anywhere, even
+	// when the file is called INSTALL or sits under docs/ (CL-1 B-3). It vetoes
+	// InDoc in NewProvenanceIndex and in nothing else. Only the scanner that read
+	// the file's first line can know it, so like SyntheticValue it is carried by
+	// the correlator. INTERNAL — never projected onto Finding.
+	NotDocumentation bool
 	// ProviderAnchored marks credential evidence whose VALUE carries a known
 	// provider's signature — an AKIA… access-key id, a ghp_/gho_/ghu_/ghs_
 	// GitHub token, sk_live_…, xox[abprs]-…, AIza… — rather than merely being

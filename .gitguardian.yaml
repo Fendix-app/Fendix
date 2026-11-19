@@ -36,3 +36,28 @@ secret:
     # Python analyzer + rule-pack tests carry the same kind of fixtures.
     - "python/tests/**"
     - "python/rules/**"
+    # Framework parity corpus: intentionally vulnerable sample apps. Its
+    # secret-class cases hold placeholder tokens only (__EVAL_AWS_ACCESS_KEY_ID__,
+    # __EVAL_GITHUB_TOKEN__, ...); no real or format-valid credential is ever
+    # committed. The harness substitutes synthetic values in a temp copy.
+    - "benchmarks/frameworks/**"
+    # Secrets-scanner unit tests for sample-token judgement, reference values,
+    # offline-provable keys and the fold (Release Closure Sprint). They hold
+    # fabricated, provider-format test vectors and published documentation
+    # samples, never a live credential. Listed file by file, not by directory.
+    - "go/internal/engine/collapse_tiebreak_test.go"
+    - "go/internal/engine/doc_policy_pipeline_test.go"
+    - "go/internal/engine/fold_hiding_test.go"
+    - "go/internal/engine/placeholder_wiring_test.go"
+    - "go/internal/engine/provider_fold_test.go"
+    - "go/internal/engine/short_value_beside_sample_test.go"
+    - "go/internal/engine/whole_value_test.go"
+    - "go/internal/scanner/secrets/lineindex_test.go"
+    - "go/internal/scanner/secrets/neighbor_test.go"
+    - "go/internal/scanner/secrets/placeholder_test.go"
+    - "go/internal/scanner/secrets/provable_test.go"
+    - "go/internal/scanner/secrets/provider_token_value_test.go"
+    - "go/internal/scanner/secrets/reference_value_spellings_test.go"
+    - "go/internal/scanner/secrets/reference_value_test.go"
+    - "go/internal/scanner/secrets/synthetic_test.go"
+    - "go/internal/scope/pep263_vectors_test.go"

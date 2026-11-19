@@ -2,12 +2,40 @@ rules:
   # Rule 1: SQL injection via string formatting / concatenation
   # The alternatives must sit under pattern-either: as sibling `pattern:` entries
   # of `patterns:` Semgrep ANDs them, so the rule could never match (v3.6.3).
+  # The first f-string alternative fires only on an interpolation that
+  # Semgrep's constant propagation cannot resolve to a string literal, so a
+  # module or local string constant is not reported; input beside it, a
+  # parameter that shadows it, and a rebinding in the same function, at module
+  # level or by a `global` write still are. The propagation is per function and
+  # misses a rebinding through `nonlocal` or after a lambda is defined, so the
+  # second alternative fires on a name a nested def declares nonlocal and on
+  # any f-string inside a lambda. Still missed: a name imported over a
+  # same-named module literal. A rule-level `pattern-not-inside: $VAR = "..."`
+  # would also hide the other alternatives and a local rebound from input
+  # (v3.7.0).
   - id: python-sql-injection-string-format
     patterns:
       - pattern-either:
           - pattern: $CURSOR.execute("..." % ..., ...)
           - pattern: $CURSOR.execute("..." + ..., ...)
-          - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+          - patterns:
+              - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+              - metavariable-pattern:
+                  metavariable: $VAR
+                  patterns:
+                    - pattern: $PART
+                    - pattern-not: '"..."'
+          - patterns:
+              - pattern: $CURSOR.execute(f"...{$VAR}...", ...)
+              - pattern-either:
+                  - pattern-inside: |
+                      def $INNER(...):
+                        ...
+                        nonlocal $VAR
+                        ...
+                      ...
+                  - pattern-inside: |
+                      lambda $...PARAMS: $BODY
           - pattern: $CURSOR.execute("...".format(...), ...)
       - pattern-not: $CURSOR.execute("..." % "...", ...)
       - pattern-not: $CURSOR.execute("..." + "...", ...)
@@ -21,6 +49,11 @@ rules:
       cwe: CWE-89
       confidence: HIGH
       fendix_severity: CRITICAL
+      fendix_title: >-
+        SQL query built via string formatting — SQL injection risk.
+      fendix_remediation: >-
+        SQL query built via string formatting — SQL injection risk.
+        Use parameterized queries: cursor.execute("SELECT ... WHERE x = %s", (value,))
 
   # Rule 2: Command injection via os.system or subprocess with shell=True
   # os.system / os.popen with a non-literal command. The subprocess(..., shell=True)
@@ -45,6 +78,12 @@ rules:
       cwe: CWE-78
       confidence: HIGH
       fendix_severity: CRITICAL
+      fendix_title: >-
+        Command execution with user-controlled input — command injection risk.
+      fendix_remediation: >-
+        Command execution with user-controlled input — command injection risk.
+        Use subprocess.run() with a list of arguments and shell=False.
+        Never pass user input directly to shell commands.
 
   # Rule 3: eval() with potentially dynamic/user-controlled input
   # eval()/exec() with a non-literal argument. The two calls were sibling
@@ -67,6 +106,12 @@ rules:
       cwe: CWE-95
       confidence: MEDIUM
       fendix_severity: CRITICAL
+      fendix_title: >-
+        eval()/exec() with dynamic argument — code injection risk.
+      fendix_remediation: >-
+        eval()/exec() with dynamic argument — code injection risk.
+        Avoid eval/exec entirely. If required, validate input strictly
+        against an allowlist before execution.
 
   # Rule 4 (Sprint 18): Django ORM raw SQL — Model.objects.raw(<non-literal>)
   # and QuerySet.extra(where=[<non-literal>]). FP class: hand-rolled but safe
@@ -95,6 +140,12 @@ rules:
       cwe: CWE-89
       confidence: MEDIUM
       fendix_severity: HIGH
+      fendix_title: >-
+        Django ORM raw SQL with a non-literal argument — SQL injection risk.
+      fendix_remediation: >-
+        Django ORM raw SQL with a non-literal argument — SQL injection risk.
+        Pass user input as params, never interpolate into the query string.
+        Prefer Django's ORM filter() expressions when possible.
 
   # Rule 5 (Sprint 18): Flask render_template_string with a non-literal
   # template — server-side template injection (SSTI) surface. FP class: if
@@ -118,6 +169,13 @@ rules:
       cwe: CWE-94
       confidence: MEDIUM
       fendix_severity: HIGH
+      fendix_title: >-
+        render_template_string() called with a non-literal template — server-side
+        template injection (SSTI) risk.
+      fendix_remediation: >-
+        render_template_string() called with a non-literal template —
+        server-side template injection (SSTI) risk. Use render_template()
+        with a static .html file; never compose Jinja source from user input.
 
   # Rule 6 (Sprint 18): subprocess called with shell=True AND a non-literal
   # first argument. The existing rule 2 (python-command-injection-shell-true)
@@ -153,6 +211,13 @@ rules:
       cwe: CWE-78
       confidence: HIGH
       fendix_severity: CRITICAL
+      fendix_title: >-
+        subprocess with shell=True and a non-literal command — command injection risk.
+      fendix_remediation: >-
+        subprocess with shell=True and a non-literal command — command
+        injection risk. Drop shell=True and pass argv as a list, OR
+        shlex.quote() each interpolated argument if shell semantics are
+        truly required.
 
   # Rule 7 (Sprint 18): pickle.loads on a non-literal argument — arbitrary
   # code execution on deserialization. The rule's confidence is MEDIUM
@@ -178,6 +243,14 @@ rules:
       cwe: CWE-502
       confidence: MEDIUM
       fendix_severity: HIGH
+      fendix_title: >-
+        pickle.loads() on a non-literal byte string — arbitrary code execution on
+        deserialization.
+      fendix_remediation: >-
+        pickle.loads() on a non-literal byte string — arbitrary code
+        execution on deserialization. Replace with json.loads() for
+        untrusted input. If pickle is strictly required, sign the payload
+        (hmac) and verify before unpickling.
 
   # Rule 8 (Sprint 18): yaml.load() without a SafeLoader — YAML allows
   # tag-based object instantiation that's effectively eval(). FP class:
@@ -204,3 +277,10 @@ rules:
       cwe: CWE-502
       confidence: HIGH
       fendix_severity: HIGH
+      fendix_title: >-
+        yaml.load() without yaml.SafeLoader can execute arbitrary Python code via the
+        !!python/object tag.
+      fendix_remediation: >-
+        yaml.load() without yaml.SafeLoader can execute arbitrary Python
+        code via the !!python/object tag. Use yaml.safe_load() or pass
+        Loader=yaml.SafeLoader explicitly.

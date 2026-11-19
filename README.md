@@ -23,7 +23,7 @@ v3.7.0 run:
 | SAST synthetic corpus (full binary, 38 TP / 0 FP / 0 FN / 18 TN) | 1.000 / 1.000 / **1.000** | `python3 scripts/accuracy/run.py --python-engine bin/fendix` |
 | DAST DVWA / Juice Shop (regression coverage) | 13 found · 0 FP / 12 found · 0 FP | `fendix benchmark run --target all` |
 
-The synthetic-corpus F1 was **1.000 in that capture and is CI-gated** (the one
+The F1 on the Python synthetic corpus, excluding documented known gaps, was **1.000 in that capture and is CI-gated** (the one
 multi-hop SSRF case v0.26 disclosed as a false negative was fixed in v0.27),
 not the stale v0.11.0 claim. Full methodology, caveats, and the
 OWASP/Java omission are in **[BENCHMARKS.md](BENCHMARKS.md)**. Every number there
@@ -35,11 +35,47 @@ legitimate and 5 false positives, where the config-file-exposure check flagged
 `/.env`, `/.git/HEAD`, `/.htaccess` and friends because Juice Shop's Express SPA
 answers **any** unknown path with HTTP 200 and a byte-identical body. On v2.0.1
 that scan returns 12 findings and no false positives. The committed baseline had
-simply not been re-run since June. `fendix benchmark compare` does gate
-precision — the same delta in the opposite direction is a −29.4% move that trips
+simply not been re-run since June. On the Juice Shop baseline, `fendix benchmark compare` does gate precision — the same delta in the opposite direction is a −29.4% move that trips
 its 10% threshold — but an improvement correctly never fails a gate, so a stale
 baseline stays stale until somebody runs it. The baseline was re-captured on
 v2.0.1 at the same time as this table.
+
+---
+
+## Language & framework support
+
+Fendix has measured support for nine web frameworks in four languages. "Classes covered" counts the eleven vulnerability classes (SQL injection, command injection, XSS, SSRF, path traversal, open redirect, hardcoded secrets, weak password hashing, JWT without verification, weak random tokens and template injection) whose `direct` case the engine detects on the framework parity development corpus (`benchmarks/frameworks/`). It says the class is covered, not how often a real-world instance is found: the blind holdout recall below is the figure to quote.
+
+| Language | Framework | Classes covered | Does a proven flow block? | Needs Semgrep? |
+|---|---|---|---|---|
+| Python | Django | 11 of 11 | Yes: a taint-proven flow blocks (weak random tokens are reported, not blocked) | No |
+| Python | Flask | 11 of 11 | Yes: same | No |
+| Python | FastAPI | 11 of 11 | Yes: same | No |
+| JavaScript / TypeScript | Express | 11 of 11 | No: taint findings are warnings. Hardcoded secrets and template-literal SQL injection still block | **Yes** |
+| JavaScript / TypeScript | NestJS | 11 of 11 | No: same as Express | **Yes** |
+| JavaScript / TypeScript | Next.js | 11 of 11 | No: same as Express | **Yes** |
+| Java | Spring | 11 of 11 | No: taint findings are warnings. Hardcoded secrets still block | **Yes** |
+| Go | net/http | 11 of 11 | No: taint findings are warnings. Hardcoded secrets still block | **Yes** |
+| Go | Gin | 11 of 11 | No: same as net/http | **Yes** |
+
+**Every non-Python row requires Semgrep.** The JavaScript/TypeScript, Java and Go taint rules run only through Semgrep. Without it, for example in the standalone binary or in a Homebrew install that has no Semgrep, only the regex scanner (textscan) and the secrets scanner run for those languages, and the coverage above does not apply. Python needs no Semgrep: its taint engine ships in the Fendix Python engine.
+
+Why the non-Python taint findings do not block: on a blind evaluation of 70 real-world repositories (at commit `6901cf7`, Semgrep 1.141.0) their blocking precision was 0.08 for JavaScript/TypeScript, 0.11 for Java and 0.09 for Go, against the 0.80 required to block ([evidence](benchmarks/frameworks/REALWORLD.md), [ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
+
+Recall by language, on the development corpus and on the blind holdout (a held-out set of labelled cases written by authors who never saw the rules):
+
+| Language | Dev recall | Dev block recall | Blind holdout recall | Real-world blocking precision |
+|---|---|---|---|---|
+| Python (Django, Flask, FastAPI) | 1.000 | 0.944 | 0.756 | n/a |
+| JavaScript / TypeScript | 0.889 | 0.194 | 0.689 | 0.08 |
+| Java (Spring) | 1.000 | 0.111 | 0.812 | 0.11 |
+| Go (net/http, Gin) | 1.000 | 0.111 | 0.750 | 0.09 |
+
+Where each column was measured: the dev columns are recomputed from `benchmarks/frameworks/baseline.json`, which `make parity` reproduced at commit `8b78364` on Semgrep 1.182.1; the blind-holdout column was measured at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins); the real-world precision column was measured at commit `6901cf7` on Semgrep 1.141.0.
+
+**Pending re-measurement.** The blind-holdout and real-world columns predate this release's detection changes (including the security fixes in `CHANGELOG.md`, `[Unreleased]`, Security) and its Semgrep 1.182.1. They are kept as measured at the commits named above and are pending re-measurement at the release commit; until then they describe those commits, not this release.
+
+Holdout recall is lower than dev recall for every language, and the drop exceeds the 0.10 limit in all four, so the development corpus overstates recall on code the rules have not seen. Quote the holdout column once it is re-measured for the release; the dev columns are scoped to the development corpus and are not a claim about arbitrary code. See [docs/accuracy.md](docs/accuracy.md) and [BENCHMARKS.md](BENCHMARKS.md).
 
 ---
 
@@ -199,7 +235,7 @@ chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 
 ### Build from Source
 
-Requires Go 1.21+ and Python 3.9+.
+Requires Go 1.21+ and Python 3.9+. The Python engine parses the scanned code with the interpreter it runs on: below 3.9 it reports every check failed and exits 2, and an interpreter older than 3.14 reports a file in newer syntax as lost evaluation rather than as clean.
 
 ```bash
 git clone https://github.com/Fendix-app/Fendix.git
@@ -283,6 +319,35 @@ auto-enables the Python AST/spec/deps phase. A standalone release without a
 resolvable Python tree records that phase as skipped; the official container
 supplies the version-matched tree.
 
+**What a white-box scan says it did not read.** A scan never reports `ok` for
+an analyzer that left in-scope source unread. A file over the analyzer's size
+cap, one it cannot read, one Semgrep cannot parse and one that the Python
+interpreter cannot parse (a `match` statement under Python 3.9, for example) make
+that analyzer `failed` in `metadata.scanner_status`, with the files named, the
+findings from the rest of the tree kept, and the scan's coverage incomplete
+(`--fail-on-scanner-error` exits 2; the GitHub Action with `require-analyzers`
+fails). **Every supported in-scope file at or below the size cap is analysed, whatever it
+looks like**: minified, vendored, generated and test code, and code under
+`node_modules`, a virtualenv or `vendor`, are scanned, because a banner, a header,
+a name or a marker file proves nothing about the rest of a file. Nothing is
+excluded for them. What is left out is a symbolic link and, by policy, a recognised
+lockfile (a closed list of exact names whose whole content parses as that format;
+no analyzer applies it yet), plus a real `<root>/.git`, skipped quietly; everything
+left out except `.git` is listed with its reason: in the analyzer's `detail` after
+`declared out of scope, not scanned:` and in full in
+`metadata.coverage.limitations`. No installed-dependency tree is excluded either (nothing
+the repository writes proves its own `node_modules` is third-party). This costs scan time
+on repositories with large front-end or installed-dependency trees, and the Semgrep stage
+can end `failed` / `timeout` with the unfinished files named: measured figures are in
+`docs/checks/semgrep.md`, "Scope". A `// nosemgrep` comment removes a Semgrep
+result only visibly: the result is listed. A source file Semgrep cannot read as JavaScript, such as a Vue
+single-file component (`.vue`), is lost evaluation too. See
+[`docs/checks/semgrep.md`](docs/checks/semgrep.md),
+[`docs/checks/secrets.md`](docs/checks/secrets.md) and
+[`docs/schema.md`](docs/schema.md). The Semgrep stage runs inside a wall,
+CPU and memory budget derived from the container, and a file that timed out is
+re-run alone before it is recorded lost.
+
 ### Hybrid scan (maximum coverage)
 
 Run both engines and cross-correlate findings for highest confidence.
@@ -298,6 +363,7 @@ fendix scan \
 
 When the black-box scanner and static analyzer both identify the same vulnerability, Fendix merges them into a single `correlated` finding with elevated confidence.
 
+**Active probes and coverage.** With `--enable-active`, a probe the target did not answer is not an evaluation. Each probe is attributed from evidence about what happened on the wire (never from the error type alone) to the scanner, the target or an unknown origin, and the report counts them in `metadata.coverage.active_probes` (`attempted`, `evaluated`, `inconclusive`, `unknown_origin`, `scanner_failed`, with the reasons and the checks and endpoints not evaluated). A target that resets, stalls or rate-limits a probe leaves it `inconclusive`: target-owned, never evidence that the endpoint is safe, fixed or resolved, and (Round 6, decision A-D5) still not evaluated, so `active-probes` reads `ok` only when **every** planned probe was evaluated; one unevaluated probe, with no percentage threshold, makes it `failed` / `no_endpoints`. A probe the target answered 401, 403, 404 or 410 is **gated**: it is not evaluated and is evidence of nothing (counted in `coverage.active_probes.gated`, by status, and inside `inconclusive`). A pass in which any probe was not evaluated (gated or unanswered) is `failed` / `no_endpoints`, `coverage: incomplete (active-probes)`, and exits 2 under `--fail-on-coverage-gap` or `--require-analyzers active-probes`; `--require-analyzers active-probes` is satisfied only when every probe was evaluated. The report's exact counts add up (`not_evaluated_counts`), at most 200 `not_evaluated_groups` are listed inline, and past a listing ceiling of 100,000 groups the overflow is counted (`listing_overflow`), never silent. The per-probe stderr lines stop at a 1 MiB budget and one line counts the rest (`--verbose` writes every line). A pass ended by `--max-duration` or `--max-requests` is `failed` and `coverage.active_probes.cut_short` names the flag and its value; a probe lost to Fendix's own deadline or budget is never read as the target's doing. The stderr summary adds `active probes: A attempted, E evaluated, N not answered by the target, G gated (403 4, 404 2), U unknown-origin, F scanner-failed`. A scanner-side or unknown-origin failure makes `active-probes` `failed`. A 429, 502, 503 or 504, a reset after the connection or a timeout on an accepted connection is retried twice (after 1 s, then 2 s) within the scan's deadline and request budget. `coverage.configured_complete` is never proof that every probe was evaluated: read `active_probes` beside it. See [`docs/schema.md`](docs/schema.md).
 ### Import findings from other scanners
 
 Normalize SARIF 2.1.0 from CodeQL, Semgrep, Trivy, or another scanner and run
@@ -316,6 +382,11 @@ fendix scan --code . --import codeql.sarif --import trivy.sarif --fail-on HIGH
 nothing blocks, `1` when a confidence-backed finding reaches `--fail-on`, and
 `2` when any input is unreadable, malformed, or not SARIF 2.1.0. A malformed
 file fails the entire import so partial coverage is never presented as complete.
+Round 6: a producer whose own run record says it failed or was partial
+(`executionSuccessful: false`, an exit signal, a non-zero `exitCode` with no success
+recorded, or error-level notifications) is a coverage gap named `import/<tool>`, and
+with `--fail-on` set the import exits `2` on it, before the findings exit `1`: an
+absent result from a run nobody finished is not evidence that a finding is gone.
 
 Imported findings remain external evidence: they carry `source: "imported"`
 and never gain native reachability, taint-chain, route, or analyzer-tier claims.
@@ -419,7 +490,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix scan` | Run a security scan against an API, source code, or both |
 | `fendix import <file.sarif>...` | Normalize and gate on third-party SARIF 2.1.0 findings |
 | `fendix report` | Re-render a saved JSON findings file to another format |
-| `fendix verify <id>` | Re-run a single finding by ID to verify it still exists |
+| `fendix verify <id>` | Re-test one finding from a saved baseline. **Never `resolved`, never exit 0** (Round 6, D4): `still-present` (exit 1) when the problem is seen again (for a secrets-scanner finding, its credential found across `--code`: text and binary files, pruned directories, archives, several encodings), and `unknown` (exit 2) otherwise, for every finding and every occurrence of a grouped one, a credential found nowhere included. A value built at run time is out of scope, and "not detected" is not "fixed": re-run `fendix scan` and diff against the baseline to learn that a finding is gone |
 | `fendix demo` | Spin up OWASP Juice Shop in Docker and scan it — a real report in <60s |
 | `fendix init` | Generate CI workflow + `.fendix.yaml` + `.fendix-ignore` starters |
 | `fendix hook` | Manage the git pre-commit hook (`install` / `status` / `uninstall`) |
@@ -435,7 +506,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix version` | Print version, OS, and architecture information |
 | `fendix managed` | **Preview (ADR-010), new in v3.5.0:** create context and submit evidence under the managed-CI contract |
 
-The published stable release is v3.7.0. `managed` and its two hidden producer
+The published stable release is v3.8.0. `managed` and its two hidden producer
 flags ship in it as a preview under ADR-010: they sit outside the stable
 compatibility contract and are not a product availability claim. No command defines a Cobra alias. Run
 `fendix <command> --help` for the executable flag contract.
@@ -457,7 +528,7 @@ compatibility contract and are not a product availability claim. No command defi
 | `--fail-on-scanner-error` | bool | `false` | Exit 2 if any recorded analyzer — any entry in `metadata.scanner_status`, the full registry (`dast`, `spec`, `active-probes`, `secrets`, `textscan`, `semgrep`, `govulncheck`, `pip`, `npm`, `plugins`, the python-engine and its checks) — ran and errored. CI-friendly: turns a silent coverage gap into a build failure. Skipped entries don't count. |
 | `--fail-on-coverage-gap` | bool | `false` | Exit 2 when an analyzer this run was configured to execute was unavailable or failed (`metadata.coverage.configured_complete=false`). Disabled, not-applicable and unsupported analyzers never trip it. |
 | `--require-analyzers` | list | | Analyzers that must be delivered (recorded `ok` or `not_applicable`) for exit 0; anything else exits 2. Stricter than `--fail-on-coverage-gap`: `--fast --require-analyzers semgrep` is a contradiction and exits 2. |
-| `--deescalate-tests` | bool | `true` | Report findings in test/fixture code (`tests/`, `test_*.py`, `*_test.py`, `conftest`, `fixtures/`) as `INFO` instead of `WARN`. The finding and its evidence are still emitted — this changes triage status, not visibility. A finding at or above `--fail-on` can still block when independent corroboration supports it; an unsupported test-code match is held at `WARN`. Pass `--deescalate-tests=false` to treat test-code findings like production ones. |
+| `--deescalate-tests` | bool | `true` | Report findings in test/fixture code as `INFO` instead of `WARN`. Test code is recognised by path: `test`/`tests`/`testing` segments, `conftest`, Python `test_*.py` and `*_test.py`, Go `*_test.go`, Ruby `*_spec.rb` and `*_test.rb`, JavaScript/TypeScript `*.test.*`, `*.spec.*`, `*.cy.*` and `*.e2e.*`, JVM `*Test`, `*Tests`, `*IT`, `*ITCase` and `Test<Name>` classes, and `fixtures`, `__tests__`, `__mocks__`, `__fixtures__`, `mock(s)`, `spec(s)`, `e2e`, `cypress`, `testdata` and `test-utils` directories. A live route (`GET /tests`) is never test code. The finding and its evidence are still emitted — this changes triage status, not visibility. A finding at or above `--fail-on` can still block when independent corroboration supports it; an unsupported test-code match is held at `WARN`. Pass `--deescalate-tests=false` to treat test-code findings like production ones. |
 | `--enforce-confidence` | bool | `true` | Only `BLOCK` a finding at or above `--fail-on` when the deterministic confidence band and evidence support it: `LOW` never blocks; `MEDIUM` needs an independent signal; `HIGH` needs an independent or self-evident signal. A high band with no signal remains `WARN`. Evidence is never suppressed, and every demotion is named in `confidence_reasons`. Pass `--enforce-confidence=false` to restore the legacy severity-only gate. |
 | `--baseline` | string | | Path to a baseline (from `--save-baseline`) or JSON report; only occurrences not proven present in it are reported |
 | `--save-baseline` | string | | Save current findings, with every occurrence identity, to this path (baseline format v2) |
@@ -944,8 +1015,15 @@ a formula at report time:
 2. **Correlation escalates it.** A correlated finding goes up one level; up a
    second level when the white-box half proved a reachable taint chain; and
    straight to CRITICAL for a [Proven Path](#architecture) (route-confirmed +
-   reachable). Semgrep-tier findings are excluded from both escalations until
-   their rule pack clears the F1 gate.
+   reachable). Semgrep pattern findings are excluded from both escalations
+   until their rule pack clears the F1 gate. A Semgrep taint finding takes the
+   reachable escalation but never a Proven Path, and only for a language whose
+   taint pack cleared its real-world precision gate. None has: JavaScript and
+   TypeScript (precision 0.077), Java (0.111) and Go (0.091) fell far short of 0.80
+   on a blind evaluation of 70 production repositories (at commit `6901cf7`,
+   Semgrep 1.141.0), so their taint findings
+   are reported as warnings and do not block
+   ([ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md)).
 3. **Reachability escalates the pure-SAST case** one level when an AST taint
    chain is proven but nothing correlated.
 4. **Confidence caps it.** `LOW` confidence caps severity at MEDIUM, `MEDIUM`
@@ -1023,9 +1101,9 @@ their corresponding credentials. Every `active` check requires
 | Check | What It Detects |
 |---|---|
 | **Secrets** | AWS keys, private keys, hardcoded passwords, API keys, JWT secrets, DB URLs, bearer tokens |
-| **Semgrep Rules** | 23 bundled rules across auth (Flask/Django/FastAPI missing decorators, JWT verification disabled), injection (SQL, command, eval/exec, Django ORM raw, SSTI, pickle.loads, yaml.load), secrets (hardcoded credentials/DB URLs, AWS keys, GCP service accounts, Slack webhooks, PEM private keys), and crypto (MD5/SHA1 for passwords, legacy ciphers, `random` used for token generation) |
+| **Semgrep Rules** | 74 bundled rules. 23 Python rules across auth (Flask/Django/FastAPI missing decorators, JWT verification disabled), injection (SQL, command, eval/exec, Django ORM raw, SSTI, pickle.loads, yaml.load), secrets (hardcoded credentials/DB URLs, AWS keys, GCP service accounts, Slack webhooks, PEM private keys), and crypto (MD5/SHA1 for passwords, legacy ciphers, `random` used for token generation in a token-named function or assigned to a token-named variable). 17 JavaScript/TypeScript rules for Express, NestJS and Next.js: taint rules from request input to SQL, shell commands, template compilation, HTML responses, outbound URLs, file paths, redirects, MD5/SHA-1 password hashes and unverified `jwt.decode`, plus `Math.random()` tokens; and shape rules for the same sinks behind a helper's parameter (see [docs/semgrep-rules.md](docs/semgrep-rules.md#the-javascript-and-typescript-pack)). 15 Java rules for Spring Boot (ten taint rules and five shape rules for SQL, command and template injection, XSS, SSRF, path traversal, open redirect, weak password hashes, unverified JWT claims and weak random tokens; see [docs/semgrep-rules.md](docs/semgrep-rules.md#the-java-packs)). 19 Go rules for net/http and Gin (nine taint rules, nine shape rules and `go-weak-random-token`, for the same classes; see [docs/semgrep-rules.md](docs/semgrep-rules.md#the-go-packs)) |
 | **Spec Parser** | Missing security schemes in OpenAPI spec, API keys in query params, unauthenticated endpoints |
-| **AST / dataflow analysis** | Python AST/dataflow plus regex-backed JS/TS heuristics in the Python phase; additional JS/TS/IaC rules run in native Go textscan |
+| **AST / dataflow analysis** | Python AST/dataflow plus regex-backed JS/TS heuristics in the Python phase (the fallback for a scan without Semgrep; they are dropped only once Semgrep's JS/TS taint findings can block, which they cannot yet, so today they also run beside a successful Semgrep run); additional JS/TS/IaC rules run in native Go textscan, and, with Semgrep installed, the JS/TS, Java and Go Semgrep taint rules follow request input to a sink within one function (Java and Go also one call into a method or function of the same class or file). These findings are reported as warnings and do not block: on a blind evaluation of 70 production repositories their precision was 0.077 (JS/TS), 0.111 (Java) and 0.091 (Go). Python request sources are `request.*` reads and a route handler's parameters: FastAPI query, path, header, cookie and body parameters, and Flask and Django URL variables. Dependencies (`Depends(...)`, `Security(...)`, a type from a `deps` module), injected objects such as `Request`, fixed-value types (`int`, `UUID`, `Literal[...]`, a same-file Enum) and Flask or Django parameters their URL pattern does not name are not sources. A Python flow is followed within a function, through its assignments, and one call into a helper: a helper's parameter is traced back to the calls that pass it, in the helper's own file or, through the caller's imports, in another module of the scanned tree, with the caller's sanitisers applied. The caller's own parameters are not traced further (one hop). Python XSS sinks are `Markup`, `mark_safe`, `render_template_string` and the body of an HTML response: Django `HttpResponse`, Flask `make_response` and `Response`, and Starlette/FastAPI `HTMLResponse` and `Response`, unless it declares a non-HTML content type. A string a Flask or Quart view returns is such a body too, since Flask sends it as `text/html`; it is reported only when request input is proven to reach it. A returned dict, list, `jsonify(...)`, template or response object is not one, and neither is a FastAPI or Django Ninja return, which is sent as JSON, unless the route's response class (`response_class=`, or the app's or router's `default_response_class=`) is `HTMLResponse`, or Starlette's or FastAPI's `Response`, which sends no Content-Type. Python template-injection sinks (`python.ast/PY_SSTI`) compile a template from a string: `jinja2.Template`, `from_string` on a Jinja2 environment (a sandboxed one too) or a Django `engines[...]` backend, `django.template.Template` and Mako's `Template`, each resolved through the file's imports. A constant template, one picked among constant templates, and one loaded by name or read from the file system are not sinks; Flask's `render_template_string` stays an XSS sink. Python open-redirect sinks (`python.ast/PY_OPEN_REDIRECT`) are the redirect constructors, resolved through the file's imports: `redirect` (Flask, Werkzeug, Quart, Django and other frameworks), Django's `HttpResponseRedirect` and `HttpResponsePermanentRedirect`, and Starlette's and FastAPI's `RedirectResponse`; and a `Location` header on a framework response whose status is a redirect, set in its headers, assigned afterwards (`resp.headers["Location"] = url`, Django's `resp["Location"] = url`) or returned in a Flask `(body, status, headers)` tuple. A same-named function or class of the project's own is not one. Python path-traversal sinks (`python.ast/PY_PATH_TRAVERSAL`) are `open`, `pathlib.Path`, Flask's `send_file` and `send_from_directory`, and Starlette's and FastAPI's `FileResponse(path)`, resolved through the file's imports; `os.path.join`, `abspath`, `expanduser` and `expandvars` are reported only when request input is proven to reach them. Django's `FileResponse` takes an open file, whose `open(...)` is the sink. A weak password hash (`python.ast/PY_WEAK_CRYPTO_PASSWORD`, MD5 or SHA-1 of a password-named value) and a JWT decoded without signature verification (`python.ast/PY_JWT_WEAK`) are reported whether or not the value comes from the request, and proven when request input is shown to reach the hashed value or the decoded token |
 | **Dependencies** | Known CVEs in PyPI (`requirements.txt`, `poetry.lock`, `Pipfile.lock`), npm (`package-lock.json`) and Go modules. Since v2.0 alias-linked advisories merge into **one finding per vulnerability**, named after the canonical id (`CVE-*` > `GHSA-*` > `PYSEC-*`) — see [`docs/checks/deps.md`](docs/checks/deps.md) |
 
 ---
@@ -1178,6 +1256,17 @@ rules:
 ```
 
 Semgrep rules are automatically picked up by the Semgrep runner.
+
+A taint rule (`mode: taint`) can set `metadata.fendix_reachability: taint`.
+Its findings then count as reachable once every language in the rule's
+`languages` is enabled in `semgrep.ReachabilityLanguages`. When Semgrep sends
+a dataflow trace (only to a logged-in account), it becomes the finding's
+`taint_chain`. Until the language is enabled, they are reported like any other
+Semgrep finding, as warnings. A language (JavaScript, TypeScript, Java or Go) is enabled only when its taint pack clears the precision gate in
+[ADR-011](docs/adr/ADR-011-semgrep-taint-reachability.md), including 0.80
+precision on at least 10 triaged real-world findings. No language is enabled:
+the JavaScript, TypeScript, Java and Go packs measured 0.077, 0.111 and 0.091
+(at commit `6901cf7`, Semgrep 1.141.0), so their findings are warnings, not blocking.
 
 ---
 

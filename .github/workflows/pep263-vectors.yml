@@ -1,0 +1,77 @@
+name: PEP 263 vectors
+
+# Round 6 (WS-E1, OR-20, R5-01). The PEP 263 source-encoding vectors
+# (go/internal/scope/testdata/pep263_vectors.json and pep263_codec_names.json)
+# are generated from the interpreter itself, on CPython 3.14.5, by
+# go/internal/scope/testdata/gen_pep263_vectors.py, and never edited by hand.
+# python/tests/test_pep263_vectors.py re-runs that generator and byte-compares
+# its output with the committed files, then drives the shared Python predicate
+# and the Python engine on every vector and every codec name. That is only
+# ground truth on the reference interpreter, so this lane runs it inside the
+# release container, whose CPython is the one the engine ships with. With
+# FENDIX_REQUIRE_PEP263_GROUND_TRUTH=1 a different interpreter (a bumped base
+# image) FAILS the test instead of skipping it: the vectors are regenerated
+# with the new interpreter, and the new answers reviewed, in the same change.
+#
+# The Go side of the same vectors (go/internal/scope) runs in the `go` job of
+# ci.yml. Both read the one codec table the generator writes
+# (go/internal/scope/testdata/pep263_codec_table.json, embedded in the Go
+# predicate and copied into python/analyzers/scope_evidence.py).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "go/internal/scope/**"
+      - "go/internal/scanner/secrets/**"
+      - "go/internal/scanner/semgrep/targets.go"
+      - "python/analyzers/scope_evidence.py"
+      - "python/analyzers/ast_analyzer.py"
+      - "python/tests/test_pep263_vectors.py"
+      - "python/requirements.lock"
+      - "Dockerfile"
+      - ".github/workflows/pep263-vectors.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "go/internal/scope/**"
+      - "go/internal/scanner/secrets/**"
+      - "go/internal/scanner/semgrep/targets.go"
+      - "python/analyzers/scope_evidence.py"
+      - "python/analyzers/ast_analyzer.py"
+      - "python/tests/test_pep263_vectors.py"
+      - "python/requirements.lock"
+      - "Dockerfile"
+      - ".github/workflows/pep263-vectors.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  vectors:
+    name: Vectors in the engine image (CPython 3.14.5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build release container
+        run: docker build --build-arg VERSION=ci -t fendix-ci .
+
+      # pytest is not part of the runtime image: it goes into a temporary
+      # directory of the throwaway container, and the repository is mounted
+      # read-only. The generator writes only under pytest's temporary
+      # directory.
+      - name: Run the vectors in the image
+        run: |
+          set -eu
+          docker run --rm --user 1000:1000 \
+            -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
+            -e FENDIX_REQUIRE_PEP263_GROUND_TRUTH=1 \
+            --entrypoint sh \
+            -v "$PWD:/src:ro" -w /src fendix-ci -c '
+              set -eu
+              python3 -c "import platform; v = platform.python_version(); print(\"interpreter\", v); assert v == \"3.14.5\", v"
+              pip install --quiet --no-cache-dir --target /tmp/pt pytest
+              PYTHONPATH=/tmp/pt python3 -m pytest -p no:cacheprovider python/tests/test_pep263_vectors.py -q
+            '

@@ -50,7 +50,6 @@ package applicability
 
 import (
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -58,6 +57,7 @@ import (
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // importGrepMaxFiles bounds the walk. On overrun the whole pass is
@@ -360,7 +360,7 @@ func grepImports(root string, tokens map[Component]bool) (found map[Component]bo
 		if ierr != nil || info.Size() > importGrepMaxFileBytes {
 			return nil
 		}
-		data, rerr := os.ReadFile(path)
+		data, rerr := scope.ReadRegular(path, importGrepMaxFileBytes)
 		if rerr != nil {
 			return nil
 		}

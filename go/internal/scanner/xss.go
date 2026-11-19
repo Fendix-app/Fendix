@@ -146,12 +146,13 @@ func probeXSS(ctx context.Context, cc *CheckContext, ep Endpoint, param string, 
 	start := time.Now()
 	req, err := buildProbeRequest(ctx, ep, param, payload, loc)
 	if err != nil {
+		recordBuildFailure(cc.Audit, ep.FullURL, ProbeXSS, payload, param, ep.Method)
 		logagg.Warn("xss", "failed to create xss probe request", "error", err)
 		return ev.Evidence{}, false
 	}
 	cc.Cfg.Auth.ApplyToRequest(req)
 
-	resp, err := cc.Client.Do(req)
+	resp, pi, err := probeDo(ctx, cc.Client, req, cc.Audit, ep.FullURL, cc.Cfg)
 	elapsed := time.Since(start)
 
 	record := ProbeRecord{
@@ -164,6 +165,7 @@ func probeXSS(ctx context.Context, cc *CheckContext, ep Endpoint, param string, 
 		Duration:  elapsed.Round(time.Millisecond).String(),
 	}
 
+	pi.apply(&record)
 	if err != nil {
 		logagg.Warn("xss", "xss probe request failed", "endpoint", ep.FullURL, "error", err)
 		record.Status = 0

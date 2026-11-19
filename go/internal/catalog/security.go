@@ -16,7 +16,7 @@ import (
 
 const (
 	SchemaVersion       = 1
-	StableEngineVersion = "v3.7.0"
+	StableEngineVersion = "v3.8.0"
 )
 
 type Contract struct {
@@ -79,6 +79,11 @@ func Build() (Contract, error) {
 		return Contract{}, err
 	}
 	checks = append(checks, semgrepChecks...)
+	pythonChecks, err := pythonEngineChecks()
+	if err != nil {
+		return Contract{}, err
+	}
+	checks = append(checks, pythonChecks...)
 	return Contract{
 		SchemaVersion: SchemaVersion,
 		EngineVersion: StableEngineVersion,

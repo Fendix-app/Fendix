@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Fendix-app/Fendix/go/internal/models"
@@ -93,7 +94,13 @@ func TestVerifyDep_PreRenameFindingStillMatchesItsCanonicalTwin(t *testing.T) {
 
 // TestVerifyDep_ResolvedWhenTheDependencyIsGone is the counter-case: the
 // alias-set match must not be so permissive that nothing ever resolves.
-func TestVerifyDep_ResolvedWhenTheDependencyIsGone(t *testing.T) {
+// Round 5 follow-up (DE5-02, contract C8, D5-3): the inventory no longer
+// listing a vulnerable dependency is an observation of one manifest, not proof
+// the package is gone from what runs, so verify answers unknown, never resolved
+// (exit 2). It was pinned as resolved before: only a credential the secrets
+// scanner found in source can be searched for in the whole tree, so that is the
+// only finding that resolves.
+func TestVerifyDep_GoneDependencyIsUnknownNeverResolved(t *testing.T) {
 	srv := fakeOSVForDepVerify(t)
 	defer srv.Close()
 	restore := pip.SetOSVAPIBaseForTest(srv.URL)
@@ -124,7 +131,10 @@ func TestVerifyDep_ResolvedWhenTheDependencyIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if r.Status != StatusResolved {
-		t.Fatalf("status = %v (reason=%q); want %v", r.Status, r.Reason, StatusResolved)
+	if r.Status != StatusUnknown {
+		t.Fatalf("status = %v (reason=%q); want %v", r.Status, r.Reason, StatusUnknown)
+	}
+	if !strings.Contains(r.Reason, "not proof that the vulnerability is fixed") {
+		t.Errorf("the reason does not say that the observation is not a fix: %q", r.Reason)
 	}
 }

@@ -37,7 +37,7 @@ func finalize(evid []evidence.Evidence, failOn string, opts decision.Options) []
 func finalizeIndexed(evid []evidence.Evidence, prov evidence.ProvenanceIndex, failOn string, opts decision.Options) []models.Finding {
 	findings := evidence.ToFindings(evid)
 	findings = escalateNonCorrelatedReachable(findings)
-	findings = Deduplicate(findings)
+	findings = DeduplicateWith(findings, prov.OccurrenceClass)
 	findings = enforceConsistency(findings)
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].Endpoint != findings[j].Endpoint {
@@ -133,35 +133,35 @@ func TestPipelineLeavesProductionFindingAlone(t *testing.T) {
 }
 
 // TestPipelineDoesNotDeescalateMixedDedupGroup is the conservative-merge gate.
-// Dedup collapses on (Title, Category, Severity), so one test occurrence and
-// one production occurrence become a SINGLE finding. De-escalating that group
-// would hide a real production finding behind a test-code exemption.
+// A production occurrence must never inherit a test-code exemption, and a
+// test-code occurrence must never inherit the production occurrence's weight.
 //
-// Both orientations are exercised on purpose. Dedup picks its primary by the
-// deterministic findingLess total order (endpoint first), so which occurrence
-// ends up in Finding.Endpoint depends only on the endpoint strings. The
-// "test path sorts FIRST" case is the discriminating one: an implementation
-// that simply re-derived the flag from the primary endpoint — instead of
-// folding the provenance across the whole group — passes the other case by
-// luck and fails this one.
+// RC-9e (owner ruling OR-85, "cross-file deduplication isolation"): this test
+// used to assert that one test occurrence and one production occurrence of one
+// title became a SINGLE finding that was then held at WARN because the
+// production occurrence refused the exemption. Occurrences whose own evidence
+// differs (the file being test code is evidence) no longer share a finding, so
+// the property is now asserted more directly: the production occurrence is its
+// own WARN finding, carrying no test-fixture reason, and the test occurrence is
+// its own finding, de-escalated on its own evidence.
+//
+// Both orientations are exercised on purpose: which occurrence sorts first must
+// not matter.
 func TestPipelineDoesNotDeescalateMixedDedupGroup(t *testing.T) {
 	cases := []struct {
 		name         string
 		testEndpoint string
 		prodEndpoint string
-		wantPrimary  string
 	}{
 		{
-			name:         "test path sorts first (primary is the test occurrence)",
+			name:         "test path sorts first",
 			testEndpoint: "app/tests/test_client.py:12",
 			prodEndpoint: "src/services/client.py:22",
-			wantPrimary:  "app/tests/test_client.py:12",
 		},
 		{
-			name:         "production path sorts first (primary is the prod occurrence)",
+			name:         "production path sorts first",
 			testEndpoint: "src/tests/test_client.py:12",
 			prodEndpoint: "app/services/client.py:22",
-			wantPrimary:  "app/services/client.py:22",
 		},
 	}
 	for _, tc := range cases {
@@ -173,25 +173,24 @@ func TestPipelineDoesNotDeescalateMixedDedupGroup(t *testing.T) {
 
 			got := finalize(evid, "", decision.Options{DeescalateTests: true})
 
-			if len(got) != 1 {
-				t.Fatalf("expected the two occurrences to dedup into 1 finding, got %d", len(got))
+			if len(got) != 2 {
+				t.Fatalf("expected one finding per own-evidence class (production, test), got %d", len(got))
 			}
-			if len(got[0].AffectedEndpoints) != 2 {
-				t.Fatalf("expected 2 affected endpoints, got %v", got[0].AffectedEndpoints)
+			prod := findByEndpoint(t, got, tc.prodEndpoint)
+			test := findByEndpoint(t, got, tc.testEndpoint)
+			if len(prod.AffectedEndpoints) != 0 || len(test.AffectedEndpoints) != 0 {
+				t.Fatalf("the occurrences must not share a finding: %v / %v", prod.AffectedEndpoints, test.AffectedEndpoints)
 			}
-			// Guard the premise: if dedup's primary selection ever changes, the
-			// discriminating orientation must be re-derived rather than silently lost.
-			if got[0].Endpoint != tc.wantPrimary {
-				t.Fatalf("dedup primary = %q, want %q — this test's premise no longer holds",
-					got[0].Endpoint, tc.wantPrimary)
+			if prod.Status != string(decision.StatusWarn) {
+				t.Errorf("production finding Status = %q, want WARN — a production\n"+
+					"occurrence must not inherit a test-code exemption", prod.Status)
 			}
-			if got[0].Status != string(decision.StatusWarn) {
-				t.Errorf("mixed test+production dedup group Status = %q, want WARN — a production\n"+
-					"occurrence must not inherit a test-code exemption", got[0].Status)
+			if strings.Contains(strings.Join(prod.ConfidenceReasons, "\n"), "test/fixture code") {
+				t.Errorf("production finding carried a test-fixture de-escalation reason: %v",
+					prod.ConfidenceReasons)
 			}
-			if strings.Contains(strings.Join(got[0].ConfidenceReasons, "\n"), "test/fixture code") {
-				t.Errorf("mixed group carried a test-fixture de-escalation reason: %v",
-					got[0].ConfidenceReasons)
+			if test.Status != string(decision.StatusInfo) {
+				t.Errorf("test finding Status = %q, want INFO on its own evidence", test.Status)
 			}
 		})
 	}

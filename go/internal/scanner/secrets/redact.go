@@ -3,6 +3,7 @@ package secrets
 import (
 	"crypto/sha256"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -52,6 +53,13 @@ func redactionMarker(value string) string {
 // whitespace is trimmed (the ordinary `-----BEGIN … KEY-----` on its own
 // line).
 func secretValueSpan(pat *pattern, line string, sub []int) (start, end int, ok bool) {
+	if pat.valueSpans != nil {
+		spans := pat.valueSpans(line, sub)
+		if len(spans) == 0 || spans[0][1] <= spans[0][0] {
+			return 0, 0, false
+		}
+		return spans[0][0], spans[0][1], true
+	}
 	switch pat.valueGroup {
 	case valueGroupNone:
 		return 0, 0, false
@@ -92,10 +100,23 @@ func secretValueSpan(pat *pattern, line string, sub []int) (start, end int, ok b
 // Spans are collected in registry order, then sorted by start and merged so
 // overlapping or touching spans (e.g. OPENAI_API_KEY and ANTHROPIC_API_KEY on
 // one token) collapse into a single deterministic marker.
-func lineSecretSpans(line string, active []pattern, matches [][][]int) [][2]int {
-	var spans [][2]int
+func lineSecretSpans(line string, active []pattern, matches [][][]int, extra ...[2]int) [][2]int {
+	// extra holds spans a previous window of a long line found and carried
+	// here (lineScanner.carry): credential material whose start this window
+	// cannot see.
+	spans := append([][2]int(nil), extra...)
 	for i := range active {
 		for _, sub := range matches[i] {
+			if active[i].valueSpans != nil {
+				// Every span, not only the first: a later password property
+				// of the same URL is credential material too.
+				for _, sp := range active[i].valueSpans(line, sub) {
+					if sp[1] > sp[0] {
+						spans = append(spans, sp)
+					}
+				}
+				continue
+			}
 			if s, e, ok := secretValueSpan(&active[i], line, sub); ok {
 				spans = append(spans, [2]int{s, e})
 			}
@@ -253,3 +274,35 @@ func truncateEvidenceAround(redacted string, anchorStart, anchorEnd int) string 
 // security boundary. A low-entropy value is recoverable from it by dictionary,
 // so never describe it to users as "the secret cannot be recovered".
 func RedactValue(value string) string { return redactionMarker(value) }
+
+// mergedMarker returns the marker the redacted line shows for the merged span
+// that holds valueStart, or "" when no span does. It differs from the value's
+// own marker when an overlapping span from another pattern widened the run.
+func mergedMarker(valueStart int, spans, newSpans [][2]int, redacted string) string {
+	for i, sp := range spans {
+		if valueStart >= sp[0] && valueStart < sp[1] {
+			return redacted[newSpans[i][0]:newSpans[i][1]]
+		}
+	}
+	return ""
+}
+
+// markerRE matches one redactionMarker: a byte length and the first 4 bytes of
+// the value's SHA-256. A marker without the digest identifies nothing.
+var markerRE = regexp.MustCompile(`\[REDACTED len=[0-9]+ sha256:[0-9a-f]{8}\.\.\.\]`)
+
+// Markers returns every redaction marker in text (a finding's evidence), in
+// order, without duplicates. Each one identifies a credential that was on the
+// evidence line, so a caller can look for the same credential elsewhere
+// without ever holding it (fendix verify, redteam-verify-01).
+func Markers(text string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range markerRE.FindAllString(text, -1) {
+		if !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	return out
+}

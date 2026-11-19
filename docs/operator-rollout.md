@@ -17,7 +17,7 @@
 - [ ] `fly` CLI authenticated (`fly auth login`) — or substitute your preferred platform
 - [ ] Repo is public on GitHub (required for Marketplace)
 - [ ] v0.11.0 release artifacts built successfully (`gh run list -w release.yml | head -2` shows the v0.11.0 run as `completed success`)
-- [ ] Accuracy scorecard verified locally — `make build && python3 scripts/accuracy/run.py --python-engine` should report `OVERALL  1.000  1.000  1.000` (P/R/F1; v0.27 fixed the v0.26-disclosed SSRF FN). A value below the CI floor (F1 < 0.99) means a regression and submission should wait; [BENCHMARKS.md](../BENCHMARKS.md) is canonical.
+- [ ] Accuracy scorecard verified locally — `make build && python3 scripts/accuracy/run.py --python-engine` should report `OVERALL  1.000  1.000  1.000` (P/R/F1 on the Python synthetic corpus, excluding documented known gaps; v0.27 fixed the v0.26-disclosed SSRF FN). A value below the CI floor (F1 < 0.99 on the Python synthetic corpus) means a regression and submission should wait; [BENCHMARKS.md](../BENCHMARKS.md) is canonical.
 
 ---
 
@@ -129,7 +129,7 @@ Draft in [`docs/launch-post.md`](launch-post.md). Three versions:
 
 **Timing:** Post after the Marketplace listing is approved (shows "Install" button works).
 
-**Headline angle:** Lead with the F1 = 1.000 labeled-corpus result (reproduced + CI-gated; v0.26's disclosed SSRF FN fixed in v0.27) and the "6.1 ms cold start, no Python required" cold-start number — those are the two concrete, falsifiable claims that distinguish fendix from the field. Quote the canonical, reproducible numbers from [BENCHMARKS.md](../BENCHMARKS.md). Avoid "fast" and "accurate" as standalone adjectives; numbers do the work.
+**Headline angle:** Lead with the F1 = 1.000 result on the Python synthetic corpus, excluding documented known gaps (reproduced + CI-gated; v0.26's disclosed SSRF FN fixed in v0.27) and the "6.1 ms cold start, no Python required" cold-start number — those are the two concrete, falsifiable claims that distinguish fendix from the field. Quote the canonical, reproducible numbers from [BENCHMARKS.md](../BENCHMARKS.md). Avoid "fast" and "accurate" as standalone adjectives; numbers do the work.
 
 ---
 

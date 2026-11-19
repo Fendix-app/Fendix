@@ -51,27 +51,46 @@ func TestConflictingReachabilityResolvesToProven(t *testing.T) {
 		Reachable: false, SourceTier: models.TierTreeSitter,
 	}
 
+	// RC-9e (owner ruling OR-85, "cross-file deduplication isolation"): the
+	// two occurrences have different own evidence (one proved a path, one did
+	// not), so they no longer share a finding. This test used to assert ONE
+	// group in which the proof-union carried the proven occurrence's claim over
+	// the whole group. The property it exists to protect is unchanged and is
+	// asserted below: the only positive claim anyone made is never discarded,
+	// and it stays pinned to the occurrence that earned it, which is now
+	// structural instead of a caveat on a group-level flag.
 	out := Deduplicate([]models.Finding{notProven, proven})
-	if len(out) != 1 {
-		t.Fatalf("got %d findings, want 1", len(out))
+	if len(out) != 2 {
+		t.Fatalf("got %d findings, want one per own-evidence class", len(out))
 	}
-	g := out[0]
+	var g, other models.Finding
+	for _, f := range out {
+		if f.Endpoint == "z/views.py:674" {
+			g = f
+		} else {
+			other = f
+		}
+	}
+	if g.Endpoint == "" || other.Endpoint != "a/util.py:10" {
+		t.Fatalf("both occurrences must stay reported, got %q and %q", out[0].Endpoint, out[1].Endpoint)
+	}
 
 	if !g.Reachable {
 		t.Error("Reachable = false — the only positive claim anyone made was discarded")
 	}
-	// The proof must stay PINNED to the occurrence that earned it. This is what
-	// stops the group-level flag from being read as "every affected endpoint is
-	// reachable": the chain names one file and line, and it is the proven one.
+	// The proof stays PINNED to the occurrence that earned it: the chain names
+	// one file and line, and it is the proven one.
 	if len(g.TaintChain) != 2 {
 		t.Fatalf("TaintChain has %d links, want the proven occurrence's chain", len(g.TaintChain))
 	}
 	if g.TaintChain[1].File != "z/views.py" {
 		t.Errorf("TaintChain sink file = %q, want the occurrence that proved reachability", g.TaintChain[1].File)
 	}
-	if len(g.AffectedEndpoints) != 2 {
-		t.Errorf("AffectedEndpoints = %v, want both occurrences retained so a reader can see the "+
-			"group spans locations the proof does not cover", g.AffectedEndpoints)
+	if len(g.AffectedEndpoints) != 0 {
+		t.Errorf("AffectedEndpoints = %v: the proven finding must cover only the occurrence the proof covers", g.AffectedEndpoints)
+	}
+	if other.Reachable || len(other.TaintChain) != 0 {
+		t.Errorf("the unproven occurrence carries a proof it does not have: reachable=%v chain=%d", other.Reachable, len(other.TaintChain))
 	}
 }
 

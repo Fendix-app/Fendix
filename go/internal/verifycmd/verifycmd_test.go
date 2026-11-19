@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,7 +86,10 @@ func TestVerifyURL_MissingCSPStillPresent(t *testing.T) {
 	}
 }
 
-func TestVerifyURL_MissingCSPResolved(t *testing.T) {
+// Round 5 follow-up (DE5-02, C8, D5-3): a CSP header on one response is an
+// observation about that response, not a remediation: unknown (exit 2), with
+// what was observed. It was pinned as resolved.
+func TestVerifyURL_MissingCSPNowSetIsUnknownNeverResolved(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'")
 		w.WriteHeader(200)
@@ -103,8 +107,11 @@ func TestVerifyURL_MissingCSPResolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if r.Status != StatusResolved {
-		t.Errorf("want resolved; got %v (reason=%q)", r.Status, r.Reason)
+	if r.Status != StatusUnknown {
+		t.Errorf("want unknown; got %v (reason=%q)", r.Status, r.Reason)
+	}
+	if !strings.Contains(r.Reason, "Content-Security-Policy now set") || !strings.Contains(r.Reason, "not proof that the vulnerability is fixed") {
+		t.Errorf("the reason must say what was observed and that it is not a fix: %q", r.Reason)
 	}
 }
 
@@ -155,7 +162,12 @@ func TestVerifyURL_MissingAuthStillPresent(t *testing.T) {
 	}
 }
 
-func TestVerifyURL_MissingAuthResolvedWhenGated(t *testing.T) {
+// Round 5 (contract C8, "HTTP status alone never resolves anything"): this was
+// TestVerifyURL_MissingAuthResolvedWhenGated and pinned "resolved" on a 401. A
+// changed status is not proof the endpoint now requires authentication (an auth
+// wall, a WAF, a moved route and a rate limiter answer the same), so the result is
+// unknown. Still-present on a 2xx is unchanged.
+func TestVerifyURL_MissingAuthIsUnknownWhenGated(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
 	}))
@@ -172,8 +184,8 @@ func TestVerifyURL_MissingAuthResolvedWhenGated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if r.Status != StatusResolved {
-		t.Errorf("want resolved; got %v (reason=%q)", r.Status, r.Reason)
+	if r.Status != StatusUnknown || !strings.Contains(r.Reason, "not proof of remediation") {
+		t.Errorf("want unknown (a status alone is not proof); got %v (reason=%q)", r.Status, r.Reason)
 	}
 }
 

@@ -209,6 +209,12 @@ func Score(ev evidence.Evidence) Result {
 		add(tierTreeSitterBump, CodeTierTreeSitter, "high-trust analyzer tier (tree-sitter taint)")
 	case models.TierSemgrepShim:
 		add(tierSemgrepPenalty, CodeTierSemgrep, "lower-trust analyzer tier (semgrep regex breadth)")
+	case models.TierSemgrepTaint:
+		// Same code and delta as the shim: still a semgrep rule, and the
+		// managed-CI policy keys tier_semgrep on analyzer_implementation
+		// "semgrep", which this tier exports. Its proof is paid for once, by
+		// reachableTaint above (ADR-011).
+		add(tierSemgrepPenalty, CodeTierSemgrep, "lower-trust analyzer tier (semgrep taint rule)")
 	}
 
 	// Strong cross-tool corroboration (engine.CorrelateCrossTool): an
@@ -301,11 +307,17 @@ func Score(ev evidence.Evidence) Result {
 //   - ConfidenceHigh: the emitting check's own claim that this is a literal
 //     match rather than a graded guess. It is the same predicate the DAST side
 //     uses, so one rule reads across both halves of the engine.
-//   - not TierSemgrepShim: that tier buys breadth at the cost of precision and
-//     has not cleared the F1 gate (see models.SourceTier.TrustRank and
-//     tierSemgrepPenalty). Letting regex breadth band HIGH on its own would
-//     hand the gate exactly the false positives band-gating exists to stop.
-//   - not InTest, not Placeholder: 31 of the 35 catalogued instances in
+//   - not a semgrep tier (models.SourceTier.IsSemgrep): the shim buys breadth
+//     at the cost of precision and has not cleared the F1 gate (see
+//     models.SourceTier.TrustRank and tierSemgrepPenalty). Letting regex
+//     breadth band HIGH on its own would hand the gate exactly the false
+//     positives band-gating exists to stop. The semgrep_taint tier is excluded
+//     too (ADR-011): its proof already counts as Reachable — +10 and an
+//     independent signal — and it must not ALSO band HIGH as a self-evident
+//     match, so a proven Semgrep taint finding stays MEDIUM and blocks on its
+//     reachable path, never on its own say-so.
+//   - not documentation (a credential in a README is a sample unless it is
+//     provable offline: documentationSample), and not InTest, not Placeholder: 31 of the 35 catalogued instances in
 //     tasks/FP_CORPUS.md are test fixtures, and a value the placeholder
 //     classifier recognises is deterministic evidence that the match is NOT a
 //     real credential. Both directly negate "deterministic detection of a real
@@ -322,9 +334,33 @@ func HasDeterministicDetection(ev evidence.Evidence) bool {
 	hasStatic := ev.Source == models.SourceWhitebox || ev.Source == models.SourceCorrelated
 	return hasStatic &&
 		ev.Confidence == models.ConfidenceHigh &&
-		ev.SourceTier != models.TierSemgrepShim &&
+		!ev.SourceTier.IsSemgrep() &&
 		!ev.InTest &&
-		!ev.Placeholder
+		!ev.Placeholder &&
+		!documentationSample(ev)
+}
+
+// documentationSample reports whether ev is a credential read out of
+// documentation with nothing that proves it real without the provider (RC-10b).
+//
+// A README, a guide or a changelog shows credentials to be read, and almost all
+// of them are samples: the file's purpose says so, which is evidence about the
+// match that the pattern itself cannot see. So the pattern match alone is not a
+// deterministic detection of a real credential there, and the finding does not
+// earn the +30 that lets it block. It is still reported, with its full evidence
+// (Rule 3), at WARN; and a value that is also demonstrably synthetic goes to
+// INFO (decision.DecideWithOptions).
+//
+// What keeps the weight is a credential that can be shown real offline
+// (evidence.OfflineProvable): a GitHub token whose checksum is valid, a private
+// key whose body parses, an AWS key pair. The path never lowers a value the
+// bytes prove.
+//
+// Documentation is decided by models.IsDocPath, which reads the file and not
+// only the directory: a deployable config under docs/ is not documentation, and
+// keeps its weight.
+func documentationSample(ev evidence.Evidence) bool {
+	return ev.Category == "secrets" && ev.InDoc && !ev.OfflineProvable
 }
 
 // lineageTrace renders ev.Lineage (the BB+WB inputs that merged during

@@ -1,0 +1,185 @@
+{
+ "version": "1.182.1",
+ "results": [
+  {
+   "check_id": "tmp.fendix-semgrep-rules-1234.go-ssrf-taint",
+   "path": "/fx/gon-0-end/main.go",
+   "start": {
+    "line": 17,
+    "col": 25,
+    "offset": 247
+   },
+   "end": {
+    "line": 17,
+    "col": 31,
+    "offset": 253
+   },
+   "extra": {
+    "message": "Outbound HTTP request to a URL taken from request input: allow only a fixed set of hosts first.",
+    "metadata": {
+     "category": "injection",
+     "cwe": [
+      "CWE-918"
+     ],
+     "confidence": "MEDIUM",
+     "fendix_severity": "HIGH",
+     "fendix_title": "Outbound HTTP request to a URL taken from request input.",
+     "fendix_remediation": "The server fetches a URL the caller chose, so it can be pointed at internal services or cloud metadata endpoints. Parse the URL and allow only a fixed set of hosts before the request: u, err := url.Parse(target); if err != nil || !allowedHosts[u.Hostname()] { return }.",
+     "fendix_reachability": "taint"
+    },
+    "severity": "ERROR",
+    "fingerprint": "requires login",
+    "lines": "requires login",
+    "validation_state": "NO_VALIDATOR",
+    "engine_kind": "OSS"
+   }
+  }
+ ],
+ "errors": [],
+ "paths": {
+  "scanned": [
+   "/fx/gon-0-end/main.go"
+  ]
+ },
+ "time": {
+  "rules": [
+   "tmp.fendix-semgrep-rules-1234.go-weak-password-hash-taint",
+   "tmp.fendix-semgrep-rules-1234.go-weak-password-hash-sink",
+   "tmp.fendix-semgrep-rules-1234.go-jwt-no-verify-taint",
+   "tmp.fendix-semgrep-rules-1234.go-jwt-no-verify-sink",
+   "tmp.fendix-semgrep-rules-1234.go-weak-random-token",
+   "tmp.fendix-semgrep-rules-1234.go-sqli-taint",
+   "tmp.fendix-semgrep-rules-1234.go-sqli-sink",
+   "tmp.fendix-semgrep-rules-1234.go-cmdi-taint",
+   "tmp.fendix-semgrep-rules-1234.go-cmdi-sink",
+   "tmp.fendix-semgrep-rules-1234.go-ssti-taint",
+   "tmp.fendix-semgrep-rules-1234.go-ssti-sink",
+   "tmp.fendix-semgrep-rules-1234.go-xss-taint",
+   "tmp.fendix-semgrep-rules-1234.go-xss-sink",
+   "tmp.fendix-semgrep-rules-1234.go-ssrf-taint",
+   "tmp.fendix-semgrep-rules-1234.go-ssrf-sink",
+   "tmp.fendix-semgrep-rules-1234.go-path-traversal-taint",
+   "tmp.fendix-semgrep-rules-1234.go-path-traversal-sink",
+   "tmp.fendix-semgrep-rules-1234.go-open-redirect-taint",
+   "tmp.fendix-semgrep-rules-1234.go-open-redirect-sink"
+  ],
+  "rules_parse_time": 0.21197891235351562,
+  "profiling_times": {
+   "config_time": 3.2885196208953857,
+   "core_time": 0.6205995082855225,
+   "ignores_time": 0.0001704692840576172,
+   "total_time": 3.913672685623169
+  },
+  "parsing_time": {
+   "total_time": 0.01619696617126465,
+   "per_file_time": {
+    "mean": 0.008098483085632324,
+    "std_dev": 6.558542828827285e-05
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_files": []
+  },
+  "scanning_time": {
+   "total_time": 0.06776690483093262,
+   "per_file_time": {
+    "mean": 0.06776690483093262,
+    "std_dev": 0.0
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_files": []
+  },
+  "matching_time": {
+   "total_time": 0.045809268951416016,
+   "per_file_and_rule_time": {
+    "mean": 0.022904634475708008,
+    "std_dev": 0.00010571053371677408
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_rules_on_files": []
+  },
+  "tainting_time": {
+   "total_time": 0.0011363029479980469,
+   "per_def_and_rule_time": {
+    "mean": 0.0002840757369995117,
+    "std_dev": 4.116829188660631e-08
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_rules_on_defs": []
+  },
+  "fixpoint_timeouts": [],
+  "prefiltering": {
+   "project_level_time": 0.0,
+   "file_level_time": 0.0,
+   "rules_with_project_prefilters_ratio": 0.0,
+   "rules_with_file_prefilters_ratio": 1.0,
+   "rules_selected_ratio": 0.10526315789473684,
+   "rules_matched_ratio": 0.10526315789473684
+  },
+  "targets": [
+   {
+    "path": "/fx/gon-0-end/main.go",
+    "num_bytes": 414,
+    "match_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.01322317123413086,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.033924102783203125,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "parse_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.01619696617126465,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "run_time": 0.06776690483093262
+   }
+  ],
+  "total_bytes": 414,
+  "max_memory_bytes": 312796864
+ },
+ "engine_requested": "OSS",
+ "skipped_rules": [],
+ "profiling_results": []
+}

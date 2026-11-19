@@ -16,7 +16,7 @@ def case_02_django_redirect_request_get():
 
 
 def case_03_multi_hop():
-    # EXPECT_TP: assignment-hop before sink
+    # EXPECT_TN: hop to a literal same-origin path prefix; cannot leave the site
     raw = request.args["dest"]
     safe = "/dashboard?next=" + raw
     return redirect(safe)

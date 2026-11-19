@@ -10,8 +10,15 @@
 //   - 17 general patterns + ENV_SECRET (.env-only).
 //   - Same SEC-<PATTERN_ID> finding IDs so dedup collapses any overlap
 //     when --checks secrets is passed explicitly.
-//   - Same skip-dirs / file-extension gate / .env name match.
-//   - Same 1MB file-size cap and >500-char minified-JS-line skip.
+//   - Same .env name match for ENV_SECRET.
+//
+// What it reads and how differs from the removed Python analyzer on purpose
+// (R-010, D6'): every file that is text, not only those with a listed
+// extension (textfiles.go); every line, however long, in overlapping windows,
+// not skipping a .js/.ts line over 500 characters (stream.go); files up to
+// streamMaxFileBytes in bounded memory, not 1 MB; and no directory pruned by
+// its name alone (PrunedDir). What it still cannot read is recorded as lost
+// evaluation (scope.Coverage), never skipped silently.
 //
 // Evidence redaction DIVERGES from the removed Python analyzer on purpose:
 // credential material is replaced at CAPTURE time with
@@ -40,6 +47,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -49,6 +57,7 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // ErrCodePathMissing signals the codePath argument is empty or points
@@ -57,32 +66,21 @@ import (
 var ErrCodePathMissing = errors.New("secrets: code path does not exist")
 
 const (
-	// maxFileBytes mirrors python secrets.py _MAX_FILE_BYTES (1 MB).
-	maxFileBytes = 1 << 20
+	// defaultMaxFileBytes is the size above which a file is not read: 128 MiB.
+	// A file is streamed in bounded memory, so the cap bounds time, not memory;
+	// it is far above any source file and a generated data file in a repository
+	// (GitHub refuses a push of one over 100 MiB). A file over it is lost
+	// evaluation, named in the scan's detail.
+	defaultMaxFileBytes = 128 << 20
 	// evidenceMaxLen mirrors python _EVIDENCE_MAX_LEN.
 	evidenceMaxLen = 120
-	// minifiedLineLen mirrors python _is_minified (>500 chars in .js/.ts).
-	minifiedLineLen = 500
 	// fixText mirrors python finding `fix` field.
 	fixText = "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately."
 )
 
-// skipDirs mirrors python _SKIP_DIRS. Pruned in-place during the walk
-// so we never descend into them.
-var skipDirs = map[string]struct{}{
-	".git": {}, "node_modules": {}, "vendor": {}, "__pycache__": {},
-	".venv": {}, "venv": {}, "dist": {}, "build": {}, ".tox": {},
-}
-
-// scanExtensions mirrors python _SCAN_EXTENSIONS. Lower-case match on
-// filepath.Ext.
-var scanExtensions = map[string]struct{}{
-	".py": {}, ".js": {}, ".ts": {}, ".jsx": {}, ".tsx": {}, ".go": {},
-	".java": {}, ".rb": {}, ".php": {}, ".env": {}, ".cfg": {}, ".ini": {},
-	".yaml": {}, ".yml": {}, ".toml": {}, ".json": {}, ".xml": {},
-	".tf": {}, ".hcl": {}, ".sh": {}, ".bash": {}, ".zsh": {},
-	".conf": {}, ".config": {},
-}
+// maxFileBytes is the cap on the bytes read from one file. It is a variable so
+// a test can lower it; production code never assigns it.
+var maxFileBytes int64 = defaultMaxFileBytes
 
 // valueGroup selectors — which part of a match is credential material, for
 // redaction (redact.go) and placeholder classification (placeholder.go).
@@ -121,6 +119,21 @@ type pattern struct {
 	// valueGroup selects which part of a match is credential material. Zero
 	// (valueGroupAuto) for all but the three entries that say otherwise.
 	valueGroup int
+	// valueSpans, when set, replaces valueGroup: it returns every credential
+	// span the match covers, the match's own value first. A pattern needs it
+	// when the regex capture cannot reach the end of the credential (a
+	// connection-string password holding ; & ' " @ or a space, or a second
+	// password property later in the same URL; see connectionStringSpans).
+	// It never changes what matches, only what is redacted.
+	valueSpans func(line string, sub []int) [][2]int
+	// lineAnchored marks a pattern whose regex is anchored to the start of the
+	// line (^). On a line longer than a window only the first window starts
+	// at the line start, so the later windows skip it.
+	lineAnchored bool
+	// required, derived at start-up (prefilter.go), is a set of lower-cased
+	// strings of which every match contains at least one; the pattern runs on a
+	// line only when the line contains one.
+	required []string
 }
 
 // CatalogRule is the public, non-sensitive contract metadata for one bundled
@@ -294,9 +307,28 @@ var patterns = []pattern{
 		// blanks just the credential. Adding a group cannot change RE2 match
 		// extents, so detection behaviour is byte-identical to the ungrouped
 		// form this replaced.
-		regex:    regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+`),
-		severity: models.SeverityHigh,
-		cwe:      "CWE-214",
+		//
+		// Two shapes, one rule id (so no existing identity moves):
+		//   1. URL userinfo: scheme://user:PASSWORD@host
+		//   2. JDBC properties, which carry the password as a pair rather than
+		//      as userinfo: jdbc:postgresql://h/app?user=u&password=PASSWORD,
+		//      jdbc:sqlserver://h:1433;databaseName=a;password=PASSWORD
+		// The value group of each is the password; the credential is the LAST
+		// participating group, so redaction treats both the same. A value
+		// STARTING with `$` is an interpolation (${DB_PASSWORD}) and does not
+		// match; a `$` later in the value is part of the password, and the
+		// whole value is the capture (a value class that excluded `$` anywhere
+		// stopped at it and published the rest of the password).
+		//
+		// The capture marks where the password STARTS; it stops at the first
+		// ; & ' " whitespace (or, for userinfo, @), which a password can
+		// contain. Redaction therefore does not use the capture's end:
+		// connectionStringSpans extends it to the end of the password
+		// property (R-013), so no part of the password reaches evidence.
+		regex:      regexp.MustCompile(`(?i)(?:mongodb|postgresql|postgres|mysql|mssql|redis|sqlite)://[^:@\s]+:([^@\s]+)@[^\s"']+|jdbc:[a-z0-9]+:(?://)?[^\s"'?;]+[?;][^\s"']*?\bpassword=([^&;\s"'$][^&;\s"']*)`),
+		severity:   models.SeverityHigh,
+		cwe:        "CWE-214",
+		valueSpans: connectionStringSpans,
 	},
 	{
 		id:    "GITHUB_TOKEN",
@@ -393,9 +425,10 @@ var envPatterns = []pattern{
 		// regex is multiline-anchored via ^...$; in Go the (?m) flag
 		// has the same effect, but we apply per-line so plain
 		// anchors are fine.
-		regex:    regexp.MustCompile(`^([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)S?(?:_[A-Z0-9_]+)?)\s*=\s*([^\s"'#][^\n#]{3,})\s*$`),
-		severity: models.SeverityHigh,
-		cwe:      "CWE-798",
+		regex:        regexp.MustCompile(`^([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIAL|AUTH)S?(?:_[A-Z0-9_]+)?)\s*=\s*([^\s"'#][^\n#]{3,})\s*$`),
+		severity:     models.SeverityHigh,
+		cwe:          "CWE-798",
+		lineAnchored: true,
 	},
 }
 
@@ -424,65 +457,238 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 // pruning are unchanged; non-allowlisted files are skipped before scanFile
 // opens them.
 func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
+	findings, _, err := ScanCoverage(ctx, codePath, allow)
+	return findings, err
+}
+
+// ScanCoverage is ScanWithAllowlist that also returns what the scan left
+// unread (decision D6). A file the scanner reads (ReadsFile) that was over
+// the size cap, could not be read, or was replaced between the walk and the
+// read, and a directory it could not list, are lost evaluation: the caller
+// records the scan a coverage gap naming them and keeps the findings. The
+// only directory left unread is <root>/.git (PrunedDir), and it is not source.
+func ScanCoverage(ctx context.Context, codePath string, allow *gitdiff.Allowlist) ([]evidence.Evidence, scope.Coverage, error) {
+	var findings []evidence.Evidence
+	var cov scope.Coverage
+	err := scanTree(ctx, codePath, allow, func(out []emitted) {
+		for _, e := range out {
+			findings = append(findings, e.ev)
+		}
+	}, &cov)
+	return findings, cov, err
+}
+
+// noteUnread files a file the walk did not (fully) read: too large or
+// unreadable, both lost evaluation. A file proven binary is not text and is not recorded.
+func noteUnread(cov *scope.Coverage, absRoot, path string, err error) {
+	if cov == nil || err == nil || errors.Is(err, errBinary) {
+		return
+	}
+	rel, rerr := filepath.Rel(absRoot, path)
+	if rerr != nil {
+		return
+	}
+	rel = filepath.ToSlash(rel)
+	switch {
+	case errors.Is(err, errTooLarge):
+		// Over the cap is lost evaluation, whatever the file looks like: a
+		// banner or a layout is not evidence that nothing in it matters
+		// (contract C6).
+		cov.TooLarge(lostName(rel))
+	case errors.Is(err, errTooManyFindings):
+		// The file is not evaluated past its findings cap: lost, not skipped.
+		cov.TooLarge(lostName(rel))
+	default:
+		cov.Unreadable(lostName(rel))
+	}
+}
+
+// noteSymlink files a symbolic link the scan refused to follow (sre3-06). A
+// link whose target is inside the scan root loses nothing: the walk reaches the
+// target directly. A dangling link has nothing to read. A link to a file or
+// directory outside the root is content that exists and was not read, so it is
+// listed as declared out of scope (a symbolic link) instead of vanishing from a
+// scan that says ok.
+func noteSymlink(cov *scope.Coverage, absRoot, path string) {
+	NoteRefusedSymlink(cov, absRoot, path, ReadsFile)
+}
+
+// NoteRefusedSymlink is noteSymlink for another scanner: reads says whether a
+// file of this base name is one that scanner reads, so a link to a file it
+// would never read is not a loss. A link to a directory always is.
+func NoteRefusedSymlink(cov *scope.Coverage, absRoot, path string, reads func(base string) bool) {
+	if cov == nil {
+		return
+	}
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return
+	}
+	rel, err := filepath.Rel(absRoot, path)
+	if err != nil {
+		return
+	}
+	if rootReal, err := filepath.EvalSymlinks(absRoot); err == nil {
+		if tr, err := filepath.Rel(rootReal, target); err == nil && tr != ".." && !strings.HasPrefix(tr, ".."+string(filepath.Separator)) {
+			return
+		}
+	}
+	if info, err := os.Stat(target); err != nil || (!info.IsDir() && !reads(filepath.Base(path))) {
+		return
+	}
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		cov.Symlink(SafeName(filepath.ToSlash(rel)) + "/")
+		return
+	}
+	cov.Symlink(SafeName(filepath.ToSlash(rel)))
+}
+
+// emitted is one finding plus the redaction markers that identify the
+// credential it reports (see Sighting). Only ScanSightings keeps the markers.
+type emitted struct {
+	ev      evidence.Evidence
+	markers []string
+}
+
+// scanTree is the body of ScanWithAllowlist: it walks codePath (or reads the
+// allowlist's files) and hands every file's findings to collect. On a walk
+// error collect has already received the findings read so far.
+//
+// cov, when not nil, receives what the walk left unread (ScanCoverage).
+func scanTree(ctx context.Context, codePath string, allow *gitdiff.Allowlist, collect func([]emitted), cov *scope.Coverage) error {
+	return walkTree(ctx, codePath, allow, func(ctx context.Context, root *os.Root, path, rootDir string, d fs.DirEntry) error {
+		emits, err := scanFile(ctx, root, path, rootDir, d)
+		// What was read is kept even when the rest of the file was not.
+		collect(emits)
+		return err
+	}, cov)
+}
+
+// fileVisitor reads one regular file the walk reached, through root. The error
+// it returns says why the file was not read in full (errTooLarge, errBinary, an
+// open or read error); the walk records it in the coverage.
+type fileVisitor func(ctx context.Context, root *os.Root, path, rootDir string, d fs.DirEntry) error
+
+// walkTree walks codePath (or visits the allowlist's files) and hands every
+// regular file the scan reads to visit. It is the one walk both the scan and
+// the credential search use, so they agree on what is in scope: the same
+// pruned directories, the same symlink refusals, the same containment.
+func walkTree(ctx context.Context, codePath string, allow *gitdiff.Allowlist, visit fileVisitor, cov *scope.Coverage) error {
+	return walkTreeWith(ctx, codePath, allow, visit, cov, walkOptions{})
+}
+
+// walkOptions are the two things a walk's caller may change: which directories
+// are pruned and which unreadable files count as lost.
+type walkOptions struct {
+	// prune says whether the directory at abs (rel under the root) is left
+	// unread, why, and whether that is not worth listing. nil means PrunedDir.
+	prune func(abs, rel string) (scope.Reason, bool)
+	// reads says whether a file of this base name is one the walk must read.
+	// nil means ReadsFile.
+	reads func(base string) bool
+}
+
+// walkTreeWith is walkTree with its options.
+func walkTreeWith(ctx context.Context, codePath string, allow *gitdiff.Allowlist, visit fileVisitor, cov *scope.Coverage, opts walkOptions) error {
+	if opts.prune == nil {
+		opts.prune = PrunedDir
+	}
+	if opts.reads == nil {
+		opts.reads = ReadsFile
+	}
 	if codePath == "" {
-		return nil, ErrCodePathMissing
+		return ErrCodePathMissing
 	}
 	info, err := os.Stat(codePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrCodePathMissing
+			return ErrCodePathMissing
 		}
-		return nil, fmt.Errorf("secrets: stat %q: %w", codePath, err)
+		return fmt.Errorf("secrets: stat %q: %w", codePath, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("secrets: %q is not a directory", codePath)
+		return fmt.Errorf("secrets: %q is not a directory", codePath)
 	}
 
 	absRoot, err := filepath.Abs(codePath)
 	if err != nil {
-		return nil, fmt.Errorf("secrets: resolve %q: %w", codePath, err)
+		return fmt.Errorf("secrets: resolve %q: %w", codePath, err)
 	}
-
-	var findings []evidence.Evidence
 
 	// A diff that matched zero scannable files → nothing to do. Guard here too
 	// (the orchestrator also short-circuits) since this is exported.
 	if allow.Empty() {
-		return nil, nil
+		return nil
 	}
+
+	// Every read goes through an os.Root opened on the scan root, so no path
+	// the walk or the allowlist produces can resolve outside it, even if the
+	// tree changes while the scan runs (R-003).
+	root, err := os.OpenRoot(absRoot)
+	if err != nil {
+		return fmt.Errorf("secrets: open %q: %w", absRoot, err)
+	}
+	defer root.Close()
 
 	// Diff-aware fast path: when the allowlist names specific changed files,
 	// scan exactly those — O(changed files) — instead of walking the whole
 	// tree to filter it down to them. Parity with the walk below is preserved:
-	// the same skipDirs prune (a committed vendor/ file stays skipped), the
-	// file set stays a strict subset of the walk's (TraversesSymlink rejects
-	// any file reached through a symlinked parent — which the walk never
-	// descends and which could escape the repo root), and directories are
-	// excluded via Lstat. (Empty allowlists already returned above.)
+	// the same pruned directories (a committed node_modules file stays
+	// skipped), the file set stays a strict subset of the walk's
+	// (TraversesSymlink rejects any file reached through a symlinked parent —
+	// which the walk never descends and which could escape the repo root), and
+	// anything that is not a regular file — a directory, a symlinked leaf, a
+	// device — is excluded via Lstat, as the walk excludes it. (Empty
+	// allowlists already returned above.)
 	if allow != nil {
+		noted := map[string]bool{}
 		for _, path := range allow.AbsPaths() {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
-			if underSkipDir(absRoot, path) || gitdiff.TraversesSymlink(absRoot, path) {
+			if NotePrunedAncestor(cov, noted, absRoot, path) != "" || gitdiff.TraversesSymlink(absRoot, path) {
 				continue
 			}
 			info, err := os.Lstat(path)
-			if err != nil || info.IsDir() {
-				continue
-			}
-			fileFindings, err := scanFile(path, absRoot, fs.FileInfoToDirEntry(info))
 			if err != nil {
 				continue
 			}
-			findings = append(findings, fileFindings...)
+			if info.Mode()&fs.ModeSymlink != 0 {
+				noteSymlink(cov, absRoot, path)
+				continue
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			if err := visit(ctx, root, path, absRoot, fs.FileInfoToDirEntry(info)); err != nil {
+				if errors.Is(err, errStopWalk) {
+					return nil
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				noteUnread(cov, absRoot, path, err)
+			}
 		}
-		return findings, nil
+		return nil
 	}
 
-	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, walkErrIn error) error {
+	// walkRoot, not filepath.WalkDir: a root that is itself a symlink is the
+	// scope the user chose, and WalkDir would report it as one non-directory
+	// entry and walk nothing (redteam-secrets-01).
+	walkErr := walkRoot(absRoot, func(path string, d fs.DirEntry, walkErrIn error) error {
 		if walkErrIn != nil {
-			// Permissions errors / vanished files — skip but keep walking.
+			// Permissions errors / vanished files: skip and keep walking, but
+			// a directory not listed, or a file of a kind the scanner reads,
+			// is in scope and was not searched (security-01).
+			if rel, rerr := filepath.Rel(absRoot, path); rerr == nil && rel != "." && cov != nil {
+				switch {
+				case d != nil && d.IsDir():
+					cov.Unreadable(lostName(filepath.ToSlash(rel)) + "/")
+				case opts.reads(filepath.Base(path)):
+					cov.Unreadable(lostName(filepath.ToSlash(rel)))
+				}
+			}
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
 			}
@@ -495,9 +701,34 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 			if path == absRoot {
 				return nil
 			}
-			if _, skip := skipDirs[d.Name()]; skip {
+			rel, rerr := filepath.Rel(absRoot, path)
+			if rerr != nil {
+				return nil
+			}
+			if reason, quiet := opts.prune(path, rel); reason != "" {
+				if cov != nil && !quiet {
+					cov.Exclude(reason, SafeName(filepath.ToSlash(rel))+"/")
+				}
 				return fs.SkipDir
 			}
+			return nil
+		}
+
+		// Regular files only (R-003). A symlink is never followed: one that
+		// points outside the root would publish another file's contents
+		// (a worker's environment, a mounted key) in this tree's evidence,
+		// and one to /dev/zero would be read until memory runs out. One that
+		// points inside the root loses nothing, because the walk reaches its
+		// target directly; one that points outside is named (noteSymlink).
+		// Devices, FIFOs and sockets are never source.
+		// (WalkDir already does not descend a symlinked directory.)
+		if d.Type()&fs.ModeSymlink != 0 {
+			if allow.Allows(path) {
+				NoteRefusedSymlink(cov, absRoot, path, opts.reads)
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
 			return nil
 		}
 
@@ -507,204 +738,455 @@ func ScanWithAllowlist(ctx context.Context, codePath string, allow *gitdiff.Allo
 			return nil
 		}
 
-		fileFindings, err := scanFile(path, absRoot, d)
-		if err != nil {
+		if err := visit(ctx, root, path, absRoot, d); err != nil {
+			if errors.Is(err, errStopWalk) {
+				return fs.SkipAll
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			// Per-file errors are non-fatal (matches Python's
-			// try/except OSError: return).
-			return nil
+			// try/except OSError: return), and recorded as lost evaluation.
+			noteUnread(cov, absRoot, path, err)
 		}
-		findings = append(findings, fileFindings...)
 		return nil
 	})
 
 	if walkErr != nil {
 		if errors.Is(walkErr, context.Canceled) || errors.Is(walkErr, context.DeadlineExceeded) {
-			return findings, walkErr
+			return walkErr
 		}
-		return findings, fmt.Errorf("secrets: walk %q: %w", absRoot, walkErr)
+		return fmt.Errorf("secrets: walk %q: %w", absRoot, walkErr)
 	}
-	return findings, nil
+	return nil
 }
 
-// scanFile reads one file, applies the pattern registry, and returns
-// any findings it produces. The file is silently skipped if it isn't
-// readable, exceeds maxFileBytes, or has an extension that's not in
-// scanExtensions (unless it's a .env-style file).
-// underSkipDir reports whether any directory component of abs (relative to
-// root) is a pruned directory. The diff-aware fast path uses it to preserve
-// parity with the walk, which prunes skipDirs subtrees (e.g. a committed
-// vendor/ file the walk never reaches).
-func underSkipDir(root, abs string) bool {
-	rel, err := filepath.Rel(root, abs)
+// walkRoot is filepath.WalkDir(root, fn) except that root itself is followed
+// when it is a symbolic link. WalkDir Lstats its root, so a linked root is one
+// non-directory entry and nothing under it is visited; the scan then recorded
+// secrets ok over zero files. The link is resolved once, the resolved
+// directory is walked, and every path is reported under root as the caller
+// gave it, so the allowlist, the os.Root reads and the endpoints are unchanged.
+// Links inside the tree are still never followed.
+func walkRoot(root string, fn fs.WalkDirFunc) error {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return filepath.WalkDir(root, fn)
+	}
+	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return false
+		return fmt.Errorf("resolve the root link %q: %w", root, err)
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for _, part := range parts[:len(parts)-1] { // dir components only, not the file
-		if _, skip := skipDirs[part]; skip {
-			return true
+	return filepath.WalkDir(resolved, func(path string, d fs.DirEntry, err error) error {
+		rel, rerr := filepath.Rel(resolved, path)
+		if rerr != nil {
+			return rerr
 		}
-	}
-	return false
+		return fn(filepath.Join(root, rel), d, err)
+	})
 }
 
-func scanFile(path, root string, d fs.DirEntry) ([]evidence.Evidence, error) {
-	name := d.Name()
-	envFile := isEnvFile(name)
-	if !envFile {
-		ext := strings.ToLower(filepath.Ext(name))
-		if _, ok := scanExtensions[ext]; !ok {
-			return nil, nil
+// SkipReason says why a full Scan of root would not read the file at path, or
+// returns "" when it would. It applies the checks Scan applies: a pruned
+// directory between root and the file, a binary file type, and a file over the
+// size cap. A caller that re-tests a finding with Scan uses it to tell "no
+// longer flagged" from "never looked at". An unreadable file returns "", so
+// the caller's own inspection reports it.
+func SkipReason(root, path string) string { return skipReason(root, path, true) }
+
+// skipReason is SkipReason, with the size check optional.
+func skipReason(root, path string, checkSize bool) string {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if dir := prunedAncestor(absRoot, absPath); dir != "" {
+		return fmt.Sprintf("it is under the skipped directory %q", dir)
+	}
+	name := filepath.Base(absPath)
+	if !ReadsFile(name) {
+		return fmt.Sprintf("files of the binary type %q are not read", strings.ToLower(filepath.Ext(name)))
+	}
+	if info, err := os.Lstat(absPath); err == nil {
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return "it is a symbolic link, which the scanner never follows"
 		}
+		if !info.Mode().IsRegular() {
+			return "it is not a regular file"
+		}
+		if checkSize && info.Size() > maxFileBytes {
+			return fmt.Sprintf("it is larger than %d bytes", maxFileBytes)
+		}
+	}
+	if gitdiff.TraversesSymlink(absRoot, absPath) {
+		return "it is reached through a symbolic link, which the scanner never follows"
+	}
+	return ""
+}
+
+// errStopWalk is returned by a visitor that has its answer and wants the walk to
+// end without recording anything as unread.
+var errStopWalk = errors.New("stop the walk")
+
+// relUnder is path relative to rootDir, or an error when it is outside it.
+func relUnder(rootDir, path string) (string, error) {
+	rel, err := filepath.Rel(rootDir, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("secrets: %q is outside the scan root", path)
+	}
+	return rel, nil
+}
+
+// errNotRegular, errChanged, errTooLarge and errBinary are why a file is not
+// (fully) read. They are per-file conditions: the walk goes on.
+var (
+	errNotRegular = errors.New("not a regular file")
+	errChanged    = errors.New("the file changed between the walk and the read")
+	errTooLarge   = errors.New("larger than the read cap")
+	// errBinary: the first bytes of a file of an unknown kind hold a NUL, which
+	// proves it is not text. It is not lost evaluation and is not recorded.
+	errBinary = errors.New("not a text file")
+	// errTooManyFindings: one file reported maxFindingsPerFile findings, so the
+	// rest of it was not read. The findings so far are kept.
+	errTooManyFindings = errors.New("too many findings in one file")
+	// wse1ErrSourceEncoding: a Python file whose declared source encoding is not
+	// read as written (a codec that is not ASCII-transparent, a name no codec
+	// answers to, a cookie only python -x reads), so what the scan read is not the
+	// program CPython runs. The findings read in clear are kept, and the file is
+	// lost evaluation under the existing "unreadable" reason (R5-01, R6-E2).
+	wse1ErrSourceEncoding = errors.New("a Python file the scan cannot read as the program CPython runs")
+)
+
+// maxFindingsPerFile bounds the memory one file can cost: a file of nothing but
+// credential-shaped lines would otherwise hold a finding per line. A file that
+// reaches it is recorded as lost evaluation, not skipped.
+var maxFindingsPerFile = 20000
+
+// openRegularFile opens rel through root, which refuses any path that
+// resolves outside the scan root. It returns only a regular file, and only the
+// file the walk saw (walked, from Lstat): a path swapped for a link, a device
+// or another file after the walk is refused.
+func openRegularFile(root *os.Root, rel string, walked fs.FileInfo) (*os.File, error) {
+	if testHookBeforeOpen != nil {
+		testHookBeforeOpen(rel)
+	}
+	f, err := root.OpenFile(rel, openReadFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return nil, errNotRegular
+	}
+	if walked != nil && !os.SameFile(walked, info) {
+		f.Close()
+		return nil, errChanged
+	}
+	// The size is not checked here: the caller has, and the read itself is
+	// bounded by maxFileBytes whatever the file does after it was sized.
+	return f, nil
+}
+
+// Test hooks, nil outside tests (qa-engine-06). They let a test change the
+// tree at the exact points between the walk and the read, so each containment
+// layer can be shown to be the one that refuses the change.
+var (
+	// testHookScanFile is called with the path of every entry that reaches
+	// scanFile: only regular files ever should.
+	testHookScanFile func(path string)
+	// testHookBeforeOpen runs after the walk's Lstat and before the open.
+	testHookBeforeOpen func(rel string)
+	// testHookReadSource wraps the opened file before it is read.
+	testHookReadSource func(io.Reader) io.Reader
+)
+
+// scanFile reads one regular file through root, in bounded memory, and
+// applies the pattern registry. It returns the findings and an error that says
+// why the file was not read in full: errTooLarge (the findings read before the
+// cap are returned with it), errBinary, or an open or read error. The walk
+// records them (D6). A file the scanner does not read by name returns nothing.
+func scanFile(ctx context.Context, root *os.Root, path, rootDir string, d fs.DirEntry) ([]emitted, error) {
+	if testHookScanFile != nil {
+		testHookScanFile(path)
+	}
+	name := d.Name()
+	if !ReadsFile(name) {
+		return nil, nil
 	}
 
 	info, err := d.Info()
 	if err != nil {
 		return nil, err
 	}
+	if !info.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
 	if info.Size() > maxFileBytes {
-		return nil, nil
+		return nil, errTooLarge
 	}
 
-	data, err := os.ReadFile(path)
+	rel, err := relUnder(rootDir, path)
 	if err != nil {
 		return nil, err
 	}
-
-	rel, err := filepath.Rel(root, path)
+	f, err := openRegularFile(root, rel, info)
 	if err != nil {
-		rel = path
+		return nil, err
 	}
-	rel = filepath.ToSlash(rel)
+	defer f.Close()
+	out, err := scanOpenFile(ctx, f, name, filepath.ToSlash(rel))
+	if len(out) > 0 && models.IsDocPath(filepath.ToSlash(rel)) {
+		// Documentation: decide which of its credentials can be shown real
+		// from the file alone (RC-10b).
+		out = markProvableInDoc(ctx, root, rel, info, name, out)
+	}
+	return out, err
+}
 
+// scanOpenFile streams an open file through the pattern registry. The read is
+// bounded by maxFileBytes whatever the file does after it was sized: a file
+// that keeps growing is cut one byte past the cap and is errTooLarge, with the
+// findings of the bytes read.
+func scanOpenFile(ctx context.Context, f io.Reader, name, rel string) ([]emitted, error) {
+	src := f
+	if testHookReadSource != nil {
+		src = testHookReadSource(src)
+	}
+	lim := &io.LimitedReader{R: src, N: maxFileBytes + 1}
+	r, py, err := textReaderPy(lim, name)
+	if err != nil {
+		return nil, err
+	}
+	out, err := scanReader(ctx, name, rel, r)
+	if err == nil && lim.N <= 0 {
+		err = errTooLarge
+	}
+	if err == nil && py.Lost() {
+		// Read as written, and reported as far as that reads; but not the program
+		// CPython runs, so the file is lost evaluation (R5-01, R6-E2).
+		err = fmt.Errorf("%w: %s", wse1ErrSourceEncoding, wse1PyReason(py))
+	}
+	return out, err
+}
+
+// lineScanner applies the pattern registry to the windows of one file.
+type lineScanner struct {
+	active  []pattern
+	matches [][][]int
+	rel     string
+	out     []emitted
+	// carry holds the credential spans the earlier windows of the current line
+	// found, in offsets of the line, so a window that sees only the tail of a
+	// credential still redacts it (carry.go).
+	carry     []carriedSpan
+	carryLine int
+	// docFile is true when the file is documentation (models.IsDocPath): the
+	// only files whose findings are examined for offline provability (RC-10b).
+	docFile bool
+}
+
+// scanReader applies the pattern registry to a stream. rel is the
+// slash-separated path findings are reported at. Each finding carries the
+// markers that identify its credential: the marker of its own value and, when
+// that value was merged with an overlapping span on the line, the marker the
+// evidence shows.
+func scanReader(ctx context.Context, name, rel string, r io.Reader) ([]emitted, error) {
 	active := patterns
-	if envFile {
+	if isEnvFile(name) {
 		active = make([]pattern, 0, len(patterns)+len(envPatterns))
 		active = append(active, patterns...)
 		active = append(active, envPatterns...)
 	}
-
-	var out []evidence.Evidence
-	isJSOrTS := strings.HasSuffix(name, ".js") || strings.HasSuffix(name, ".ts")
-	text := string(data)
-	lineno := 0
 	// matches holds one FindAllStringSubmatchIndex row set per active
 	// pattern for the CURRENT line. Reused across lines, and shared by the
 	// redaction pre-pass and the emit loop so each regex runs exactly once
 	// per line rather than once per consumer.
-	matches := make([][][]int, len(active))
-	for _, line := range splitLines(text) {
-		lineno++
-		if isJSOrTS && len(line) > minifiedLineLen {
-			continue
-		}
-		matched := false
-		for i := range active {
-			matches[i] = active[i].regex.FindAllStringSubmatchIndex(line, -1)
-			matched = matched || matches[i] != nil
-		}
-		if !matched {
-			continue
-		}
-
-		// One redaction pass per line, over the union of EVERY pattern's
-		// credential spans — not just the emitting pattern's own. Evidence is
-		// a window over the SOURCE LINE, so a line carrying two credentials
-		// would otherwise ship each one in the clear inside the other's
-		// window. See redact.go for the full argument.
-		//
-		// INVARIANT from here down: `line` is used ONLY for offsets, pattern
-		// matching and placeholder classification. The only string that may
-		// reach an evidence.Evidence is `redacted`.
-		spans := lineSecretSpans(line, active, matches)
-		redacted, newSpans := redactSpans(line, spans)
-
-		for i := range active {
-			pat := &active[i]
-			for _, sub := range matches[i] {
-				if !boundaryOK(line, sub[0], sub[1], pat.leftBoundary, pat.rightBoundary) {
-					continue
-				}
-				match := line[sub[0]:sub[1]]
-				// B1/B2: drop matches that are references-not-credentials
-				// (an ARN / Secrets-Manager lookup key) or well-known
-				// placeholders (YOUR_TOKEN_HERE, example keys, changeme…).
-				// These are the two false-positive classes that previously
-				// had to be hand-suppressed per file:line in .fendix-ignore.
-				// Unchanged: it still receives the FULL match.
-				if isReferenceOrPlaceholder(line, match) {
-					continue
-				}
-				vStart, vEnd, hasValue := secretValueSpan(pat, line, sub)
-				value := ""
-				if hasValue {
-					value = line[vStart:vEnd]
-				}
-				aStart, aEnd := evidenceAnchor(sub[0], vStart, hasValue, spans, newSpans)
-				safeEvidence := truncateEvidenceAround(redacted, aStart, aEnd)
-				lineRef := fmt.Sprintf("%s:%d", rel, lineno)
-				lineCopy := lineRef
-				out = append(out, evidence.Evidence{
-					ID:         "SEC-" + pat.id,
-					RuleID:     "secrets/" + pat.id, // v0.22 native provenance
-					Title:      pat.title,
-					Severity:   pat.severity,
-					Source:     models.SourceWhitebox,
-					Category:   "secrets",
-					Endpoint:   lineRef,
-					Evidence:   safeEvidence,
-					Fix:        fixText,
-					References: []string{pat.cwe},
-					Confidence: models.ConfidenceHigh,
-					Line:       &lineCopy,
-					// The SAFE identity the v2 fingerprint keys on: which
-					// identifier this credential is bound to, and where it
-					// lives. Never the credential, never a digest of it — see
-					// models.SecretRef. lastAssignmentKey is reused rather
-					// than re-derived so identity and the placeholder
-					// classifier always agree on what the key is.
-					Secret: &models.SecretRef{
-						Identifier: secretIdentifier(line, vStart, hasValue),
-						File:       rel,
-					},
-					// Deterministic fixture-credential classification. An
-					// EVIDENCE ANNOTATION, not a filter — the finding is
-					// emitted either way, at the same ID, severity and
-					// endpoint, with full (redacted) evidence. The confidence
-					// scorer turns it into one named negative delta. See
-					// placeholder.go for why this is not folded into
-					// isReferenceOrPlaceholder.
-					Placeholder: classifyPlaceholder(line, vStart, value).isPlaceholder(),
-					// Whether the match was anchored on the provider's own
-					// token signature rather than on a surrounding assignment.
-					// Bounds how far the fixture classification above is
-					// allowed to de-escalate — see providerAnchoredRules.
-					ProviderAnchored: isProviderAnchored(pat.id),
-				})
+	ls := &lineScanner{active: active, matches: make([][][]int, len(active)), rel: rel, docFile: models.IsDocPath(rel)}
+	n := 0
+	script := false
+	err := streamLines(r, func(seg segment) error {
+		if n++; n&0xff == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 		}
+		// A file whose FIRST line is a "#!" interpreter line is a script, and a
+		// script is never documentation whatever it is called (CL-1 B-3). Only
+		// the first window of line 1 can say so, and a path cannot.
+		if seg.lineno == 1 && seg.first && strings.HasPrefix(strings.TrimPrefix(seg.text, "\ufeff"), "#!") {
+			script = true
+		}
+		ls.scan(seg)
+		if len(ls.out) >= maxFindingsPerFile {
+			return errTooManyFindings
+		}
+		return nil
+	})
+	if script {
+		for i := range ls.out {
+			ls.out[i].ev.NotDocumentation = true
+		}
 	}
-	return out, nil
+	return ls.out, err
 }
 
-// splitLines splits text on \n and \r\n line endings without including
-// the terminator in each line. Mirrors python str.splitlines() closely
-// enough for this scanner's purposes (we don't care about exotic
-// terminators like U+2028 — secrets in those would also be exotic).
-func splitLines(text string) []string {
-	if text == "" {
-		return nil
+// scan applies the registry to one window of one line.
+func (ls *lineScanner) scan(seg segment) {
+	line, lineno, rel := seg.text, seg.lineno, ls.rel
+	active, matches := ls.active, ls.matches
+	matched := false
+	lower := strings.ToLower(line)
+	ascii := isASCII(line)
+	for i := range active {
+		matches[i] = nil
+		if !seg.first && active[i].lineAnchored {
+			continue
+		}
+		if !active[i].mayMatch(lower, ascii) {
+			continue
+		}
+		matches[i] = active[i].regex.FindAllStringSubmatchIndex(line, -1)
+		matched = matched || matches[i] != nil
 	}
-	// Normalise \r\n → \n, then split on \n. Drop trailing empty if
-	// the file ends in a newline so line numbers match Python's
-	// splitlines (which also drops trailing empty).
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	carriedIn := ls.carriedSpans(seg, line)
+	if !matched {
+		// Nothing to emit here, but a credential carried in from an earlier
+		// window may reach through this one into the next.
+		ls.updateCarry(seg, line, carriedIn, nil, 0)
+		return
 	}
-	return lines
+
+	// One redaction pass per line, over the union of EVERY pattern's
+	// credential spans — not just the emitting pattern's own. Evidence is
+	// a window over the SOURCE LINE, so a line carrying two credentials
+	// would otherwise ship each one in the clear inside the other's
+	// window. See redact.go for the full argument.
+	//
+	// INVARIANT from here down: `line` is used ONLY for offsets, pattern
+	// matching and placeholder classification. The only string that may
+	// reach an evidence.Evidence is `redacted`.
+	// One index per window: the per-match lookups below are answered from it.
+	ix := newLineIndex(line)
+	spans := lineSecretSpans(line, active, matches, carriedIn...)
+	redacted, newSpans := redactSpans(line, spans)
+	ls.updateCarry(seg, line, carriedIn, spans, restOfLineEnd(line, active, matches))
+
+	for i := range active {
+		pat := &active[i]
+		for _, sub := range matches[i] {
+			if sub[0] < seg.ownStart || sub[0] >= seg.ownEnd {
+				// Owned by the previous window (context here) or by the next,
+				// which sees the whole match.
+				continue
+			}
+			if !boundaryOK(line, sub[0], sub[1], pat.leftBoundary, pat.rightBoundary) {
+				continue
+			}
+			match := line[sub[0]:sub[1]]
+			vStart, vEnd, hasValue := secretValueSpan(pat, line, sub)
+			// B1/B2: drop matches that are references-not-credentials
+			// (an ARN / Secrets-Manager lookup key) or well-known
+			// placeholders (YOUR_TOKEN_HERE, example keys, changeme…).
+			// These are the two false-positive classes that previously
+			// had to be hand-suppressed per file:line in .fendix-ignore.
+			//
+			// The reference test reads the credential's own value and
+			// nothing else on the line (NEW-E1): a resource name in a
+			// comment, a URL, a second assignment or a sibling JSON member
+			// says nothing about this credential.
+			if isReferenceOrPlaceholder(referenceCandidate(pat, line, sub), match) {
+				continue
+			}
+			value := ""
+			if hasValue {
+				value = line[vStart:vEnd]
+			}
+			aStart, aEnd := evidenceAnchor(sub[0], vStart, hasValue, spans, newSpans)
+			safeEvidence := truncateEvidenceAround(redacted, aStart, aEnd)
+			var markers []string
+			if hasValue {
+				markers = append(markers, redactionMarker(value))
+				if m := mergedMarker(vStart, spans, newSpans, redacted); m != "" && m != markers[0] {
+					markers = append(markers, m)
+				}
+			}
+			// Whether a credential is a sample is a question about its whole literal
+			// value (synthetic.go): a provider token is read inside the string it
+			// sits in, not as the regex's match.
+			litStart, litEnd := -1, -1
+			if hasValue && providerTokenRuleIDs[pat.id] {
+				litStart, litEnd = ix.literalAround(vStart, vEnd)
+			}
+			sig := classifyPlaceholderLit(ix, vStart, value, litStart, litEnd)
+			placeholder, syntheticValue := sig.isPlaceholder(), sig.valueBased()
+			if isProviderAnchored(pat.id) && sig.Extended &&
+				!(sig.NamePrefix || sig.ValueWord || sig.RepeatedChars || sig.LowLength || sig.Common) &&
+				ix.hasNeighbor(neighborStart(sub, vStart, hasValue), neighborEnd(sub, vEnd, hasValue)) {
+				// Judged a sample by the RC-10b signals alone, on a line that
+				// also holds a credential no rule can read: v3.7.0's status
+				// (see neighbor.go).
+				placeholder, syntheticValue = false, false
+			}
+			lineRef := fmt.Sprintf("%s:%d", rel, lineno)
+			lineCopy := lineRef
+			ls.out = append(ls.out, emitted{markers: markers, ev: evidence.Evidence{
+				ID:         "SEC-" + pat.id,
+				RuleID:     "secrets/" + pat.id, // v0.22 native provenance
+				Title:      pat.title,
+				Severity:   pat.severity,
+				Source:     models.SourceWhitebox,
+				Category:   "secrets",
+				Endpoint:   lineRef,
+				Evidence:   safeEvidence,
+				Fix:        fixText,
+				References: []string{pat.cwe},
+				Confidence: models.ConfidenceHigh,
+				Line:       &lineCopy,
+				// The SAFE identity the v2 fingerprint keys on: which
+				// identifier this credential is bound to, and where it
+				// lives. Never the credential, never a digest of it — see
+				// models.SecretRef. lastAssignmentKey is reused rather
+				// than re-derived so identity and the placeholder
+				// classifier always agree on what the key is.
+				Secret: &models.SecretRef{
+					Identifier: secretIdentifierIx(ix, vStart, hasValue),
+					File:       rel,
+				},
+				// Deterministic fixture-credential classification. An
+				// EVIDENCE ANNOTATION, not a filter — the finding is
+				// emitted either way, at the same ID, severity and
+				// endpoint, with full (redacted) evidence. The confidence
+				// scorer turns it into one named negative delta. See
+				// placeholder.go for why this is not folded into
+				// isReferenceOrPlaceholder.
+				Placeholder: placeholder,
+				// The same classification, value evidence only: the name
+				// prefix is excluded. With the file being documentation it is
+				// the second independent signal that the value is a sample
+				// (RC-10b).
+				SyntheticValue: syntheticValue,
+				// A GitHub token whose checksum holds is provable offline; the
+				// private-key and AWS-pair cases need the lines around the
+				// match and are decided after the file is scanned
+				// (markProvableInDoc). Documentation files only.
+				OfflineProvable: ls.docFile && pat.id == "GITHUB_TOKEN" && githubChecksumValid(value),
+				// Whether the match was anchored on the provider's own
+				// token signature rather than on a surrounding assignment.
+				// Bounds how far the fixture classification above is
+				// allowed to de-escalate — see providerAnchoredRules.
+				ProviderAnchored: isProviderAnchored(pat.id),
+			}})
+		}
+	}
 }
 
 // boundaryOK returns false when the character immediately before
@@ -725,24 +1207,93 @@ func boundaryOK(line string, start, end int, leftRE, rightRE *regexp.Regexp) boo
 	return true
 }
 
-// referencePrefixes are case-insensitive substrings whose presence in the
-// matched value means it is a REFERENCE to a secret (a lookup key / ARN /
-// resource id), not the secret value itself. The canonical case is an AWS
+// A credential's value is a REFERENCE to a secret (a lookup key, an ARN, a
+// resource id), not the secret itself, ONLY when the whole value is a
+// well-formed reference, anchored at both ends. The canonical case is an AWS
 // Secrets Manager identifier — e.g.
 //
 //	secret_name = "rds!db-403f5acc-6752-4edd-a4a9-339a8395f134"
-//	secret_arn  = "arn:aws:secretsmanager:eu-central-1:123:secret:prod/db-AbCdEf"
+//	secret_arn  = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:prod/db-AbCdEf"
 //
 // The real credential is fetched at runtime from the secrets manager; the
 // literal in source is the address, not the password. These were previously
 // hand-suppressed per file:line in .fendix-ignore (B1).
-var referencePrefixes = []string{
-	"arn:aws:secretsmanager:",
-	"arn:aws:ssm:",
-	"arn:aws:kms:",
-	"rds!db-",      // RDS-managed master-secret name
-	"rds!cluster-", // Aurora-managed master-secret name
-	"projects/",    // GCP Secret Manager resource name: projects/*/secrets/*
+//
+// Three shapes are references, and each is matched whole:
+//
+//   - an AWS ARN of Secrets Manager, SSM Parameter Store or KMS, with a valid
+//     partition (aws, aws-cn, aws-us-gov), region, 12-digit account and the
+//     service's own resource form. The region, the account and the resource
+//     may be a template slot, an IAM wildcard (*) or, for the account, the
+//     literal "aws", and a Secrets Manager ARN may carry the ECS valueFrom
+//     suffix :json-key:version-stage:version-id (the empty fields kept);
+//   - the RDS-managed secret name, rds!db-<uuid> or rds!cluster-<uuid>;
+//   - a GCP Secret Manager resource name, projects/<id>/secrets/<name>,
+//     optionally with /locations/<loc>, /versions/<n|latest> and an API method
+//     suffix (:access, :addVersion, :destroy, :disable, :enable); the project,
+//     secret, location and version may be template slots.
+//
+// A template slot is how a reference is written before a tool fills it in:
+// ${var} (shell, Terraform, CloudFormation), {{ expr }} (Helm, Jinja), $(var)
+// (make, shell, Azure Pipelines), %s and %(name)s (printf). A slot holds only
+// the characters an identifier or a short expression uses (${...} and $(...):
+// letters, digits, : . _ - and, for $(...), spaces; {{ ... }} also quotes,
+// pipes, parentheses and $), so a '&', '!', '+' or '/' inside one makes the
+// value not a reference. A slot can still hold a plain word, and a word in the
+// region slot of an otherwise perfect ARN is read as a reference: that is the
+// price of reading templates, and the same one ${...} always paid (VERIFY-SEC
+// C-2). A value that is ONLY a slot is not a reference.
+//
+// Not "contains": a value that merely CONTAINS one of these, begins like one and
+// carries other text, or has one glued to its front is a credential
+// (`password = "projects/hunter2hunter2"` is a real password). A reference
+// prefix is not an exemption for the text around it, and a provider-shaped token
+// inside a slot or a resource name is reported by its own rule whatever the
+// generic rules do with the value around it.
+const (
+	// refSlot: one template slot.
+	refSlot = `(?:\$\{[A-Za-z0-9:._-]+\}` +
+		`|\{\{[A-Za-z0-9_$.:()|"'\s-]+\}\}` +
+		`|\$\([A-Za-z0-9:._ -]+\)` +
+		`|%(?:\([A-Za-z_][A-Za-z0-9_]*\))?[sdv])`
+	refPartition = `(?:aws(?:-cn|-us-gov)?|` + refSlot + `)`
+	refRegion    = `(?:[a-z]{2}(?:-[a-z]+)+-[0-9]|[a-z]{2}(?:-[a-z]+)*-?\*|\*|` + refSlot + `)`
+	refAccount   = `(?:[0-9]{12}|aws|\*|` + refSlot + `)`
+	// Resource names: one or more characters of the service's name class, or
+	// slots. '*' is an IAM wildcard; '?' is deliberately not accepted, so a
+	// query-string tail ("?pw=...") never reads as part of a name.
+	refSMName  = `(?:[A-Za-z0-9/_+=.@!*-]|` + refSlot + `)+`
+	refSSMName = `(?:[A-Za-z0-9/_.*-]|` + refSlot + `)+`
+	// refKMSKey: a key id of at least eight characters, or one that carries a
+	// slot or a wildcard (key/*, key/${KeyId}).
+	refKMSKey = `(?:[A-Za-z0-9-]{8,}` +
+		`|(?:[A-Za-z0-9-]|` + refSlot + `|\*)*(?:` + refSlot + `|\*)(?:[A-Za-z0-9-]|` + refSlot + `|\*)*)`
+	refKMSAlias = `(?:[A-Za-z0-9/_*-]|` + refSlot + `)+`
+	// refECSSuffix: :json-key:version-stage:version-id of an ECS valueFrom, all
+	// three colons always present, any field empty. A version id is a UUID, so
+	// a bare word there is not one.
+	refECSSuffix = `:(?:[A-Za-z0-9_.-]|` + refSlot + `)*` +
+		`:(?:[A-Za-z0-9_.-]|` + refSlot + `)*` +
+		`:(?:[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12}|` + refSlot + `)?`
+	// GCP names.
+	refGCPProject = `(?:[A-Za-z0-9]|` + refSlot + `)(?:[A-Za-z0-9._:-]|` + refSlot + `)*`
+	refGCPLoc     = `(?:[A-Za-z0-9-]|` + refSlot + `)+`
+	refGCPSecret  = `(?:[A-Za-z0-9_-]|` + refSlot + `)+`
+	refGCPVersion = `(?:[0-9]+|latest|` + refSlot + `)`
+)
+
+var referenceValueREs = []*regexp.Regexp{
+	// AWS ARN.
+	regexp.MustCompile(`(?i)^arn:` + refPartition + `:(?:` +
+		`secretsmanager:` + refRegion + `:` + refAccount + `:secret:` + refSMName + `(?:` + refECSSuffix + `)?` +
+		`|ssm:` + refRegion + `:` + refAccount + `:parameter/` + refSSMName +
+		`|kms:` + refRegion + `:` + refAccount + `:(?:key/` + refKMSKey + `|alias/` + refKMSAlias + `)` +
+		`)$`),
+	// RDS / Aurora managed master-secret name.
+	regexp.MustCompile(`(?i)^rds!(?:db|cluster)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`),
+	// GCP Secret Manager resource name.
+	regexp.MustCompile(`(?i)^projects/` + refGCPProject + `(?:/locations/` + refGCPLoc + `)?/secrets/` + refGCPSecret +
+		`(?:/versions/` + refGCPVersion + `)?(?::(?:access|addversion|destroy|disable|enable))?$`),
 }
 
 // placeholderRE matches a VALUE that is UNAMBIGUOUSLY a templating marker, not
@@ -771,25 +1322,55 @@ var placeholderRE = regexp.MustCompile(`(?i)^(?:your[_-][a-z0-9_-]*here|<[^>]+>|
 // have to pull it back out of the match.
 var quotedValueRE = regexp.MustCompile(`["']([^"']*)["']`)
 
-// isReferenceOrPlaceholder reports whether a regex-matched secret should NOT be
-// reported because it is a reference-not-credential (an ARN / Secrets-Manager
-// lookup key — referencePrefixes) or an unambiguous placeholder
-// (placeholderRE). `match` is the full regex match (often `KEY = "value"`);
-// the quoted value is extracted for the placeholder test, with a fallback to
-// the whole match when there is no quoted segment.
-func isReferenceOrPlaceholder(line, match string) bool {
-	lowerMatch := strings.ToLower(match)
-	lowerLine := strings.ToLower(line)
-	for _, p := range referencePrefixes {
-		if strings.Contains(lowerMatch, p) || strings.Contains(lowerLine, p) {
+// referenceCandidate returns the text the reference check reads: the credential
+// VALUE of one match, never the line around it.
+//
+// A pattern that captures its credential (a capture group, or valueSpans) is
+// tested on that value; a pattern whose whole match is the credential (a
+// provider token) on the match. A pattern whose credential is a signature or
+// "everything after a header" (valueGroupNone, valueGroupRestOfLine: a PEM
+// armour header, a service-account type marker) has no value that could be a
+// reference, so only its own match is read. Reading the rest of the line there
+// would put a sibling member's resource name back into the decision.
+func referenceCandidate(pat *pattern, line string, sub []int) string {
+	if pat.valueSpans != nil || pat.valueGroup == valueGroupAuto {
+		if s, e, ok := secretValueSpan(pat, line, sub); ok {
+			return line[s:e]
+		}
+	}
+	return line[sub[0]:sub[1]]
+}
+
+// isReferenceValue reports whether value, a credential's own value, is
+// entirely a well-formed reference to a secret (see referenceValueREs). Text
+// around a reference, or a reference prefix on its own, makes it a credential.
+func isReferenceValue(value string) bool {
+	v := strings.TrimSpace(value)
+	for _, re := range referenceValueREs {
+		if re.MatchString(v) {
 			return true
 		}
 	}
-	value := match
-	if m := quotedValueRE.FindStringSubmatch(match); m != nil {
-		value = m[1]
+	return false
+}
+
+// isReferenceOrPlaceholder reports whether a regex-matched secret should NOT be
+// reported because its value is a reference-not-credential (an ARN /
+// Secrets-Manager lookup key — referenceValueREs) or an unambiguous placeholder
+// (placeholderRE). value is the credential value (referenceCandidate): ONLY it
+// is tested for a reference prefix, never the line it sits on. match is the full
+// regex match (often `KEY = "value"`); the quoted value is extracted for the
+// placeholder test, with a fallback to the whole match when there is no quoted
+// segment.
+func isReferenceOrPlaceholder(value, match string) bool {
+	if isReferenceValue(value) {
+		return true
 	}
-	return placeholderRE.MatchString(strings.TrimSpace(value))
+	placeholder := match
+	if m := quotedValueRE.FindStringSubmatch(match); m != nil {
+		placeholder = m[1]
+	}
+	return placeholderRE.MatchString(strings.TrimSpace(placeholder))
 }
 
 // isEnvFile mirrors python _is_env_file: .env exactly, anything
@@ -816,10 +1397,16 @@ func isEnvFile(name string) bool {
 // identity, or with a digest of the credential, which would persist a
 // credential oracle. See models.SecretRef for the consequence.
 func secretIdentifier(line string, valueStart int, hasValue bool) string {
-	if !hasValue || valueStart <= 0 || valueStart > len(line) {
+	return secretIdentifierIx(newLineIndex(line), valueStart, hasValue)
+}
+
+// secretIdentifierIx is secretIdentifier with the line's index supplied (see
+// lineIndex): the same answers, read from one pass over the window instead of a
+// scan of the prefix per match.
+func secretIdentifierIx(ix *lineIndex, valueStart int, hasValue bool) string {
+	if !hasValue || valueStart <= 0 || valueStart > len(ix.line) {
 		return ""
 	}
-	prefix := line[:valueStart]
 	// The binding is the assignment to the left of the STRING LITERAL the
 	// value sits in — not of the nearest key, and not of the first quote on
 	// the line.
@@ -843,12 +1430,12 @@ func secretIdentifier(line string, valueStart int, hasValue bool) string {
 	// its left. lastAssignmentKey still runs on that prefix (a nested
 	// `config["stripe_key"] =` gives `stripe_key`, not `config`), never on the
 	// value's text.
-	if open := enclosingQuote(prefix); open >= 0 {
-		if outer := lastAssignmentKey(prefix[:open]); outer != "" {
+	if open := ix.enclosingQuoteBefore(valueStart); open >= 0 {
+		if outer := ix.lastKeyBefore(open); outer != "" {
 			return outer
 		}
 	}
-	return lastAssignmentKey(prefix)
+	return ix.lastKeyBefore(valueStart)
 }
 
 // enclosingQuote returns the index of the quote that opens the string literal

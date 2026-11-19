@@ -125,7 +125,7 @@ func Scan(ctx context.Context, codePath string) ([]evidence.Evidence, error) {
 		return nil, fmt.Errorf("npm: stat package-lock.json: %w", err)
 	}
 
-	content, err := os.ReadFile(lockfile)
+	content, err := readManifest(lockfile)
 	if err != nil {
 		return nil, fmt.Errorf("npm: read package-lock.json: %w", err)
 	}
@@ -238,7 +238,7 @@ func ScanOffline(codePath string, snap *offline.Snapshot) ([]evidence.Evidence, 
 		return nil, fmt.Errorf("npm: stat package-lock.json: %w", err)
 	}
 
-	content, err := os.ReadFile(lockfile)
+	content, err := readManifest(lockfile)
 	if err != nil {
 		return nil, fmt.Errorf("npm: read package-lock.json: %w", err)
 	}
@@ -1245,4 +1245,19 @@ func writeCache(dir, pkg, version string, vulns []osvVuln) {
 	}
 	tmp.Close()
 	_ = os.Rename(tmp.Name(), p)
+}
+
+// readManifest reads a manifest the scan found in the tree. A path that is a
+// named pipe or a device once links are followed is refused instead of read: an
+// open of a pipe waits for a writer that never comes and would hang the scan
+// (round 5, redteam5-11). A link to a regular file is still followed.
+func readManifest(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return os.ReadFile(path)
 }

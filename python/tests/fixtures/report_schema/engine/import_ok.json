@@ -1,0 +1,115 @@
+{
+  "decisions": {
+    "blocking": 0,
+    "confirmed": 1,
+    "informational": 0,
+    "total": 1,
+    "warning": 1
+  },
+  "findings": [
+    {
+      "category": "injection",
+      "confidence": "HIGH",
+      "confidence_band": "HIGH",
+      "confidence_breakdown": [
+        {
+          "code": "base_detection",
+          "delta": 35,
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "code": "imported_evidence",
+          "delta": 10,
+          "text": "imported: an external scanner reported this finding (SARIF import)"
+        },
+        {
+          "code": "imported_high_precision",
+          "delta": 25,
+          "text": "the source tool declares high precision for this rule"
+        }
+      ],
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 imported: an external scanner reported this finding (SARIF import)",
+        "+25 the source tool declares high precision for this rule"
+      ],
+      "confidence_score": 70,
+      "decision_policy": "enforced",
+      "decision_reason": "actionable finding below the --fail-on threshold",
+      "endpoint": "app/db.py:12",
+      "evidence": "This query depends on a user-provided value.",
+      "fingerprint": "878edc30919016bb37c003de4f480eed5dc908a7",
+      "fingerprint_v1": "d4f3bf513de635339ae06517280b678274292e6b",
+      "fix": "",
+      "id": "SEC-001",
+      "line": "12",
+      "occurrences": [
+        {
+          "endpoint": "app/db.py:12",
+          "fingerprint": "878edc30919016bb37c003de4f480eed5dc908a7"
+        }
+      ],
+      "references": [
+        "CWE-89",
+        "tool:codeql@2.19.0",
+        "rule:py/sql-injection"
+      ],
+      "rule_id": "py/sql-injection",
+      "self_evident_signals": [
+        "imported high-precision rule"
+      ],
+      "severity": "HIGH",
+      "source": "imported",
+      "status": "WARN",
+      "title": "SQL query built from user-controlled sources"
+    }
+  ],
+  "metadata": {
+    "active_probes": false,
+    "coverage": {
+      "configured_complete": true,
+      "contract_version": 1,
+      "gaps": [],
+      "limitations": [],
+      "required_analyzers": [],
+      "required_gaps": [],
+      "retried": [],
+      "strict": false
+    },
+    "duration": "0s",
+    "endpoints_scanned": 0,
+    "fingerprint_algorithm": "fendix/v2",
+    "imports": [
+      {
+        "analyzed_paths": [
+          "app/db.py",
+          "app/views.py"
+        ],
+        "error_notifications": 0,
+        "execution_successful": true,
+        "results": 1,
+        "tool": "codeql",
+        "version": "2.19.0"
+      }
+    ],
+    "mode": "import",
+    "policy_version": "1.0.0",
+    "schema_version": 2,
+    "started_at": "2026-11-14T00:00:00Z",
+    "target": "",
+    "version": "golden"
+  },
+  "sources": {
+    "blackbox": 0,
+    "correlated": 0,
+    "whitebox": 0
+  },
+  "summary": {
+    "critical": 0,
+    "high": 1,
+    "info": 0,
+    "low": 0,
+    "medium": 0
+  },
+  "total": 1
+}

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "engine_version": "v3.7.0",
+  "engine_version": "v3.8.0",
   "formats": [
     "json",
     "html",
@@ -15,6 +15,338 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "additionalProperties": false,
       "definitions": {
+        "ActiveProbeCoverage": {
+          "additionalProperties": false,
+          "description": "Present when active probing was enabled. Accounts for every active probe sent. A scan-wide configured_complete is never proof that every probe was evaluated: read this beside it. attempted = evaluated + inconclusive + unknown_origin + scanner_failed. A probe the target answered with 401, 403, 404 or 410 is gated: not evaluated, counted inside inconclusive and itemised in gated. Required-probe coverage is complete only when every planned probe was evaluated (attempted = evaluated): there is no percentage threshold, and one unevaluated probe, whoever's it is, makes the pass incomplete. The not_evaluated_* keys, groups_total, inline_truncated, listing_ceiling_reached and listing_overflow (all additive; absent from reports of engines before the bounded-evidence contract) account for every unevaluated probe in storage whose size does not follow the probe count.",
+          "properties": {
+            "attempted": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "cut_short": {
+              "additionalProperties": false,
+              "description": "Present only when a limit set for the scan ended the probe pass: probes it never started are in no count above. The engine cannot say who set the limit, only which flag and what value.",
+              "properties": {
+                "cause": {
+                  "enum": [
+                    "max_duration",
+                    "max_requests"
+                  ],
+                  "type": "string"
+                },
+                "configured": {
+                  "description": "The limit's value as given to the engine, for example 45s or 500.",
+                  "type": "string"
+                },
+                "limit": {
+                  "enum": [
+                    "--max-duration",
+                    "--max-requests"
+                  ],
+                  "type": "string"
+                },
+                "refused": {
+                  "description": "Requests the --max-requests budget turned away.",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "cause",
+                "limit",
+                "configured",
+                "refused"
+              ],
+              "type": "object"
+            },
+            "evaluated": {
+              "description": "A response came back and the check judged it.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "gated": {
+              "additionalProperties": false,
+              "description": "The probes the target answered with 401, 403, 404 or 410. A gated probe is NOT evaluated and is evidence of nothing: the request was refused or the path is not served to this client, not proof that the parameter is safe. It is target-side (never a scanner gap, never refunded) and is counted inside inconclusive and reasons.target.gated. Always present from the engine that adds it; absent from older reports.",
+              "properties": {
+                "by_status": {
+                  "additionalProperties": false,
+                  "description": "Non-zero counts by HTTP status; keys are 401, 403, 404, 410 only.",
+                  "properties": {
+                    "401": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "403": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "404": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "410": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "total": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "by_status"
+              ],
+              "type": "object"
+            },
+            "groups_total": {
+              "description": "The groups the engine listed, at most the listing ceiling (100,000). Greater than the groups shown exactly when inline_truncated.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inconclusive": {
+              "description": "Target-side non-evaluation: a confirmed non-answer, a redirect into an address the SSRF guard refuses, or a gated answer (401, 403, 404, 410; see gated). Not an evaluation, never evidence that anything is absent, safe or fixed. Target-owned, not a scanner failure, but still not evaluated: the pass is incomplete.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "inline_truncated": {
+              "description": "groups_total exceeds the groups shown in not_evaluated_groups. Counted, not lost: the aggregate in not_evaluated_counts is exact.",
+              "type": "boolean"
+            },
+            "listing_ceiling_reached": {
+              "description": "There were more groups than the engine's hard listing ceiling (100,000). The unevaluated probes whose group detail was therefore not recorded are counted in listing_overflow, and the aggregate counts stay exact. A pass that reached the ceiling is never complete.",
+              "type": "boolean"
+            },
+            "listing_overflow": {
+              "description": "The exact number of unevaluated probes whose group detail was not recorded because the listing ceiling was reached; 0 otherwise.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "not_evaluated_checks": {
+              "description": "Distinct (check, endpoint, origin, reason) with a probe that was not evaluated, scanner then unknown then target. A (check, endpoint) pair absent from the list was evaluated only when truncated is false.",
+              "items": {
+                "$ref": "#/definitions/NotEvaluatedCheck"
+              },
+              "maxItems": 200,
+              "type": "array"
+            },
+            "not_evaluated_counts": {
+              "description": "The exact aggregate of the probes that were not evaluated: one row per (origin, reason, HTTP status) with a non-zero count, in a fixed order. The vocabularies are closed, so a few dozen rows at most whatever the probe count. The counts add up to attempted - evaluated; a report whose counts do not add up is unreadable and its pass is not complete.",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "count": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "origin": {
+                    "enum": [
+                      "target",
+                      "unknown",
+                      "scanner"
+                    ],
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "description": "The HTTP status of the answer that was not evaluable (gated 401/403/404/410, rate limited 429, service unavailable 502/503/504); absent or null when the reason carries no HTTP status (a timeout, a reset, DNS, transport).",
+                    "maximum": 599,
+                    "minimum": 100,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "origin",
+                  "reason",
+                  "count"
+                ],
+                "type": "object"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "not_evaluated_groups": {
+              "description": "At most 200 (endpoint, origin, reason) groups of unevaluated probes with the check families they cover, in a fixed order. The groups shown are exact. Every group left out is counted: groups_total minus the groups shown.",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "checks": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "endpoint": {
+                    "description": "METHOD /path, exactly as a finding names its endpoint.",
+                    "type": "string"
+                  },
+                  "origin": {
+                    "enum": [
+                      "target",
+                      "unknown",
+                      "scanner"
+                    ],
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "endpoint",
+                  "origin",
+                  "reason",
+                  "checks"
+                ],
+                "type": "object"
+              },
+              "maxItems": 200,
+              "type": "array"
+            },
+            "reasons": {
+              "additionalProperties": false,
+              "description": "{origin: {reason: count}}. Origins: target, unknown, scanner. Reasons are a closed vocabulary per origin.",
+              "properties": {
+                "scanner": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "internal_error": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "not_sent": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "proxy_failure": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "request_construction": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "resource_exhausted": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scan_cancelled": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "scan_deadline": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "target": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "connection_refused": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "connection_reset": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "gated": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "other_transport": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "rate_limited": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "service_unavailable": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "tls_error": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "unknown": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "connection_refused": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "dns_failure": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "network_unreachable": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "timeout": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "tls_handshake": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "unclassified": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
+            },
+            "scanner_failed": {
+              "description": "The engine failed or never sent the probe. Not evaluated, and a coverage gap for active-probes.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "description": "not_evaluated_checks was cut at 200 entries, or the group listing reached its ceiling (see listing_ceiling_reached).",
+              "type": "boolean"
+            },
+            "unknown_origin": {
+              "description": "No evidence settles whose fault the failure is. Fail-closed: not evaluated, and a coverage gap for active-probes.",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "attempted",
+            "evaluated",
+            "inconclusive",
+            "unknown_origin",
+            "scanner_failed",
+            "reasons",
+            "not_evaluated_checks",
+            "truncated"
+          ],
+          "type": "object"
+        },
         "ConfidenceReason": {
           "additionalProperties": false,
           "description": "One scoring rule's contribution to a confidence score. `code` is the stable machine-readable identity a consumer matches on; `text` is human wording and is free to be reworded. The `delta` values of a finding's confidence_breakdown sum to its confidence_score.",
@@ -39,6 +371,9 @@
         "Coverage": {
           "additionalProperties": false,
           "properties": {
+            "active_probes": {
+              "$ref": "#/definitions/ActiveProbeCoverage"
+            },
             "configured_complete": {
               "type": "boolean"
             },
@@ -47,6 +382,7 @@
               "type": "integer"
             },
             "gaps": {
+              "description": "Analyzer names whose scanner_status is a gap, then, for an import, one `import/\u003ctool\u003e` entry for every producer whose run was recorded as failed or partial (executionSuccessful false, an exit signal, a non-zero exit code, an error-level notification). A scan is configured_complete only with no gap.",
               "items": {
                 "type": "string"
               },
@@ -312,7 +648,8 @@
               "enum": [
                 "native_go",
                 "tree_sitter_sidecar",
-                "semgrep_shim"
+                "semgrep_shim",
+                "semgrep_taint"
               ],
               "type": "string"
             },
@@ -356,9 +693,26 @@
         "ImportedTool": {
           "additionalProperties": false,
           "properties": {
+            "analyzed_paths": {
+              "description": "The files the run lists as analysed (artifacts that were code the run read), repo-relative, sorted, at most 4096.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 4096,
+              "type": "array"
+            },
             "corroborated": {
               "minimum": 0,
               "type": "integer"
+            },
+            "error_notifications": {
+              "description": "Error-level notifications the producer raised (toolExecutionNotifications and toolConfigurationNotifications), summed across the tool's runs. Absent when no invocation was recorded. Above zero makes `import/\u003ctool\u003e` a coverage gap: the run may be partial.",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "execution_successful": {
+              "description": "The producer's own account of its run, folded across the tool's runs and files: false when any invocation failed (executionSuccessful false, an exit signal, or a non-zero exit code with no success recorded); true only when every invocation said it succeeded. Absent when the document does not say: absent means not recorded, never fine. A false makes `import/\u003ctool\u003e` a coverage gap.",
+              "type": "boolean"
             },
             "no_location": {
               "minimum": 0,
@@ -382,6 +736,42 @@
           "required": [
             "tool",
             "results"
+          ],
+          "type": "object"
+        },
+        "NotEvaluatedCheck": {
+          "additionalProperties": false,
+          "properties": {
+            "check": {
+              "description": "The rule-id family of the findings the probe could produce: injection, xss, ssrf, openredirect, hostheader, graphql, methodtamper.",
+              "type": "string"
+            },
+            "endpoint": {
+              "description": "METHOD /path, exactly as a finding names its endpoint.",
+              "type": "string"
+            },
+            "evidence": {
+              "description": "A fixed phrase stating what was observed.",
+              "type": "string"
+            },
+            "origin": {
+              "enum": [
+                "target",
+                "unknown",
+                "scanner"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "check",
+            "endpoint",
+            "origin",
+            "reason",
+            "evidence"
           ],
           "type": "object"
         },
@@ -883,7 +1273,7 @@
         "target": "https://staging.example.com",
         "started_at": "2026-10-03T09:00:00Z",
         "duration": "1.2s",
-        "version": "v3.7.0",
+        "version": "v3.8.0",
         "mode": "blackbox",
         "endpoints_scanned": 1,
         "active_probes": false
@@ -917,7 +1307,7 @@
         "target": "https://staging.example.com",
         "started_at": "2026-10-03T09:00:00Z",
         "duration": "2.4s",
-        "version": "v3.7.0",
+        "version": "v3.8.0",
         "mode": "hybrid",
         "endpoints_scanned": 12,
         "active_probes": false,
@@ -1018,7 +1408,7 @@
           "tool": {
             "driver": {
               "name": "Fendix",
-              "version": "v3.7.0",
+              "version": "v3.8.0",
               "informationUri": "https://github.com/Fendix-app/Fendix",
               "rules": [
                 {

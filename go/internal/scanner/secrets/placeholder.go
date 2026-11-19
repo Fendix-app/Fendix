@@ -73,6 +73,11 @@ type placeholderSignals struct {
 	ValueWord     bool // a placeholder word appears inside the value
 	RepeatedChars bool // a long identical run, or one byte dominating
 	LowLength     bool // shorter than any real credential
+	// Extended is a signal synthetic.go adds (RC-10b): a published example, a
+	// sequential or periodic run, low diversity, a template marker.
+	Extended bool
+	// Common is a value on the common-sample-credential list ("password123").
+	Common bool
 }
 
 // isPlaceholder reports whether any signal fired. Disjunctive on purpose: each
@@ -80,7 +85,15 @@ type placeholderSignals struct {
 // miss the single most common fixture shape (`FAKE_API_KEY = "<32 hex>"`,
 // which trips the name prefix and nothing else).
 func (s placeholderSignals) isPlaceholder() bool {
-	return s.NamePrefix || s.ValueWord || s.RepeatedChars || s.LowLength
+	return s.NamePrefix || s.valueBased()
+}
+
+// valueBased reports whether a signal read off the VALUE fired. The name prefix
+// is deliberately absent: a name records the intent of whoever wrote the line,
+// not the nature of the value, so it never counts as evidence that the value is
+// synthetic (evidence.Evidence.SyntheticValue).
+func (s placeholderSignals) valueBased() bool {
+	return s.ValueWord || s.RepeatedChars || s.LowLength || s.Extended || s.Common
 }
 
 // classifyPlaceholder decides whether the credential at value (bound at
@@ -90,13 +103,30 @@ func (s placeholderSignals) isPlaceholder() bool {
 // header with nothing after it on the line — carries no evidence either way
 // and classifies as not-a-placeholder.
 func classifyPlaceholder(line string, valueStart int, value string) placeholderSignals {
+	return classifyPlaceholderIx(newLineIndex(line), valueStart, value)
+}
+
+// classifyPlaceholderIx is classifyPlaceholder with the line's index supplied, so
+// the assignment key left of the value is looked up and not recomputed from the
+// start of the line for every match.
+func classifyPlaceholderIx(ix *lineIndex, valueStart int, value string) placeholderSignals {
+	return classifyPlaceholderLit(ix, valueStart, value, -1, -1)
+}
+
+// classifyPlaceholderLit is classifyPlaceholderIx for a credential whose value is
+// only part of its literal. A provider's token pattern matches the token inside the
+// string it sits in, and whether the credential is a sample is a question about the
+// WHOLE literal (the whole-value rule, synthetic.go): the extended signals are read
+// from line[litStart:litEnd]; litStart < 0 means the value is the literal. The signals v3.7.0 already had (a placeholder word, a repeated
+// character, a short value, the name) read the value, exactly as v3.7.0 did.
+func classifyPlaceholderLit(ix *lineIndex, valueStart int, value string, litStart, litEnd int) placeholderSignals {
 	if value == "" {
 		return placeholderSignals{}
 	}
 	var s placeholderSignals
 
-	if valueStart > 0 && valueStart <= len(line) {
-		if key := lastAssignmentKey(line[:valueStart]); key != "" {
+	if valueStart > 0 && valueStart <= len(ix.line) {
+		if key := ix.lastKeyBefore(valueStart); key != "" {
 			s.NamePrefix = placeholderKeyRe.MatchString(key)
 		}
 	}
@@ -111,6 +141,14 @@ func classifyPlaceholder(line string, valueStart int, value string) placeholderS
 
 	s.RepeatedChars = hasRepeatedChars(value)
 	s.LowLength = len(value) < placeholderMinLen
+	if litStart < 0 {
+		s.Common = isCommonPlaceholderValue(value)
+		s.Extended = extendedSynthetic(value) && !s.Common
+		return s
+	}
+	literal := ix.line[litStart:litEnd]
+	s.Common = isCommonPlaceholderValue(value) || isCommonPlaceholderValue(literal)
+	s.Extended = ix.extendedSpan(litStart, litEnd) && !s.Common
 	return s
 }
 

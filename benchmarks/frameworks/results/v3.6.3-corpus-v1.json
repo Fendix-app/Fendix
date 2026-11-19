@@ -1,0 +1,4755 @@
+{
+  "engine": "fendix version v3.6.3 (darwin/arm64)",
+  "semgrep": "1.141.0",
+  "fail_on": "HIGH",
+  "python": "3.14.9",
+  "summary": {
+    "by_framework": {
+      "django": {
+        "TP": 12,
+        "FN": 2,
+        "FP": 3,
+        "TN": 11,
+        "recall": 0.857,
+        "precision": 0.8,
+        "false_positive_rate": 0.214,
+        "f1": 0.828,
+        "block_recall": 0.571,
+        "safe_cases_blocked": 2
+      },
+      "flask": {
+        "TP": 12,
+        "FN": 2,
+        "FP": 3,
+        "TN": 11,
+        "recall": 0.857,
+        "precision": 0.8,
+        "false_positive_rate": 0.214,
+        "f1": 0.828,
+        "block_recall": 0.571,
+        "safe_cases_blocked": 2
+      },
+      "fastapi": {
+        "TP": 10,
+        "FN": 4,
+        "FP": 3,
+        "TN": 11,
+        "recall": 0.714,
+        "precision": 0.769,
+        "false_positive_rate": 0.214,
+        "f1": 0.741,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "express": {
+        "TP": 4,
+        "FN": 10,
+        "FP": 1,
+        "TN": 13,
+        "recall": 0.286,
+        "precision": 0.8,
+        "false_positive_rate": 0.071,
+        "f1": 0.421,
+        "block_recall": 0.286,
+        "safe_cases_blocked": 1
+      },
+      "nestjs": {
+        "TP": 4,
+        "FN": 10,
+        "FP": 1,
+        "TN": 13,
+        "recall": 0.286,
+        "precision": 0.8,
+        "false_positive_rate": 0.071,
+        "f1": 0.421,
+        "block_recall": 0.286,
+        "safe_cases_blocked": 1
+      },
+      "nextjs": {
+        "TP": 4,
+        "FN": 10,
+        "FP": 1,
+        "TN": 13,
+        "recall": 0.286,
+        "precision": 0.8,
+        "false_positive_rate": 0.071,
+        "f1": 0.421,
+        "block_recall": 0.286,
+        "safe_cases_blocked": 1
+      },
+      "spring": {
+        "TP": 4,
+        "FN": 10,
+        "FP": 1,
+        "TN": 13,
+        "recall": 0.286,
+        "precision": 0.8,
+        "false_positive_rate": 0.071,
+        "f1": 0.421,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "nethttp": {
+        "TP": 6,
+        "FN": 8,
+        "FP": 2,
+        "TN": 12,
+        "recall": 0.429,
+        "precision": 0.75,
+        "false_positive_rate": 0.143,
+        "f1": 0.545,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "gin": {
+        "TP": 6,
+        "FN": 8,
+        "FP": 2,
+        "TN": 12,
+        "recall": 0.429,
+        "precision": 0.75,
+        "false_positive_rate": 0.143,
+        "f1": 0.545,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      }
+    },
+    "by_family": {
+      "go": {
+        "TP": 12,
+        "FN": 16,
+        "FP": 4,
+        "TN": 24,
+        "recall": 0.429,
+        "precision": 0.75,
+        "false_positive_rate": 0.143,
+        "f1": 0.545,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "java": {
+        "TP": 4,
+        "FN": 10,
+        "FP": 1,
+        "TN": 13,
+        "recall": 0.286,
+        "precision": 0.8,
+        "false_positive_rate": 0.071,
+        "f1": 0.421,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "js-ts": {
+        "TP": 12,
+        "FN": 30,
+        "FP": 3,
+        "TN": 39,
+        "recall": 0.286,
+        "precision": 0.8,
+        "false_positive_rate": 0.071,
+        "f1": 0.421,
+        "block_recall": 0.286,
+        "safe_cases_blocked": 3
+      },
+      "python": {
+        "TP": 34,
+        "FN": 8,
+        "FP": 9,
+        "TN": 33,
+        "recall": 0.81,
+        "precision": 0.791,
+        "false_positive_rate": 0.214,
+        "f1": 0.8,
+        "block_recall": 0.429,
+        "safe_cases_blocked": 4
+      }
+    },
+    "by_family_class": {
+      "go/sqli": {
+        "TP": 4,
+        "FN": 0,
+        "FP": 2,
+        "TN": 2,
+        "recall": 1.0,
+        "precision": 0.667,
+        "false_positive_rate": 0.5,
+        "f1": 0.8,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "go/cmdi": {
+        "TP": 4,
+        "FN": 0,
+        "FP": 2,
+        "TN": 2,
+        "recall": 1.0,
+        "precision": 0.667,
+        "false_positive_rate": 0.5,
+        "f1": 0.8,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "go/xss": {
+        "TP": 0,
+        "FN": 4,
+        "FP": 0,
+        "TN": 4,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "go/ssrf": {
+        "TP": 0,
+        "FN": 4,
+        "FP": 0,
+        "TN": 4,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "go/path_traversal": {
+        "TP": 0,
+        "FN": 4,
+        "FP": 0,
+        "TN": 4,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "go/open_redirect": {
+        "TP": 0,
+        "FN": 4,
+        "FP": 0,
+        "TN": 4,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "go/hardcoded_secret": {
+        "TP": 4,
+        "FN": 0,
+        "FP": 0,
+        "TN": 4,
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0,
+        "block_recall": 1.0,
+        "safe_cases_blocked": 0
+      },
+      "java/sqli": {
+        "TP": 0,
+        "FN": 2,
+        "FP": 0,
+        "TN": 2,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "java/cmdi": {
+        "TP": 2,
+        "FN": 0,
+        "FP": 1,
+        "TN": 1,
+        "recall": 1.0,
+        "precision": 0.667,
+        "false_positive_rate": 0.5,
+        "f1": 0.8,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "java/xss": {
+        "TP": 0,
+        "FN": 2,
+        "FP": 0,
+        "TN": 2,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "java/ssrf": {
+        "TP": 0,
+        "FN": 2,
+        "FP": 0,
+        "TN": 2,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "java/path_traversal": {
+        "TP": 0,
+        "FN": 2,
+        "FP": 0,
+        "TN": 2,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "java/open_redirect": {
+        "TP": 0,
+        "FN": 2,
+        "FP": 0,
+        "TN": 2,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "java/hardcoded_secret": {
+        "TP": 2,
+        "FN": 0,
+        "FP": 0,
+        "TN": 2,
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0,
+        "block_recall": 1.0,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/sqli": {
+        "TP": 6,
+        "FN": 0,
+        "FP": 3,
+        "TN": 3,
+        "recall": 1.0,
+        "precision": 0.667,
+        "false_positive_rate": 0.5,
+        "f1": 0.8,
+        "block_recall": 1.0,
+        "safe_cases_blocked": 3
+      },
+      "js-ts/cmdi": {
+        "TP": 0,
+        "FN": 6,
+        "FP": 0,
+        "TN": 6,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/xss": {
+        "TP": 0,
+        "FN": 6,
+        "FP": 0,
+        "TN": 6,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/ssrf": {
+        "TP": 0,
+        "FN": 6,
+        "FP": 0,
+        "TN": 6,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/path_traversal": {
+        "TP": 0,
+        "FN": 6,
+        "FP": 0,
+        "TN": 6,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/open_redirect": {
+        "TP": 0,
+        "FN": 6,
+        "FP": 0,
+        "TN": 6,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/hardcoded_secret": {
+        "TP": 6,
+        "FN": 0,
+        "FP": 0,
+        "TN": 6,
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0,
+        "block_recall": 1.0,
+        "safe_cases_blocked": 0
+      },
+      "python/sqli": {
+        "TP": 6,
+        "FN": 0,
+        "FP": 3,
+        "TN": 3,
+        "recall": 1.0,
+        "precision": 0.667,
+        "false_positive_rate": 0.5,
+        "f1": 0.8,
+        "block_recall": 0.667,
+        "safe_cases_blocked": 0
+      },
+      "python/cmdi": {
+        "TP": 6,
+        "FN": 0,
+        "FP": 0,
+        "TN": 6,
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0,
+        "block_recall": 0.333,
+        "safe_cases_blocked": 0
+      },
+      "python/xss": {
+        "TP": 0,
+        "FN": 6,
+        "FP": 0,
+        "TN": 6,
+        "recall": 0.0,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": 0.0,
+        "block_recall": 0.0,
+        "safe_cases_blocked": 0
+      },
+      "python/ssrf": {
+        "TP": 6,
+        "FN": 0,
+        "FP": 3,
+        "TN": 3,
+        "recall": 1.0,
+        "precision": 0.667,
+        "false_positive_rate": 0.5,
+        "f1": 0.8,
+        "block_recall": 0.333,
+        "safe_cases_blocked": 2
+      },
+      "python/path_traversal": {
+        "TP": 6,
+        "FN": 0,
+        "FP": 3,
+        "TN": 3,
+        "recall": 1.0,
+        "precision": 0.667,
+        "false_positive_rate": 0.5,
+        "f1": 0.8,
+        "block_recall": 0.333,
+        "safe_cases_blocked": 2
+      },
+      "python/open_redirect": {
+        "TP": 4,
+        "FN": 2,
+        "FP": 0,
+        "TN": 6,
+        "recall": 0.667,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 0.8,
+        "block_recall": 0.333,
+        "safe_cases_blocked": 0
+      },
+      "python/hardcoded_secret": {
+        "TP": 6,
+        "FN": 0,
+        "FP": 0,
+        "TN": 6,
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1": 1.0,
+        "block_recall": 1.0,
+        "safe_cases_blocked": 0
+      }
+    },
+    "by_variant_family": {
+      "go/direct": {
+        "TP": 6,
+        "FN": 8,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.429,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.6,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "go/indirect": {
+        "TP": 6,
+        "FN": 8,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.429,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.6,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "go/safe": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 0,
+        "TN": 14,
+        "recall": null,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": null,
+        "block_recall": null,
+        "safe_cases_blocked": 0
+      },
+      "go/safe_lookalike": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 4,
+        "TN": 10,
+        "recall": null,
+        "precision": 0.0,
+        "false_positive_rate": 0.286,
+        "f1": 0.0,
+        "block_recall": null,
+        "safe_cases_blocked": 0
+      },
+      "java/direct": {
+        "TP": 2,
+        "FN": 5,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.286,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.444,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "java/indirect": {
+        "TP": 2,
+        "FN": 5,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.286,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.444,
+        "block_recall": 0.143,
+        "safe_cases_blocked": 0
+      },
+      "java/safe": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 0,
+        "TN": 7,
+        "recall": null,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": null,
+        "block_recall": null,
+        "safe_cases_blocked": 0
+      },
+      "java/safe_lookalike": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 1,
+        "TN": 6,
+        "recall": null,
+        "precision": 0.0,
+        "false_positive_rate": 0.143,
+        "f1": 0.0,
+        "block_recall": null,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/direct": {
+        "TP": 6,
+        "FN": 15,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.286,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.444,
+        "block_recall": 0.286,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/indirect": {
+        "TP": 6,
+        "FN": 15,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.286,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.444,
+        "block_recall": 0.286,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/safe": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 0,
+        "TN": 21,
+        "recall": null,
+        "precision": null,
+        "false_positive_rate": 0.0,
+        "f1": null,
+        "block_recall": null,
+        "safe_cases_blocked": 0
+      },
+      "js-ts/safe_lookalike": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 3,
+        "TN": 18,
+        "recall": null,
+        "precision": 0.0,
+        "false_positive_rate": 0.143,
+        "f1": 0.0,
+        "block_recall": null,
+        "safe_cases_blocked": 3
+      },
+      "python/direct": {
+        "TP": 17,
+        "FN": 4,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.81,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.895,
+        "block_recall": 0.619,
+        "safe_cases_blocked": 0
+      },
+      "python/indirect": {
+        "TP": 17,
+        "FN": 4,
+        "FP": 0,
+        "TN": 0,
+        "recall": 0.81,
+        "precision": 1.0,
+        "false_positive_rate": null,
+        "f1": 0.895,
+        "block_recall": 0.238,
+        "safe_cases_blocked": 0
+      },
+      "python/safe": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 6,
+        "TN": 15,
+        "recall": null,
+        "precision": 0.0,
+        "false_positive_rate": 0.286,
+        "f1": 0.0,
+        "block_recall": null,
+        "safe_cases_blocked": 4
+      },
+      "python/safe_lookalike": {
+        "TP": 0,
+        "FN": 0,
+        "FP": 3,
+        "TN": 18,
+        "recall": null,
+        "precision": 0.0,
+        "false_positive_rate": 0.143,
+        "f1": 0.0,
+        "block_recall": null,
+        "safe_cases_blocked": 0
+      }
+    },
+    "overall": {
+      "TP": 62,
+      "FN": 64,
+      "FP": 17,
+      "TN": 109,
+      "recall": 0.492,
+      "precision": 0.785,
+      "false_positive_rate": 0.135,
+      "f1": 0.605,
+      "block_recall": 0.286,
+      "safe_cases_blocked": 7
+    }
+  },
+  "frameworks": [
+    {
+      "framework": "django",
+      "family": "python",
+      "cases": [
+        {
+          "id": "django-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/views/sqli_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/views/sqli_indirect.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/views/sqli_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/views/sqli_safe_lookalike.py",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python-sql-injection-string-format"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/views/cmdi_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SUBPROCESS_SHELL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/views/cmdi_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SUBPROCESS_SHELL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/views/cmdi_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/views/cmdi_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/views/xss_direct.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/views/xss_indirect.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/views/xss_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/views/xss_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/views/ssrf_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/views/ssrf_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/views/ssrf_safe.py",
+          "outcome": "FP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/views/ssrf_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/views/path_traversal_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/views/path_traversal_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/views/path_traversal_safe.py",
+          "outcome": "FP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/views/path_traversal_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/views/open_redirect_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_OPEN_REDIRECT"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/views/open_redirect_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_OPEN_REDIRECT"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/views/open_redirect_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/views/open_redirect_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/views/hardcoded_secret_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/AWS_ACCESS_KEY",
+            "secrets/AWS_SECRET_KEY"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/views/hardcoded_secret_indirect.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/views/hardcoded_secret_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "django-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/views/hardcoded_secret_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "ok",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {},
+      "findings_without_rule_id": {},
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 36,
+          "lines": 457,
+          "seconds_median": 1.15,
+          "seconds_samples": [
+            1.16,
+            1.15,
+            1.14
+          ],
+          "kloc_per_second": 0.4
+        },
+        "20x": {
+          "files": 720,
+          "lines": 9140,
+          "seconds_median": 1.74,
+          "seconds_samples": [
+            1.76,
+            1.69,
+            1.74
+          ],
+          "kloc_per_second": 5.25
+        }
+      }
+    },
+    {
+      "framework": "flask",
+      "family": "python",
+      "cases": [
+        {
+          "id": "flask-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/sqli_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/sqli_indirect.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/sqli_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/sqli_safe_lookalike.py",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python-sql-injection-string-format"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/cmdi_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SUBPROCESS_SHELL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/cmdi_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SUBPROCESS_SHELL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/cmdi_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/cmdi_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/xss_direct.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/xss_indirect.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/xss_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/xss_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/ssrf_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/ssrf_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/ssrf_safe.py",
+          "outcome": "FP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/ssrf_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/path_traversal_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/path_traversal_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/path_traversal_safe.py",
+          "outcome": "FP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/path_traversal_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/open_redirect_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "python.ast/PY_OPEN_REDIRECT"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/open_redirect_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_OPEN_REDIRECT"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/open_redirect_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/open_redirect_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/hardcoded_secret_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/AWS_ACCESS_KEY",
+            "secrets/AWS_SECRET_KEY"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/hardcoded_secret_indirect.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/hardcoded_secret_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        },
+        {
+          "id": "flask-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/hardcoded_secret_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "flask-missing-login-required",
+            "flask-route-no-auth-decorator"
+          ]
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "ok",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {
+        "flask-route-no-auth-decorator": 15,
+        "flask-missing-login-required": 15
+      },
+      "findings_without_rule_id": {},
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 30,
+          "lines": 459,
+          "seconds_median": 1.21,
+          "seconds_samples": [
+            1.21,
+            1.22,
+            1.15
+          ],
+          "kloc_per_second": 0.38
+        },
+        "20x": {
+          "files": 600,
+          "lines": 9180,
+          "seconds_median": 2.69,
+          "seconds_samples": [
+            2.72,
+            2.69,
+            2.69
+          ],
+          "kloc_per_second": 3.41
+        }
+      }
+    },
+    {
+      "framework": "fastapi",
+      "family": "python",
+      "cases": [
+        {
+          "id": "fastapi-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/sqli_direct.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/sqli_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/sqli_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/sqli_safe_lookalike.py",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python-sql-injection-string-format"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/cmdi_direct.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SUBPROCESS_SHELL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/cmdi_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SUBPROCESS_SHELL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/cmdi_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/cmdi_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/xss_direct.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/xss_indirect.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/xss_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/xss_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/ssrf_direct.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/ssrf_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/ssrf_safe.py",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_SSRF"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/ssrf_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/path_traversal_direct.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/path_traversal_indirect.py",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/path_traversal_safe.py",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "python.ast/PY_PATH_TRAVERSAL"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/path_traversal_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/open_redirect_direct.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/open_redirect_indirect.py",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/open_redirect_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/open_redirect_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/hardcoded_secret_direct.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/AWS_ACCESS_KEY",
+            "secrets/AWS_SECRET_KEY"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/hardcoded_secret_indirect.py",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/hardcoded_secret_safe.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        },
+        {
+          "id": "fastapi-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/hardcoded_secret_safe_lookalike.py",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": [
+            "fastapi-route-missing-auth-dependency"
+          ]
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "ok",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {
+        "fastapi-route-missing-auth-dependency": 15
+      },
+      "findings_without_rule_id": {},
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 30,
+          "lines": 474,
+          "seconds_median": 1.17,
+          "seconds_samples": [
+            1.14,
+            1.18,
+            1.17
+          ],
+          "kloc_per_second": 0.4
+        },
+        "20x": {
+          "files": 600,
+          "lines": 9480,
+          "seconds_median": 2.46,
+          "seconds_samples": [
+            2.35,
+            2.46,
+            2.53
+          ],
+          "kloc_per_second": 3.86
+        }
+      }
+    },
+    {
+      "framework": "express",
+      "family": "js-ts",
+      "cases": [
+        {
+          "id": "express-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "routes/sqli-direct.js",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "routes/sqli-indirect.js",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "routes/sqli-safe.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "routes/sqli-safe-lookalike.js",
+          "outcome": "FP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "routes/cmdi-direct.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "routes/cmdi-indirect.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "routes/cmdi-safe.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "routes/cmdi-safe-lookalike.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "routes/xss-direct.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "routes/xss-indirect.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "routes/xss-safe.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "routes/xss-safe-lookalike.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "routes/ssrf-direct.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "routes/ssrf-indirect.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "routes/ssrf-safe.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "routes/ssrf-safe-lookalike.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "routes/path-traversal-direct.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "routes/path-traversal-indirect.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "routes/path-traversal-safe.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "routes/path-traversal-safe-lookalike.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "routes/open-redirect-direct.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "routes/open-redirect-indirect.js",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "routes/open-redirect-safe.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "routes/open-redirect-safe-lookalike.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "routes/hardcoded-secret-direct.js",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "JS_HARDCODED_AWS_KEY"
+          ],
+          "line_delta": 1,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "routes/hardcoded-secret-indirect.js",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "routes/hardcoded-secret-safe.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "express-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "routes/hardcoded-secret-safe-lookalike.js",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "skipped",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {},
+      "findings_without_rule_id": {
+        "SQL query built via template literal \u2014 injection risk": 1
+      },
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 29,
+          "lines": 465,
+          "seconds_median": 0.97,
+          "seconds_samples": [
+            0.98,
+            0.97,
+            0.97
+          ],
+          "kloc_per_second": 0.48
+        },
+        "20x": {
+          "files": 580,
+          "lines": 9300,
+          "seconds_median": 1.18,
+          "seconds_samples": [
+            1.15,
+            1.19,
+            1.18
+          ],
+          "kloc_per_second": 7.88
+        }
+      }
+    },
+    {
+      "framework": "nestjs",
+      "family": "js-ts",
+      "cases": [
+        {
+          "id": "nestjs-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/controllers/sqli-direct.controller.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/controllers/sqli-indirect.controller.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/controllers/sqli-safe.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/controllers/sqli-safe-lookalike.controller.ts",
+          "outcome": "FP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/controllers/cmdi-direct.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/controllers/cmdi-indirect.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/controllers/cmdi-safe.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/controllers/cmdi-safe-lookalike.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/controllers/xss-direct.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/controllers/xss-indirect.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/controllers/xss-safe.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/controllers/xss-safe-lookalike.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/controllers/ssrf-direct.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/controllers/ssrf-indirect.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/controllers/ssrf-safe.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/controllers/ssrf-safe-lookalike.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/controllers/path-traversal-direct.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/controllers/path-traversal-indirect.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/controllers/path-traversal-safe.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/controllers/path-traversal-safe-lookalike.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/controllers/open-redirect-direct.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/controllers/open-redirect-indirect.controller.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/controllers/open-redirect-safe.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/controllers/open-redirect-safe-lookalike.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/controllers/hardcoded-secret-direct.controller.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "JS_HARDCODED_AWS_KEY"
+          ],
+          "line_delta": 1,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/controllers/hardcoded-secret-indirect.controller.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/controllers/hardcoded-secret-safe.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nestjs-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/controllers/hardcoded-secret-safe-lookalike.controller.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "skipped",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {},
+      "findings_without_rule_id": {
+        "SQL query built via template literal \u2014 injection risk": 1
+      },
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 30,
+          "lines": 492,
+          "seconds_median": 1.04,
+          "seconds_samples": [
+            1.0,
+            1.04,
+            1.62
+          ],
+          "kloc_per_second": 0.47
+        },
+        "20x": {
+          "files": 600,
+          "lines": 9840,
+          "seconds_median": 1.32,
+          "seconds_samples": [
+            1.32,
+            1.39,
+            1.24
+          ],
+          "kloc_per_second": 7.44
+        }
+      }
+    },
+    {
+      "framework": "nextjs",
+      "family": "js-ts",
+      "cases": [
+        {
+          "id": "nextjs-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/api/sqli-direct/route.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/api/sqli-indirect/route.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/api/sqli-safe/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/api/sqli-safe-lookalike/route.ts",
+          "outcome": "FP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "(no rule_id) SQL query built via template literal \u2014 injection risk"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/api/cmdi-direct/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/api/cmdi-indirect/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/api/cmdi-safe/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/api/cmdi-safe-lookalike/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/api/xss-direct/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/api/xss-indirect/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/api/xss-safe/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/api/xss-safe-lookalike/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/api/ssrf-direct/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/api/ssrf-indirect/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/api/ssrf-safe/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/api/ssrf-safe-lookalike/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/api/path-traversal-direct/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/api/path-traversal-indirect/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/api/path-traversal-safe/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/api/path-traversal-safe-lookalike/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/api/open-redirect-direct/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/api/open-redirect-indirect/route.ts",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/api/open-redirect-safe/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/api/open-redirect-safe-lookalike/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "app/api/hardcoded-secret-direct/route.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "JS_HARDCODED_AWS_KEY"
+          ],
+          "line_delta": 1,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "app/api/hardcoded-secret-indirect/route.ts",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "app/api/hardcoded-secret-safe/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nextjs-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "app/api/hardcoded-secret-safe-lookalike/route.ts",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "skipped",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {},
+      "findings_without_rule_id": {
+        "SQL query built via template literal \u2014 injection risk": 1
+      },
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 28,
+          "lines": 314,
+          "seconds_median": 1.11,
+          "seconds_samples": [
+            1.02,
+            1.11,
+            1.67
+          ],
+          "kloc_per_second": 0.28
+        },
+        "20x": {
+          "files": 560,
+          "lines": 6280,
+          "seconds_median": 1.33,
+          "seconds_samples": [
+            1.47,
+            1.33,
+            1.3
+          ],
+          "kloc_per_second": 4.7
+        }
+      }
+    },
+    {
+      "framework": "spring",
+      "family": "java",
+      "cases": [
+        {
+          "id": "spring-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/SqliDirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/SqliIndirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/SqliSafeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/SqliSafeLookalikeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/CmdiDirectController.java",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "JAVA_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/CmdiIndirectController.java",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "JAVA_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/CmdiSafeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/CmdiSafeLookalikeController.java",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "JAVA_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/XssDirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/XssIndirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/XssSafeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/XssSafeLookalikeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/SsrfDirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/SsrfIndirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/SsrfSafeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/SsrfSafeLookalikeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/PathTraversalDirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/PathTraversalIndirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/PathTraversalSafeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/PathTraversalSafeLookalikeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/OpenRedirectDirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/OpenRedirectIndirectController.java",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/OpenRedirectSafeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/OpenRedirectSafeLookalikeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/HardcodedSecretDirectController.java",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/AWS_ACCESS_KEY",
+            "secrets/AWS_SECRET_KEY"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "src/main/java/com/example/eval/web/HardcodedSecretIndirectController.java",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/HardcodedSecretSafeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "spring-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "src/main/java/com/example/eval/web/HardcodedSecretSafeLookalikeController.java",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "ok",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {},
+      "findings_without_rule_id": {},
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 29,
+          "lines": 713,
+          "seconds_median": 0.99,
+          "seconds_samples": [
+            0.99,
+            0.98,
+            0.99
+          ],
+          "kloc_per_second": 0.72
+        },
+        "20x": {
+          "files": 580,
+          "lines": 14260,
+          "seconds_median": 1.53,
+          "seconds_samples": [
+            1.53,
+            1.58,
+            1.52
+          ],
+          "kloc_per_second": 9.32
+        }
+      }
+    },
+    {
+      "framework": "nethttp",
+      "family": "go",
+      "cases": [
+        {
+          "id": "nethttp-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "sqli_direct.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "sqli_indirect.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "sqli_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "sqli_safe_lookalike.go",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "cmdi_direct.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "cmdi_indirect.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "cmdi_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "cmdi_safe_lookalike.go",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "xss_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "xss_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "xss_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "xss_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "ssrf_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "ssrf_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "ssrf_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "ssrf_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "path_traversal_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "path_traversal_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "path_traversal_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "path_traversal_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "open_redirect_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "open_redirect_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "open_redirect_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "open_redirect_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "hardcoded_secret_direct.go",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "GO_HARDCODED_AWS_KEY",
+            "secrets/AWS_SECRET_KEY"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "hardcoded_secret_indirect.go",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "hardcoded_secret_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "nethttp-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "hardcoded_secret_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "ok",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {},
+      "findings_without_rule_id": {},
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 29,
+          "lines": 685,
+          "seconds_median": 1.0,
+          "seconds_samples": [
+            1.0,
+            1.05,
+            1.0
+          ],
+          "kloc_per_second": 0.68
+        },
+        "20x": {
+          "files": 580,
+          "lines": 13700,
+          "seconds_median": 1.16,
+          "seconds_samples": [
+            1.13,
+            1.28,
+            1.16
+          ],
+          "kloc_per_second": 11.85
+        }
+      }
+    },
+    {
+      "framework": "gin",
+      "family": "go",
+      "cases": [
+        {
+          "id": "gin-sqli-direct",
+          "class": "sqli",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "sqli_direct.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-sqli-indirect",
+          "class": "sqli",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "sqli_indirect.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-sqli-safe",
+          "class": "sqli",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "sqli_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-sqli-safe_lookalike",
+          "class": "sqli",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "sqli_safe_lookalike.go",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_SQL_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-cmdi-direct",
+          "class": "cmdi",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "cmdi_direct.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-cmdi-indirect",
+          "class": "cmdi",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "cmdi_indirect.go",
+          "outcome": "TP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-cmdi-safe",
+          "class": "cmdi",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "cmdi_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-cmdi-safe_lookalike",
+          "class": "cmdi",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "cmdi_safe_lookalike.go",
+          "outcome": "FP",
+          "blocks": false,
+          "best_status": "WARN",
+          "rules": [
+            "GO_EXEC_COMMAND_INJECTION"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-xss-direct",
+          "class": "xss",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "xss_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-xss-indirect",
+          "class": "xss",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "xss_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-xss-safe",
+          "class": "xss",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "xss_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-xss-safe_lookalike",
+          "class": "xss",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "xss_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-ssrf-direct",
+          "class": "ssrf",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "ssrf_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-ssrf-indirect",
+          "class": "ssrf",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "ssrf_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-ssrf-safe",
+          "class": "ssrf",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "ssrf_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-ssrf-safe_lookalike",
+          "class": "ssrf",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "ssrf_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-path_traversal-direct",
+          "class": "path_traversal",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "path_traversal_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-path_traversal-indirect",
+          "class": "path_traversal",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "path_traversal_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-path_traversal-safe",
+          "class": "path_traversal",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "path_traversal_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-path_traversal-safe_lookalike",
+          "class": "path_traversal",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "path_traversal_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-open_redirect-direct",
+          "class": "open_redirect",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "open_redirect_direct.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-open_redirect-indirect",
+          "class": "open_redirect",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "open_redirect_indirect.go",
+          "outcome": "FN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-open_redirect-safe",
+          "class": "open_redirect",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "open_redirect_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-open_redirect-safe_lookalike",
+          "class": "open_redirect",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "open_redirect_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-hardcoded_secret-direct",
+          "class": "hardcoded_secret",
+          "variant": "direct",
+          "vulnerable": true,
+          "file": "hardcoded_secret_direct.go",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "GO_HARDCODED_AWS_KEY",
+            "secrets/AWS_SECRET_KEY"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-hardcoded_secret-indirect",
+          "class": "hardcoded_secret",
+          "variant": "indirect",
+          "vulnerable": true,
+          "file": "hardcoded_secret_indirect.go",
+          "outcome": "TP",
+          "blocks": true,
+          "best_status": "BLOCK",
+          "rules": [
+            "secrets/GITHUB_TOKEN"
+          ],
+          "line_delta": 0,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-hardcoded_secret-safe",
+          "class": "hardcoded_secret",
+          "variant": "safe",
+          "vulnerable": false,
+          "file": "hardcoded_secret_safe.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        },
+        {
+          "id": "gin-hardcoded_secret-safe_lookalike",
+          "class": "hardcoded_secret",
+          "variant": "safe_lookalike",
+          "vulnerable": false,
+          "file": "hardcoded_secret_safe_lookalike.go",
+          "outcome": "TN",
+          "blocks": false,
+          "best_status": null,
+          "rules": [],
+          "line_delta": null,
+          "off_target_rules": []
+        }
+      ],
+      "scanner_status": {
+        "dast": "skipped",
+        "spec": "skipped",
+        "active-probes": "skipped",
+        "secrets": "ok",
+        "textscan": "ok",
+        "semgrep": "ok",
+        "govulncheck": "skipped",
+        "pip": "skipped",
+        "npm": "skipped",
+        "python-engine": "ok",
+        "python-engine/auth": "skipped",
+        "python-engine/injection": "ok",
+        "python-engine/deps": "ok",
+        "plugins": "skipped"
+      },
+      "unmapped_rules": {},
+      "findings_without_rule_id": {},
+      "support_file_findings": [],
+      "engine_version": null,
+      "timing": {
+        "1x": {
+          "files": 29,
+          "lines": 725,
+          "seconds_median": 1.12,
+          "seconds_samples": [
+            1.63,
+            1.12,
+            1.1
+          ],
+          "kloc_per_second": 0.65
+        },
+        "20x": {
+          "files": 580,
+          "lines": 14500,
+          "seconds_median": 1.17,
+          "seconds_samples": [
+            1.27,
+            1.17,
+            1.12
+          ],
+          "kloc_per_second": 12.34
+        }
+      }
+    }
+  ]
+}

@@ -39,7 +39,13 @@ def emit(finding: dict) -> None:
     print(json.dumps(finding), flush=True)
 
 
-def _status(check: str, state: str, reason: Optional[str] = None, detail: Optional[str] = None) -> None:
+def _status(
+    check: str,
+    state: str,
+    reason: Optional[str] = None,
+    detail: Optional[str] = None,
+    scope: Optional[dict] = None,
+) -> None:
     """Emit one protocol-v2 status line for `check`.
 
     The Go side records this as the python-engine/<check> child entry (see
@@ -48,12 +54,20 @@ def _status(check: str, state: str, reason: Optional[str] = None, detail: Option
     toward done.total and the existing finding-counting tests are unaffected.
     Optional fields are omitted rather than sent as null/empty so the wire
     shape matches the Go struct's `omitempty` tags exactly.
+
+    `scope`, when given, is the complete list of the files whose analysis was
+    lost and the paths left out on purpose (`status_detail.scope_payload`).
+    The detail names only the first few within its byte budget; this is the
+    whole record, an additive field the Go side may copy into the report's
+    metadata (an unknown key in a status line is ignored today).
     """
     payload: dict = {"check": check, "state": state}
     if reason:
         payload["reason"] = reason
     if detail:
         payload["detail"] = detail
+    if scope:
+        payload["scope"] = scope
     print(json.dumps({"status": payload}), flush=True)
 
 
@@ -92,7 +106,16 @@ def _run_check(check: str, label: str, fn: Callable[[], None], verbose: bool) ->
         return ("skipped", "dependency_missing", str(exc))
     except Exception as exc:  # noqa: BLE001
         _log(f"check '{label}' failed: {exc}")
-        return ("failed", "execution_error", f"{type(exc).__name__}: {exc}")
+        # AnalysisIncomplete carries its own detail, fitted to the byte budget
+        # so the Go side never cuts a listing (C2); any other exception's
+        # message is cut at the budget and made safe for a segment (C1).
+        fitted = getattr(exc, "status_detail", None)
+        if isinstance(fitted, str) and fitted:
+            return ("failed", "execution_error", fitted)
+        from analyzers import status_detail
+
+        text = status_detail.clean(f"{type(exc).__name__}: {exc}", status_detail.DETAIL_BUDGET)
+        return ("failed", "execution_error", text)
 
 
 def _injection_support(stats: dict) -> StatusTuple:
@@ -107,22 +130,43 @@ def _injection_support(stats: dict) -> StatusTuple:
     clean" from "not the kind of code this check understands". A mixed tree
     still gets a real taint pass over its Python files, so it stays "ok" with
     a detail noting the JS files got pattern checks only.
+
+    `stats["excluded"]` (ASTAnalyzer.excluded) is what the analyzer left out
+    of scope on purpose, each path with its reason: since round 5 (D5-2) only a
+    symlink that is not followed (`analyzers/scope_evidence.py`). It is appended
+    to the detail as one segment that
+    starts "declared out of scope, not scanned:", fitted to the byte budget
+    and never cut (C1, C2), so nothing is excluded silently.
     """
+    from analyzers import status_detail
+
     py = int(stats.get("python", 0))
     js = int(stats.get("javascript", 0))
+    excluded = list(stats.get("excluded") or [])
     if py == 0 and js > 0:
         return (
             "skipped",
             "unsupported_target",
-            f"{js} JavaScript/TypeScript file(s): pattern checks ran, taint analysis does not apply",
+            status_detail.fit(
+                lead=[f"{js} JavaScript/TypeScript file(s): pattern checks ran, taint analysis does not apply"],
+                declared=excluded,
+            )
+            or None,
         )
     if js > 0:
         return (
             "ok",
             None,
-            f"{js} JavaScript/TypeScript file(s) got pattern checks only; taint analysis covered {py} Python file(s)",
+            status_detail.fit(
+                lead=[
+                    f"{js} JavaScript/TypeScript file(s) got pattern checks only; "
+                    f"taint analysis covered {py} Python file(s)"
+                ],
+                declared=excluded,
+            )
+            or None,
         )
-    return ("ok", None, None)
+    return ("ok", None, status_detail.fit(declared=excluded) or None)
 
 
 def main() -> None:
@@ -163,6 +207,25 @@ def main() -> None:
 
     counter = 0
 
+    # The interpreter floor (DE-03). The engine parses the scanned code with
+    # the interpreter it runs on, so an interpreter that is too old either
+    # cannot run the engine at all or cannot parse valid code. Below the
+    # floor it reports itself: every requested check failed, nothing run,
+    # exit 2. Between the floor and the newest grammar it says so on stderr,
+    # and each file it cannot parse is lost evaluation naming the interpreter
+    # (never a clean result).
+    from analyzers import interpreter
+
+    floor = interpreter.floor_error()
+    if floor:
+        _log(floor)
+    elif interpreter.older_than_grammar():
+        _log(
+            f"python {interpreter.version_text()} is older than "
+            f"{'.'.join(str(p) for p in interpreter.NEWEST_GRAMMAR)}: a file written in newer "
+            "syntax cannot be parsed and is reported as lost evaluation, not as clean"
+        )
+
     def emit_finding(f: dict) -> None:
         """Emit a single finding to stdout and increment the counter."""
         nonlocal counter
@@ -193,11 +256,17 @@ def main() -> None:
         SpecParser(spec_path).check_auth(emit_finding)
 
     def _run_injection() -> None:
-        from analyzers.ast_analyzer import ASTAnalyzer
+        from analyzers.ast_analyzer import AnalysisIncomplete, ASTAnalyzer
 
         analyzer = ASTAnalyzer(code_path, language or "python")
-        analyzer.run(emit_finding)
+        try:
+            analyzer.run(emit_finding)
+        except AnalysisIncomplete as exc:
+            injection_stats["scope"] = analyzer.scope_payload()
+            raise
         injection_stats.update(getattr(analyzer, "file_stats", {}))
+        injection_stats["excluded"] = list(analyzer.excluded)
+        injection_stats["scope"] = analyzer.scope_payload()
 
     def _run_deps() -> None:
         from analyzers.deps import DepsAnalyzer
@@ -220,18 +289,32 @@ def main() -> None:
         if not needs_input:
             _status(check_id, "skipped", "not_applicable", missing_detail)
             continue
+        if floor:
+            _status(check_id, "failed", "execution_error", floor)
+            continue
         state, reason, detail = _run_check(check_id, label, fn, verbose)
         if check_id == "injection" and state == "ok":
             # A clean run still needs classifying: a JavaScript-only tree got
             # pattern checks, not taint analysis, so "ok" would overstate
             # what was actually verified. See _injection_support's docstring.
             state, reason, detail = _injection_support(injection_stats)
-        _status(check_id, state, reason, detail)
+        _status(
+            check_id,
+            state,
+            reason,
+            detail,
+            injection_stats.get("scope") if check_id == "injection" else None,
+        )
 
     if verbose:
         _log(f"engine completed {counter} findings")
 
-    print(json.dumps({"done": True, "total": counter, "protocol": PROTOCOL_VERSION}), flush=True)
+    done: dict = {"done": True, "total": counter, "protocol": PROTOCOL_VERSION}
+    if floor:
+        done["error"] = floor
+    print(json.dumps(done), flush=True)
+    if floor:
+        sys.exit(2)
 
 
 if __name__ == "__main__":

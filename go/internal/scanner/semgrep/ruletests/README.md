@@ -1,0 +1,123 @@
+# Rule tests
+
+Test cases for the bundled Semgrep rule pack in `../rules/`, run with
+Semgrep's own test mode. From the repository root:
+
+```sh
+semgrep --test --config go/internal/scanner/semgrep/rules go/internal/scanner/semgrep/ruletests
+```
+
+The CI job `container-smoke` runs this command with the Semgrep in the
+release image.
+
+## Layout
+
+`semgrep --test` pairs each test file with the rule file of the same stem:
+`ruletests/<stem>.<ext>` tests `rules/<stem>.yaml`. For example,
+`ruletests/javascript-injection.ts` tests `rules/javascript-injection.yaml`.
+Several test files may share a stem, such as a `.js` and a `.ts` file.
+
+The stem is the file name up to its first dot, so
+`javascript-injection.spec.ts` also tests `rules/javascript-injection.yaml`,
+and a stem cannot contain a dot. `<stem>.fixed.<ext>` is not a test file:
+Semgrep reads it as the expected output of a rule's `fix:` on
+`<stem>.<ext>`. Dotfiles such as `.gitkeep` are ignored.
+
+Semgrep skips a test file that has no rule file of its stem and still
+reports success, so a misnamed test never runs. `TestRuleTestsPairWithRulePacks`
+in `../scanner_rulepack_test.go` fails on such a file. It also requires every
+rule of a pack that targets a language other than Python to have at least
+one `ruleid:` line and one `ok:` line in that pack's test files.
+
+## Annotations
+
+An annotation is a comment on the line above the code it describes. Use `//`
+in JavaScript, TypeScript, Java and Go, and `#` in Python.
+
+```ts
+// ruleid: js-sqli-taint
+db.query("SELECT * FROM users WHERE id = " + req.query.id);
+// ok: js-sqli-taint
+db.query("SELECT * FROM users WHERE id = $1", [req.query.id]);
+```
+
+- `ruleid: <id>`: the rule must report the next line. A line it does not
+  report is a missed line, and the test fails.
+- `ok: <id>`: the rule must not report the next line. A line it reports is an
+  incorrect line, and the test fails.
+- One annotation may name several rules, comma-separated:
+  `// ok: js-sqli-taint, js-sqli-sink`.
+
+A line that no annotation names must not be reported by any rule of the
+pack.
+
+Semgrep also requires every rule a test file annotates to report at least one
+line of that file: a file whose only annotations are `ok:` lines for a rule
+that reports nothing there fails the run ("rule id mismatch"). A file that
+must stay silent, such as `go-crypto.cryptorand.go`, carries no annotation:
+any line a rule reports in it fails the test.
+
+## Go test files
+
+This directory is inside the Go module, so the `go` tool would compile a
+`.go` test file as a package. Start every `.go` file here with
+`//go:build ignore`, keep it `gofmt`-clean, and give it a `package` clause so
+Semgrep can parse it. Nothing in this directory is embedded in the `fendix`
+binary: only `../rules/*.yaml` is.
+
+## Merged sanitizer fixtures
+
+`javascript-web.merged-sanitizers.ts` and `javascript-injection.merged-sanitizers.ts`
+carry one handler per alternative of the JavaScript sanitizer items that end in
+the same bare `pattern: $X` (R-008). Semgrep matches a bare metavariable against
+every expression of the file, and it did so once per such item; the items of one
+rule are now merged into a single item whose alternatives are nested `patterns`
+blocks, so the bare pattern is matched once. A merge that dropped an alternative
+would make its handler a reported line, so each handler is a regression test for
+one alternative. The controls at the end are the same handlers without a guard
+and must stay reported. A guard shape the rule does not accept today (the
+`startsWith(BASE + path.sep)` family of `js-path-traversal-taint`) is not in
+the file: a test must not freeze a behaviour nobody chose.
+
+An alternative may be merged only when its conjuncts are `pattern-inside`,
+`pattern-either` of `pattern-inside`, or `metavariable-*`. A negated conjunct
+(`pattern-not-inside`, `pattern-not`) inside an alternative filters the guard's
+range instead of the use, which accepts more uses than the unmerged item did:
+the Java `$GV` guards lost two findings of `java-web.java` that way and are
+left as they were, and the Go call sanitizers, which carry dozens of negated
+conjuncts, were not shown equivalent and are left as they were too.
+
+## JavaScript mirrors
+
+Every JavaScript pack rule declares `languages: [javascript, typescript]`, so
+each `javascript-*.ts` file has a `.js` mirror of the same name. The mirror is
+the `.ts` file with its types erased in place, so every line, and every
+annotation, stays on the same line number. Node.js does this without changing
+positions:
+
+```sh
+node -e "const m=require('node:module'),fs=require('node:fs');fs.writeFileSync(process.argv[2],m.stripTypeScriptTypes(fs.readFileSync(process.argv[1],'utf8'),{mode:'strip'}).replace(/[ \t]+$/gm,''))" \
+  javascript-web.ts javascript-web.js
+```
+
+`javascript-web.merged-sanitizers.ts` holds `{..., hostname, ...}`, which the
+TypeScript parser rejects: replace each `...` there with `___` before stripping
+and put it back afterwards. Decorators are JavaScript syntax and stay, so the
+NestJS handlers in a mirror are what Babel's legacy decorator plugins produce.
+`TestJavaScriptRuleTestsHaveJSMirror` (`../js_mirror_test.go`) fails when a
+mirror is missing, or when its lines or annotations drift from its `.ts` file.
+
+Two more kinds of `.js` file hold the cases a type eraser removes or cannot
+show. `*.flow-as.js` uses Flow's `as` cast (Flow 0.229+), the shape of the
+`const {..., $V, ...} = $E as $T` source; `TestJavaScriptAsSourceRulesHaveFlowCase`
+requires a `ruleid:` line there for every rule that carries that source.
+`javascript-<pack>.decorators.ts` and its `.js` mirror hold one NestJS handler
+per parameter-decorator source of each taint rule (`@Query`, `@Param`, `@Body`,
+`@Headers`, `@Req` under two names, and the PASSWORD `@Body` key), each marked
+`// source: <rule> @<decorator> <label>`. No case can be reported through
+another source: its parameter is not named `req` or `request`, its handler is not
+named after an HTTP method, and it has no `as` cast.
+`TestJavaScriptDecoratorSourcesHaveCases` requires a marked case for every
+decorator item of every rule. The mirror is how Babel's legacy decorator
+plugins write the same handler. Together these files are the parity guard for
+any change that runs the packs differently on `.js` and `.ts`.

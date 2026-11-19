@@ -91,7 +91,7 @@ func guardedClient(cfg *models.ScanConfig) *http.Client {
 	}
 	return &http.Client{
 		Timeout:       time.Duration(timeout) * time.Second,
-		Transport:     budget.TransportGuarded(ap),
+		Transport:     ObserveTransport(budget.TransportGuarded(ap)),
 		CheckRedirect: netguard.Config{AllowPrivate: ap}.CheckRedirect(),
 	}
 }
@@ -106,7 +106,7 @@ func guardedClientNoFollow(cfg *models.ScanConfig) *http.Client {
 	ap := allowPrivate(cfg)
 	return &http.Client{
 		Timeout:       0,
-		Transport:     budget.TransportGuarded(ap),
+		Transport:     ObserveTransport(budget.TransportGuarded(ap)),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }

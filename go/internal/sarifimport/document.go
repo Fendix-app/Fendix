@@ -48,6 +48,38 @@ type Run struct {
 	// and an absolute URI that starts with one of these bases can be
 	// relativized without guessing.
 	OriginalURIBaseIDs map[string]ArtifactLocation `json:"originalUriBaseIds"`
+	// Invocations carry the producer's own account of the run: whether it
+	// succeeded and what it reported going wrong.
+	Invocations []Invocation `json:"invocations"`
+	// Artifacts lists the files the run says it analysed or reported on.
+	Artifacts []Artifact `json:"artifacts"`
+}
+
+// Invocation is one execution of the tool within a run. ExecutionSuccessful is
+// a pointer because a document that does not say is not a document that says
+// true. ExitCode, ExitSignalName and ExitSignalNumber are the process's own end
+// (SARIF 2.1.0 3.20.14 to 3.20.17); recordOf reads them as failure signals
+// (R5-09).
+type Invocation struct {
+	ExecutionSuccessful            *bool          `json:"executionSuccessful"`
+	ExitCode                       *int           `json:"exitCode"`
+	ExitSignalName                 string         `json:"exitSignalName"`
+	ExitSignalNumber               *int           `json:"exitSignalNumber"`
+	ToolExecutionNotifications     []Notification `json:"toolExecutionNotifications"`
+	ToolConfigurationNotifications []Notification `json:"toolConfigurationNotifications"`
+}
+
+// Notification is a tool-reported event; only its level is read.
+type Notification struct {
+	Level string `json:"level"`
+}
+
+// Artifact is a file the run lists. Roles say what the file was to the run
+// (analysisTarget, resultFile, tool, driver, ...); an absent role list is a
+// plain analysed file.
+type Artifact struct {
+	Location ArtifactLocation `json:"location"`
+	Roles    []string         `json:"roles"`
 }
 
 // Tool wraps the driver that produced a run.

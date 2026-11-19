@@ -1,0 +1,75 @@
+{
+  "framework": "spring",
+  "language": "java",
+  "cases": [
+    {"id": "spring-sqli-direct", "class": "sqli", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SqliDirectController.java"},
+    {"id": "spring-sqli-indirect", "class": "sqli", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SqliIndirectController.java"},
+    {"id": "spring-sqli-safe", "class": "sqli", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/SqliSafeController.java"},
+    {"id": "spring-sqli-safe_lookalike", "class": "sqli", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/SqliSafeLookalikeController.java"},
+
+    {"id": "spring-cmdi-direct", "class": "cmdi", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/CmdiDirectController.java"},
+    {"id": "spring-cmdi-indirect", "class": "cmdi", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/CmdiIndirectController.java"},
+    {"id": "spring-cmdi-safe", "class": "cmdi", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/CmdiSafeController.java"},
+    {"id": "spring-cmdi-safe_lookalike", "class": "cmdi", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/CmdiSafeLookalikeController.java"},
+
+    {"id": "spring-xss-direct", "class": "xss", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/XssDirectController.java"},
+    {"id": "spring-xss-indirect", "class": "xss", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/XssIndirectController.java"},
+    {"id": "spring-xss-safe", "class": "xss", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/XssSafeController.java"},
+    {"id": "spring-xss-safe_lookalike", "class": "xss", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/XssSafeLookalikeController.java"},
+
+    {"id": "spring-ssrf-direct", "class": "ssrf", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SsrfDirectController.java"},
+    {"id": "spring-ssrf-indirect", "class": "ssrf", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SsrfIndirectController.java"},
+    {"id": "spring-ssrf-safe", "class": "ssrf", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/SsrfSafeController.java"},
+    {"id": "spring-ssrf-safe_lookalike", "class": "ssrf", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/SsrfSafeLookalikeController.java"},
+
+    {"id": "spring-path_traversal-direct", "class": "path_traversal", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/PathTraversalDirectController.java"},
+    {"id": "spring-path_traversal-indirect", "class": "path_traversal", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/PathTraversalIndirectController.java"},
+    {"id": "spring-path_traversal-safe", "class": "path_traversal", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/PathTraversalSafeController.java"},
+    {"id": "spring-path_traversal-safe_lookalike", "class": "path_traversal", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/PathTraversalSafeLookalikeController.java"},
+
+    {"id": "spring-open_redirect-direct", "class": "open_redirect", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/OpenRedirectDirectController.java"},
+    {"id": "spring-open_redirect-indirect", "class": "open_redirect", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/OpenRedirectIndirectController.java"},
+    {"id": "spring-open_redirect-safe", "class": "open_redirect", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/OpenRedirectSafeController.java"},
+    {"id": "spring-open_redirect-safe_lookalike", "class": "open_redirect", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/OpenRedirectSafeLookalikeController.java"},
+
+    {"id": "spring-hardcoded_secret-direct", "class": "hardcoded_secret", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/HardcodedSecretDirectController.java"},
+    {"id": "spring-hardcoded_secret-indirect", "class": "hardcoded_secret", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/HardcodedSecretIndirectController.java"},
+    {"id": "spring-hardcoded_secret-safe", "class": "hardcoded_secret", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/HardcodedSecretSafeController.java"},
+    {"id": "spring-hardcoded_secret-safe_lookalike", "class": "hardcoded_secret", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/HardcodedSecretSafeLookalikeController.java"},
+
+    {"id": "spring-sqli-cross_file", "class": "sqli", "variant": "cross_file", "vulnerable": true, "file": "src/main/java/com/example/eval/service/UserDirectoryService.java", "entry_file": "src/main/java/com/example/eval/web/SqliCrossFileController.java"},
+    {"id": "spring-sqli-alt_api", "class": "sqli", "variant": "alt_api", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SqliAltApiController.java"},
+    {"id": "spring-cmdi-cross_file", "class": "cmdi", "variant": "cross_file", "vulnerable": true, "file": "src/main/java/com/example/eval/service/NetworkDiagnosticsService.java", "entry_file": "src/main/java/com/example/eval/web/CmdiCrossFileController.java"},
+    {"id": "spring-cmdi-alt_api", "class": "cmdi", "variant": "alt_api", "vulnerable": true, "file": "src/main/java/com/example/eval/web/CmdiAltApiController.java"},
+    {"id": "spring-xss-cross_file", "class": "xss", "variant": "cross_file", "vulnerable": true, "file": "src/main/java/com/example/eval/service/GreetingPageWriter.java", "entry_file": "src/main/java/com/example/eval/web/XssCrossFileController.java"},
+    {"id": "spring-xss-alt_api", "class": "xss", "variant": "alt_api", "vulnerable": true, "file": "src/main/java/com/example/eval/web/XssAltApiController.java"},
+    {"id": "spring-ssrf-cross_file", "class": "ssrf", "variant": "cross_file", "vulnerable": true, "file": "src/main/java/com/example/eval/service/LinkPreviewService.java", "entry_file": "src/main/java/com/example/eval/web/SsrfCrossFileController.java"},
+    {"id": "spring-ssrf-alt_api", "class": "ssrf", "variant": "alt_api", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SsrfAltApiController.java"},
+    {"id": "spring-path_traversal-cross_file", "class": "path_traversal", "variant": "cross_file", "vulnerable": true, "file": "src/main/java/com/example/eval/service/DocumentStorageService.java", "entry_file": "src/main/java/com/example/eval/web/PathTraversalCrossFileController.java"},
+    {"id": "spring-path_traversal-alt_api", "class": "path_traversal", "variant": "alt_api", "vulnerable": true, "file": "src/main/java/com/example/eval/web/PathTraversalAltApiController.java"},
+    {"id": "spring-open_redirect-cross_file", "class": "open_redirect", "variant": "cross_file", "vulnerable": true, "file": "src/main/java/com/example/eval/service/RedirectService.java", "entry_file": "src/main/java/com/example/eval/web/OpenRedirectCrossFileController.java"},
+    {"id": "spring-open_redirect-alt_api", "class": "open_redirect", "variant": "alt_api", "vulnerable": true, "file": "src/main/java/com/example/eval/web/OpenRedirectAltApiController.java"},
+    {"id": "spring-hardcoded_secret-cross_file", "class": "hardcoded_secret", "variant": "cross_file", "vulnerable": true, "file": "src/main/java/com/example/eval/config/AwsCredentials.java", "entry_file": "src/main/java/com/example/eval/web/HardcodedSecretCrossFileController.java"},
+    {"id": "spring-hardcoded_secret-alt_api", "class": "hardcoded_secret", "variant": "alt_api", "vulnerable": true, "file": "src/main/java/com/example/eval/web/HardcodedSecretAltApiController.java"},
+
+    {"id": "spring-weak_password_hash-direct", "class": "weak_password_hash", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/WeakPasswordHashDirectController.java"},
+    {"id": "spring-weak_password_hash-indirect", "class": "weak_password_hash", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/WeakPasswordHashIndirectController.java"},
+    {"id": "spring-weak_password_hash-safe", "class": "weak_password_hash", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/WeakPasswordHashSafeController.java"},
+    {"id": "spring-weak_password_hash-safe_lookalike", "class": "weak_password_hash", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/WeakPasswordHashSafeLookalikeController.java"},
+
+    {"id": "spring-jwt_no_verify-direct", "class": "jwt_no_verify", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/JwtNoVerifyDirectController.java"},
+    {"id": "spring-jwt_no_verify-indirect", "class": "jwt_no_verify", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/JwtNoVerifyIndirectController.java"},
+    {"id": "spring-jwt_no_verify-safe", "class": "jwt_no_verify", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/JwtNoVerifySafeController.java"},
+    {"id": "spring-jwt_no_verify-safe_lookalike", "class": "jwt_no_verify", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/JwtNoVerifySafeLookalikeController.java"},
+
+    {"id": "spring-weak_random_token-direct", "class": "weak_random_token", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/WeakRandomTokenDirectController.java"},
+    {"id": "spring-weak_random_token-indirect", "class": "weak_random_token", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/WeakRandomTokenIndirectController.java"},
+    {"id": "spring-weak_random_token-safe", "class": "weak_random_token", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/WeakRandomTokenSafeController.java"},
+    {"id": "spring-weak_random_token-safe_lookalike", "class": "weak_random_token", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/WeakRandomTokenSafeLookalikeController.java"},
+
+    {"id": "spring-ssti-direct", "class": "ssti", "variant": "direct", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SstiDirectController.java"},
+    {"id": "spring-ssti-indirect", "class": "ssti", "variant": "indirect", "vulnerable": true, "file": "src/main/java/com/example/eval/web/SstiIndirectController.java"},
+    {"id": "spring-ssti-safe", "class": "ssti", "variant": "safe", "vulnerable": false, "file": "src/main/java/com/example/eval/web/SstiSafeController.java"},
+    {"id": "spring-ssti-safe_lookalike", "class": "ssti", "variant": "safe_lookalike", "vulnerable": false, "file": "src/main/java/com/example/eval/web/SstiSafeLookalikeController.java"}
+  ]
+}

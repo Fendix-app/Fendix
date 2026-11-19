@@ -1,0 +1,1025 @@
+{
+ "fx01_inline_realpath_commonpath_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Resolve once with realpath, then commonpath against a constant base, exit when outside. Control: the one shape the current recogniser accepts (attrib cm-inline2)."
+ },
+ "fx01b_inline_target_realpath_in_check_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Inline commonpath, both sides realpath'd inside the check, the unresolved join is what is opened. Correct (realpath(target) inside BASE means open(target) opens a file inside BASE); this is the shape of the real validators.py, written inline (attrib cm-inline: flagged at HEAD)."
+ },
+ "fx01c_inline_startswith_sep_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "realpath then startswith(BASE + os.sep): separator-safe prefix test on a resolved value."
+ },
+ "fx19_dotdot_isabs_inline_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "known_false_positive",
+  "why": "Reject '..' anywhere in the name and any absolute name, then join. Lexically complete; SAFE unless an attacker can plant a symlink inside BASE."
+ },
+ "fx02_helper_guard_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "The real validators.py shape: project-local helper = realpath both sides + commonpath, called as `if not helper(BASE, target): return` on the same `target` that is opened (attrib cm-helper)."
+ },
+ "fx02b_helper_guard_other_module_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Correct containment helper lives in guards.py (module A); the sink is in helpers.py (module B), reached from views.py (module C)."
+ },
+ "fx02c_helper_raises_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Exception-style guard: ensure_within() raises when outside, the result is not used in a test. Correct."
+ },
+ "fx02d_helper_returns_resolved_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "known_false_positive",
+  "why": "Resolve-and-verify helper: resolve_within(root, rel) returns the resolved path or raises, and that return value is what is opened."
+ },
+ "fx02e_helper_pathlib_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "pathlib helper: resolve() both sides, is_relative_to(); called as a guard on the opened path."
+ },
+ "fx02s_helper_guard_ok_samefile": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Same as fx02 but the view and the helper are in ONE file (same-file hop, which v3.7.0 already had)."
+ },
+ "fx02f_helper_guard_ok_direct": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Same as fx02 with no hop at all: the view reads request.GET and holds the sink (direct taint)."
+ },
+ "fx10_startswith_no_sep": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Looks like a guard: realpath both sides + startswith, but no separator. /srv/uploads2/x passes startswith('/srv/uploads'). Input '../uploads2/secret.txt'."
+ },
+ "fx10b_startswith_no_sep_inline": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Same sibling-prefix bug written inline, no helper: realpath + startswith(BASE) without separator."
+ },
+ "fx10s_startswith_no_sep_samefile": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "fx10 with view, helper and sink in one file (same-file hop)."
+ },
+ "fx11_abspath_symlink_escape": {
+  "label": "COND",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Guard uses abspath (lexical) instead of realpath: `..` and absolute names are rejected, but a symlink inside BASE that points outside passes. COND: exploitable only when an attacker can plant a symlink under BASE (archive extraction, shared volume). Oracle plants /srv/uploads/link -> /srv/outside."
+ },
+ "fx12_wrong_variable_checked": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The guard is correct but is applied to a different value than the sink argument: it checks the first path component, then the sink opens the whole name ('a/../../secret.txt')."
+ },
+ "fx13_return_value_ignored": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The correct helper is called but its boolean result is discarded, so nothing is ever rejected."
+ },
+ "fx14_guard_one_branch_only": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The correct guard runs only when the name starts with 'img/'; any other name skips it."
+ },
+ "fx15_join_after_check": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The folder is checked, then a second request-controlled part (file) is joined AFTER the check, re-introducing '..'. Inputs: folder='a', file='../../secret.txt'."
+ },
+ "fx16_decode_after_check": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The check sees the still-encoded name, the sink uses unquote(name). '%2e%2e%2fsecret.txt' (what a double-encoded request looks like to the app) passes the check as a plain file name, then decodes to '../secret.txt'."
+ },
+ "fx17_decode_before_check_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Control for fx16: the same decode happens BEFORE the check, and the decoded value is what is checked and opened."
+ },
+ "fx18_normpath_dotdot_only": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Normalises then rejects a leading '..', but not an absolute name: join(BASE, '/srv/secret.txt') is '/srv/secret.txt'. Guard-like (normalisation + prefix check), no helper."
+ },
+ "fx20_helper_always_true": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "A function named like a guard that proves nothing: is_safe_path() returns True for any non-empty value."
+ },
+ "fx21_replace_dotdot_slash": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Non-recursive sanitiser: name.replace('../', '') turns '....//secret.txt' into '../secret.txt'. No guard call at all; control that W must not cap."
+ },
+ "fx22_exists_check_only": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "A call whose result gates the sink (os.path.exists) that has nothing to do with containment: a literal reading of 'any call whose result gates the sink' caps this. Input '../secret.txt'."
+ },
+ "fx23_commonprefix_helper": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Looks like a containment helper but uses os.path.commonprefix, a STRING prefix: '/srv/uploads2/x' has the common prefix '/srv/uploads'. Input '../uploads2/secret.txt'."
+ },
+ "fx24_inverted_helper": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The helper returns True when the path is OUTSIDE the root (commonpath != root); the caller uses it as 'is within'. Rejects legitimate names and accepts '../secret.txt'."
+ },
+ "fx26_exception_swallowed": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The raising helper is correct but the caller swallows its exception (`except PermissionError: pass`) and opens the path anyway."
+ },
+ "fx28_rebind_between_check_and_use": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The check is made on join(BASE, name); then `name` is URL-decoded (rebound) and the SAME-LOOKING expression join(BASE, name) is opened. Textual equality of the guard argument and the sink argument does not mean the same value."
+ },
+ "fx29_unguarded_early_path": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The correct guard exists but a fast path (flag set) opens the path before the guard runs: the guard does not dominate every path to the sink."
+ },
+ "fx51d_inline_realpath_commonpath_direct": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Direct layout (the view holds the request value and the sink): realpath once, commonpath against a constant base. What v3.7.0 and the candidate each make of an inline guard with no hop."
+ },
+ "fx52d_inline_target_realpath_in_check_direct": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Direct layout: the inline check of the real validators.py shape (realpath on both sides inside the commonpath test; the unresolved join is opened)."
+ },
+ "fx53d_dotdot_isabs_direct": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "known_false_positive",
+  "why": "Direct layout: reject '..' anywhere and absolute names, then join (lexically complete)."
+ },
+ "fx54d_pathlib_resolve_relative_to_direct": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Direct layout: pathlib resolve() + is_relative_to()."
+ },
+ "fx55d_startswith_no_sep_direct": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Direct layout: realpath + startswith(BASE) without a separator (sibling prefix)."
+ },
+ "fx56_inline_accepted_form_inside_try": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "The EXACT inline shape the engine accepts (fx01: realpath once, commonpath against a constant, exit) but placed inside a `try:` block, as the real validators.py does. The engine's guard search reads only top-level statements of the function (`_dominating_exit_guard`), so this is not recognised."
+ },
+ "fx58_inline_guard_settings_base": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Django-typical base: settings.MEDIA_ROOT. The accepted inline shape (realpath once, commonpath, exit) but the base is a settings attribute, not a string constant: `_is_fixed_base` refuses it."
+ },
+ "fx59d_inline_guard_settings_base_direct": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Same as fx58 with no hop (the view holds the request value and the sink)."
+ },
+ "fx60_any_startswith_roots": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "known_false_positive",
+  "why": "The pygoat shape (Tier B): realpath of the join, then `any(path.startswith(root + os.sep) for root in ROOTS)` over a collection of fixed roots, raise when none matches."
+ },
+ "fx30_tenant_inline_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Per-tenant base computed by a call (get_tenant_root(user), in tenants.py); inline realpath + commonpath against that base (attrib cm-inline3 shape)."
+ },
+ "fx31_tenant_helper_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "Real-code shape: per-tenant root from a call, project helper containment check (realpath both sides, commonpath) on the opened path."
+ },
+ "fx32_tenant_wrong_base": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Per-tenant base, but the containment check is against the GLOBAL tenants root: tenant 7 reads tenant 8 with '../8/secret.txt' (check passes: still under /srv/tenants)."
+ },
+ "fx33_tenant_startswith_no_sep": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "Per-tenant base + helper that uses startswith without a separator: '/srv/tenants/7' is a prefix of '/srv/tenants/70', so tenant 7 reads tenant 70 with '../70/secret.txt'."
+ },
+ "fx34_tenant_from_request": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "proven",
+  "why": "The per-tenant base is derived from a REQUEST parameter (tenant) and the correct containment check is made against that attacker-chosen base, so it bounds nothing: tenant='../..', name='srv/secret.txt'."
+ },
+ "fx40_pathlib_resolve_is_relative_to_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "pathlib: base = Path(BASE).resolve(); full = (base / name).resolve(); is_relative_to(base) rejects."
+ },
+ "fx41_pathlib_relative_to_try_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "pathlib: relative_to() inside try/except ValueError that leaves the function."
+ },
+ "fx42_django_safe_join_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "known_false_positive",
+  "why": "django.utils._os.safe_join raises SuspiciousFileOperation for '..' and absolute names (lexical: abspath, not realpath). Oracle uses a faithful shim of the documented algorithm (Django is not installed in the engine image)."
+ },
+ "fx43_werkzeug_safe_join_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "known_false_positive",
+  "why": "werkzeug.security.safe_join returns None for '..' / absolute names; None is checked before use. Oracle uses a shim of the documented algorithm (Werkzeug is not installed in the engine image)."
+ },
+ "fx44_secure_filename_ok": {
+  "label": "SAFE",
+  "group": "r6d-53",
+  "expect": "recognised",
+  "why": "werkzeug secure_filename() reduces the name to one safe component before the join."
+ },
+ "fx46_pathlib_resolve_no_check": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "known_false_negative",
+  "why": "pathlib resolve() with no containment assertion: resolve() collapses '..' and follows links, it does not contain."
+ },
+ "fx47_pathlib_str_startswith": {
+  "label": "VULN",
+  "group": "r6d-53",
+  "expect": "known_false_negative",
+  "why": "pathlib resolve() + str.startswith(str(base)) with no separator: /srv/uploads2 passes."
+ },
+ "fx50_toctou_swap_after_check": {
+  "label": "COND",
+  "group": "r6d-53",
+  "expect": "recognised_same_code_as_a_safe_fixture",
+  "why": "Correct helper (fx02), sink opens the UNRESOLVED path after the check. If an attacker who can write inside BASE swaps a directory for a symlink between the check and the open, the open follows it. Static analysis cannot decide this; the oracle injects the swap right after the guard returns True."
+ },
+ "h01_is_safe_path_checks_only_existence": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "A helper NAMED is_safe_path whose body never tests containment (os.path.exists): the guard-shaped name proves nothing."
+ },
+ "h02_helper_startswith_without_separator_one_liner": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "_path_is_within realpaths both sides but uses startswith(root) with no separator: /srv/uploads2 passes (the /uploads-evil prefix bug), written as one expression."
+ },
+ "h03_guard_on_one_branch_only": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The correct containment helper runs only when strict=True; the default path opens the joined name unchecked."
+ },
+ "h04_guard_checks_a_different_variable": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The correct helper checks `probe` (a fixed joined name); the sink opens `target`, the request-controlled join. Same helper, wrong value."
+ },
+ "h05_guard_then_rebind_of_the_checked_name": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The check is made on `target`; `target` is then rebound from the URL-decoded name and the new value is opened."
+ },
+ "h06_commonpath_without_normalisation": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The helper compares commonpath of the two UNRESOLVED paths (no realpath/abspath): `/srv/uploads/../secret.txt` keeps its `..` and still has the common path /srv/uploads."
+ },
+ "h07_bool_helper_called_as_a_statement": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "ensure_within returns a boolean (correct body) instead of raising; the caller calls it as a statement and ignores the result."
+ },
+ "h08_guard_dominates_a_different_sink": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "Two request-controlled names: the guard checks `first` and its open is guarded; the function then opens `second`, built from the other parameter, which no guard covers."
+ },
+ "h09_inline_guard_exception_swallowed": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The inline containment test raises inside a try whose handler swallows it; the open runs afterwards on the unchecked path."
+ },
+ "h10_absolute_part_joined_after_the_guard": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The folder is checked with a correct inline guard; the file part is joined AFTER the check and may be absolute (join discards the base)."
+ },
+ "h11_raising_helper_swallowed_by_broad_except": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "ensure_within is correct and raises; the caller wraps it in `except Exception: pass` and opens the path anyway."
+ },
+ "h12_helper_ignores_its_path_parameter": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "is_within resolves and tests only its root against itself and never looks at `target`: the body proves nothing about the path."
+ },
+ "h13_guard_against_the_filesystem_root": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "A correct helper, called with `/` as the root: everything is 'within' /, so it bounds nothing; the sink path was built from /srv/uploads."
+ },
+ "h14_helper_requires_abspath_only": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The helper uses abspath (lexical) on both sides and then startswith(root + sep): `..` is collapsed but a symlink inside the base is followed by open ('link/secret.txt' escapes)."
+ },
+ "s01_helper_with_an_unremarkable_name": {
+  "label": "SAFE",
+  "group": "ws-c3-holdout",
+  "expect": "recognised",
+  "why": "The same correct realpath+commonpath body as fx02, under the name `chk`: recognised by what it does, not by what it is called."
+ },
+ "s02_guard_nested_in_with_and_try": {
+  "label": "SAFE",
+  "group": "ws-c3-holdout",
+  "expect": "recognised",
+  "why": "Correct helper guard, written inside `with` inside `try`, with the sink in the same with-body: it dominates the sink on every path."
+ },
+ "s03_guard_and_sink_in_the_same_branch": {
+  "label": "SAFE",
+  "group": "ws-c3-holdout",
+  "expect": "recognised",
+  "why": "The guard and the sink are both in the `if mode` branch; the other branch reads a constant file."
+ },
+ "s04_helper_with_boolean_or_form": {
+  "label": "SAFE",
+  "group": "ws-c3-holdout",
+  "expect": "recognised",
+  "why": "Helper returns `t == r or t.startswith(r + os.sep)` on realpath'd values (the exact-match-or-prefix form)."
+ },
+ "s05_guard_against_a_narrower_subdirectory": {
+  "label": "SAFE",
+  "group": "ws-c3-holdout",
+  "expect": "recognised",
+  "why": "The validators.py shape in miniature: the path is joined under BASE, the helper checks containment in BASE/sub, which is narrower, inside a try."
+ },
+ "s06_pathlib_helper_with_try_relative_to": {
+  "label": "SAFE",
+  "group": "ws-c3-holdout",
+  "expect": "recognised",
+  "why": "pathlib helper: resolve() both sides and `relative_to` in a try that returns False on ValueError; called as `if not helper(): return`."
+ },
+ "s07_raising_helper_in_the_same_try_as_the_sink": {
+  "label": "SAFE",
+  "group": "ws-c3-holdout",
+  "expect": "recognised",
+  "why": "The raising helper and the sink are both in the try body, so an escape raises before the open; the handler returns."
+ },
+ "h15_guard_against_a_wider_trusted_root": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "A correct helper, called with a trusted constant root that is WIDER than the base the path was joined from (/srv instead of /srv/uploads): the check passes for /srv/secret.txt."
+ },
+ "h16_root_computed_by_a_call_from_a_request_value": {
+  "label": "VULN",
+  "group": "ws-c3-holdout",
+  "expect": "proven",
+  "why": "The root is a call-computed per-tenant directory (a project function), checked correctly against itself; but the tenant comes from the request ('../..'), so the base bounds nothing."
+ },
+ "v01_realpath_one_side": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "commonpath: only the base is realpath-ed; the joined target keeps its .. so commonpath does not see it"
+ },
+ "v02_wrong_root": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "guard compares against the parent of BASE, so /srv/secret.txt is inside"
+ },
+ "v03_isabs_only": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "rejects absolute names only; .. passes"
+ },
+ "v04_sep_monkeypatched": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "os.sep is overwritten at import, so BASE + os.sep is a bare prefix"
+ },
+ "v05_startswith_unnormalised": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "startswith with a separator on the joined, not normalised path"
+ },
+ "v06_guard_in_finally": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the containment result is computed in a finally block after the read and never enforced"
+ },
+ "v07_result_unused_in_if": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the guard is called in an if whose body only logs; execution continues"
+ },
+ "v08_dotdot_substring_only": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "rejects names containing .. but an absolute name replaces BASE in os.path.join"
+ },
+ "v09_helper_startswith_no_sep": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "helper uses realpath on both sides and startswith with no separator"
+ },
+ "v10_local_safe_join": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "a project function named safe_join that does not check anything"
+ },
+ "v11_local_secure_filename_identity": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "a project secure_filename that returns its argument"
+ },
+ "v12_werkzeug_safe_join_unchecked": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "werkzeug safe_join returns None for a bad name; the result is dropped and the raw join is opened"
+ },
+ "v13_guard_rebound_to_true": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the guard is imported strict and rebound to a lambda that returns True at import"
+ },
+ "v14_guard_default_param": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the guard is a default parameter bound to a lambda that returns True"
+ },
+ "v15_normpath_symlink": {
+  "label": "COND",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "normpath (lexical) + startswith with a separator; a symlink inside BASE escapes"
+ },
+ "v16_pathlib_parts_check": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "rejects .. parts with pathlib but the absolute name still replaces BASE in os.path.join"
+ },
+ "v17_prefix_slash_dotdot_only": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "rejects names that start with / or .. only"
+ },
+ "v18_lstrip_slash_only": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "known_false_negative",
+  "why": "strips a leading slash and nothing else"
+ },
+ "v19_commonpath_unresolved_both": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "commonpath of two unresolved paths: .. is not collapsed"
+ },
+ "v20_substring_in_real": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the resolved path only has to CONTAIN the base string"
+ },
+ "v21_guard_method_always_true": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "known_false_negative",
+  "why": "a method guard that always returns True"
+ },
+ "v22_decorator_passthrough": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "a path-guard decorator that returns the function unchanged"
+ },
+ "v23_guard_wrong_branch_returns_early": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the helper returns True for any name ending in .txt (an extension allow-list read as a containment check)"
+ },
+ "v24_realpath_then_open_raw_name": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "containment is checked on the resolved path of a DIFFERENT join (BASE + basename) and the full name is opened"
+ },
+ "v25_check_after_open_closure": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the guard is evaluated lazily in a lambda that is never called"
+ },
+ "s01_control_realpath_commonpath": {
+  "label": "SAFE",
+  "group": "verify-acc",
+  "expect": "recognised",
+  "why": "the accepted form: resolve once, commonpath against a constant base, exit when outside"
+ },
+ "s02_control_startswith_sep_resolved": {
+  "label": "SAFE",
+  "group": "verify-acc",
+  "expect": "recognised",
+  "why": "realpath then startswith(BASE + os.sep)"
+ },
+ "s03_control_finally_raises": {
+  "label": "SAFE",
+  "group": "verify-acc",
+  "expect": "known_false_positive",
+  "why": "the check in finally raises, replacing the return"
+ },
+ "v26_guard_in_try_handler_continues": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the containment violation is raised inside a try whose handler swallows it and continues"
+ },
+ "v27_or_bypass": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the containment test is OR-ed with a second condition that is true for every .txt name"
+ },
+ "v28_root_from_request": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the root the path is checked against is built from the request name itself"
+ },
+ "v29_identity_realpath_from_project": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the helper looks right but its realpath is a project function that returns its argument"
+ },
+ "v30_conditional_helper_definitions": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the helper is defined twice: the strict one, and a permissive one in a branch that is always taken"
+ },
+ "v31_inline_inverted_commonpath": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "inline containment test is inverted: it rejects the paths inside BASE and serves the rest"
+ },
+ "v32_computed_parent_root": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the guard is a correct containment test against a root computed as the parent of BASE"
+ },
+ "v33_walrus_guard_unused": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the guard result is bound by a walrus in a comprehension condition and never tested"
+ },
+ "v34_enclosing_if_or": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the sink sits in an if whose test is the containment OR-ed with a .txt allow-list"
+ },
+ "v36_helper_swallows_its_raise": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "a bare-call guard whose helper catches its own PermissionError and returns"
+ },
+ "v37_helper_always_true_via_inner_return": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the helper computes containment into a variable and returns a different value"
+ },
+ "v38_augassign_after_guard": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the path is extended after the guard with an augmented assignment"
+ },
+ "v39_tuple_rebind_after_guard": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the checked name is rebound by tuple unpacking after the guard"
+ },
+ "v40_for_rebind_after_guard": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the checked name is rebound as a for-loop target after the guard"
+ },
+ "v41_walrus_rebind_after_guard": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the checked name is rebound by a walrus after the guard"
+ },
+ "v42_with_as_rebind": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "the checked name is rebound by a with-as target after the guard"
+ },
+ "w01_startswith_sep_parent_const": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "inline startswith(sep) against realpath of the parent constant"
+ },
+ "w02_commonpath_parent_const": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "inline commonpath against a parent constant root"
+ },
+ "w03_startswith_sep_root_slash_dirname": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "inline startswith(sep) against dirname(BASE)"
+ },
+ "w04_startswith_sep_other_const": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "inline startswith(sep) against a sibling constant root (uploads2)"
+ },
+ "w05_pathlib_relative_parent": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "pathlib resolve + is_relative_to against the parent"
+ },
+ "w06_fallback_stub_helper": {
+  "label": "VULN",
+  "group": "verify-acc",
+  "expect": "proven",
+  "why": "optional guard import with a permissive fallback stub (the module is not installed)"
+ },
+ "x01_setattr_rebind": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the imported guard is replaced by setattr on the module object at import",
+  "oracle_leaks": true
+ },
+ "x02_globals_rebind": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the imported guard is replaced through globals()",
+  "oracle_leaks": true
+ },
+ "x03_exec_rebind": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the imported guard is replaced by exec at module level",
+  "oracle_leaks": true
+ },
+ "x04_module_dict_update": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the imported guard is replaced through the module __dict__",
+  "oracle_leaks": true
+ },
+ "x05_init_patches_guards_attr": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the package __init__ assigns a permissive function to guards.is_within before helpers imports it",
+  "oracle_leaks": true
+ },
+ "x06_third_module_patches": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "a boot module imported by __init__ patches the guards module attribute",
+  "oracle_leaks": true
+ },
+ "x07_os_path_realpath_patched_elsewhere": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the package __init__ replaces os.path.realpath with the identity",
+  "oracle_leaks": true
+ },
+ "x08_realpath_alias_rebound": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "the helper resolves with a module alias of realpath that the module rebinds to the identity",
+  "oracle_leaks": true
+ },
+ "x09_realpath_import_then_rebound": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "the helper uses a from-imported realpath that the module then rebinds",
+  "oracle_leaks": true
+ },
+ "x10_realpath_param_shadow": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "the helper takes realpath as a parameter whose default is the identity",
+  "oracle_leaks": true
+ },
+ "x11_narrow_root_symlink_inline": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the root is join(BASE, \"link\") and link is a symlink to a directory outside BASE",
+  "oracle_leaks": true
+ },
+ "x12_narrow_root_symlink_helper": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "a helper guard against join(BASE, \"link\"), a symlink to outside",
+  "oracle_leaks": true
+ },
+ "x13_root_pardir_attribute": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "the root is join(BASE, os.pardir): the parent, spelled without a \"..\" literal",
+  "oracle_leaks": true
+ },
+ "x14_root_alias_rebound_later": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "ROOT is an alias of BASE and is rebound to the parent later in the module",
+  "oracle_leaks": true
+ },
+ "x15_star_import_overrides": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "a star import after the guard import brings a permissive is_within",
+  "oracle_leaks": true
+ },
+ "x16_second_import_overrides": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "a second from-import of the same name binds the permissive function",
+  "oracle_leaks": true
+ },
+ "x17_wrapped_rebind": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "the guard is re-assigned from a wrapper that returns True",
+  "oracle_leaks": true
+ },
+ "x18_class_attr_patch": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "a class-held guard is replaced by an assignment after the class body",
+  "oracle_leaks": true
+ },
+ "t01_safe_helper_commonpath": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "recognised",
+  "why": "the accepted helper form",
+  "oracle_leaks": false
+ },
+ "t02_safe_inline_startswith": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "recognised",
+  "why": "inline realpath + startswith(sep) against the base",
+  "oracle_leaks": false
+ },
+ "t03_safe_narrower_root_plain_dir": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "recognised",
+  "why": "a plain narrower root join(BASE, \"sub\") (not a symlink)",
+  "oracle_leaks": false
+ },
+ "t04_safe_trailing_slash_root": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "recognised",
+  "why": "the root is the base spelled with a trailing slash",
+  "oracle_leaks": false
+ },
+ "t05_safe_pathlib_relative_to": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "known_false_positive",
+  "why": "pathlib resolve + relative_to in try/except",
+  "oracle_leaks": false
+ },
+ "t06_safe_is_relative_to": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "known_false_positive",
+  "why": "pathlib resolve + is_relative_to",
+  "oracle_leaks": false
+ },
+ "t07_safe_helper_raises": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "recognised",
+  "why": "a bare-call helper that raises",
+  "oracle_leaks": false
+ },
+ "t08_safe_other_module_helper": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "recognised",
+  "why": "guard imported from a sibling module and used on a resolved name",
+  "oracle_leaks": false
+ },
+ "y01_concat_path_parent_root": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the path is built with string concatenation (no join) and checked against the parent constant",
+  "oracle_leaks": true
+ },
+ "y02_fstring_path_parent_root": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the path is an f-string and the guard root is the parent",
+  "oracle_leaks": true
+ },
+ "y03_percent_format_parent_root": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the path is %-formatted and the guard root is the parent",
+  "oracle_leaks": true
+ },
+ "y04_starred_join_parent_root": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "a starred join and the parent root",
+  "oracle_leaks": true
+ },
+ "y05_sep_join_parent_root": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "os.sep.join and the parent root",
+  "oracle_leaks": true
+ },
+ "y06_pathlib_str_parent_root": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "str(Path) join and the parent root",
+  "oracle_leaks": true
+ },
+ "y07_multipart_join_first_part_root": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "join(\"/srv\", \"uploads\", name) checked against its FIRST part, the parent of the directory it names",
+  "oracle_leaks": true
+ },
+ "y08_multipart_join_helper": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the same through a helper guard",
+  "oracle_leaks": true
+ },
+ "y09_basedir_join_uploads_guard_basedir": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the common shape: join(BASE_DIR, \"uploads\", name) checked against BASE_DIR",
+  "oracle_leaks": true
+ },
+ "y10_pathlib_multipart_is_relative_to": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "proven",
+  "why": "Path(BASE_DIR) / \"uploads\" / name checked with is_relative_to(BASE_DIR)",
+  "oracle_leaks": true
+ },
+ "z01_root_const_dotdot_after_symlink": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the root string \"/srv/uploads/link/..\" normalises lexically to the base, but link is a symlink so realpath gives the parent",
+  "oracle_leaks": true
+ },
+ "z02_helper_root_const_dotdot_after_symlink": {
+  "label": "VULN",
+  "group": "verify-acc-rc3",
+  "expect": "lowered",
+  "why": "the same through a helper guard",
+  "oracle_leaks": true
+ },
+ "z03_root_const_dotdot_sub_ok": {
+  "label": "SAFE",
+  "group": "verify-acc-rc3",
+  "expect": "recognised",
+  "why": "CONTROL: \"/srv/uploads/sub/..\" (sub is a real directory) is the base",
+  "oracle_leaks": false
+ }
+}

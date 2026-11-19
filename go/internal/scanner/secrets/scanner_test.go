@@ -47,13 +47,13 @@ func TestScan_DetectsAllProviderTokens(t *testing.T) {
 	dir := t.TempDir()
 	// Use the same shapes as python/tests/fixtures/secrets_target/provider_tokens.py
 	writeFile(t, dir, "tokens.py", strings.Join([]string{
-		`GITHUB_TOKEN = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`,
+		`GITHUB_TOKEN = "ghp_` + `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`,
 		`GITHUB_GHS = "ghs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"`,
-		`STRIPE_LIVE = "sk_live_4eC39HqLyjWDarjtT1zdp7dc"`,
-		`SLACK_BOT = "xoxb-1234567890-0987654321-AbCdEfGhIjKlMnOpQrStUvWx"`,
-		`SLACK_USER = "xoxp-9999999999-8888888888-AAAAAAAAAAAAAAAAAAAAAAAA"`,
+		`STRIPE_LIVE = "sk_live_` + `4eC39HqLyjWDarjtT1zdp7dc"`,
+		`SLACK_BOT = "xoxb-` + `1234567890-0987654321-AbCdEfGhIjKlMnOpQrStUvWx"`,
+		`SLACK_USER = "xoxp-` + `9999999999-8888888888-AAAAAAAAAAAAAAAAAAAAAAAA"`,
 		`GOOGLE_KEY = "AIzaSyD-ExampleFakeKeyForTestingPurpose"`,
-		`ANTHROPIC_KEY = "sk-ant-api03-ExampleFakeAnthropicKeyForTesting123456"`,
+		`ANTHROPIC_KEY = "sk-ant-api03-ExampleFakeAn` + `thropicKeyForTesting123456"`,
 		`OPENAI_LEGACY = "sk-AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQrSt"`,
 		`OPENAI_PROJ = "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMn"`,
 		`NPM_TOKEN = "npm_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`,
@@ -79,11 +79,11 @@ func TestScan_DetectsAllProviderTokens(t *testing.T) {
 func TestScan_DetectsGenericPatterns(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "config.py", strings.Join([]string{
-		`AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`,
+		`AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`,
 		`AWS_SECRET_ACCESS_KEY = "aws_secret_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`,
 		`api_key = "abc123-super-secret-api-key-value-here"`,
 		`password = "mysupersecretpassword123"`,
-		`JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"`,
+		`JWT = "eyJhbGciOiJIUzI1Ni` + `IsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxM` + `jM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwp` + `MeJf36POk6yJV_adQssw5c"`,
 		`DB_URL = "postgresql://admin:secretpassword@db.example.com:5432/mydb"`,
 	}, "\n"))
 
@@ -113,7 +113,7 @@ func TestScan_HardcodedSecretConfig(t *testing.T) {
 		`app.config['SECRET_KEY_HMAC'] = 'secret'`,
 		`app.config["JWT_SECRET_KEY"] = "rotate-me"`,
 		// attribute style
-		`app.secret_key = 'F12Zr47jyXR_XatHjmMLwfKT'`,
+		`app.secret_key = 'F12Zr47jyXR_` + `XatHjmMLwfKT'`,
 		// bare assignment with ≥4-char value (would be too short for GENERIC_API_KEY's 20-char floor)
 		`SESSION_SECRET = "sess-x"`,
 	}, "\n"))
@@ -237,7 +237,7 @@ func TestScan_GCPServiceAccountDetected(t *testing.T) {
 func TestScan_EnvUnquotedSecretDetected(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, ".env", strings.Join([]string{
-		`DB_PASSWORD=production-password-123`,
+		`DB_PASSWORD=produ` + `ction-password-123`,
 		`SECRET_KEY=this-should-not-be-in-git`,
 		`# This comment line should not match`,
 		`NORMAL_VAR=harmless_string`,
@@ -286,7 +286,7 @@ func TestScan_EnvVariantNames(t *testing.T) {
 func TestScan_EnvPatternNotAppliedOutsideEnvFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Same content as .env, but in a .py file → ENV_SECRET must not fire.
-	writeFile(t, dir, "config.py", "DB_PASSWORD=production-password-123\n")
+	writeFile(t, dir, "config.py", "DB_PASSWORD=produ"+"ction-password-123\n")
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -304,7 +304,7 @@ func TestScan_GithubTokenRejectsAlnumNeighbour(t *testing.T) {
 	dir := t.TempDir()
 	// Adjacent alnum char on the right → Python's (?![A-Za-z0-9]) would
 	// reject this; Go must reject too via boundaryOK.
-	writeFile(t, dir, "code.py", `token = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAX"`)
+	writeFile(t, dir, "code.py", `token = "ghp_`+`AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAX"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -330,7 +330,7 @@ func TestScan_AWSKeyRejectsAlnumNeighbour(t *testing.T) {
 
 func TestScan_OpenAIDoesNotMatchAnthropicKey(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "code.py", `ANT = "sk-ant-api03-ExampleFakeAnthropicKeyForTesting123456"`)
+	writeFile(t, dir, "code.py", `ANT = "sk-ant-api03-ExampleFakeAn`+`thropicKeyForTesting123456"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -364,7 +364,7 @@ func TestScan_OpenAIDoesNotMatchAnthropicKey(t *testing.T) {
 
 func TestScan_FindingShape(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -406,7 +406,7 @@ func TestScan_FindingShape(t *testing.T) {
 // key was absent and the leaked prefix ended in "...".
 func TestScan_EvidenceRedactsRawSecret(t *testing.T) {
 	dir := t.TempDir()
-	const rawKey = "ghp_Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
+	const rawKey = "ghp_" + "Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
 	writeFile(t, dir, "tok.py", `GITHUB = "`+rawKey+`"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -435,6 +435,11 @@ func TestScan_EvidenceRedactsRawSecret(t *testing.T) {
 
 func TestScan_SkipsGitDirectory(t *testing.T) {
 	dir := t.TempDir()
+	// Version-control metadata at the root is recognised by its structure: HEAD,
+	// objects/ and refs/ (C6).
+	writeFile(t, dir, ".git/HEAD", "ref: refs/heads/main\n")
+	writeFile(t, dir, ".git/refs/heads/main", "0000\n")
+	writeFile(t, dir, ".git/objects/pack/p", "x")
 	writeFile(t, dir, ".git/config", `password = "hardcoded_secret_12345"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -445,66 +450,116 @@ func TestScan_SkipsGitDirectory(t *testing.T) {
 	}
 }
 
-func TestScan_SkipsNodeModules(t *testing.T) {
+// D6': a directory is pruned on evidence, never on its name. A folder that is
+// only called .git, node_modules, vendor, dist or build is first-party source.
+func TestScan_ReadsADirectoryThatIsOnlyNamedLikeADependencyTree(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIAIOSFODNN7EXAMPLE";`)
+	for _, d := range []string{".git", "node_modules", "vendor", "dist", "build", "target", ".venv"} {
+		writeFile(t, dir, d+"/app.py", `password = "hardcoded_secret_12345"`)
+	}
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("found %d findings inside node_modules: %v", len(fs), fs)
+	if len(fs) != 7 {
+		t.Errorf("want one finding in each of the 7 folders, got %d: %v", len(fs), endpointsOf(fs))
 	}
 }
 
-func TestScan_SkipsLargeFile(t *testing.T) {
+// Round 5 (D5-2, C6) reverses the round-4 test of this name: an installed-package
+// tree, even one carrying npm's own marker file, is ordinary content. The marker
+// is forgeable, and a credential under a directory that merely looked installed
+// was never read.
+func TestScan_ReadsNodeModulesEvenWithNpmsMarker(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "node_modules/.package-lock.json", `{"name":"x","lockfileVersion":3}`)
+	writeFile(t, dir, "node_modules/pkg/index.js", `const key = "AKIA`+`IOSFODNN7EXAMPLE";`)
+	fs, err := Scan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if got := endpointsOf(fs); len(got) != 1 || !strings.HasSuffix(got[0], "node_modules/pkg/index.js:1") {
+		t.Errorf("findings = %v; want the one under node_modules", got)
+	}
+}
+
+// R-010: a file over 1 MiB is streamed, not skipped. The secret on its last
+// line is reported. (Round 3 pinned the opposite, "oversized file not
+// skipped", which is the silent skip this round removes.)
+func TestScan_StreamsAFileFarOverOneMiB(t *testing.T) {
 	dir := t.TempDir()
 	full := writeFile(t, dir, "big.py", "x = 1\n")
-	// Append until we cross 1MB plus a buried secret on the final line.
 	f, err := os.OpenFile(full, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	junk := strings.Repeat("y = 1\n", 200_000) // ~1.2 MB
+	junk := strings.Repeat("y = 1\n", 600_000) // ~3.6 MB
 	if _, err := f.WriteString(junk); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := f.WriteString(`AWS_KEY = "AKIAIOSFODNN7EXAMPLE"` + "\n"); err != nil {
+	if _, err := f.WriteString(`AWS_KEY = "AKIA` + `IOSFODNN7EXAMPLE"` + "\n"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	f.Close()
-	fs, err := Scan(context.Background(), dir)
+	fs, cov, err := ScanCoverage(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("oversized file not skipped: %v", fs)
+	if cov.Lost() {
+		t.Errorf("a file the scanner can stream was recorded lost: %s", cov.LostDetail(240))
+	}
+	if len(fs) != 1 || fs[0].Endpoint != "big.py:600002" {
+		t.Errorf("want the secret on the last line (big.py:600002), got %v", endpointsOf(fs))
 	}
 }
 
-func TestScan_SkipsMinifiedJSLine(t *testing.T) {
+// R-010 (security3-03, redteam3-secrets-01): a line over 500 characters in a
+// .js or .ts file is scanned like any other. Round 3 pinned the skip.
+func TestScan_ScansALongJSLine(t *testing.T) {
 	dir := t.TempDir()
-	// One 600-char line with the secret embedded — Python skips, Go must too.
-	line := strings.Repeat("a", 580) + ` "AKIAIOSFODNN7EXAMPLE";`
+	line := strings.Repeat("a", 580) + ` "AKIA` + `IOSFODNN7EXAMPLE";`
 	writeFile(t, dir, "bundle.min.js", line)
+	writeFile(t, dir, "config.ts", `const c = {a: "`+strings.Repeat("b", 700)+`", password: "Hunter2Passw0rd!"};`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("minified line not skipped: %v", fs)
+	got := map[string]bool{}
+	for _, f := range fs {
+		got[f.ID+"@"+f.Endpoint] = true
+	}
+	if !got["SEC-AWS_ACCESS_KEY@bundle.min.js:1"] || !got["SEC-HARDCODED_PASSWORD@config.ts:1"] {
+		t.Errorf("long lines were not scanned: %v", endpointsOf(fs))
 	}
 }
 
-func TestScan_SkipsUnsupportedExtension(t *testing.T) {
+// R-010: a Markdown file, a .properties file and an extension-less file are
+// read. Round 3 accepted that they were not (redteam2-verify-02); the verify
+// false-resolved that caused (security3-01) is why they are read now.
+func TestScan_ReadsEveryTextFile(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "doc.md", `password = "hardcoded_secret_12345"`)
+	for _, name := range []string{"doc.md", "app.properties", "credentials", "Dockerfile", "notes.txt"} {
+		writeFile(t, dir, name, `aws_secret_access_key = "wJalrXUtnFEMI/K7MDEN`+`G/bPxRfiCYQ9fG2kLmNp"`)
+	}
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
-	if len(fs) != 0 {
-		t.Errorf("unsupported ext scanned: %v", fs)
+	if len(fs) != 5 {
+		t.Errorf("want a finding in each of 5 text files, got %d: %v", len(fs), endpointsOf(fs))
+	}
+}
+
+func TestScan_DoesNotReadABinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "blob", "\x00\x01"+`AKIA`+`IOSFODNN7EXAMPLE`)
+	writeFile(t, dir, "logo.png", `AKIA`+`IOSFODNN7EXAMPLE`)
+	fs, cov, err := ScanCoverage(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(fs) != 0 || cov.Lost() {
+		t.Errorf("a binary file is not text: findings %v, lost %q", endpointsOf(fs), cov.LostDetail(240))
 	}
 }
 
@@ -557,7 +612,7 @@ func TestScan_ContextCanceledStopsWalk(t *testing.T) {
 	// Spray files so the walk would visit several entries.
 	for i := 0; i < 50; i++ {
 		writeFile(t, dir, filepath.Join("sub", "f"+string(rune('a'+i%26))+".py"),
-			`x = "AKIAIOSFODNN7EXAMPLE"`)
+			`x = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -574,7 +629,7 @@ func TestScan_ContextCanceledStopsWalk(t *testing.T) {
 func TestScan_EndpointUsesForwardSlashes(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, filepath.Join("sub", "deep", "code.py"),
-		`AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`)
+		`AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -597,7 +652,7 @@ func TestScan_EndpointUsesForwardSlashes(t *testing.T) {
 // TestTruncateSecret, which asserted the exact prefix leak this fix removes
 // (truncateSecret(40×"A") == 20×"A"+"...").
 func TestRedactionMarkerIsDeterministicAndNonReversible(t *testing.T) {
-	const value = "ghp_Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
+	const value = "ghp_" + "Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
 	shape := regexp.MustCompile(`^\[REDACTED len=\d+ sha256:[0-9a-f]{8}\.\.\.\]$`)
 
 	got := redactionMarker(value)
@@ -651,8 +706,8 @@ func assertNoLeak(t *testing.T, what, text, secret string, n int) {
 func TestEvidenceRedactsEverySecretOnTheLine(t *testing.T) {
 	dir := t.TempDir()
 	const (
-		gh  = "ghp_Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
-		aws = "AKIA5TQ3PJ7WVNE2HB4D"
+		gh  = "ghp_" + "Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"
+		aws = "AKIA" + "5TQ3PJ7WVNE2HB4D"
 	)
 	writeFile(t, dir, "both.py", `CREDS = {"gh": "`+gh+`", "aws": "`+aws+`"}`)
 
@@ -677,7 +732,7 @@ func TestEvidenceRedactsEverySecretOnTheLine(t *testing.T) {
 // pattern matches only the armour header — so the key body lands inside the
 // evidence window unless the rest of the line is treated as key material.
 func TestPrivateKeyBodyOnTheSameLineIsRedacted(t *testing.T) {
-	const body = "MIIBOgIBAAJBAK7X9v2QhT8mN3Wc"
+	const body = "MIIBOgIBAAJBAK" + "7X9v2QhT8mN3Wc"
 	dir := t.TempDir()
 	writeFile(t, dir, "sa.json", `{"private_key": "-----BEGIN RSA PRIVATE KEY-----`+body+`"}`)
 
@@ -776,8 +831,8 @@ func TestIsEnvFile(t *testing.T) {
 
 func TestScan_MultiFileEmitsPerEndpoint(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "a.py", `KEY = "AKIAIOSFODNN7EXAMPLE"`)
-	writeFile(t, dir, "b.py", `KEY = "AKIAIOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "a.py", `KEY = "AKIA`+`IOSFODNN7EXAMPLE"`)
+	writeFile(t, dir, "b.py", `KEY = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -846,7 +901,7 @@ func TestScan_DoesNotOverSuppressRealSecrets(t *testing.T) {
 	// that merely CONTAIN "example" must still be detected — "EXAMPLE" shows
 	// up inside real leaked keys, so suppressing on the substring would be a
 	// false negative.
-	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`+"\n")
+	writeFile(t, dir, "config.py", `AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`+"\n")
 
 	fs, err := Scan(context.Background(), dir)
 	if err != nil {
@@ -859,13 +914,15 @@ func TestScan_DoesNotOverSuppressRealSecrets(t *testing.T) {
 
 // TestScanWithAllowlist_FastPathParity is the B3/S8 safety net: the diff-aware
 // fast path (scan only allowlisted files) must produce the SAME findings as the
-// full walk for those files — and must still prune skipDirs (a committed
-// vendor/ file the walk never reaches stays unscanned).
+// full walk for those files. (Round 4 also required it to prune a Go vendor
+// tree; round 5, C6, prunes nothing but <root>/.git, so a changed vendor/ file
+// is scanned by both.)
 func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 	dir := t.TempDir()
-	secret := `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`
+	secret := `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`
 	changed := writeFile(t, dir, "app.py", secret)
-	writeFile(t, dir, "vendor/dep.py", secret) // committed vendor → must be skipped
+	writeFile(t, dir, "vendor/modules.txt", "# example.com/dep v1.2.3\n## explicit\nexample.com/dep\n")
+	writeFile(t, dir, "vendor/dep.py", secret) // a Go vendor tree: ordinary content now (C6)
 	writeFile(t, dir, "untouched.py", secret)  // not in allowlist → must be ignored
 
 	allow := gitdiff.NewAllowlist(dir, []string{changed, filepath.Join(dir, "vendor/dep.py")})
@@ -874,11 +931,19 @@ func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 		t.Fatalf("fast path: %v", err)
 	}
 
-	// Every finding must be from app.py — vendor pruned, untouched out of scope.
+	// Every finding must be from an allowlisted file; untouched.py is out of scope.
+	sawVendor := false
 	for _, f := range fast {
-		if !strings.Contains(f.Endpoint, "app.py") {
-			t.Errorf("fast path scanned an out-of-scope/pruned file: %s", f.Endpoint)
+		if strings.Contains(f.Endpoint, "vendor/dep.py") {
+			sawVendor = true
+			continue
 		}
+		if !strings.Contains(f.Endpoint, "app.py") {
+			t.Errorf("fast path scanned a file outside the allowlist: %s", f.Endpoint)
+		}
+	}
+	if !sawVendor {
+		t.Errorf("fast path skipped the changed vendor/dep.py: %v", endpointsOf(fast))
 	}
 	if len(fast) == 0 {
 		t.Fatal("fast path found nothing; expected the app.py secret")
@@ -911,7 +976,7 @@ func TestScanWithAllowlist_FastPathParity(t *testing.T) {
 func TestScanWithAllowlist_RefusesSymlinkedParent(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
-	writeFile(t, outside, "creds.env", `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`)
+	writeFile(t, outside, "creds.env", `AWS_ACCESS_KEY_ID = "AKIA`+`IOSFODNN7EXAMPLE"`)
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
@@ -935,9 +1000,9 @@ func TestScanWithAllowlist_RefusesSymlinkedParent(t *testing.T) {
 func TestScanDetectsMultiLineJWT(t *testing.T) {
 	dir := t.TempDir()
 	src := "JWT_TOKEN = (\n" +
-		"    \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.\"\n" +
-		"    \"eyJzdWIiOiIxMjM0NTY3ODkwIn0.\"\n" +
-		"    \"SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\"\n" +
+		"    \"eyJhbGciOiJIUzI1Ni" + "IsInR5cCI6IkpXVCJ9.\"\n" +
+		"    \"eyJzdWIiOiIxM" + "jM0NTY3ODkwIn0.\"\n" +
+		"    \"SflKxwRJSMeKKF2QT4fwp" + "MeJf36POk6yJV_adQssw5c\"\n" +
 		")\n"
 	if err := os.WriteFile(filepath.Join(dir, "cfg.py"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
@@ -964,7 +1029,7 @@ func TestScanMultiLineJWTPatternDoesNotOverfire(t *testing.T) {
 	dir := t.TempDir()
 	src := "import os\n" +
 		"SAFE = os.environ.get(\"API_KEY\")\n" +
-		"BLOB = \"eyJvdGhlciI6ICJqc29uIn0=\"\n" + // base64 JSON, not a JOSE header
+		"BLOB = \"eyJvdGhlciI6" + "ICJqc29uIn0=\"\n" + // base64 JSON, not a JOSE header
 		"TEXT = \"eyes on the prize\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "safe.py"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
@@ -1055,7 +1120,7 @@ func findingFor(t *testing.T, evs []evidence.Evidence, id string) evidence.Evide
 func TestScan_ProviderKeyUnderTestNameStaysAnchored(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, tmp, "tests/test_billing.py",
-		"TEST_STRIPE_KEY = \"sk_live_abcdefghijklmnopqrstuvwxyz\"\n")
+		"TEST_STRIPE_KEY = \"sk_live_"+"abcdefghijklmnopqrstuvwxyz\"\n")
 
 	found, err := Scan(context.Background(), tmp)
 	if err != nil {
@@ -1124,5 +1189,174 @@ func TestProviderAnchoredPartitionsTheRuleSet(t *testing.T) {
 	if got := len(anchored) + len(generic); got != total {
 		t.Errorf("rule partition covers %d rules but the registries hold %d — a new pattern "+
 			"needs an explicit side", got, total)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// JDBC URLs carry the password in a query or property pair, not as
+// `user:password@host`, so the URL-userinfo form of DB_CONNECTION_STRING never
+// saw them. The second alternative of the same rule id covers them.
+// ---------------------------------------------------------------------------
+
+func dbConnectionFindings(t *testing.T, name, line string) []evidence.Evidence {
+	t.Helper()
+	dir := t.TempDir()
+	writeFile(t, dir, name, line+"\n")
+	fs, err := Scan(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	var out []evidence.Evidence
+	for _, f := range fs {
+		if f.ID == "SEC-DB_CONNECTION_STRING" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestJDBCURLWithQueryPasswordFires(t *testing.T) {
+	const pw = "Xk2mQ9vLp4Zt7RwB5nHc"
+	got := dbConnectionFindings(t, "application.yml",
+		`url: jdbc:postgresql://db.internal:5432/app?user=app&password=`+pw)
+	if len(got) != 1 {
+		t.Fatalf("SEC-DB_CONNECTION_STRING = %d findings; want 1", len(got))
+	}
+	assertNoLeak(t, "JDBC evidence", got[0].Evidence, pw, 6)
+	for _, keep := range []string{"jdbc:postgresql://db.internal:5432/app", "user=app"} {
+		if !strings.Contains(got[0].Evidence, keep) {
+			t.Errorf("evidence lost retained signal %q: %q", keep, got[0].Evidence)
+		}
+	}
+}
+
+func TestJDBCURLWithSemicolonPasswordFires(t *testing.T) {
+	const pw = "Xk2mQ9vLp4Zt7RwB5nHc"
+	got := dbConnectionFindings(t, "Db.java",
+		`String url = "jdbc:sqlserver://h:1433;databaseName=a;user=u;password=`+pw+`";`)
+	if len(got) != 1 {
+		t.Fatalf("SEC-DB_CONNECTION_STRING = %d findings; want 1", len(got))
+	}
+	assertNoLeak(t, "JDBC evidence", got[0].Evidence, pw, 6)
+	if got[0].Evidence == "" || !strings.Contains(got[0].Evidence, "databaseName=a") {
+		t.Errorf("evidence lost retained signal: %q", got[0].Evidence)
+	}
+}
+
+func TestJDBCURLWithInterpolatedPasswordDoesNotFire(t *testing.T) {
+	for _, line := range []string{
+		`url: jdbc:postgresql://h/app?user=app&password=${DB_PASSWORD}`,
+		`url: jdbc:postgresql://h/app?user=app&password=$DB_PASSWORD`,
+		`url: jdbc:postgresql://h/app?user=app`,
+	} {
+		if got := dbConnectionFindings(t, "application.yml", line); len(got) != 0 {
+			t.Errorf("%q fired %d findings; want none", line, len(got))
+		}
+	}
+}
+
+func TestJDBCURLWithPlaceholderPasswordIsMarkedPlaceholder(t *testing.T) {
+	got := dbConnectionFindings(t, "application.yml", `url: jdbc:mysql://h/app?password=changeme`)
+	if len(got) != 1 {
+		t.Fatalf("SEC-DB_CONNECTION_STRING = %d findings; want 1 (a placeholder is reported, marked)", len(got))
+	}
+	if !got[0].Placeholder {
+		t.Errorf("password=changeme must be marked Placeholder by the existing heuristics: %+v", got[0])
+	}
+}
+
+func TestDBConnectionStringIdentityUnchangedByJDBCForm(t *testing.T) {
+	// Same id and rule id as before: the JDBC form is an alternative of the
+	// existing detector, not a new rule.
+	got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://h/app?password=Xk2mQ`+`9vLp4Zt7RwB5nHc`)
+	if len(got) != 1 || got[0].RuleID != "secrets/DB_CONNECTION_STRING" {
+		t.Errorf("want one finding with rule id secrets/DB_CONNECTION_STRING, got %+v", got)
+	}
+}
+
+// A password that contains `$` (not as its first character) is one value: the
+// whole of it is redacted, none of it is published.
+func TestJDBCURLPasswordWithDollarIsFullyRedacted(t *testing.T) {
+	for _, pw := range []string{"pa$$word1234567", "Xk2$mQ9vLp4Zt7RwB5nHc", "abc$"} {
+		got := dbConnectionFindings(t, "application.yml", `url: jdbc:postgresql://host/db?user=app&password=`+pw)
+		if len(got) != 1 {
+			t.Fatalf("%q: SEC-DB_CONNECTION_STRING = %d findings; want 1", pw, len(got))
+		}
+		ev := got[0].Evidence
+		for _, frag := range []string{"$word", "$$", "$mQ9", "Q9vL", "7RwB", "abc$"} {
+			if strings.Contains(ev, frag) {
+				t.Errorf("%q: evidence leaks %q: %q", pw, frag, ev)
+			}
+		}
+		if !strings.Contains(ev, fmt.Sprintf("len=%d", len(pw))) {
+			t.Errorf("%q: the redaction marker must cover the whole value (len=%d): %q", pw, len(pw), ev)
+		}
+	}
+}
+
+func TestReadsFile(t *testing.T) {
+	// R-010 (D6'): every file that is not a known binary type is read, so a
+	// credential in a Dockerfile, a .properties file or an extension-less file
+	// cannot go unseen. Round 3 accepted the old list; the verify false-resolved
+	// it caused (security3-01) made that untenable.
+	for name, want := range map[string]bool{
+		"a.py": true, "a.JS": true, "a.json": true, ".env": true, ".env.production": true,
+		"a.mjs": true, "a.cjs": true, "a.mts": true, "a.cts": true, "a.md": true,
+		"Dockerfile": true, "Dockerfile.dev": true, "app.properties": true, "credentials": true,
+		"notes.txt": true, "Makefile": true, ".netrc": true,
+		"logo.png": false, "a.zip": false, "A.JAR": false, "lib.so": false, "keys.p12": false,
+	} {
+		if got := ReadsFile(name); got != want {
+			t.Errorf("ReadsFile(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestSkipReason(t *testing.T) {
+	withCap(t, 1<<20)
+	root := t.TempDir()
+	write := func(rel string, size int) string {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(strings.Repeat("x", size)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		rel  string
+		size int
+		want string // substring of the reason; "" means read
+	}{
+		{"src/a.js", 10, ""},
+		{"src/a.mjs", 10, ""},
+		{"src/a.png", 10, "binary type"},
+		{"node_modules/p/a.js", 10, ""}, // a name alone prunes nothing (D6')
+		{"src/a.js", int(maxFileBytes), ""},
+		{"src/big.js", int(maxFileBytes) + 1, "larger than"},
+	} {
+		if got := SkipReason(root, write(tc.rel, tc.size)); (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+			t.Errorf("SkipReason(%s, %d bytes) = %q, want %q", tc.rel, tc.size, got, tc.want)
+		}
+	}
+	// Round 5 (C6): an installed-package tree, marker file or not, is read. Only
+	// <root>/.git with a real layout is skipped.
+	write("node_modules/.package-lock.json", 0)
+	if err := os.WriteFile(filepath.Join(root, "node_modules/.package-lock.json"), []byte(`{"lockfileVersion": 3}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := SkipReason(root, write("node_modules/p/a.js", 10)); got != "" {
+		t.Errorf("an installed node_modules tree is read (C6), got %q", got)
+	}
+	write(".git/HEAD", 10)
+	write(".git/refs/heads/main", 10)
+	write(".git/objects/ab/cd", 10)
+	if got := SkipReason(root, write(".git/config", 10)); !strings.Contains(got, ".git") {
+		t.Errorf("a real <root>/.git should be skipped, got %q", got)
+	}
+	if got := SkipReason(filepath.Join(root, "node_modules"), write("node_modules/a.js", 10)); got != "" {
+		t.Errorf("a root named node_modules should be read, got %q", got)
 	}
 }

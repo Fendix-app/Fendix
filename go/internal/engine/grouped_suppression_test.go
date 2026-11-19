@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -258,9 +259,13 @@ func TestBaseline_MultipleKnownLocations(t *testing.T) {
 // Matrix 14: a baseline written by an engine that predates occurrences (a
 // bare array of grouped findings) must keep working without preserving the
 // hole.
+// RC-9e: occurrences whose own evidence differs no longer share a finding, and a
+// test-code occurrence and a production one differ. This test is about a LEGACY
+// baseline that saved a GROUPED finding, so its "fixture" lives in a directory that
+// is not test code (pkg/support/), which keeps the two in one group as before.
 func TestBaseline_LegacyFormatCompatibility(t *testing.T) {
-	const fixtureEP, prodEP = "pkg/tests/helpers.py:2", "pkg/zapp/db.py:2"
-	root := repoFiles(t, map[string]string{"pkg/tests/helpers.py": fixtureCredential, "pkg/zapp/db.py": prodCredential})
+	const fixtureEP, prodEP = "pkg/support/helpers.py:2", "pkg/zapp/db.py:2"
+	root := repoFiles(t, map[string]string{"pkg/support/helpers.py": fixtureCredential, "pkg/zapp/db.py": prodCredential})
 	_, full := codeScan(t, root, scanOpts{})
 	pw := passwordFindings(full)
 	if len(pw) != 1 || len(pw[0].Occurrences) != 2 {
@@ -279,7 +284,7 @@ func TestBaseline_LegacyFormatCompatibility(t *testing.T) {
 		f.Endpoint, f.Occurrences, f.AffectedEndpoints = fixtureEP, nil, affected
 		line := fixtureEP
 		f.Line = &line
-		f.Secret = &models.SecretRef{Identifier: "email", File: "pkg/tests/helpers.py"} // pre-fix identifier
+		f.Secret = &models.SecretRef{Identifier: "email", File: "pkg/support/helpers.py"} // pre-fix identifier
 		f.Evidence = "il=\"t@example.com\", password=\"[REDACTED]\")"
 		if mutate != nil {
 			mutate(&f)
@@ -371,12 +376,15 @@ func TestBaseline_SaveWritesEveryOccurrence(t *testing.T) {
 	if doc.BaselineVersion != 2 || doc.FingerprintAlgorithm != models.FingerprintAlgorithm {
 		t.Errorf("header = %d %q", doc.BaselineVersion, doc.FingerprintAlgorithm)
 	}
+	// RC-9e: the test-code occurrence and the production one are separate findings,
+	// so every occurrence is the union over the presented findings.
 	var eps []string
 	for _, f := range doc.Findings {
 		if f.RuleID == "secrets/HARDCODED_PASSWORD" {
-			eps = occurrenceEndpoints(f)
+			eps = append(eps, occurrenceEndpoints(f)...)
 		}
 	}
+	sort.Strings(eps)
 	if !reflect.DeepEqual(eps, []string{"pkg/tests/helpers.py:2", "pkg/zapp/db.py:2"}) {
 		t.Errorf("saved occurrences = %v", eps)
 	}
@@ -387,8 +395,11 @@ func TestBaseline_SaveWritesEveryOccurrence(t *testing.T) {
 
 // Ignore selectors are occurrence-scoped (fingerprint) or group-scoped by
 // documented design (id), and positional IDs survive partial suppression.
+// RC-9e: the grouped finding this test is about holds a fixture and a production
+// occurrence, so the fixture lives in a directory that is not test code (pkg/support/);
+// a test-code occurrence is its own finding now.
 func TestIgnore_SelectorScopes(t *testing.T) {
-	root := repoFiles(t, map[string]string{"pkg/tests/helpers.py": fixtureCredential, "pkg/zapp/db.py": prodCredential})
+	root := repoFiles(t, map[string]string{"pkg/support/helpers.py": fixtureCredential, "pkg/zapp/db.py": prodCredential})
 	_, full := codeScan(t, root, scanOpts{})
 	pw := passwordFindings(full)
 	if len(pw) != 1 || len(pw[0].Occurrences) != 2 {
@@ -412,7 +423,7 @@ func TestIgnore_SelectorScopes(t *testing.T) {
 	})
 
 	t.Run("endpoint + category narrows to the occurrence", func(t *testing.T) {
-		ign := "ignore:\n  - endpoint: \"pkg/tests/**\"\n    category: secrets\n"
+		ign := "ignore:\n  - endpoint: \"pkg/support/**\"\n    category: secrets\n"
 		code, rep := codeScan(t, root, scanOpts{ignore: writeIgnore(t, ign)})
 		assertOnlyProduction(t, code, rep, "pkg/zapp/db.py")
 	})
@@ -521,15 +532,24 @@ func TestFinalize_DetectorOrderDoesNotChangeIdentityOrVerdict(t *testing.T) {
 // Invariant 4: an occurrence's fingerprint is the same whether it is alone or
 // grouped with others, and whichever occurrence is the primary.
 func TestFinalize_GroupingDoesNotChangeOccurrenceIdentity(t *testing.T) {
+	// RC-9e: a test-code occurrence and a production one no longer share a finding,
+	// so the occurrence is grouped with another test-code occurrence (its own class).
 	alone, _ := finalizeOnce(t, []evidence.Evidence{gsSecretEvidence("pkg/tests/helpers.py", "password")}, scanOpts{})
 	grouped, _ := finalizeOnce(t, []evidence.Evidence{
-		gsSecretEvidence("pkg/tests/helpers.py", "password"), gsSecretEvidence("pkg/app/db.py", "password"),
+		gsSecretEvidence("pkg/tests/helpers.py", "password"), gsSecretEvidence("pkg/tests/other.py", "password"),
+		gsSecretEvidence("pkg/app/db.py", "password"),
 	}, scanOpts{})
-	if len(alone) != 1 || len(grouped) != 1 || len(grouped[0].Occurrences) != 2 {
+	var group models.Finding
+	for _, f := range grouped {
+		if len(f.Occurrences) == 2 {
+			group = f
+		}
+	}
+	if len(alone) != 1 || len(grouped) != 2 || len(group.Occurrences) != 2 {
 		t.Fatalf("setup: %v / %v", alone, grouped)
 	}
 	var fixtureInGroup string
-	for _, o := range grouped[0].Occurrences {
+	for _, o := range group.Occurrences {
 		if o.Endpoint == "pkg/tests/helpers.py:2" {
 			fixtureInGroup = o.Fingerprint
 		}

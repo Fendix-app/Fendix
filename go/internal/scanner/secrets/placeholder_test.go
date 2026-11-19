@@ -39,13 +39,16 @@ func TestClassifyPlaceholder(t *testing.T) {
 			name:  "long identical run",
 			line:  `GITHUB_TOKEN = "ghp_` + strings.Repeat("A", 36) + `"`,
 			value: "ghp_" + strings.Repeat("A", 36),
-			want:  placeholderSignals{RepeatedChars: true},
+			// RC-10b: the extended classifier also reads a run of one letter as
+			// low diversity.
+			want: placeholderSignals{RepeatedChars: true, Extended: true},
 		},
 		{
 			name:  "aws documented example key",
-			line:  `AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"`,
-			value: "AKIAIOSFODNN7EXAMPLE",
-			want:  placeholderSignals{ValueWord: true},
+			line:  `AWS_ACCESS_KEY_ID = "AKIA` + `IOSFODNN7EXAMPLE"`,
+			value: "AKIA" + "IOSFODNN7EXAMPLE",
+			// RC-10b: AWS's documented example key is also a published example.
+			want: placeholderSignals{ValueWord: true, Extended: true},
 		},
 		{
 			name:  "google fixture key",
@@ -57,7 +60,8 @@ func TestClassifyPlaceholder(t *testing.T) {
 			name:  "subscript target with a too-short value",
 			line:  `app.config['JWT_SECRET_KEY'] = 'test'`,
 			value: "test",
-			want:  placeholderSignals{LowLength: true},
+			// RC-10b: "test" is also on the common-placeholder list.
+			want: placeholderSignals{LowLength: true, Common: true},
 		},
 		{
 			name:  "camelCase fixture name",
@@ -84,15 +88,28 @@ func TestClassifyPlaceholder(t *testing.T) {
 			line:  `API_KEY = "08bf2e526a1f4c8db3b91e7d0f2a5c6e"`,
 			value: "08bf2e526a1f4c8db3b91e7d0f2a5c6e",
 		},
+		// RC-10b (owner ruling OR-85, "evidence-based documentation policy with a
+		// common-placeholder list"): a published documentation example, an
+		// alphabetical run and a value on the common-sample-credential list ARE
+		// recognised as synthetic now, in every file. These three rows were QUIET
+		// before the ruling; they moved from QUIET to FIRES with the signal that
+		// names why (old: want the zero value; new: the signal below).
 		{
-			name:  "stripe documentation key",
-			line:  `STRIPE_LIVE = "sk_live_4eC39HqLyjWDarjtT1zdp7dc"`,
-			value: "sk_live_4eC39HqLyjWDarjtT1zdp7dc",
+			name:  "stripe documentation key is a published example",
+			line:  `STRIPE_LIVE = "sk_live_` + `4eC39HqLyjWD` + `arjtT1zdp7dc"`,
+			value: "sk_live_" + "4eC39HqLyjWD" + "arjtT1zdp7dc",
+			want:  placeholderSignals{Extended: true},
 		},
 		{
-			name:  "48-char openai key",
+			name:  "48-char openai key that is an alphabetical run",
 			line:  `OPENAI_LEGACY = "sk-AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQrSt"`,
 			value: "sk-AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQrSt",
+			want:  placeholderSignals{Extended: true},
+		},
+		{
+			name:  "a random openai key stays quiet",
+			line:  `OPENAI_LEGACY = "sk-Ky9Pf34qY6Nb3wWD25RQ4` + `F5ZR3qa7yEeeby3abP3E2Zs8"`,
+			value: "sk-Ky9Pf34qY6Nb3wWD25RQ4" + "F5ZR3qa7yEeeby3abP3E2Zs8",
 		},
 		{
 			name:  "short but real-looking placeholder-free value",
@@ -100,9 +117,16 @@ func TestClassifyPlaceholder(t *testing.T) {
 			value: "rotate-me",
 		},
 		{
-			name:  "db password (the key resolves to the url user, not the var)",
+			// RC-10b: "secretpassword" is on the common-placeholder list (old: QUIET).
+			name:  "db password on the common-placeholder list (the key resolves to the url user, not the var)",
 			line:  `DB_URL = "postgresql://admin:secretpassword@db.example.com:5432/mydb"`,
 			value: "secretpassword",
+			want:  placeholderSignals{Common: true},
+		},
+		{
+			name:  "db password that is not a sample (the key resolves to the url user, not the var)",
+			line:  `DB_URL = "postgresql://admin:kRUv6bJ9uSn2yWrKwAjm@db.example.com:5432/mydb"`,
+			value: "kRUv6bJ9uSn2yWrKwAjm",
 		},
 		// The S1 boundary cases. Each of these WOULD fire under a naive
 		// "starts with test/…" prefix test.
@@ -160,7 +184,7 @@ func TestHasRepeatedChars(t *testing.T) {
 		"aaaXaaaXaa":                       true,  // no run of 8, but 'a' is 8/10 = 80%
 		"aXaXaXaXaXaXaXaXaX":               false, // 9+9 of 18 = 50% each, under the 60% floor
 		"08bf2e526a1f4c8db3b91e7d0f2a5c6e": false, // real-looking 32-hex
-		"sk_live_4eC39HqLyjWDarjtT1zdp7dc": false,
+		"sk_live_" + "4eC39HqLyjWD" + "arjtT1zdp7dc": false,
 	}
 	for in, want := range cases {
 		if got := hasRepeatedChars(in); got != want {

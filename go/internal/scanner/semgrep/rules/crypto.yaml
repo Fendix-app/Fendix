@@ -28,6 +28,12 @@ rules:
       cwe: CWE-327
       confidence: MEDIUM
       fendix_severity: HIGH
+      fendix_title: >-
+        hashlib.md5() used on a password-shaped variable.
+      fendix_remediation: >-
+        hashlib.md5() used on a password-shaped variable.
+        MD5 is broken for cryptographic use. Use a password-hashing
+        function — bcrypt, scrypt, argon2, or PBKDF2 — never a raw hash.
 
   # Rule 2 (Sprint 18): SHA1 used on a password-shaped variable. Same
   # shape as the MD5 rule above; SHA1 is also unsuitable for password
@@ -54,6 +60,12 @@ rules:
       cwe: CWE-327
       confidence: MEDIUM
       fendix_severity: HIGH
+      fendix_title: >-
+        hashlib.sha1() used on a password-shaped variable.
+      fendix_remediation: >-
+        hashlib.sha1() used on a password-shaped variable.
+        SHA1 is unsuitable for password hashing (fast hash, no work
+        factor). Use bcrypt, scrypt, argon2, or PBKDF2 instead.
 
   # Rule 3 (Sprint 18): Legacy / broken symmetric ciphers (DES, 3DES, RC4).
   # Imports from pycryptodome's Crypto.Cipher submodule. FP class: a
@@ -82,30 +94,48 @@ rules:
       cwe: CWE-327
       confidence: HIGH
       fendix_severity: HIGH
+      fendix_title: >-
+        Legacy / broken symmetric cipher imported (DES, 3DES, RC4, ARC2, Blowfish).
+      fendix_remediation: >-
+        Legacy / broken symmetric cipher imported (DES, 3DES, RC4, ARC2,
+        Blowfish). These are no longer considered secure. Use AES-GCM,
+        AES-CCM, or ChaCha20-Poly1305 instead.
 
-  # Rule 4 (Sprint 18): random.random / random.choice / random.randint /
-  # random.sample / random.shuffle used in a function whose name or
-  # arguments suggest token / password / nonce generation. The standard
-  # `random` module is NOT cryptographically secure — use `secrets`. FP
-  # class: a function named `generate_token` that's testing-only and
-  # uses `random` deliberately for reproducibility will fire; suppress
-  # with // nosemgrep when intentional. FN class: a generic-name helper
-  # `def make_id():` that happens to be used as a token isn't caught.
+  # Rule 4 (Sprint 18): random.random / choice / choices / randint /
+  # randrange / sample / shuffle / getrandbits / randbytes used in a
+  # function whose name suggests token / password / nonce generation. The
+  # standard `random` module is NOT cryptographically secure — use
+  # `secrets`. FP class: a function named `generate_token` that's
+  # testing-only and uses `random` deliberately for reproducibility will
+  # fire; suppress with // nosemgrep when intentional. FN class: a
+  # generic-name helper `def make_id():` that happens to be used as a token
+  # isn't caught (Rule 5 catches it when its result is assigned to a
+  # token-named variable).
+  #
+  # Semgrep's metavariable-regex is anchored at the start of the value, so
+  # the word must open a name segment: the name's start or just after a
+  # non-alphanumeric character. `issue_api_key` and `_generate_api_key`
+  # match; `footprint` (otp) and `preset_palette` (reset) do not. Until
+  # v3.7.0 the regex had no leading part and matched only a name that
+  # starts with the word, so `generate_token` itself was never reported.
   - id: python-random-for-token-generation
     patterns:
       - pattern-either:
           - pattern: random.random()
           - pattern: random.choice(...)
+          - pattern: random.choices(...)
           - pattern: random.randint(...)
+          - pattern: random.randrange(...)
           - pattern: random.sample(...)
           - pattern: random.shuffle(...)
           - pattern: random.getrandbits(...)
+          - pattern: random.randbytes(...)
       - pattern-inside: |
           def $FN(...):
               ...
       - metavariable-regex:
           metavariable: $FN
-          regex: (?i)(token|password|secret|nonce|salt|session|otp|reset|csrf|api_key|access_key)
+          regex: (?i)^(?:.*[^a-z0-9])?(?:token|password|secret|nonce|salt|session|otp|reset|csrf|api_key|access_key)
     message: >
       random module used inside a function whose name suggests a
       security-sensitive value ('$FN'). The `random` module is NOT
@@ -126,3 +156,61 @@ rules:
         value. The `random` module is NOT cryptographically secure. Use
         `secrets.token_urlsafe()`, `secrets.token_bytes()`, or `secrets.choice()`
         instead.
+
+  # Rule 5 (v3.7.0): the same random calls assigned to a variable or
+  # attribute whose name suggests a security-sensitive value, in a function
+  # whose name does not (or at module level): `token = "".join(
+  # random.choices(ALPHABET, k=40))` inside `def create(request):`. The
+  # name test is Rule 4's, applied to the assignment target. Inside a
+  # function Rule 4 matches, the call is Rule 4's finding and this rule
+  # stays silent, so one call is one finding. FP class: a target named
+  # like a secret that holds a non-secret value (`session_colour`). FN
+  # class: a random value that reaches a token through a generic-name
+  # variable or a return value.
+  - id: python-random-token-assignment
+    patterns:
+      - pattern-either:
+          - pattern: random.random()
+          - pattern: random.choice(...)
+          - pattern: random.choices(...)
+          - pattern: random.randint(...)
+          - pattern: random.randrange(...)
+          - pattern: random.sample(...)
+          - pattern: random.shuffle(...)
+          - pattern: random.getrandbits(...)
+          - pattern: random.randbytes(...)
+      - pattern-inside: $T = <... random.$M(...) ...>
+      - metavariable-regex:
+          metavariable: $T
+          regex: (?i)^(?:.*[^a-z0-9])?(?:token|password|secret|nonce|salt|session|otp|reset|csrf|api_key|access_key)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(random|choice|choices|randint|randrange|sample|shuffle|getrandbits|randbytes)$
+      - pattern-not-inside:
+          patterns:
+            - pattern: |
+                def $FN(...):
+                    ...
+            - metavariable-regex:
+                metavariable: $FN
+                regex: (?i)^(?:.*[^a-z0-9])?(?:token|password|secret|nonce|salt|session|otp|reset|csrf|api_key|access_key)
+    message: >
+      random module output assigned to '$T', whose name suggests a
+      security-sensitive value. The `random` module is NOT
+      cryptographically secure. Use `secrets.token_urlsafe()`,
+      `secrets.token_bytes()`, or `secrets.choice()` instead.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: secrets
+      cwe: CWE-338
+      confidence: MEDIUM
+      fendix_severity: HIGH
+      fendix_title: >-
+        random module output assigned to a variable whose name suggests a
+        security-sensitive value.
+      fendix_remediation: >-
+        random module output assigned to a variable whose name suggests a
+        security-sensitive value. The `random` module is NOT cryptographically
+        secure. Use `secrets.token_urlsafe()`, `secrets.token_bytes()`, or
+        `secrets.choice()` instead.

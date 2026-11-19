@@ -1,0 +1,449 @@
+{
+  "metadata": {
+    "schema_version": 2,
+    "fingerprint_algorithm": "fendix/v2",
+    "target": "",
+    "started_at": "2026-11-12T12:11:16.296218219Z",
+    "duration": "4.978s",
+    "version": "v3.7.0",
+    "mode": "whitebox",
+    "endpoints_scanned": 0,
+    "active_probes": false,
+    "checks_run": [
+      "configleak",
+      "headers",
+      "cors",
+      "exposure",
+      "ratelimit",
+      "cookie-flags",
+      "secrets",
+      "semgrep"
+    ],
+    "scanner_status": [
+      {
+        "name": "dast",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --url"
+      },
+      {
+        "name": "spec",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no --spec"
+      },
+      {
+        "name": "active-probes",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--enable-active not set"
+      },
+      {
+        "name": "secrets",
+        "state": "ok"
+      },
+      {
+        "name": "textscan",
+        "state": "ok"
+      },
+      {
+        "name": "semgrep",
+        "state": "ok"
+      },
+      {
+        "name": "govulncheck",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--no-native-deps"
+      },
+      {
+        "name": "pip",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--no-native-deps"
+      },
+      {
+        "name": "npm",
+        "state": "skipped",
+        "reason": "disabled_by_flag",
+        "detail": "--no-native-deps"
+      },
+      {
+        "name": "python-engine",
+        "state": "ok"
+      },
+      {
+        "name": "python-engine/auth",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no spec supplied"
+      },
+      {
+        "name": "python-engine/injection",
+        "state": "ok"
+      },
+      {
+        "name": "python-engine/deps",
+        "state": "ok"
+      },
+      {
+        "name": "plugins",
+        "state": "skipped",
+        "reason": "not_applicable",
+        "detail": "no plugins configured"
+      }
+    ],
+    "coverage": {
+      "contract_version": 1,
+      "strict": false,
+      "configured_complete": true,
+      "gaps": [],
+      "limitations": [],
+      "required_analyzers": [],
+      "required_gaps": [],
+      "retried": []
+    },
+    "policy_version": "1.0.0"
+  },
+  "summary": {
+    "critical": 3,
+    "high": 1,
+    "medium": 1,
+    "low": 0,
+    "info": 0
+  },
+  "sources": {
+    "blackbox": 0,
+    "whitebox": 5,
+    "correlated": 0
+  },
+  "total": 5,
+  "decisions": {
+    "total": 5,
+    "confirmed": 3,
+    "blocking": 3,
+    "warning": 2,
+    "informational": 0
+  },
+  "findings": [
+    {
+      "id": "SEC-001",
+      "fingerprint": "984824cf55e9713f0d0fe8558c553ebd17c94a5c",
+      "fingerprint_v1": "e6d3d8dcaff7ee33f308e399a287526e4c4787fa",
+      "rule_id": "python.ast/PY_OS_SYSTEM",
+      "sink": "os.system(cmd)",
+      "symbol": "run",
+      "title": "Unsafe os.system() call — command injection risk",
+      "severity": "CRITICAL",
+      "source": "whitebox",
+      "category": "injection",
+      "endpoint": "app.py:12",
+      "occurrences": [
+        {
+          "endpoint": "app.py:12",
+          "fingerprint": "984824cf55e9713f0d0fe8558c553ebd17c94a5c"
+        }
+      ],
+      "evidence": "os.system(cmd)",
+      "fix": "Replace os.system() with subprocess.run() using a list of arguments and shell=False.",
+      "references": [
+        "CWE-78"
+      ],
+      "confidence": "HIGH",
+      "line": "app.py:12",
+      "taint_chain": [
+        {
+          "file": "app.py",
+          "line": 11,
+          "expr": "request.args.get('c')"
+        },
+        {
+          "file": "app.py",
+          "line": 12,
+          "expr": "os.system(cmd)"
+        }
+      ],
+      "reachable": true,
+      "source_tier": "tree_sitter_sidecar",
+      "route": {
+        "pattern": "/run",
+        "handler": "run",
+        "file": "app.py",
+        "line": 9
+      },
+      "status": "BLOCK",
+      "confidence_score": 90,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 static (SAST) evidence present",
+        "+10 AST proved a reachable source→sink taint path",
+        "+30 deterministic detection: a high-confidence pattern match in production (non-test) code",
+        "+5 high-trust analyzer tier (tree-sitter taint)"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "static_evidence",
+          "text": "static (SAST) evidence present"
+        },
+        {
+          "delta": 10,
+          "code": "reachable_taint_path",
+          "text": "AST proved a reachable source→sink taint path"
+        },
+        {
+          "delta": 30,
+          "code": "deterministic_detection",
+          "text": "deterministic detection: a high-confidence pattern match in production (non-test) code"
+        },
+        {
+          "delta": 5,
+          "code": "tier_tree_sitter",
+          "text": "high-trust analyzer tier (tree-sitter taint)"
+        }
+      ],
+      "decision_reason": "severity at or above the --fail-on threshold; corroborated by: reachable taint path, deterministic detection in production code",
+      "decision_policy": "enforced",
+      "independent_signals": [
+        "reachable taint path"
+      ],
+      "self_evident_signals": [
+        "deterministic detection in production code"
+      ]
+    },
+    {
+      "id": "SEC-002",
+      "fingerprint": "b2849daa60a0a9d4c8ca46ab96b6f8c798fb73b7",
+      "fingerprint_v1": "44bf0102297f480ebece67ba9777878b309d385b",
+      "rule_id": "secrets/AWS_ACCESS_KEY",
+      "secret": {
+        "identifier": "AWS_ACCESS_KEY_ID",
+        "file": "app.py"
+      },
+      "title": "AWS Access Key ID hardcoded",
+      "severity": "CRITICAL",
+      "source": "whitebox",
+      "category": "secrets",
+      "endpoint": "app.py:5",
+      "occurrences": [
+        {
+          "endpoint": "app.py:5",
+          "fingerprint": "b2849daa60a0a9d4c8ca46ab96b6f8c798fb73b7"
+        }
+      ],
+      "evidence": "WS_ACCESS_KEY_ID = \"[REDACTED len=20 sha256:2d081dae...]\"",
+      "fix": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "references": [
+        "CWE-798"
+      ],
+      "confidence": "HIGH",
+      "line": "app.py:5",
+      "status": "BLOCK",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 static (SAST) evidence present",
+        "+30 deterministic detection: a high-confidence pattern match in production (non-test) code"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "static_evidence",
+          "text": "static (SAST) evidence present"
+        },
+        {
+          "delta": 30,
+          "code": "deterministic_detection",
+          "text": "deterministic detection: a high-confidence pattern match in production (non-test) code"
+        }
+      ],
+      "decision_reason": "severity at or above the --fail-on threshold; corroborated by: deterministic detection in production code",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "deterministic detection in production code"
+      ]
+    },
+    {
+      "id": "SEC-003",
+      "fingerprint": "7ffd60c91e508282bb9332a46d9c8a7f2a555f30",
+      "fingerprint_v1": "c9f2bc1c27dc009157ce4a34805e2bd36b6b5ef7",
+      "rule_id": "secrets/AWS_SECRET_KEY",
+      "secret": {
+        "identifier": "AWS_SECRET_ACCESS_KEY",
+        "file": "app.py"
+      },
+      "title": "AWS Secret Access Key hardcoded",
+      "severity": "CRITICAL",
+      "source": "whitebox",
+      "category": "secrets",
+      "endpoint": "app.py:6",
+      "occurrences": [
+        {
+          "endpoint": "app.py:6",
+          "fingerprint": "7ffd60c91e508282bb9332a46d9c8a7f2a555f30"
+        }
+      ],
+      "evidence": "AWS_SECRET_ACCESS_KEY = \"[REDACTED len=40 sha256:e37b9cf7...]\"",
+      "fix": "Remove the hardcoded credential. Store secrets in environment variables or a secrets manager (e.g. Vault, AWS Secrets Manager). Rotate the exposed credential immediately.",
+      "references": [
+        "CWE-798"
+      ],
+      "confidence": "HIGH",
+      "line": "app.py:6",
+      "status": "BLOCK",
+      "confidence_score": 75,
+      "confidence_band": "HIGH",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 static (SAST) evidence present",
+        "+30 deterministic detection: a high-confidence pattern match in production (non-test) code"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "static_evidence",
+          "text": "static (SAST) evidence present"
+        },
+        {
+          "delta": 30,
+          "code": "deterministic_detection",
+          "text": "deterministic detection: a high-confidence pattern match in production (non-test) code"
+        }
+      ],
+      "decision_reason": "severity at or above the --fail-on threshold; corroborated by: deterministic detection in production code",
+      "decision_policy": "enforced",
+      "self_evident_signals": [
+        "deterministic detection in production code"
+      ]
+    },
+    {
+      "id": "SEC-004",
+      "fingerprint": "a95395146e32aaea774a6d4656106fa4f3d8fec3",
+      "fingerprint_v1": "61eca7bf3fe5d37289ed9841066df4ee27f0bfa0",
+      "rule_id": "flask-route-no-auth-decorator",
+      "sink": "@app.route(\"/run\")",
+      "title": "Flask route 'run' has no auth-style decorator (@login_required, @requires_auth, @jwt_required, or @auth.login_required) ",
+      "severity": "MEDIUM",
+      "source": "whitebox",
+      "category": "auth",
+      "endpoint": "app.py:9",
+      "occurrences": [
+        {
+          "endpoint": "app.py:9",
+          "fingerprint": "a95395146e32aaea774a6d4656106fa4f3d8fec3"
+        }
+      ],
+      "evidence": "@app.route(\"/run\")",
+      "fix": "Flask route 'run' has no auth-style decorator (@login_required, @requires_auth, @jwt_required, or @auth.login_required) directly below the @app.route(...) line. Confirm authentication is enforced. The auth decorator must sit below @app.route(...), because route() must be the outermost decorator: one placed above @app.route(...) does not protect the route.",
+      "references": [
+        "CWE-306"
+      ],
+      "confidence": "LOW",
+      "line": "app.py:9",
+      "source_tier": "semgrep_shim",
+      "status": "WARN",
+      "confidence_score": 40,
+      "confidence_band": "MEDIUM",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 static (SAST) evidence present",
+        "-5 lower-trust analyzer tier (semgrep regex breadth)"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "static_evidence",
+          "text": "static (SAST) evidence present"
+        },
+        {
+          "delta": -5,
+          "code": "tier_semgrep",
+          "text": "lower-trust analyzer tier (semgrep regex breadth)"
+        }
+      ],
+      "decision_reason": "actionable finding below the --fail-on threshold",
+      "decision_policy": "enforced"
+    },
+    {
+      "id": "SEC-005",
+      "fingerprint": "32f260be2a23dc881b7e49c64ff0ae4df3f079d6",
+      "fingerprint_v1": "107cdcf737b91fce80de23b89adca7c6a05992fc",
+      "rule_id": "flask-missing-login-required",
+      "sink": "@app.route(\"/run\")",
+      "title": "Flask route 'run' is missing @login_required decorator. Any user can access this endpoint without authentication.",
+      "severity": "HIGH",
+      "source": "whitebox",
+      "category": "auth",
+      "endpoint": "app.py:9",
+      "occurrences": [
+        {
+          "endpoint": "app.py:9",
+          "fingerprint": "32f260be2a23dc881b7e49c64ff0ae4df3f079d6"
+        }
+      ],
+      "evidence": "@app.route(\"/run\")",
+      "fix": "Flask route 'run' is missing @login_required decorator. Any user can access this endpoint without authentication.",
+      "references": [
+        "CWE-306"
+      ],
+      "confidence": "MEDIUM",
+      "line": "app.py:9",
+      "source_tier": "semgrep_shim",
+      "status": "WARN",
+      "confidence_score": 40,
+      "confidence_band": "MEDIUM",
+      "confidence_reasons": [
+        "+35 base: a scanner produced this finding",
+        "+10 static (SAST) evidence present",
+        "-5 lower-trust analyzer tier (semgrep regex breadth)",
+        "+0 held at WARN: severity above threshold but nothing corroborates the claim — needs corroboration to block"
+      ],
+      "confidence_breakdown": [
+        {
+          "delta": 35,
+          "code": "base_detection",
+          "text": "base: a scanner produced this finding"
+        },
+        {
+          "delta": 10,
+          "code": "static_evidence",
+          "text": "static (SAST) evidence present"
+        },
+        {
+          "delta": -5,
+          "code": "tier_semgrep",
+          "text": "lower-trust analyzer tier (semgrep regex breadth)"
+        },
+        {
+          "delta": 0,
+          "code": "held_uncorroborated",
+          "text": "held at WARN: severity above threshold but nothing corroborates the claim — needs corroboration to block"
+        }
+      ],
+      "decision_reason": "severity above threshold but nothing corroborates the claim — needs corroboration to block",
+      "decision_policy": "enforced"
+    }
+  ]
+}

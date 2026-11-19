@@ -1,0 +1,17 @@
+rules:
+  - id: express-sqli-taint-spike
+    mode: taint
+    pattern-sources:
+      - pattern: req.query.$X
+    pattern-sinks:
+      - pattern: $DB.query(...)
+    message: >
+      User input from req.query reaches $DB.query() — SQL injection.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: injection
+      cwe: CWE-89
+      confidence: HIGH
+      fendix_severity: HIGH
+      fendix_reachability: taint

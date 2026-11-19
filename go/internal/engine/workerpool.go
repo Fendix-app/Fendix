@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Fendix-app/Fendix/go/internal/evidence"
 	"github.com/Fendix-app/Fendix/go/internal/models"
@@ -94,6 +96,10 @@ func (wp *WorkerPool) Run(ctx context.Context, cfg *models.ScanConfig, endpoints
 // RunEvidence executes the pool and returns the raw []evidence.Evidence so
 // the orchestrator can keep provenance flowing through correlation (v0.22).
 func (wp *WorkerPool) RunEvidence(ctx context.Context, cfg *models.ScanConfig, endpoints []scanner.Endpoint) []evidence.Evidence {
+	// The per-panic log lines of this pass are bounded in bytes, and the ones
+	// not written are counted in one exact line when the pass ends (OR-13).
+	panicLines.reset()
+	defer panicLines.flush()
 	bufSize := wp.workers * 4
 	if bufSize < 1 {
 		bufSize = 1
@@ -197,8 +203,20 @@ func runCheck(ctx context.Context, cc *scanner.CheckContext, cfg *models.ScanCon
 	defer func() {
 		if r := recover(); r != nil {
 			epLabel := fmt.Sprintf("%s %s", job.endpoint.Method, job.endpoint.Path)
-			slog.Error("scanner check panicked — job contained, scan continues",
-				"worker", workerID, "endpoint", epLabel, "check", job.check.Name(), "panic", r)
+			// The endpoint label is the target's, so the line is cut and the
+			// pass's lines are budgeted in bytes (OR-13, risk R-34): a worker
+			// that panics on every endpoint of a hostile target must not fill
+			// the host's memory with its own log.
+			if panicLines.admit(len(epLabel), len(job.check.Name()), fmt.Sprint(r)) {
+				slog.Error("scanner check panicked — job contained, scan continues",
+					"worker", workerID, "endpoint", clipPanicField(epLabel), "check", job.check.Name(), "panic", clipPanicField(fmt.Sprint(r)))
+			}
+			// An active check that panicked did not finish its probes: record
+			// that as a scanner-side failure so the active-probe account says so.
+			if job.check.Tier() == scanner.TierActive {
+				scanner.RecordScannerFailure(scanner.RuleFamilyOfCheck(job.check.Name()), job.endpoint.FullURL, scanner.ReasonInternalError,
+					"a scanner check panicked before it finished its probes")
+			}
 			findings = []evidence.Evidence{{
 				// The rule is the CHECK that panicked, not "something
 				// panicked": two different checks failing at one endpoint are
@@ -234,4 +252,66 @@ func runCheck(ctx context.Context, cc *scanner.CheckContext, cfg *models.ScanCon
 	}
 
 	return job.check.Run(jobCtx, cc, job.endpoint)
+}
+
+// panicLogBudget is the bytes of per-panic log records a pass writes before it
+// counts the rest instead; panicFieldMax cuts each target-controlled field of a
+// record (OR-13, risk R-34).
+const (
+	panicLogBudget = 64 << 10
+	panicFieldMax  = 256
+	// panicRecordOverhead is what the log handler adds around the fields (time,
+	// level, message, keys), rounded up.
+	panicRecordOverhead = 160
+)
+
+func clipPanicField(s string) string {
+	if len(s) <= panicFieldMax {
+		return s
+	}
+	cut := panicFieldMax
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "...(" + strconv.Itoa(len(s)) + " bytes)"
+}
+
+// panicLimiter budgets the panic records of one pass.
+type panicLimiter struct {
+	mu      sync.Mutex
+	bytes   int
+	dropped int
+}
+
+var panicLines panicLimiter
+
+func (l *panicLimiter) reset() {
+	l.mu.Lock()
+	l.bytes, l.dropped = 0, 0
+	l.mu.Unlock()
+}
+
+// admit reports whether a record with these field sizes fits the budget, and
+// counts it as dropped when it does not.
+func (l *panicLimiter) admit(endpointLen, checkLen int, panicText string) bool {
+	size := panicRecordOverhead + min(endpointLen, panicFieldMax+16) + checkLen + min(len(panicText), panicFieldMax+16)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.bytes+size > panicLogBudget {
+		l.dropped++
+		return false
+	}
+	l.bytes += size
+	return true
+}
+
+// flush writes the one exact line that counts the records not written.
+func (l *panicLimiter) flush() {
+	l.mu.Lock()
+	n := l.dropped
+	l.dropped = 0
+	l.mu.Unlock()
+	if n > 0 {
+		slog.Error(fmt.Sprintf("%d further check panics not logged; each one is a finding in the report", n))
+	}
 }

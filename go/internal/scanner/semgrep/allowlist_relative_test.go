@@ -43,9 +43,11 @@ func recordedIncludes(t *testing.T, argvFile string) []string {
 	}
 	args := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
 	var out []string
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "--include" {
-			out = append(out, args[i+1])
+	for _, a := range args {
+		// "--include=<rel>": one argument, so a name that starts with '-' is a
+		// value and never an option (review item 4).
+		if v, ok := strings.CutPrefix(a, "--include="); ok {
+			out = append(out, v)
 		}
 	}
 	return out

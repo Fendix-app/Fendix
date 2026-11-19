@@ -71,6 +71,48 @@ func TestSemgrepTierPenalty(t *testing.T) {
 	}
 }
 
+// TestSemgrepTaintNeverDeterministic: a Semgrep taint finding is still a
+// Semgrep finding. Its proof counts through Reachable (+10, and an independent
+// signal), never through the deterministic-detection delta, so it cannot band
+// HIGH on its own — the confidence gate's invariant for every Semgrep tier.
+func TestSemgrepTaintNeverDeterministic(t *testing.T) {
+	for _, reachable := range []bool{false, true} {
+		ev := evidence.Evidence{
+			Source:     models.SourceWhitebox,
+			SourceTier: models.TierSemgrepTaint,
+			Confidence: models.ConfidenceHigh,
+			Reachable:  reachable,
+		}
+		if HasDeterministicDetection(ev) {
+			t.Errorf("Reachable=%v: HasDeterministicDetection = true for a semgrep_taint finding", reachable)
+		}
+		if r := Score(ev); r.Band == models.ConfidenceHigh {
+			t.Errorf("Reachable=%v: Band = HIGH (%d) for a semgrep_taint finding on its own: %v",
+				reachable, r.Value, r.Reasons)
+		}
+	}
+}
+
+// TestSemgrepTaintTierPenalty: the taint tier carries the same tier_semgrep
+// delta as the shim — the managed-CI policy keys that delta on
+// analyzer_implementation == semgrep, which both tiers export.
+func TestSemgrepTaintTierPenalty(t *testing.T) {
+	withTier := Score(evidence.Evidence{Source: models.SourceWhitebox, SourceTier: models.TierSemgrepTaint})
+	noTier := Score(evidence.Evidence{Source: models.SourceWhitebox})
+	if withTier.Value != noTier.Value+tierSemgrepPenalty {
+		t.Errorf("semgrep penalty not applied to semgrep_taint: withTier=%d noTier=%d", withTier.Value, noTier.Value)
+	}
+	found := false
+	for _, d := range withTier.Details {
+		if d.Code == CodeTierSemgrep && d.Delta == tierSemgrepPenalty {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no %s detail with delta %d: %+v", CodeTierSemgrep, tierSemgrepPenalty, withTier.Details)
+	}
+}
+
 func TestBandThresholds(t *testing.T) {
 	cases := []struct {
 		score int
@@ -137,6 +179,7 @@ func TestReasonsSumToValue(t *testing.T) {
 	cases := []evidence.Evidence{
 		{Source: models.SourceBlackbox},
 		{Source: models.SourceWhitebox, SourceTier: models.TierSemgrepShim},
+		{Source: models.SourceWhitebox, SourceTier: models.TierSemgrepTaint, Reachable: true, Confidence: models.ConfidenceHigh},
 		{Source: models.SourceCorrelated, RouteConfirmed: true, Reachable: true, ProvenPath: true, SourceTier: models.TierTreeSitter, Payload: "p", Response: "r"},
 		// The B4 de-escalation deltas are negative — the sum must still land
 		// exactly on Value.
@@ -340,6 +383,63 @@ func provenanceDriftFixtures() []provenanceFixture {
 			wantValue: base + staticEvidence + deterministicDetn + componentNotImported,
 		},
 		{
+			// RC-10b: a credential read out of documentation (a README) with
+			// nothing offline to prove it. The path is endpoint-derived
+			// (InDoc), so it is covered by the round trip, and the finding
+			// earns no deterministic-detection weight.
+			name: "credential in documentation, not provable offline",
+			ev: evidence.Evidence{
+				Title:      "Stripe live secret key hardcoded",
+				Category:   "secrets",
+				Endpoint:   "docs/guide.md:12",
+				Severity:   models.SeverityCritical,
+				Source:     models.SourceWhitebox,
+				Confidence: models.ConfidenceHigh,
+				InDoc:      true,
+			},
+			// 35 base + 10 static, and NO +30: the file is documentation.
+			wantValue: base + staticEvidence,
+		},
+		{
+			// RC-10b: the same file, but the credential is provable offline (a
+			// checksum-valid GitHub token). OfflineProvable is a producer-set
+			// fact with no endpoint-derived fallback, so it must survive the
+			// projection or the weight a provable credential keeps would be
+			// lost on every real scan.
+			name: "credential in documentation, provable offline",
+			ev: evidence.Evidence{
+				Title:           "GitHub token hardcoded",
+				Category:        "secrets",
+				Endpoint:        "README.md:7",
+				Severity:        models.SeverityCritical,
+				Source:          models.SourceWhitebox,
+				Confidence:      models.ConfidenceHigh,
+				InDoc:           true,
+				OfflineProvable: true,
+			},
+			// 35 base + 10 static + 30 deterministic detection.
+			wantValue: base + staticEvidence + deterministicDetn,
+		},
+		{
+			// RC-10b: a documentation value that is demonstrably synthetic.
+			// SyntheticValue (value evidence only, never the name) is the
+			// second independent signal the decision layer reads.
+			name: "synthetic value in documentation",
+			ev: evidence.Evidence{
+				Title:          "GitHub token hardcoded",
+				Category:       "secrets",
+				Endpoint:       "docs/ref.rst:3",
+				Severity:       models.SeverityCritical,
+				Source:         models.SourceWhitebox,
+				Confidence:     models.ConfidenceHigh,
+				InDoc:          true,
+				Placeholder:    true,
+				SyntheticValue: true,
+			},
+			// 35 base + 10 static - 20 fixture-shaped value.
+			wantValue: base + staticEvidence + placeholderPenalty,
+		},
+		{
 			// A SARIF-imported finding that CorrelateCrossTool strongly
 			// corroborated (an independent tool reported the same normalized
 			// CWE at the same location). CrossToolCorroborated and
@@ -529,6 +629,7 @@ func TestDeterministicDetectionLetsAProductionPatternMatchBandHigh(t *testing.T)
 		{"test/fixture code (FP_CORPUS P1: 31 of 35 catalogued instances)", func(e *evidence.Evidence) { e.InTest = true }},
 		{"fixture-shaped credential value", func(e *evidence.Evidence) { e.Placeholder = true }},
 		{"semgrep-shim tier (breadth before precision)", func(e *evidence.Evidence) { e.SourceTier = models.TierSemgrepShim }},
+		{"semgrep-taint tier (Semgrep-sourced, ADR-011)", func(e *evidence.Evidence) { e.SourceTier = models.TierSemgrepTaint }},
 		{"the analyzer did not assert HIGH confidence", func(e *evidence.Evidence) { e.Confidence = models.ConfidenceMedium }},
 		{"blackbox source (the DAST mirror is directObservation)", func(e *evidence.Evidence) { e.Source = models.SourceBlackbox }},
 	}

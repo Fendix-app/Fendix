@@ -1,0 +1,279 @@
+[
+  {
+    "id": "PY_AUTH_HEADER_TRUST",
+    "title": "Auth decision based on a client-controllable header",
+    "cwe": "CWE-290",
+    "category": "auth_bypass",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_AUTH_HEADER_TRUST",
+    "finding_id": "SEC-PY_AUTH_HEADER_TRUST"
+  },
+  {
+    "id": "PY_EVAL",
+    "title": "Unsafe eval() or exec() with a dynamic argument",
+    "cwe": "CWE-95",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_EVAL",
+    "finding_id": "SEC-PY_EVAL"
+  },
+  {
+    "id": "PY_JWT_WEAK",
+    "title": "Weak JWT verification — decode with verify=False or unpinned algorithm",
+    "cwe": "CWE-347",
+    "category": "auth_bypass",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_JWT_WEAK",
+    "finding_id": "SEC-PY_JWT_WEAK"
+  },
+  {
+    "id": "PY_LLM_PROMPT_INJECTION",
+    "title": "Prompt injection — untrusted input flows into an LLM prompt",
+    "cwe": "CWE-77",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_LLM_PROMPT_INJECTION",
+    "finding_id": "SEC-PY_LLM_PROMPT_INJECTION"
+  },
+  {
+    "id": "PY_OPEN_REDIRECT",
+    "title": "Potential open redirect — dynamic redirect target",
+    "cwe": "CWE-601",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_OPEN_REDIRECT",
+    "finding_id": "SEC-PY_OPEN_REDIRECT"
+  },
+  {
+    "id": "PY_OS_POPEN",
+    "title": "Unsafe os.popen() family call — command injection risk",
+    "cwe": "CWE-78",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_OS_POPEN",
+    "finding_id": "SEC-PY_OS_POPEN"
+  },
+  {
+    "id": "PY_OS_SYSTEM",
+    "title": "Unsafe os.system() call — command injection risk",
+    "cwe": "CWE-78",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_OS_SYSTEM",
+    "finding_id": "SEC-PY_OS_SYSTEM"
+  },
+  {
+    "id": "PY_PATH_TRAVERSAL",
+    "title": "Potential unsafe dynamic filesystem path",
+    "cwe": "CWE-22",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "MEDIUM",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_PATH_TRAVERSAL",
+    "finding_id": "SEC-PY_PATH_TRAVERSAL"
+  },
+  {
+    "id": "PY_PICKLE_LOAD",
+    "title": "Unsafe pickle deserialization — RCE risk",
+    "cwe": "CWE-502",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "CRITICAL",
+    "confidence": "HIGH",
+    "rule_id": "python.ast/PY_PICKLE_LOAD",
+    "finding_id": "SEC-PY_PICKLE_LOAD"
+  },
+  {
+    "id": "PY_SECRET_IN_LOG",
+    "title": "Secret written to logs — credential exposure",
+    "cwe": "CWE-532",
+    "category": "secrets",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "MEDIUM",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_SECRET_IN_LOG",
+    "finding_id": "SEC-PY_SECRET_IN_LOG"
+  },
+  {
+    "id": "PY_SQL_INJECTION",
+    "title": "SQL query built via string formatting — injection risk",
+    "cwe": "CWE-89",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "CRITICAL",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_SQL_INJECTION",
+    "finding_id": "SEC-PY_SQL_INJECTION"
+  },
+  {
+    "id": "PY_SSRF",
+    "title": "Potential SSRF — dynamic URL passed to HTTP client",
+    "cwe": "CWE-918",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_SSRF",
+    "finding_id": "SEC-PY_SSRF"
+  },
+  {
+    "id": "PY_SSTI",
+    "title": "Template built from a non-constant value (possible server-side template injection)",
+    "cwe": "CWE-1336",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_SSTI",
+    "finding_id": "SEC-PY_SSTI"
+  },
+  {
+    "id": "PY_SUBPROCESS_SHELL",
+    "title": "subprocess called with shell=True — command injection risk",
+    "cwe": "CWE-78",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_SUBPROCESS_SHELL",
+    "finding_id": "SEC-PY_SUBPROCESS_SHELL"
+  },
+  {
+    "id": "PY_WEAK_CRYPTO_PASSWORD",
+    "title": "Weak hash (MD5/SHA1) used for password — credential exposure risk",
+    "cwe": "CWE-916",
+    "category": "secrets",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_WEAK_CRYPTO_PASSWORD",
+    "finding_id": "SEC-PY_WEAK_CRYPTO_PASSWORD"
+  },
+  {
+    "id": "PY_XSS_HTML_SINK",
+    "title": "Reflected XSS — user input passed to HTML render sink",
+    "cwe": "CWE-79",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "python.ast/PY_XSS_HTML_SINK",
+    "finding_id": "SEC-PY_XSS_HTML_SINK"
+  },
+  {
+    "id": "PY_YAML_UNSAFE_LOAD",
+    "title": "Unsafe yaml.load() — RCE risk",
+    "cwe": "CWE-502",
+    "category": "injection",
+    "languages": [
+      "python"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "HIGH",
+    "rule_id": "python.ast/PY_YAML_UNSAFE_LOAD",
+    "finding_id": "SEC-PY_YAML_UNSAFE_LOAD"
+  },
+  {
+    "id": "JS_DOCUMENT_WRITE",
+    "title": "Unsafe use of document.write() — XSS risk",
+    "cwe": "CWE-79",
+    "category": "injection",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "default_severity": "MEDIUM",
+    "confidence": "MEDIUM",
+    "rule_id": "SEC-JS_DOCUMENT_WRITE",
+    "finding_id": "SEC-JS_DOCUMENT_WRITE"
+  },
+  {
+    "id": "JS_EVAL",
+    "title": "Unsafe use of eval() in JavaScript",
+    "cwe": "CWE-95",
+    "category": "injection",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "HIGH",
+    "rule_id": "SEC-JS_EVAL",
+    "finding_id": "SEC-JS_EVAL"
+  },
+  {
+    "id": "JS_INNER_HTML",
+    "title": "Unsafe assignment to innerHTML — XSS risk",
+    "cwe": "CWE-79",
+    "category": "injection",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "MEDIUM",
+    "rule_id": "SEC-JS_INNER_HTML",
+    "finding_id": "SEC-JS_INNER_HTML"
+  },
+  {
+    "id": "JS_SQL_TEMPLATE",
+    "title": "SQL query built via template literal — injection risk",
+    "cwe": "CWE-89",
+    "category": "injection",
+    "languages": [
+      "javascript",
+      "typescript"
+    ],
+    "default_severity": "HIGH",
+    "confidence": "HIGH",
+    "rule_id": "SEC-JS_SQL_TEMPLATE",
+    "finding_id": "SEC-JS_SQL_TEMPLATE"
+  }
+]

@@ -45,3 +45,7 @@ func currentAuditLog() *ProbeAuditLog {
 	defer globalAuditMu.Unlock()
 	return globalAuditLog
 }
+
+// GlobalProbeLog returns the scan-wide audit log, which also carries the
+// target-health evidence SummarizeProbes needs to settle failure origins.
+func GlobalProbeLog() *ProbeAuditLog { return currentAuditLog() }

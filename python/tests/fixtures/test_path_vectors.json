@@ -1,0 +1,475 @@
+{
+ "_comment": "Shared by python/tests/test_rc10_test_paths.py and go/internal/models/testpath_test.go: every path is a source-file path (no line suffix, no URL). The Go test also appends :42 and checks the URL guard. Edit both implementations together.",
+ "vectors": [
+  {
+   "name": "tests dir",
+   "path": "tests/test_login.py",
+   "want": true
+  },
+  {
+   "name": "test dir singular",
+   "path": "test/helpers.py",
+   "want": true
+  },
+  {
+   "name": "testing dir",
+   "path": "app/testing/factory.py",
+   "want": true
+  },
+  {
+   "name": "conftest",
+   "path": "app/conftest.py",
+   "want": true
+  },
+  {
+   "name": "test_ prefix file",
+   "path": "app/test_views.py",
+   "want": true
+  },
+  {
+   "name": "_test suffix file",
+   "path": "app/views_test.py",
+   "want": true
+  },
+  {
+   "name": "fixtures dir",
+   "path": "app/fixtures/users.py",
+   "want": true
+  },
+  {
+   "name": "fixture dir singular",
+   "path": "app/fixture/users.py",
+   "want": true
+  },
+  {
+   "name": "root fixtures dir",
+   "path": "fixtures/users.js",
+   "want": true
+  },
+  {
+   "name": "root fixture dir",
+   "path": "fixture/users.js",
+   "want": true
+  },
+  {
+   "name": "nested fixtures dir, js",
+   "path": "src/fixtures/users.js",
+   "want": true
+  },
+  {
+   "name": "__tests__ dir",
+   "path": "src/__tests__/App.js",
+   "want": true
+  },
+  {
+   "name": "root __tests__ dir",
+   "path": "__tests__/App.js",
+   "want": true
+  },
+  {
+   "name": "__mocks__ dir",
+   "path": "src/__mocks__/axios.ts",
+   "want": true
+  },
+  {
+   "name": "root __mocks__ dir",
+   "path": "__mocks__/fs.js",
+   "want": true
+  },
+  {
+   "name": "__fixtures__ dir",
+   "path": "src/__fixtures__/user.js",
+   "want": true
+  },
+  {
+   "name": "mocks dir",
+   "path": "src/mocks/handlers.ts",
+   "want": true
+  },
+  {
+   "name": "mock dir singular",
+   "path": "src/mock/server.js",
+   "want": true
+  },
+  {
+   "name": "root mocks dir",
+   "path": "mocks/api.js",
+   "want": true
+  },
+  {
+   "name": "spec dir",
+   "path": "spec/models/user_spec.rb",
+   "want": true
+  },
+  {
+   "name": "specs dir",
+   "path": "src/specs/api.js",
+   "want": true
+  },
+  {
+   "name": "spec helper",
+   "path": "spec/helper.rb",
+   "want": true
+  },
+  {
+   "name": "e2e dir",
+   "path": "apps/web/e2e/login.ts",
+   "want": true
+  },
+  {
+   "name": "root e2e dir",
+   "path": "e2e/login.ts",
+   "want": true
+  },
+  {
+   "name": "cypress dir",
+   "path": "cypress/support/commands.js",
+   "want": true
+  },
+  {
+   "name": "nested cypress dir",
+   "path": "web/cypress/e2e/a.cy.ts",
+   "want": true
+  },
+  {
+   "name": "testdata dir",
+   "path": "pkg/testdata/golden.go",
+   "want": true
+  },
+  {
+   "name": "root testdata dir",
+   "path": "testdata/x.go",
+   "want": true
+  },
+  {
+   "name": "test-utils dir",
+   "path": "src/test-utils/render.tsx",
+   "want": true
+  },
+  {
+   "name": "test-util dir",
+   "path": "src/test-util/a.js",
+   "want": true
+  },
+  {
+   "name": "testutils dir",
+   "path": "src/testutils/db.go",
+   "want": true
+  },
+  {
+   "name": "testutil dir",
+   "path": "internal/testutil/pg.go",
+   "want": true
+  },
+  {
+   "name": "root test-utils dir",
+   "path": "test-utils/index.ts",
+   "want": true
+  },
+  {
+   "name": ".test.tsx",
+   "path": "src/App.test.tsx",
+   "want": true
+  },
+  {
+   "name": ".test.js",
+   "path": "src/a.test.js",
+   "want": true
+  },
+  {
+   "name": ".test.jsx",
+   "path": "src/a.test.jsx",
+   "want": true
+  },
+  {
+   "name": ".test.mjs",
+   "path": "src/a.test.mjs",
+   "want": true
+  },
+  {
+   "name": ".test.cjs",
+   "path": "src/a.test.cjs",
+   "want": true
+  },
+  {
+   "name": ".test.mts",
+   "path": "src/a.test.mts",
+   "want": true
+  },
+  {
+   "name": ".test.cts",
+   "path": "src/a.test.cts",
+   "want": true
+  },
+  {
+   "name": ".test.ts",
+   "path": "src/a.test.ts",
+   "want": true
+  },
+  {
+   "name": ".spec.ts",
+   "path": "src/a.spec.ts",
+   "want": true
+  },
+  {
+   "name": ".spec.js",
+   "path": "src/a.spec.js",
+   "want": true
+  },
+  {
+   "name": ".cy.ts",
+   "path": "src/login.cy.ts",
+   "want": true
+  },
+  {
+   "name": ".cy.js",
+   "path": "src/login.cy.js",
+   "want": true
+  },
+  {
+   "name": ".e2e.ts",
+   "path": "src/login.e2e.ts",
+   "want": true
+  },
+  {
+   "name": "_test.go",
+   "path": "pkg/server/handler_test.go",
+   "want": true
+  },
+  {
+   "name": "root _test.go",
+   "path": "handler_test.go",
+   "want": true
+  },
+  {
+   "name": "_spec.rb",
+   "path": "lib/user_spec.rb",
+   "want": true
+  },
+  {
+   "name": "_test.rb",
+   "path": "lib/user_test.rb",
+   "want": true
+  },
+  {
+   "name": "*Test.java under main",
+   "path": "src/main/java/com/acme/UserTest.java",
+   "want": true
+  },
+  {
+   "name": "*Tests.java",
+   "path": "src/main/java/com/acme/UserTests.java",
+   "want": true
+  },
+  {
+   "name": "*IT.java",
+   "path": "src/main/java/com/acme/UserIT.java",
+   "want": true
+  },
+  {
+   "name": "*ITCase.java",
+   "path": "src/main/java/com/acme/UserITCase.java",
+   "want": true
+  },
+  {
+   "name": "*Test.kt",
+   "path": "src/main/kotlin/com/acme/UserTest.kt",
+   "want": true
+  },
+  {
+   "name": "*Test.scala",
+   "path": "src/main/scala/com/acme/UserTest.scala",
+   "want": true
+  },
+  {
+   "name": "*Test.groovy",
+   "path": "src/main/groovy/com/acme/UserTest.groovy",
+   "want": true
+  },
+  {
+   "name": "Test<Upper>.java",
+   "path": "src/main/java/com/acme/TestUser.java",
+   "want": true
+  },
+  {
+   "name": "Test<Upper>.kt",
+   "path": "src/main/kotlin/com/acme/TestHelper.kt",
+   "want": true
+  },
+  {
+   "name": "windows separators, __tests__",
+   "path": "src\\__tests__\\App.js",
+   "want": true
+  },
+  {
+   "name": "windows separators, _test.go",
+   "path": "pkg\\server\\handler_test.go",
+   "want": true
+  },
+  {
+   "name": "plain module",
+   "path": "app/views.py",
+   "want": false
+  },
+  {
+   "name": "nested module",
+   "path": "src/api/handlers/login.ts",
+   "want": false
+  },
+  {
+   "name": "substring not a segment",
+   "path": "app/latest/mod.js",
+   "want": false
+  },
+  {
+   "name": "contest is not conftest",
+   "path": "app/contest.py",
+   "want": false
+  },
+  {
+   "name": "Interest.java",
+   "path": "src/main/java/com/acme/Interest.java",
+   "want": false
+  },
+  {
+   "name": "Testimonial.java is not Test<Upper>",
+   "path": "src/main/java/com/acme/Testimonial.java",
+   "want": false
+  },
+  {
+   "name": "Latest.java",
+   "path": "src/main/java/com/acme/Latest.java",
+   "want": false
+  },
+  {
+   "name": "Contest.kt",
+   "path": "src/main/kotlin/Contest.kt",
+   "want": false
+  },
+  {
+   "name": "protest.js",
+   "path": "src/protest.js",
+   "want": false
+  },
+  {
+   "name": "attest.go",
+   "path": "src/attest.go",
+   "want": false
+  },
+  {
+   "name": "specification.js is not a spec dir",
+   "path": "src/specification.js",
+   "want": false
+  },
+  {
+   "name": "inspect dir",
+   "path": "src/inspect/x.js",
+   "want": false
+  },
+  {
+   "name": "mockups dir",
+   "path": "src/mockups/x.js",
+   "want": false
+  },
+  {
+   "name": "mocked.js",
+   "path": "src/mocked.js",
+   "want": false
+  },
+  {
+   "name": "mock-server.js",
+   "path": "lib/mock-server.js",
+   "want": false
+  },
+  {
+   "name": "e2e-helpers.js is not an e2e dir",
+   "path": "src/e2e-helpers.js",
+   "want": false
+  },
+  {
+   "name": "a.testing.js",
+   "path": "src/a.testing.js",
+   "want": false
+  },
+  {
+   "name": "notatest.js",
+   "path": "src/notatest.js",
+   "want": false
+  },
+  {
+   "name": "spec-parser.js",
+   "path": "lib/spec-parser.js",
+   "want": false
+  },
+  {
+   "name": "specs-extra dir",
+   "path": "pkg/specs-extra/a.js",
+   "want": false
+  },
+  {
+   "name": "cypress.config.ts",
+   "path": "cypress.config.ts",
+   "want": false
+  },
+  {
+   "name": "playwright.config.ts",
+   "path": "playwright.config.ts",
+   "want": false
+  },
+  {
+   "name": "testdatabase dir",
+   "path": "src/testdatabase/a.go",
+   "want": false
+  },
+  {
+   "name": "testutility.js",
+   "path": "src/testutility.js",
+   "want": false
+  },
+  {
+   "name": "testutility dir",
+   "path": "src/testutility/a.js",
+   "want": false
+  },
+  {
+   "name": "main.go",
+   "path": "src/main.go",
+   "want": false
+  },
+  {
+   "name": "server.rb",
+   "path": "src/server.rb",
+   "want": false
+  },
+  {
+   "name": "app.js",
+   "path": "src/app.js",
+   "want": false
+  },
+  {
+   "name": "fixturesque dir",
+   "path": "src/fixturesque/a.js",
+   "want": false
+  },
+  {
+   "name": "README",
+   "path": "README.md",
+   "want": false
+  },
+  {
+   "name": "login.js with test in the middle",
+   "path": "src/login.test-helper.js",
+   "want": false
+  },
+  {
+   "name": "_tests.go is not _test.go",
+   "path": "pkg/a_tests.go",
+   "want": false
+  },
+  {
+   "name": "_spec.rb prefix",
+   "path": "lib/spec_helper_extra.rb",
+   "want": false
+  }
+ ]
+}

@@ -41,6 +41,7 @@ package textscan
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -53,6 +54,7 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/gitdiff"
 	"github.com/Fendix-app/Fendix/go/internal/models"
 	"github.com/Fendix-app/Fendix/go/internal/scanner/secrets"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // Rule describes one SAST pattern. A file matches a rule when its
@@ -66,7 +68,14 @@ type Rule struct {
 	CWE        string
 	Pattern    *regexp.Regexp
 	NegPattern *regexp.Regexp // optional: line must NOT also match
-	Fix        string
+	// NegException lifts NegPattern: a line that matches it is kept even when
+	// it also matches NegPattern. RE2 has no look-behind, so "`.exec(` that is
+	// not `child_process.exec(`" is written as the two patterns.
+	NegException *regexp.Regexp
+	// FileGuard, when set, restricts the rule to files whose content matches
+	// it (JS_CHILD_PROCESS_SHELL: only a file that imports child_process).
+	FileGuard *regexp.Regexp
+	Fix       string
 	// RedactMatch replaces every Pattern match inside the emitted evidence
 	// snippet with the shared secrets marker. Set it on any rule whose
 	// Pattern matches CREDENTIAL MATERIAL itself — without it the raw source
@@ -78,6 +87,12 @@ type Rule struct {
 	// matches an md5/sha1 CALL, not a credential, and blanking that would
 	// destroy the only useful part of its evidence.
 	RedactMatch bool
+	// ConstArgSafe drops a match whose interpolated values are all
+	// file-level constant strings (see interpolatedIdentsAreFileConstants):
+	// `db.Query(fmt.Sprintf("... FROM %s", usersTable))` with
+	// `const usersTable = "users"` cannot carry user input. Set it on the
+	// injection rules whose Pattern fires on any `+` or Sprintf.
+	ConstArgSafe bool
 	// Applies returns true when path falls under this rule's
 	// language-extension set.
 	Applies func(path string) bool
@@ -100,6 +115,33 @@ func Scan(rootDir string, rules []Rule) ([]evidence.Evidence, error) {
 // skip-dir pruning still happens) but non-allowlisted files are skipped
 // before they are read, keeping diff scans sub-second on large trees.
 func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) ([]evidence.Evidence, error) {
+	findings, _, err := ScanCoverage(context.Background(), rootDir, rules, allow)
+	return findings, err
+}
+
+// ScanCoverage is ScanWithAllowlist that also returns what the scan left
+// unread (decision D6). A file one of the rules applies to that was over the
+// size cap, could not be read, or is not text (a NUL byte in its first 512
+// bytes), and a directory the walk could not list, are lost evaluation: the
+// caller records the scan a coverage gap naming them and keeps the findings.
+// A declared generated artifact (scope.Generated) left unread and a pruned
+// vendored or build-output directory are declared out of scope, listed only.
+//
+// The scan honours ctx (R5-19, gate G2.5): it checks the context before every
+// directory entry and every allowlisted file, so the overrun past a
+// --max-duration deadline is at most one entry's work (a file is at most 1 MiB).
+// When ctx ends the scan stops and returns what it found so far, what it had
+// left unread so far, and the context's error (wrapped, so errors.Is sees
+// context.DeadlineExceeded and the caller records the analyzer failed/timeout):
+// a finding made before the deadline is real and is never dropped with the
+// error.
+func ScanCoverage(ctx context.Context, rootDir string, rules []Rule, allow *gitdiff.Allowlist) ([]evidence.Evidence, scope.Coverage, error) {
+	var cov scope.Coverage
+	findings, err := scanTree(ctx, rootDir, rules, allow, &cov)
+	return findings, cov, err
+}
+
+func scanTree(ctx context.Context, rootDir string, rules []Rule, allow *gitdiff.Allowlist, cov *scope.Coverage) ([]evidence.Evidence, error) {
 	var findings []evidence.Evidence
 
 	if rootDir == "" {
@@ -131,22 +173,50 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 		if err != nil {
 			return nil, fmt.Errorf("textscan: resolve %s: %w", rootDir, err)
 		}
+		noted := map[string]bool{}
 		for _, path := range allow.AbsPaths() {
+			if err := ctx.Err(); err != nil {
+				return findings, fmt.Errorf("textscan: stopped before the scan finished: %w", err)
+			}
 			info, err := os.Lstat(path)
-			if err != nil || info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
+			if err != nil || info.IsDir() {
 				continue
 			}
-			if underSkipDir(absRoot, path) || gitdiff.TraversesSymlink(absRoot, path) {
+			if info.Mode()&fs.ModeSymlink != 0 {
+				secrets.NoteRefusedSymlink(cov, absRoot, path, func(base string) bool { return hasApplicableRule(base, rules) })
 				continue
 			}
-			findings = append(findings, scanCandidate(absRoot, path, fs.FileInfoToDirEntry(info), rules)...)
+			if secrets.NotePrunedAncestor(cov, noted, absRoot, path) != "" || gitdiff.TraversesSymlink(absRoot, path) {
+				continue
+			}
+			findings = append(findings, scanCandidate(absRoot, path, fs.FileInfoToDirEntry(info), rules, cov)...)
 		}
 		return findings, nil
 	}
 
-	err := filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
+	// walkRoot, not filepath.WalkDir: a root that is itself a symlink is the
+	// scope the user chose, and WalkDir would report it as one symlink entry,
+	// which the check below drops, and walk nothing (redteam-secrets-01).
+	cleanRoot := filepath.Clean(rootDir)
+	err := walkRoot(rootDir, func(path string, d fs.DirEntry, walkErr error) error {
+		// Before every entry, the run's own deadline (R5-19).
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
-			return nil // skip unreadable entries; don't fail the walk
+			// Skip unreadable entries and keep walking, but a directory not
+			// listed, or a file a rule applies to, is in scope and was not
+			// read (security-01).
+			if filepath.Clean(path) != cleanRoot {
+				rel := pathRel(rootDir, path)
+				switch {
+				case d != nil && d.IsDir():
+					cov.Unreadable(secrets.LostName(rel) + "/")
+				case hasApplicableRule(path, rules):
+					cov.Unreadable(secrets.LostName(rel))
+				}
+			}
+			return nil
 		}
 		// Skip symlinks unconditionally — both file and directory
 		// symlinks. filepath.WalkDir does not follow symlinks (it uses
@@ -155,11 +225,29 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 		// to descend or read either way. Prevents loops and silent
 		// privilege boundary crossings (e.g. /tmp symlink to /etc).
 		if d.Type()&fs.ModeSymlink != 0 {
+			// A link that leaves the root is content that exists and was not
+			// read: named, not dropped (sre3-06).
+			if allow.Allows(path) {
+				if absRoot, err := filepath.Abs(rootDir); err == nil {
+					if abs, err := filepath.Abs(path); err == nil {
+						secrets.NoteRefusedSymlink(cov, absRoot, abs, func(base string) bool { return hasApplicableRule(base, rules) })
+					}
+				}
+			}
 			return nil
 		}
 		if d.IsDir() {
-			// Skip noisy build / vendor / VCS dirs.
-			if _, skip := textSkipDirs[d.Name()]; skip {
+			// Skip dependency, build-output and VCS dirs, but only on evidence
+			// in the directory itself (D6'), and never the root itself:
+			// `--code ./build` is the scope the user chose.
+			if filepath.Clean(path) == cleanRoot {
+				return nil
+			}
+			rel := pathRel(rootDir, path)
+			if reason, quiet := secrets.PrunedDir(path, rel); reason != "" {
+				if !quiet {
+					cov.Exclude(reason, secrets.SafeName(rel)+"/")
+				}
 				return filepath.SkipDir
 			}
 			return nil
@@ -169,31 +257,61 @@ func ScanWithAllowlist(rootDir string, rules []Rule, allow *gitdiff.Allowlist) (
 		if !allow.Allows(path) {
 			return nil
 		}
-		findings = append(findings, scanCandidate(rootDir, path, d, rules)...)
+		findings = append(findings, scanCandidate(rootDir, path, d, rules, cov)...)
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("walk %s: %w", rootDir, err)
+		// What was found before the walk stopped is kept (R5-19): the caller
+		// records the failure, and a finding made before it is still a finding.
+		return findings, fmt.Errorf("walk %s: %w", rootDir, err)
 	}
 	return findings, nil
 }
 
-// textSkipDirs are the build / vendor / VCS directories pruned from the scan.
-// Single-sourced so the full walk and the diff-aware fast path agree on what
-// to skip.
-var textSkipDirs = map[string]struct{}{
-	".git": {}, "node_modules": {}, "vendor": {}, "__pycache__": {},
-	".venv": {}, "build": {}, "dist": {}, ".pytest_cache": {},
-	".next": {}, ".nuxt": {}, ".svelte-kit": {}, ".cache": {}, "target": {},
+// walkRoot is filepath.WalkDir(root, fn) except that root itself is followed
+// when it is a symbolic link: the link is resolved once, the resolved directory
+// is walked, and every path is reported under root as the caller gave it, so
+// the allowlist and the reported endpoints are unchanged. Links inside the tree
+// are still never followed.
+func walkRoot(root string, fn fs.WalkDirFunc) error {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return filepath.WalkDir(root, fn)
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve the root link %s: %w", root, err)
+	}
+	return filepath.WalkDir(resolved, func(path string, d fs.DirEntry, err error) error {
+		rel, rerr := filepath.Rel(resolved, path)
+		if rerr != nil {
+			return rerr
+		}
+		return fn(filepath.Join(root, rel), d, err)
+	})
 }
 
-const textMaxFileBytes = 1 << 20 // 1 MiB
+const textMaxFileBytes = scope.MaxFileBytes // 1 MiB, shared by every Go analyzer (D6)
+
+// hasApplicableRule reports whether any rule applies to path.
+func hasApplicableRule(path string, rules []Rule) bool {
+	for i := range rules {
+		if rules[i].Applies != nil && rules[i].Applies(path) {
+			return true
+		}
+	}
+	return false
+}
 
 // scanCandidate runs the applicable rules against a single file that has
 // already passed the symlink / dir / allowlist gates. Shared by the full walk
 // and the diff-aware fast path so both apply identical rule-applicability,
 // size, and binary-sniff logic — no parity drift between the two code paths.
-func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule) []evidence.Evidence {
+//
+// A file a rule applies to that it does not read is recorded in cov (D6):
+// over the cap (declared out of scope when it is a generated artifact),
+// unreadable, or not text.
+func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule, cov *scope.Coverage) []evidence.Evidence {
 	applicable := make([]*Rule, 0, len(rules))
 	for i := range rules {
 		if rules[i].Applies != nil && rules[i].Applies(path) {
@@ -203,39 +321,49 @@ func scanCandidate(rootDir, path string, d fs.DirEntry, rules []Rule) []evidence
 	if len(applicable) == 0 {
 		return nil
 	}
+	rel := pathRel(rootDir, path)
 	info, err := d.Info()
-	if err != nil || info.Size() > textMaxFileBytes {
+	if err != nil {
+		cov.Unreadable(secrets.LostName(rel))
+		return nil
+	}
+	if info.Size() > textMaxFileBytes {
+		// Over the cap is lost evaluation whatever the file looks like
+		// (contract C6): a banner or a layout is not evidence that nothing in
+		// it matters.
+		cov.TooLarge(secrets.LostName(rel))
 		return nil
 	}
 	// Skip binary blobs. Reading PNGs/jars/sqlite line-by-line against every
 	// regex is CPU waste and produces false-positive AKIA hits in binary
 	// noise; sniff the first 512 bytes so the AWS-key et al. rules never run
-	// on non-text.
-	if looksBinary, _ := isBinaryFile(path); looksBinary {
+	// on non-text. A file a rule applies to that is skipped so is still a
+	// file of the scan's scope left unread.
+	looksBinary, err := isBinaryFile(path)
+	switch {
+	case err != nil:
+		cov.Unreadable(secrets.LostName(rel))
 		return nil
+	case looksBinary:
+		cov.NotText(secrets.LostName(rel))
+		return nil
+	}
+	// A unicode escape the language translates before it reads the program
+	// (an identifier spelled `\u0065val` in JavaScript or TypeScript, R6-E7a) is
+	// invisible to every pattern here: the file is lost evaluation, under the
+	// existing "unreadable" reason with the cause after its name. It is still
+	// scanned, and what it holds in clear is reported.
+	// A file that cannot be read for the check (swapped for a pipe, grown past the cap)
+	// is lost too: EscapeLostPath never answers "no escape" for a file it did not read.
+	if why, lost := scope.EscapeLostPath(rel, path, textMaxFileBytes); lost {
+		cov.Unreadable(secrets.LostName(rel) + " (" + why + ")")
 	}
 	got, err := scanFile(rootDir, path, applicable)
 	if err != nil {
-		return nil
+		// What was read is kept; the rest of the file is lost evaluation.
+		cov.Unreadable(secrets.LostName(rel))
 	}
 	return got
-}
-
-// underSkipDir reports whether any directory component of abs (relative to
-// root) is a pruned directory — preserving walk parity for the diff-aware
-// fast path (e.g. a committed vendor/ file the walk would never reach).
-func underSkipDir(root, abs string) bool {
-	rel, err := filepath.Rel(root, abs)
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for _, part := range parts[:len(parts)-1] { // dir components only, not the file
-		if _, skip := textSkipDirs[part]; skip {
-			return true
-		}
-	}
-	return false
 }
 
 // dockerfileUserRe matches a `USER <name>` directive. Package-level because
@@ -279,7 +407,7 @@ var dockerfileNumericRe = regexp.MustCompile(`^[0-9]+$`)
 // when the image actually drops privileges. Cheap whole-file pre-pass
 // so the per-line scan can stay stateless.
 func dockerfileHasUSER(path string) bool {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return false
 	}
@@ -311,7 +439,7 @@ func dockerfileHasUSER(path string) bool {
 // Returns nil (not an empty map) when the file declares no aliases, so the
 // caller can skip installing the predicate entirely.
 func dockerfileStageAliases(path string) map[string]struct{} {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return nil
 	}
@@ -407,7 +535,7 @@ func dockerfileRefIsPinned(ref string, aliases map[string]struct{}) bool {
 // rules. We use bufio.Scanner with a generous buffer to handle
 // auto-generated source files with long lines.
 func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return nil, err
 	}
@@ -459,6 +587,32 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20) // 1 MiB max line
 
+	// FileGuard rules are off for the whole file unless its content matches.
+	// The file is read only when such a rule is in play.
+	var content []byte
+	for _, r := range rules {
+		if r.FileGuard == nil {
+			continue
+		}
+		if content == nil {
+			content, _ = scope.ReadRegular(path, textMaxFileBytes)
+		}
+		if !r.FileGuard.Match(content) {
+			suppressRule[r.ID] = true
+		}
+	}
+
+	// File-level string constants, read lazily and once: only a line that
+	// already matched a ConstArgSafe rule needs them.
+	var fileConsts map[string]struct{}
+	constsOf := func() map[string]struct{} {
+		if fileConsts == nil {
+			src, _ := scope.ReadRegular(path, textMaxFileBytes)
+			fileConsts = fileStringConstants(src, langOf(path))
+		}
+		return fileConsts
+	}
+
 	var findings []evidence.Evidence
 	lineNo := 0
 	for sc.Scan() {
@@ -474,8 +628,16 @@ func scanFile(rootDir, path string, rules []*Rule) ([]evidence.Evidence, error) 
 			if !r.Pattern.MatchString(line) {
 				continue
 			}
-			if r.NegPattern != nil && r.NegPattern.MatchString(line) {
+			if r.NegPattern != nil && r.NegPattern.MatchString(line) &&
+				(r.NegException == nil || !r.NegException.MatchString(line)) {
 				continue
+			}
+			if r.ConstArgSafe {
+				// The call as the rule matched it: from the match start, so
+				// a statement prefix (`rows, err := `) is not an argument.
+				if loc := r.Pattern.FindStringIndex(line); loc != nil && callArgsAreConstants(line[loc[0]:], constsOf()) {
+					continue
+				}
 			}
 			// Per-line suppression runs LAST, after Pattern and NegPattern,
 			// so its cost is only paid on a line that already matched.
@@ -524,41 +686,54 @@ func pathRel(rootDir, path string) string {
 	return filepath.ToSlash(path)
 }
 
-// HasGoExtension is a small exported helper used by Applies funcs.
-func HasGoExtension(path string) bool {
-	return strings.HasSuffix(path, ".go")
-}
+// Extension matching is case-insensitive (APP.JS, Server.GO and Config.YAML are
+// source) and the JavaScript/TypeScript set is complete: the same extensions the
+// Semgrep target planner treats as JavaScript or TypeScript source, including
+// .mts, .cts, .es6 and .vue (C4B-26). Before round 5 the match was
+// case-sensitive and missed those, so `eval` in an .es6 file was reported by no
+// analyzer.
 
-// HasJSExtension reports JavaScript / TypeScript files.
-func HasJSExtension(path string) bool {
-	for _, ext := range []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"} {
-		if strings.HasSuffix(path, ext) {
+// hasAnySuffixFold reports whether path ends with one of exts, ignoring case.
+func hasAnySuffixFold(path string, exts ...string) bool {
+	lower := strings.ToLower(path)
+	for _, ext := range exts {
+		if strings.HasSuffix(lower, ext) {
 			return true
 		}
 	}
 	return false
 }
 
+// HasGoExtension is a small exported helper used by Applies funcs.
+func HasGoExtension(path string) bool {
+	return hasAnySuffixFold(path, ".go")
+}
+
+// jsExtensions are the JavaScript and TypeScript source extensions.
+var jsExtensions = []string{".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".es6", ".vue"}
+
+// HasJSExtension reports JavaScript / TypeScript files.
+func HasJSExtension(path string) bool {
+	return hasAnySuffixFold(path, jsExtensions...)
+}
+
 // HasJavaExtension reports Java source files (v0.27 Java regex SAST).
 func HasJavaExtension(path string) bool {
-	return strings.HasSuffix(path, ".java")
+	return hasAnySuffixFold(path, ".java")
 }
 
 // IsDockerfile reports paths the Dockerfile rules apply to.
-// Matches `Dockerfile`, `Dockerfile.<anything>`, and `*.dockerfile`.
+// Matches `Dockerfile`, `Dockerfile.<anything>` and `*.dockerfile`, in any case.
 func IsDockerfile(path string) bool {
-	base := filepath.Base(path)
-	if base == "Dockerfile" || strings.HasPrefix(base, "Dockerfile.") {
-		return true
-	}
-	return strings.HasSuffix(strings.ToLower(base), ".dockerfile")
+	base := strings.ToLower(filepath.Base(path))
+	return base == "dockerfile" || strings.HasPrefix(base, "dockerfile.") || strings.HasSuffix(base, ".dockerfile")
 }
 
 // IsYAML reports paths with a YAML extension. Caller (the k8s rule)
 // is responsible for checking content shape (`apiVersion:` + `kind:`)
 // before flagging anything.
 func IsYAML(path string) bool {
-	return strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")
+	return hasAnySuffixFold(path, ".yaml", ".yml")
 }
 
 // isBinaryFile sniffs the first 512 bytes of path and reports whether
@@ -568,7 +743,7 @@ func IsYAML(path string) bool {
 // (false, nil) when the file can't be opened — the caller will then
 // try to scan it (and probably fail similarly), which is fine.
 func isBinaryFile(path string) (bool, error) {
-	f, err := os.Open(path)
+	f, err := scope.OpenRegular(path)
 	if err != nil {
 		return false, err
 	}

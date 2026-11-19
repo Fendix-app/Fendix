@@ -33,6 +33,7 @@ import (
 	"github.com/Fendix-app/Fendix/go/internal/scanner/secrets"
 	"github.com/Fendix-app/Fendix/go/internal/scanner/semgrep"
 	"github.com/Fendix-app/Fendix/go/internal/scanner/textscan"
+	"github.com/Fendix-app/Fendix/go/internal/scope"
 )
 
 // Orchestrator coordinates the full scan lifecycle:
@@ -58,6 +59,10 @@ type Orchestrator struct {
 	// analyzer; nothing else reads it, and an analyzer the engine does not
 	// time simply reports 0.
 	analyzerTimings map[string]time.Duration
+	// codeRoot is the directory the code analyzers scan: --code, or what it
+	// resolves to when --code is itself a symbolic link. Set by Run once
+	// --code is validated; "" before that.
+	codeRoot string
 	// metrics is the opt-in product-metrics collector (v0.20). It is a
 	// NoopCollector unless FENDIX_METRICS is set, so the scan path pays
 	// nothing when metrics are disabled. nil only when an Orchestrator is
@@ -171,6 +176,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// don't include leftovers from a previous run in the same process
 	// (long-running tests, future server mode).
 	scanner.ResetGlobalAuditLog()
+	// --verbose writes every per-probe line; otherwise they stop at a byte
+	// budget and one exact line counts the rest (OR-28).
+	scanner.GlobalProbeLog().SetVerbose(o.cfg.Verbose)
 
 	// --debug-bundle wiring (TASK-102). Setup is a no-op when disabled.
 	// When enabled, install a slog tee that captures DEBUG-and-above
@@ -214,6 +222,10 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	}
 	ctx, cancelBudget := context.WithCancel(ctx)
 	defer cancelBudget()
+	// The probe audit log attributes an expired probe context to the engine's
+	// own deadline or cancellation only when it knows which context is the
+	// scan's.
+	scanner.SetScanContext(ctx)
 	defer budget.SetCancelFunc(nil) // unregister on Run return
 
 	// 1. Discover endpoints. A hard discovery failure and a zero-endpoint
@@ -285,13 +297,18 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	// ScanMetadata.ScannerStatus, a scan-end summary line, the SARIF
 	// invocations[].executionSuccessful flag, and (opt-in) the exit code.
 	var scanStatus scannerStatusList
+	// scopeNotes collects the complete lists of what the code analyzers
+	// excluded, lost or suppressed, for metadata.coverage.limitations (see
+	// capLimitations).
+	var scopeNotes []string
 
 	// The black-box entries describe what the check pass did, not what was
 	// configured: budget.Stats() covers the check phase because Reset() ran
 	// after discovery, and the probe audit log holds every active probe sent.
 	_, rejected := budget.Stats()
-	recordBlackbox(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr,
-		summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), rejected))
+	scanner.GlobalProbeLog().Flush()
+	probePhase := summarizeCheckPhase(ctx, scanner.GlobalAuditRecords(), rejected)
+	recordBlackbox(&scanStatus, o.cfg, len(endpoints), discoveryErr, crawler.SpecErr, probePhase)
 
 	// Validate --code once. An unreadable path is an input error for every
 	// code analyzer (spec §4.4), recorded identically so a consumer sees one
@@ -313,6 +330,18 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		}
 	}
 	codeUsable := codeConfigured && codeErr == nil
+
+	// The directory every code analyzer scans: --code, or the directory it
+	// resolves to when --code is itself a symbolic link. Resolved once, here,
+	// so every analyzer and the diff allowlist agree on the root (Semgrep
+	// does not follow a linked scanning root, and a WalkDir does not descend
+	// one). Links below the root are never followed. The report still names
+	// --code as given.
+	codeRoot := o.cfg.CodePath
+	if codeUsable {
+		codeRoot = resolveCodeRoot(o.cfg.CodePath)
+	}
+	o.codeRoot = codeRoot
 
 	// --offline (F-M4/F-H4): load the air-gapped snapshot once. In offline
 	// mode the orchestrator MUST NOT make any outbound call — pip/npm
@@ -346,7 +375,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	var allow *gitdiff.Allowlist
 	if o.cfg.Diff && o.cfg.CodePath != "" {
 		changed, derr := gitdiff.ChangedFiles(ctx, gitdiff.Options{
-			RepoRoot: o.cfg.CodePath,
+			RepoRoot: codeRoot,
 			Ref:      o.cfg.DiffRef,
 			Staged:   o.cfg.DiffStaged,
 		})
@@ -359,8 +388,8 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			// repository root, whose paths git reports from the top), the
 			// scope cannot be trusted. Widen to a full scan; never hand the
 			// scanners a filter that matches nothing.
-			scoped := gitdiff.NewAllowlist(o.cfg.CodePath, changed)
-			if serr := scoped.CheckScope(o.cfg.CodePath); serr != nil {
+			scoped := gitdiff.NewAllowlist(codeRoot, changed)
+			if serr := scoped.CheckScope(codeRoot); serr != nil {
 				slog.Warn("diff-aware scan: file scope could not be represented safely — falling back to full scan",
 					"error", serr, "ref", o.cfg.DiffRef, "staged", o.cfg.DiffStaged)
 			} else {
@@ -436,7 +465,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		} else {
 			started := time.Now()
 			nativeFindings, attempts, err := retryTransient(ctx, AnalyzerGovulncheck, func() ([]evidence.Evidence, error) {
-				return govulncheck.Scan(ctx, o.cfg.CodePath)
+				return govulncheck.Scan(ctx, codeRoot)
 			})
 			o.recordAnalyzerTime(AnalyzerGovulncheck, started)
 			switch {
@@ -484,7 +513,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			scanStatus.skip(AnalyzerPip, reporters.ReasonDependencyMissing, "--offline: no usable snapshot at "+dbPathForLog(o.cfg))
 		case o.cfg.Offline:
 			slog.Debug("native pypi dep-CVE scan starting", "mode", "offline snapshot")
-			pipFindings, pipErr = pip.ScanOffline(o.cfg.CodePath, pip.DefaultRecurseDepth, offlineSnap)
+			pipFindings, pipErr = pip.ScanOffline(codeRoot, pip.DefaultRecurseDepth, offlineSnap)
 			o.recordDepScanResult(&scanStatus, "pip", "native pypi deps scan", &evid, pipFindings, pipErr)
 		default:
 			pipMode := "OSV.dev"
@@ -495,7 +524,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			var attempts int
 			started := time.Now()
 			pipFindings, attempts, pipErr = retryTransient(ctx, AnalyzerPip, func() ([]evidence.Evidence, error) {
-				return pip.ScanRecursiveWithOptions(ctx, o.cfg.CodePath, pip.DefaultRecurseDepth, pip.Options{UsePipAudit: o.cfg.UsePipAudit})
+				return pip.ScanRecursiveWithOptions(ctx, codeRoot, pip.DefaultRecurseDepth, pip.Options{UsePipAudit: o.cfg.UsePipAudit})
 			})
 			o.recordAnalyzerTime(AnalyzerPip, started)
 			o.recordDepScanResult(&scanStatus, AnalyzerPip, "native pypi deps scan", &evid, pipFindings, pipErr)
@@ -518,13 +547,13 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			slog.Warn("offline mode: skipping native npm deps scan (no usable snapshot)")
 			scanStatus.skip(AnalyzerNpm, reporters.ReasonDependencyMissing, "--offline: no usable snapshot at "+dbPathForLog(o.cfg))
 		case o.cfg.Offline:
-			npmFindings, npmErr = npm.ScanOffline(o.cfg.CodePath, offlineSnap)
+			npmFindings, npmErr = npm.ScanOffline(codeRoot, offlineSnap)
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
 		default:
 			var attempts int
 			started := time.Now()
 			npmFindings, attempts, npmErr = retryTransient(ctx, AnalyzerNpm, func() ([]evidence.Evidence, error) {
-				return npm.Scan(ctx, o.cfg.CodePath)
+				return npm.Scan(ctx, codeRoot)
 			})
 			o.recordAnalyzerTime(AnalyzerNpm, started)
 			evid = o.recordNpmScanResult(&scanStatus, &evid, npmFindings, npmErr)
@@ -553,7 +582,7 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		// recorded diff_unchanged above
 	default:
 		started := time.Now()
-		secretEvidence, err := secrets.ScanWithAllowlist(ctx, o.cfg.CodePath, allow)
+		secretEvidence, secretCov, err := secrets.ScanCoverage(ctx, codeRoot, allow)
 		o.recordAnalyzerTime(AnalyzerSecrets, started)
 		switch {
 		case err == nil:
@@ -562,7 +591,8 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			// accumulator boundary (provenance threads through once the
 			// accumulator itself is flipped to Evidence in a later batch).
 			evid = append(evid, secretEvidence...)
-			scanStatus.ok("secrets")
+			recordFileCoverage(&scanStatus, AnalyzerSecrets, secretCov)
+			scopeNotes = append(scopeNotes, secretCov.Limitations(AnalyzerSecrets)...)
 		case errors.Is(err, secrets.ErrCodePathMissing):
 			slog.Debug("code path missing — skipping native secrets scan")
 			scanStatus.fail(AnalyzerSecrets, reporters.ReasonInputError, err)
@@ -595,20 +625,18 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		// recorded diff_unchanged above
 	default:
 		started := time.Now()
-		semgrepFindings, semgrepReport, err := semgrep.ScanWithReport(ctx, o.cfg.CodePath, allow)
+		semgrepRun, err := semgrep.ScanRunWithOptions(ctx, codeRoot, allow, semgrep.Options{
+			Jobs:         o.cfg.SemgrepJobs,
+			MaxMemoryMiB: o.cfg.SemgrepMaxMemoryMiB,
+			Wall:         o.cfg.SemgrepWallBudget,
+		})
 		o.recordAnalyzerTime(AnalyzerSemgrep, started)
+		scopeNotes = append(scopeNotes, semgrepBudgetNotes(semgrepRun)...)
 		switch {
 		case err == nil:
-			slog.Info("native semgrep scan complete", "findings", len(semgrepFindings))
-			evid = append(evid, semgrepFindings...)
-			// Per-file problems Semgrep reports as non-fatal (a file that
-			// did not fully parse, a per-file timeout) leave the run ok,
-			// counted in the detail so they are not invisible.
-			if detail := semgrepReport.Summary(); detail != "" {
-				scanStatus.okDetail(AnalyzerSemgrep, detail)
-			} else {
-				scanStatus.ok("semgrep")
-			}
+			slog.Info("native semgrep scan complete", "findings", len(semgrepRun.Findings), "rule_timeouts", len(semgrepRun.Timeouts))
+			recordSemgrepRun(&scanStatus, &evid, semgrepRun)
+			scopeNotes = append(scopeNotes, semgrepLimitations(semgrepRun)...)
 		case errors.Is(err, semgrep.ErrSemgrepUnavailable):
 			slog.Info("semgrep not installed — skipping (install with: pip install semgrep)")
 			scanStatus.skip(AnalyzerSemgrep, reporters.ReasonDependencyMissing, "semgrep binary not installed")
@@ -619,8 +647,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			// A fatal run (semgrep.ErrFatal) still returns the findings
 			// Semgrep printed before it failed. They are real, so they are
 			// kept; the run is recorded failed, never ok.
-			evid = append(evid, semgrepFindings...)
-			slog.Warn("native semgrep scan failed", "error", err, "partial_findings", len(semgrepFindings))
+			evid = append(evid, semgrepRun.Findings...)
+			scopeNotes = append(scopeNotes, semgrepLimitations(semgrepRun)...)
+			slog.Warn("native semgrep scan failed", "error", err, "partial_findings", len(semgrepRun.Findings))
 			scanStatus.fail(AnalyzerSemgrep, classifyErr(err), err)
 		}
 	}
@@ -642,18 +671,31 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		// recorded diff_unchanged above
 	default:
 		started := time.Now()
-		textFindings, err := textscan.ScanWithAllowlist(o.cfg.CodePath, textscan.AllRules(), allow)
+		// textscan honours the run's deadline to the entry, so a run whose
+		// budget an earlier stage spent would give it nothing: it is given a
+		// small floor, then stops (R5-19; see textscanFloor).
+		textCtx, stopText := withStageFloor(ctx, textscanFloor)
+		textFindings, textCov, err := textscan.ScanCoverage(textCtx, codeRoot, textscan.AllRules(), allow)
+		stopText()
 		o.recordAnalyzerTime(AnalyzerTextscan, started)
 		switch {
 		case err != nil:
-			slog.Warn("native textscan failed", "error", err)
+			// R5-19: textscan now honours --max-duration, and a scan that stops
+			// (the deadline, or any other error mid-walk) returns what it found
+			// first. Those findings are real, so they are kept; the run is
+			// recorded failed, never ok, and what it left unread so far is
+			// still listed.
+			slog.Warn("native textscan failed", "error", err, "partial_findings", len(textFindings))
+			evid = append(evid, textFindings...)
+			scopeNotes = append(scopeNotes, textCov.Limitations(AnalyzerTextscan)...)
 			scanStatus.fail(AnalyzerTextscan, classifyErr(err), err)
 		default:
 			if len(textFindings) > 0 {
 				slog.Info("native textscan complete", "findings", len(textFindings))
 				evid = append(evid, textFindings...)
 			}
-			scanStatus.ok("textscan")
+			recordFileCoverage(&scanStatus, AnalyzerTextscan, textCov)
+			scopeNotes = append(scopeNotes, textCov.Limitations(AnalyzerTextscan)...)
 		}
 	}
 
@@ -685,8 +727,12 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 			started := time.Now()
 			wbFindings, result := o.runWhiteboxScan(ctx)
 			o.recordAnalyzerTime(AnalyzerPythonEngine, started)
+			// The engine's JavaScript pattern checks only fall back for a scan
+			// that has no Semgrep; a Semgrep run that succeeded already covered
+			// JavaScript (D4).
+			wbFindings = dropFallbackJSPatterns(wbFindings, scanStatus)
 			evid = append(evid, wbFindings...)
-			recordPythonEngine(&scanStatus, result)
+			scopeNotes = append(scopeNotes, recordPythonEngine(&scanStatus, result)...)
 		}
 	}
 
@@ -760,6 +806,17 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 	scanStatus = scanStatus.sorted()
 	strict := o.cfg.FailOnCoverageGap || len(o.cfg.RequiredAnalyzers) > 0
 	cov := reporters.BuildCoverage([]reporters.ScannerStatus(scanStatus), o.cfg.RequiredAnalyzers, strict)
+	// The complete lists behind the scanner-status details (decisions D6', D1',
+	// contracts C1 and C2): what each analyzer excluded, lost or suppressed, named
+	// in full, in the existing limitations list.
+	cov.Limitations = append(cov.Limitations, capLimitations(scopeNotes, maxLimitations)...)
+	// Active-probe evaluation coverage rides beside the scan-wide verdict: a
+	// complete scan is not proof that every probe was evaluated.
+	if o.cfg.EnableActive {
+		ap := probePhase.Probes
+		ap.CutShort = cutShortOf(o.cfg, probePhase)
+		cov.ActiveProbes = &ap
+	}
 
 	meta := reporters.ScanMetadata{
 		Target:    o.cfg.URL,
@@ -782,6 +839,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		PolicyVersion:        decision.PolicyVersion,
 		Imports:              importedTools,
 	}
+	// R5-09: a SARIF producer's failed or partial run is a gap of its own, so
+	// `scan --import` never reads configured_complete over a run that did not finish.
+	addImportGaps(meta.Coverage, importedTools)
 
 	// Steps 5.2–12 (cross-tool correlation → escalate → collapse → dedup →
 	// consistency → sort → IDs/fingerprints → ignore → baseline →
@@ -851,9 +911,9 @@ func (o *Orchestrator) Run(ctx context.Context) int {
 		return 2
 	}
 
-	if o.cfg.FailOnCoverageGap && !cov.ConfiguredComplete {
-		slog.Error("coverage gap recorded and --fail-on-coverage-gap set — exiting non-zero", "gaps", strings.Join(cov.Gaps, ","))
-		fmt.Fprintf(os.Stderr, "fendix: coverage incomplete and --fail-on-coverage-gap is set: %s\n", describeGaps(scanStatus, cov.Gaps))
+	if o.cfg.FailOnCoverageGap && !meta.Coverage.ConfiguredComplete {
+		slog.Error("coverage gap recorded and --fail-on-coverage-gap set — exiting non-zero", "gaps", strings.Join(meta.Coverage.Gaps, ","))
+		fmt.Fprintf(os.Stderr, "fendix: coverage incomplete and --fail-on-coverage-gap is set: %s\n", describeAllGaps(scanStatus, meta.Coverage.Gaps, importedTools))
 		return 2
 	}
 	if len(cov.RequiredGaps) > 0 {
@@ -933,7 +993,13 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// on Title — so two engines describing one sink in different words never
 	// merged and the user saw the same vulnerability two or three times. Runs
 	// before Deduplicate, while each finding is still one (endpoint, title).
-	findings = CollapseDuplicateLocations(findings)
+	findings = collapseDuplicateLocations(findings, func(rep, member models.Finding) {
+		// Two findings that read a credential: the folded finding is graded on what
+		// they earn together. A Semgrep finding judges nothing about the value.
+		if isNativeSecret(rep) && isNativeSecret(member) {
+			prov.FoldMember(rep, member)
+		}
+	})
 
 	// 5.5. Occurrence identity, BEFORE any grouping.
 	//
@@ -964,9 +1030,13 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// unsuppressed occurrence set, exactly as they always have, so an `id:`
 	// ignore rule written from a report keeps naming the same group. Each
 	// occurrence carries the ID of the group it would be presented in.
-	groupIDs := presentationGroupIDs(occurrences)
+	//
+	// Occurrences are grouped by their own evidence: the finding's fields and the
+	// flags only the producer knows (prov.OccurrenceClass), so a fixture-shaped
+	// or synthetic occurrence never shares a finding with a stronger one (C1-1).
+	groupIDs := presentationGroupIDs(occurrences, prov.OccurrenceClass)
 	for i := range occurrences {
-		occurrences[i].ID = groupIDs[dedupKey(occurrences[i])].id
+		occurrences[i].ID = groupIDs[dedupKeyWith(occurrences[i], prov.OccurrenceClass)].id
 	}
 
 	// 7. Apply ignore rules from .fendix-ignore, per OCCURRENCE. A path-scoped
@@ -1013,7 +1083,7 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// survivors are grouped, the primary endpoint, evidence, secret metadata,
 	// affected endpoints, occurrence list and scoring provenance all describe
 	// actionable occurrences; none can point at a suppressed one.
-	findings = regroupOccurrences(occurrences, groupIDs)
+	findings = regroupOccurrences(occurrences, groupIDs, prov.OccurrenceClass)
 
 	// 9.5. Enforce severity↔confidence consistency (TASK-092). LOW confidence
 	// caps severity at MEDIUM; MEDIUM confidence caps at HIGH. Mismatched
@@ -1165,7 +1235,7 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 		Version:              reportVersion(o.version),
 		Mode:                 "import",
 		Imports:              importedTools,
-		Coverage:             func() *reporters.Coverage { c := reporters.BuildCoverage(nil, nil, false); return &c }(),
+		Coverage:             importCoverage(importedTools),
 		PolicyVersion:        decision.PolicyVersion,
 	}
 
@@ -1173,7 +1243,30 @@ func (o *Orchestrator) RunImport(ctx context.Context) int {
 	if ec != 0 {
 		return ec
 	}
+	// R5-09 (decision D6): a producer's failed or partial run is incomplete
+	// coverage. Under a gate (--fail-on, --fail-on-coverage-gap) a run nobody
+	// finished cannot pass, so the import exits 2, and that coverage exit takes
+	// precedence over the findings exit 1, as it does in Run (OR-11).
+	if why := describeImportGaps(importedTools); why != "" {
+		fmt.Fprintf(os.Stderr, "fendix: the imported run is incomplete: %s\n", why)
+		if o.cfg.FailOn != "" || o.cfg.FailOnCoverageGap {
+			fmt.Fprintln(os.Stderr, "fendix: a gate was requested and the coverage is not complete — exiting 2")
+			return 2
+		}
+	}
 	return decision.ExitCode(decisions)
+}
+
+// importCoverage is the coverage block of an import-only report. The engine
+// scanned nothing, so there is no analyzer to be incomplete; what it can say is
+// what a producer reported about its own run, which a reader of the findings
+// should not have to open the per-tool block to find: a run its producer marked
+// failed, or one that raised error notifications (a partial run), is listed as a
+// limitation (verification pass 1: R5DB5-01, redteam5-02).
+func importCoverage(tools []reporters.ImportedTool) *reporters.Coverage {
+	c := reporters.BuildCoverage(nil, nil, false)
+	addImportGaps(&c, tools)
+	return &c
 }
 
 // loadImports reads, parses and normalizes every configured SARIF file.
@@ -1213,7 +1306,15 @@ func loadImports(paths []string) ([]evidence.Evidence, []reporters.ImportedTool,
 				cur = &reporters.ImportedTool{Tool: t.Tool, Version: t.Version}
 				byTool[t.Tool] = cur
 				order = append(order, t.Tool)
-			} else if cur.Version != t.Version {
+			}
+			// The producer's own account of each run folds fail-closed across
+			// files: one failed run fails the tool, one that records nothing
+			// leaves the tool's record empty.
+			rec := sarifimport.FoldRecord(
+				sarifimport.RunRecord{ExecutionSuccessful: cur.ExecutionSuccessful, ErrorNotifications: cur.ErrorNotifications, AnalyzedPaths: cur.AnalyzedPaths},
+				t.Record(), !seen)
+			cur.ExecutionSuccessful, cur.ErrorNotifications, cur.AnalyzedPaths = rec.ExecutionSuccessful, rec.ErrorNotifications, rec.AnalyzedPaths
+			if seen && cur.Version != t.Version {
 				// Same tool, different versions across files — the tool name
 				// carries the provenance, so drop the ambiguous version.
 				cur.Version = ""
@@ -1418,6 +1519,49 @@ func recordPlugins(status *scannerStatusList, cfg *models.ScanConfig, outcome pl
 	}
 }
 
+// firstNonEmptyString is the first of values that is not "".
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// resolveCodeRoot is root, or the directory it resolves to when root itself
+// is a symbolic link (see the code phase of Run).
+func resolveCodeRoot(root string) string {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return root
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return root
+	}
+	return resolved
+}
+
+// recordFileCoverage records a file-walking analyzer (secrets, textscan) that
+// ran to the end (decision D6): failed/execution_error naming the in-scope
+// files it left unread, when there are any (its findings are already kept);
+// otherwise ok, with the files and directories declared out of scope listed
+// in the detail.
+func recordFileCoverage(status *scannerStatusList, name string, cov scope.Coverage) {
+	switch {
+	case cov.Lost():
+		slog.Warn(name+": in-scope files were not read; the analyzer is a coverage gap", "files", cov.LostFiles())
+		// Loss first, then what was declared out of scope (contract C2): the
+		// declared exclusions are listed beside the loss, never dropped for it.
+		status.failDetail(name, reporters.ReasonExecutionError, scope.Compose(detailMax, cov.LostSeg(), cov.DeclaredSeg()))
+	case cov.Declared():
+		status.okDetail(name, cov.DeclaredDetail(detailMax))
+	default:
+		status.ok(name)
+	}
+}
+
 // validateCodePath reports why --code cannot be scanned: missing, not a
 // directory, or unreadable. nil means every code analyzer may walk it.
 func (o *Orchestrator) validateCodePath() error {
@@ -1434,33 +1578,44 @@ func (o *Orchestrator) validateCodePath() error {
 	return nil
 }
 
-// checkPhaseOutcome is what the black-box check pass observably did: how
-// many active probes were sent, how many got no HTTP response at all, how
-// many requests the --max-requests budget refused, and whether the
-// --max-duration deadline cut the pass short.
+// checkPhaseOutcome is what the black-box check pass observably did: the
+// account of every active probe sent (attempted, evaluated, inconclusive,
+// unknown-origin, scanner-failed), how many requests the --max-requests budget
+// refused, and whether the --max-duration deadline cut the pass short.
 type checkPhaseOutcome struct {
-	Attempted  int
-	NoResponse int
-	Rejected   int64
-	Deadline   bool
+	Attempted int
+	Probes    models.ActiveProbeCoverage
+	Rejected  int64
+	Deadline  bool
 }
 
 // summarizeCheckPhase derives the outcome from the probe audit log (every
-// active check records each probe it sends; Status 0 means no HTTP response
-// came back), the budget counters, and the context.
+// active check records each probe it sends, with the evidence that says whether
+// it was evaluated or who is at fault when it was not), the budget counters,
+// and the context.
 func summarizeCheckPhase(ctx context.Context, records []scanner.ProbeRecord, rejected int64) checkPhaseOutcome {
-	out := checkPhaseOutcome{Attempted: len(records), Rejected: rejected, Deadline: errors.Is(ctx.Err(), context.DeadlineExceeded)}
-	for _, r := range records {
-		if r.Status == 0 {
-			out.NoResponse++
-		}
+	// The scan-wide log keeps a bounded prefix of its records, each clipped to a
+	// bounded size (OR-13); when the records given are the log's own, the account
+	// comes from its exact streaming ledger, which saw every probe whole, never
+	// from counting a truncated or clipped list.
+	var probes models.ActiveProbeCoverage
+	if log := scanner.GlobalProbeLog(); len(records) > 0 && log.Attempted() >= len(records) && log.Retained() == len(records) {
+		probes = scanner.SummarizeGlobalProbes()
+	} else {
+		probes = scanner.SummarizeProbes(records, scanner.GlobalProbeLog())
 	}
-	return out
+	return checkPhaseOutcome{
+		Attempted: probes.Attempted,
+		Probes:    probes,
+		Rejected:  rejected,
+		Deadline:  errors.Is(ctx.Err(), context.DeadlineExceeded),
+	}
 }
 
 // recordBlackbox records dast, spec and active-probes (spec §4.4) once the
 // check pass has finished. `ok` means the pass ran to completion: nothing
-// cut it short and, for probes, at least one probe got an HTTP response.
+// cut it short and, for probes, at least one probe was evaluated (an HTTP
+// response the check judged: not a 401/403/404/410 and not a target non-answer).
 func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints int, discoveryErr, specErr error, phase checkPhaseOutcome) {
 	switch {
 	case cfg.URL == "":
@@ -1490,17 +1645,40 @@ func recordBlackbox(status *scannerStatusList, cfg *models.ScanConfig, endpoints
 	case endpoints == 0:
 		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no endpoints to probe")
 	case phase.Deadline:
-		status.failDetail(AnalyzerActiveProbes, reporters.ReasonTimeout, "--max-duration elapsed before the probe pass completed")
+		// A limit set for this scan ended the pass: said as one, with its value.
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonTimeout, probeDetail(phase.Probes, true, fmt.Sprintf("scan limit --max-duration=%s elapsed before the probe pass completed", cfg.MaxDuration)))
 	case phase.Rejected > 0:
-		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, fmt.Sprintf("--max-requests exhausted: %d requests refused before the probe pass completed", phase.Rejected))
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, probeDetail(phase.Probes, true, fmt.Sprintf("scan limit --max-requests=%d exhausted: %d requests refused before the probe pass completed", cfg.MaxRequests, phase.Rejected)))
 	case phase.Attempted == 0:
 		status.skip(AnalyzerActiveProbes, reporters.ReasonNotApplicable, "no probe-eligible parameters on the discovered endpoints")
-	case phase.NoResponse == phase.Attempted:
-		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNetworkError, fmt.Sprintf("%d probe requests sent, none received an HTTP response", phase.Attempted))
-	case phase.NoResponse > 0:
-		status.okDetail(AnalyzerActiveProbes, fmt.Sprintf("%d of %d probe requests received no HTTP response", phase.NoResponse, phase.Attempted))
+	case !phase.Probes.Consistent():
+		// Counts that do not add up are unreadable: the pass cannot be read as
+		// complete (A-D5, fail closed).
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonMalformedOutput, probeDetail(phase.Probes, true, probeInconsistentSegment))
+	case phase.Probes.UnknownOrigin+phase.Probes.ScannerFailed > 0:
+		// Fail closed: a probe the engine failed to send or whose failure no
+		// evidence attributes to the target was not evaluated, and neither may
+		// read as an evaluation or as the target's doing.
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonExecutionError, probeDetail(phase.Probes, true, ""))
+	case phase.Probes.Evaluated == 0:
+		// Probes were attempted and not one was evaluated: no evidence at all,
+		// so the pass delivered nothing, whoever's doing that was (a target that
+		// answered nothing, or only 401/403/404/410). The backend reads the same
+		// counts the same way; here it makes the CLI, the Action and
+		// --fail-on-coverage-gap / --require-analyzers active-probes agree with
+		// it. no_endpoints is a target-owned reason: never a scanner failure.
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNoEndpoints, probeDetail(phase.Probes, true, probeNoneEvaluatedSegment(phase.Probes)))
+	case phase.Probes.NotEvaluated() > 0 || phase.Probes.ListingCeilingReached:
+		// A-D5 (no threshold): required-probe coverage is complete only when
+		// every planned probe was evaluated. What remains here is target-side
+		// (gated 401/403/404/410, or not answered): not a scanner failure, so
+		// the reason is the target-owned no_endpoints, and the account says
+		// exactly what was not evaluated. Configure authentication for gated
+		// endpoints, or make the target reachable, to evaluate them.
+		status.failDetail(AnalyzerActiveProbes, reporters.ReasonNoEndpoints, probeTargetIncompleteDetail(phase.Probes))
 	default:
-		status.ok(AnalyzerActiveProbes)
+		// ok: every probe was evaluated. The counts are always stated.
+		status.okDetail(AnalyzerActiveProbes, probeDetail(phase.Probes, false, ""))
 	}
 }
 
@@ -1540,7 +1718,7 @@ func retryTransient(ctx context.Context, name string, fn func() ([]evidence.Evid
 // already enforced completeness (one line per expected check, no unknown
 // checks); this function validates the state/reason pairing and keeps the
 // parent's process semantics separate from any child's final state.
-func recordPythonEngine(status *scannerStatusList, res SpawnResult) {
+func recordPythonEngine(status *scannerStatusList, res SpawnResult) (notes []string) {
 	switch res.Outcome {
 	case SpawnOK:
 		status.ok(AnalyzerPythonEngine)
@@ -1571,7 +1749,45 @@ func recordPythonEngine(status *scannerStatusList, res SpawnResult) {
 				Detail: fmt.Sprintf("invalid status line: state=%q reason=%q", c.State, c.Reason)}
 		}
 		status.set(entry)
+		notes = append(notes, pythonScopeNotes(name, c.Scope)...)
 	}
+	return notes
+}
+
+// pythonScopeNotes writes a Python check's complete lost and declared lists as
+// metadata.coverage.limitations entries (contract C2), each at most 240 bytes
+// and starting with the check's name, every name sanitised (contract C1): the
+// detail the check reports names a few files and counts the rest, and this is
+// the rest.
+func pythonScopeNotes(name string, sc *CheckScope) []string {
+	if sc == nil {
+		return nil
+	}
+	rows := func(entries [][]string) []string {
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if len(e) == 0 {
+				continue
+			}
+			item := scope.Sanitize(e[0])
+			if len(e) > 1 && e[1] != "" {
+				item += " (" + scope.Sanitize(e[1]) + ")"
+			}
+			out = append(out, item)
+		}
+		return out
+	}
+	var notes []string
+	if lost := rows(sc.Lost); len(lost) > 0 {
+		notes = append(notes, scope.ChunkEntries(name+": lost evaluation, not fully analysed: ", lost)...)
+	}
+	if declared := rows(sc.Declared); len(declared) > 0 {
+		notes = append(notes, scope.ChunkEntries(name+": "+scope.DeclaredMarker+" ", declared)...)
+	}
+	if sc.Truncated {
+		notes = append(notes, name+": the lists above stop at the check's own cap; more were not listed")
+	}
+	return notes
 }
 
 // absPathOrEmpty resolves p to an absolute path. Returns "" for an
@@ -1627,7 +1843,7 @@ func (o *Orchestrator) runWhiteboxScan(ctx context.Context) ([]evidence.Evidence
 	req := ScanRequest{
 		Mode:     "whitebox",
 		Spec:     absPathOrEmpty(o.cfg.SpecPath),
-		CodePath: absPathOrEmpty(o.cfg.CodePath),
+		CodePath: absPathOrEmpty(firstNonEmptyString(o.codeRoot, o.cfg.CodePath)),
 		Checks:   checks,
 		Verbose:  o.cfg.Verbose,
 	}
@@ -1788,4 +2004,24 @@ func hasBlackbox(findings []models.Finding) bool {
 		}
 	}
 	return false
+}
+
+// semgrepBudgetNotes lists, for the report's metadata.coverage.limitations,
+// every file the Semgrep stage re-ran alone after it lost evaluation to time
+// in pass 1 (round 4, R-008), and how each ended. A file that finished on the
+// re-run is no longer in the lost-evaluation detail, so this is where its
+// timeout stays on the record; one that did not is still lost and says why.
+func semgrepBudgetNotes(run semgrep.Run) []string {
+	if len(run.Retries) == 0 {
+		return nil
+	}
+	items := make([]string, len(run.Retries))
+	for i, r := range run.Retries {
+		state := "resolved, evaluated in full when run alone"
+		if !r.Resolved {
+			state = "still lost: " + scope.Sanitize(r.Why)
+		}
+		items[i] = scope.Sanitize(r.Path) + " (" + state + ")"
+	}
+	return scope.ChunkEntries(AnalyzerSemgrep+": retried alone after losing evaluation to time in the first pass: ", items)
 }

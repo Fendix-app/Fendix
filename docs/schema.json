@@ -65,11 +65,121 @@
         "contract_version":    { "type": "integer", "minimum": 1 },
         "strict":              { "type": "boolean" },
         "configured_complete": { "type": "boolean" },
-        "gaps":                { "type": "array", "items": { "type": "string" } },
+        "gaps":                { "type": "array", "items": { "type": "string" }, "description": "Analyzer names whose scanner_status is a gap, then, for an import, one `import/<tool>` entry for every producer whose run was recorded as failed or partial (executionSuccessful false, an exit signal, a non-zero exit code, an error-level notification). A scan is configured_complete only with no gap." },
         "limitations":         { "type": "array", "items": { "type": "string" } },
         "required_analyzers":  { "type": "array", "items": { "type": "string" } },
         "required_gaps":       { "type": "array", "items": { "type": "string" } },
-        "retried":             { "type": "array", "items": { "type": "string" } }
+        "retried":             { "type": "array", "items": { "type": "string" } },
+        "active_probes":       { "$ref": "#/definitions/ActiveProbeCoverage" }
+      }
+    },
+    "ActiveProbeCoverage": {
+      "type": "object",
+      "description": "Present when active probing was enabled. Accounts for every active probe sent. A scan-wide configured_complete is never proof that every probe was evaluated: read this beside it. attempted = evaluated + inconclusive + unknown_origin + scanner_failed. A probe the target answered with 401, 403, 404 or 410 is gated: not evaluated, counted inside inconclusive and itemised in gated. Required-probe coverage is complete only when every planned probe was evaluated (attempted = evaluated): there is no percentage threshold, and one unevaluated probe, whoever's it is, makes the pass incomplete. The not_evaluated_* keys, groups_total, inline_truncated, listing_ceiling_reached and listing_overflow (all additive; absent from reports of engines before the bounded-evidence contract) account for every unevaluated probe in storage whose size does not follow the probe count.",
+      "required": ["attempted", "evaluated", "inconclusive", "unknown_origin", "scanner_failed", "reasons", "not_evaluated_checks", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "attempted":      { "type": "integer", "minimum": 0 },
+        "evaluated":      { "type": "integer", "minimum": 0, "description": "A response came back and the check judged it." },
+        "inconclusive":   { "type": "integer", "minimum": 0, "description": "Target-side non-evaluation: a confirmed non-answer, a redirect into an address the SSRF guard refuses, or a gated answer (401, 403, 404, 410; see gated). Not an evaluation, never evidence that anything is absent, safe or fixed. Target-owned, not a scanner failure, but still not evaluated: the pass is incomplete." },
+        "unknown_origin": { "type": "integer", "minimum": 0, "description": "No evidence settles whose fault the failure is. Fail-closed: not evaluated, and a coverage gap for active-probes." },
+        "scanner_failed": { "type": "integer", "minimum": 0, "description": "The engine failed or never sent the probe. Not evaluated, and a coverage gap for active-probes." },
+        "reasons": {
+          "type": "object",
+          "description": "{origin: {reason: count}}. Origins: target, unknown, scanner. Reasons are a closed vocabulary per origin.",
+          "additionalProperties": false,
+          "properties": {
+            "target":  { "type": "object", "additionalProperties": false, "properties": {
+              "timeout": { "type": "integer", "minimum": 1 }, "connection_reset": { "type": "integer", "minimum": 1 }, "connection_refused": { "type": "integer", "minimum": 1 },
+              "tls_error": { "type": "integer", "minimum": 1 }, "rate_limited": { "type": "integer", "minimum": 1 }, "service_unavailable": { "type": "integer", "minimum": 1 },
+              "other_transport": { "type": "integer", "minimum": 1 }, "gated": { "type": "integer", "minimum": 1 } } },
+            "unknown": { "type": "object", "additionalProperties": false, "properties": {
+              "dns_failure": { "type": "integer", "minimum": 1 }, "timeout": { "type": "integer", "minimum": 1 }, "connection_refused": { "type": "integer", "minimum": 1 },
+              "network_unreachable": { "type": "integer", "minimum": 1 }, "tls_handshake": { "type": "integer", "minimum": 1 }, "unclassified": { "type": "integer", "minimum": 1 } } },
+            "scanner": { "type": "object", "additionalProperties": false, "properties": {
+              "internal_error": { "type": "integer", "minimum": 1 }, "scan_deadline": { "type": "integer", "minimum": 1 }, "scan_cancelled": { "type": "integer", "minimum": 1 },
+              "resource_exhausted": { "type": "integer", "minimum": 1 }, "proxy_failure": { "type": "integer", "minimum": 1 }, "request_construction": { "type": "integer", "minimum": 1 },
+              "not_sent": { "type": "integer", "minimum": 1 } } }
+          }
+        },
+        "not_evaluated_checks": {
+          "type": "array",
+          "maxItems": 200,
+          "description": "Distinct (check, endpoint, origin, reason) with a probe that was not evaluated, scanner then unknown then target. A (check, endpoint) pair absent from the list was evaluated only when truncated is false.",
+          "items": { "$ref": "#/definitions/NotEvaluatedCheck" }
+        },
+        "truncated": { "type": "boolean", "description": "not_evaluated_checks was cut at 200 entries, or the group listing reached its ceiling (see listing_ceiling_reached)." },
+        "not_evaluated_counts": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "The exact aggregate of the probes that were not evaluated: one row per (origin, reason, HTTP status) with a non-zero count, in a fixed order. The vocabularies are closed, so a few dozen rows at most whatever the probe count. The counts add up to attempted - evaluated; a report whose counts do not add up is unreadable and its pass is not complete.",
+          "items": {
+            "type": "object",
+            "required": ["origin", "reason", "count"],
+            "additionalProperties": false,
+            "properties": {
+              "origin": { "type": "string", "enum": ["target", "unknown", "scanner"] },
+              "reason": { "type": "string" },
+              "status": { "type": ["integer", "null"], "minimum": 100, "maximum": 599, "description": "The HTTP status of the answer that was not evaluable (gated 401/403/404/410, rate limited 429, service unavailable 502/503/504); absent or null when the reason carries no HTTP status (a timeout, a reset, DNS, transport)." },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "not_evaluated_groups": {
+          "type": "array",
+          "maxItems": 200,
+          "description": "At most 200 (endpoint, origin, reason) groups of unevaluated probes with the check families they cover, in a fixed order. The groups shown are exact. Every group left out is counted: groups_total minus the groups shown.",
+          "items": {
+            "type": "object",
+            "required": ["endpoint", "origin", "reason", "checks"],
+            "additionalProperties": false,
+            "properties": {
+              "endpoint": { "type": "string", "description": "METHOD /path, exactly as a finding names its endpoint." },
+              "origin":   { "type": "string", "enum": ["target", "unknown", "scanner"] },
+              "reason":   { "type": "string" },
+              "checks":   { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "groups_total":  { "type": "integer", "minimum": 0, "description": "The groups the engine listed, at most the listing ceiling (100,000). Greater than the groups shown exactly when inline_truncated." },
+        "inline_truncated": { "type": "boolean", "description": "groups_total exceeds the groups shown in not_evaluated_groups. Counted, not lost: the aggregate in not_evaluated_counts is exact." },
+        "listing_ceiling_reached": { "type": "boolean", "description": "There were more groups than the engine's hard listing ceiling (100,000). The unevaluated probes whose group detail was therefore not recorded are counted in listing_overflow, and the aggregate counts stay exact. A pass that reached the ceiling is never complete." },
+        "listing_overflow": { "type": "integer", "minimum": 0, "description": "The exact number of unevaluated probes whose group detail was not recorded because the listing ceiling was reached; 0 otherwise." },
+        "gated": {
+          "type": "object",
+          "description": "The probes the target answered with 401, 403, 404 or 410. A gated probe is NOT evaluated and is evidence of nothing: the request was refused or the path is not served to this client, not proof that the parameter is safe. It is target-side (never a scanner gap, never refunded) and is counted inside inconclusive and reasons.target.gated. Always present from the engine that adds it; absent from older reports.",
+          "required": ["total", "by_status"],
+          "additionalProperties": false,
+          "properties": {
+            "total":     { "type": "integer", "minimum": 0 },
+            "by_status": { "type": "object", "description": "Non-zero counts by HTTP status; keys are 401, 403, 404, 410 only.", "additionalProperties": false,
+              "properties": { "401": { "type": "integer", "minimum": 1 }, "403": { "type": "integer", "minimum": 1 }, "404": { "type": "integer", "minimum": 1 }, "410": { "type": "integer", "minimum": 1 } } }
+          }
+        },
+        "cut_short": {
+          "type": "object",
+          "description": "Present only when a limit set for the scan ended the probe pass: probes it never started are in no count above. The engine cannot say who set the limit, only which flag and what value.",
+          "required": ["cause", "limit", "configured", "refused"],
+          "additionalProperties": false,
+          "properties": {
+            "cause":      { "type": "string", "enum": ["max_duration", "max_requests"] },
+            "limit":      { "type": "string", "enum": ["--max-duration", "--max-requests"] },
+            "configured": { "type": "string", "description": "The limit's value as given to the engine, for example 45s or 500." },
+            "refused":    { "type": "integer", "minimum": 0, "description": "Requests the --max-requests budget turned away." }
+          }
+        }
+      }
+    },
+    "NotEvaluatedCheck": {
+      "type": "object",
+      "required": ["check", "endpoint", "origin", "reason", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "check":    { "type": "string", "description": "The rule-id family of the findings the probe could produce: injection, xss, ssrf, openredirect, hostheader, graphql, methodtamper." },
+        "endpoint": { "type": "string", "description": "METHOD /path, exactly as a finding names its endpoint." },
+        "origin":   { "type": "string", "enum": ["target", "unknown", "scanner"] },
+        "reason":   { "type": "string" },
+        "evidence": { "type": "string", "description": "A fixed phrase stating what was observed." }
       }
     },
     "SeverityCounts": {
@@ -128,7 +238,10 @@
         "results":      { "type": "integer", "minimum": 0 },
         "suppressed":   { "type": "integer", "minimum": 0 },
         "no_location":  { "type": "integer", "minimum": 0 },
-        "corroborated": { "type": "integer", "minimum": 0 }
+        "corroborated": { "type": "integer", "minimum": 0 },
+        "execution_successful": { "type": "boolean", "description": "The producer's own account of its run, folded across the tool's runs and files: false when any invocation failed (executionSuccessful false, an exit signal, or a non-zero exit code with no success recorded); true only when every invocation said it succeeded. Absent when the document does not say: absent means not recorded, never fine. A false makes `import/<tool>` a coverage gap." },
+        "error_notifications":  { "type": "integer", "minimum": 0, "description": "Error-level notifications the producer raised (toolExecutionNotifications and toolConfigurationNotifications), summed across the tool's runs. Absent when no invocation was recorded. Above zero makes `import/<tool>` a coverage gap: the run may be partial." },
+        "analyzed_paths":       { "type": "array", "maxItems": 4096, "items": { "type": "string" }, "description": "The files the run lists as analysed (artifacts that were code the run read), repo-relative, sorted, at most 4096." }
       }
     },
     "ConfidenceReason": {
@@ -202,7 +315,7 @@
         "reachable":          { "type": "boolean" },
         "fingerprint":        { "type": "string" },
         "fingerprint_v1":     { "type": "string" },
-        "source_tier":        { "type": "string", "enum": ["native_go", "tree_sitter_sidecar", "semgrep_shim"] },
+        "source_tier":        { "type": "string", "enum": ["native_go", "tree_sitter_sidecar", "semgrep_shim", "semgrep_taint"] },
         "route":              { "$ref": "#/definitions/Route" },
         "route_confirmed":    { "type": "boolean" },
         "proven_path":        { "type": "boolean" },

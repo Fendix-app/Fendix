@@ -23,7 +23,10 @@ var runImport = func(ctx context.Context, cfg *models.ScanConfig, version string
 // normalization, fingerprinting, deterministic confidence scoring, dedup,
 // .fendix-ignore / --baseline, confidence-gated --fail-on, and every report
 // format. The exit contract matches `scan`: 0 clean, 1 when a finding
-// BLOCKs, 2 on error.
+// BLOCKs, 2 on error. Round 6 (R5-09, decision D6): 2 also when a gate
+// (--fail-on) was requested and a producer's run was recorded as failed or
+// partial, which is an `import/<tool>` coverage gap; that coverage exit is
+// returned before the findings exit 1.
 func newImportCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "import <file.sarif> [more.sarif ...]",
@@ -32,7 +35,14 @@ func newImportCmd() *cobra.Command {
 			"into fendix findings and run the standard pipeline: deterministic confidence " +
 			"scoring, dedup, ignore/baseline filtering, confidence-gated --fail-on, and the " +
 			"full reporter set. Pass '-' to read stdin. To merge imports into a live fendix " +
-			"scan instead, use `fendix scan --import <file.sarif>`.",
+			"scan instead, use `fendix scan --import <file.sarif>`.\n\n" +
+			"A producer's own account of its run is read: executionSuccessful false, an exit " +
+			"signal, a non-zero exitCode with no success recorded, and error-level notifications " +
+			"make the run failed or partial. Each such tool is a coverage gap named import/<tool> " +
+			"in coverage.gaps (configured_complete is false); with --fail-on set, the import then " +
+			"exits 2 instead of passing on a run nobody finished, even when a finding would BLOCK " +
+			"(exit 1). Exit codes: 0 clean, 1 a finding reached BLOCK, 2 error or an incomplete " +
+			"producer run under --fail-on.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags := cmd.Flags()
@@ -81,7 +91,7 @@ func newImportCmd() *cobra.Command {
 	flags := cmd.Flags()
 	flags.StringP("output", "o", "", "Output file path (default: stdout)")
 	flags.StringP("format", "f", "json", "Output format: json, html, sarif, pdf")
-	flags.String("fail-on", "", "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence)")
+	flags.String("fail-on", "", "Exit 1 if a finding at this severity reaches BLOCK: CRITICAL, HIGH, MEDIUM, LOW (confidence gating applies — see --enforce-confidence); exit 2 instead when an imported producer's run failed or was partial")
 	flags.String("baseline", "", "Path to a baseline (from --save-baseline) or JSON report; only occurrences not proven present in it are reported")
 	flags.String("save-baseline", "", "Save current findings, with every occurrence identity, to this path (baseline format v2)")
 	flags.String("ignore", "", "Path to .fendix-ignore file")

@@ -1,0 +1,376 @@
+{
+ "version": "1.182.1",
+ "results": [
+  {
+   "check_id": "tmp.fendix-semgrep-rules-1234.js-ssrf-taint",
+   "path": "/fx/syntax/routes/api.js",
+   "start": {
+    "line": 8,
+    "col": 32,
+    "offset": 230
+   },
+   "end": {
+    "line": 8,
+    "col": 35,
+    "offset": 233
+   },
+   "extra": {
+    "message": "Request input chooses the URL of an outbound request. Check its host against an allowlist before the request is made.",
+    "metadata": {
+     "category": "injection",
+     "cwe": "CWE-918",
+     "confidence": "MEDIUM",
+     "fendix_severity": "MEDIUM",
+     "fendix_title": "Outbound request to a URL taken from request input.",
+     "fendix_remediation": "Request input chooses the URL of a request the server makes (fetch, axios, got, http.get, undici), so a caller can reach internal services or cloud metadata endpoints through the server. Parse the URL and check its scheme and host against an allowlist before the request; do not follow redirects to other hosts.",
+     "fendix_reachability": "taint"
+    },
+    "severity": "ERROR",
+    "fingerprint": "requires login",
+    "lines": "requires login",
+    "validation_state": "NO_VALIDATOR",
+    "engine_kind": "OSS"
+   }
+  }
+ ],
+ "errors": [
+  {
+   "code": 3,
+   "level": "warn",
+   "type": [
+    "PartialParsing",
+    [
+     {
+      "path": "/fx/syntax/bad.py",
+      "start": {
+       "line": 2,
+       "col": 3,
+       "offset": 0
+      },
+      "end": {
+       "line": 3,
+       "col": 11,
+       "offset": 37
+      }
+     }
+    ]
+   ],
+   "message": "Syntax error at line /fx/syntax/bad.py:2:\n `)))) (((( class class [[[ \n x = = = 1` was unexpected",
+   "path": "/fx/syntax/bad.py",
+   "spans": [
+    {
+     "file": "/fx/syntax/bad.py",
+     "start": {
+      "line": 2,
+      "col": 3,
+      "offset": 0
+     },
+     "end": {
+      "line": 3,
+      "col": 11,
+      "offset": 37
+     }
+    }
+   ]
+  }
+ ],
+ "paths": {
+  "scanned": [
+   "/fx/syntax/bad.py",
+   "/fx/syntax/routes/api.js"
+  ]
+ },
+ "time": {
+  "rules": [
+   "tmp.fendix-semgrep-rules-1234.python-md5-used-for-password",
+   "tmp.fendix-semgrep-rules-1234.python-sha1-used-for-password",
+   "tmp.fendix-semgrep-rules-1234.python-legacy-cipher-import",
+   "tmp.fendix-semgrep-rules-1234.python-random-for-token-generation",
+   "tmp.fendix-semgrep-rules-1234.python-random-token-assignment",
+   "tmp.fendix-semgrep-rules-1234.js-weak-password-hash-taint",
+   "tmp.fendix-semgrep-rules-1234.js-weak-password-hash-sink",
+   "tmp.fendix-semgrep-rules-1234.js-jwt-no-verify-taint",
+   "tmp.fendix-semgrep-rules-1234.js-jwt-no-verify-sink",
+   "tmp.fendix-semgrep-rules-1234.js-weak-random-token-taint",
+   "tmp.fendix-semgrep-rules-1234.python-sql-injection-string-format",
+   "tmp.fendix-semgrep-rules-1234.python-command-injection-shell-true",
+   "tmp.fendix-semgrep-rules-1234.python-eval-injection",
+   "tmp.fendix-semgrep-rules-1234.django-orm-raw-sql",
+   "tmp.fendix-semgrep-rules-1234.flask-render-template-string-injection",
+   "tmp.fendix-semgrep-rules-1234.python-subprocess-shell-true-with-variable",
+   "tmp.fendix-semgrep-rules-1234.python-pickle-loads-untrusted",
+   "tmp.fendix-semgrep-rules-1234.python-yaml-load-unsafe",
+   "tmp.fendix-semgrep-rules-1234.python-hardcoded-secret-assignment",
+   "tmp.fendix-semgrep-rules-1234.python-hardcoded-db-url",
+   "tmp.fendix-semgrep-rules-1234.python-gcp-service-account-inline",
+   "tmp.fendix-semgrep-rules-1234.python-aws-access-key-id-literal",
+   "tmp.fendix-semgrep-rules-1234.python-slack-webhook-url-literal",
+   "tmp.fendix-semgrep-rules-1234.python-pem-private-key-literal",
+   "tmp.fendix-semgrep-rules-1234.django-view-missing-login-required",
+   "tmp.fendix-semgrep-rules-1234.fastapi-route-missing-auth-dependency",
+   "tmp.fendix-semgrep-rules-1234.python-jwt-decode-no-verification",
+   "tmp.fendix-semgrep-rules-1234.flask-route-no-auth-decorator",
+   "tmp.fendix-semgrep-rules-1234.js-xss-taint",
+   "tmp.fendix-semgrep-rules-1234.js-ssrf-taint",
+   "tmp.fendix-semgrep-rules-1234.js-path-traversal-taint",
+   "tmp.fendix-semgrep-rules-1234.js-xss-sink",
+   "tmp.fendix-semgrep-rules-1234.js-open-redirect-taint",
+   "tmp.fendix-semgrep-rules-1234.js-open-redirect-sink",
+   "tmp.fendix-semgrep-rules-1234.js-sqli-taint",
+   "tmp.fendix-semgrep-rules-1234.js-sqli-sink",
+   "tmp.fendix-semgrep-rules-1234.js-cmdi-taint",
+   "tmp.fendix-semgrep-rules-1234.js-cmdi-sink",
+   "tmp.fendix-semgrep-rules-1234.js-ssti-taint",
+   "tmp.fendix-semgrep-rules-1234.js-ssti-sink"
+  ],
+  "rules_parse_time": 0.18434786796569824,
+  "profiling_times": {
+   "config_time": 3.7209019660949707,
+   "core_time": 0.5624713897705078,
+   "ignores_time": 0.00018930435180664062,
+   "total_time": 4.288263320922852
+  },
+  "parsing_time": {
+   "total_time": 0.03270125389099121,
+   "per_file_time": {
+    "mean": 0.0036334726545545785,
+    "std_dev": 4.757801234321914e-05
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_files": []
+  },
+  "scanning_time": {
+   "total_time": 0.048861026763916016,
+   "per_file_time": {
+    "mean": 0.024430513381958008,
+    "std_dev": 2.0488086249770276e-05
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_files": []
+  },
+  "matching_time": {
+   "total_time": 0.013020992279052734,
+   "per_file_and_rule_time": {
+    "mean": 0.0014467769198947484,
+    "std_dev": 4.220982554844666e-06
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_rules_on_files": []
+  },
+  "tainting_time": {
+   "total_time": 0.0002040863037109375,
+   "per_def_and_rule_time": {
+    "mean": 0.00010204315185546875,
+    "std_dev": 1.6427748050773516e-11
+   },
+   "very_slow_stats": {
+    "time_ratio": 0.0,
+    "count_ratio": 0.0
+   },
+   "very_slow_rules_on_defs": []
+  },
+  "fixpoint_timeouts": [],
+  "prefiltering": {
+   "project_level_time": 0.0,
+   "file_level_time": 0.0,
+   "rules_with_project_prefilters_ratio": 0.0,
+   "rules_with_file_prefilters_ratio": 0.8,
+   "rules_selected_ratio": 0.225,
+   "rules_matched_ratio": 0.225
+  },
+  "targets": [
+   {
+    "path": "/fx/syntax/bad.py",
+    "num_bytes": 50,
+    "match_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.005074977874755859,
+     1.2874603271484375e-05,
+     3.0994415283203125e-06,
+     2.1457672119140625e-06,
+     9.5367431640625e-07,
+     9.5367431640625e-07,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "parse_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.013859033584594727,
+     1.1920928955078125e-06,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "run_time": 0.019904136657714844
+   },
+   {
+    "path": "/fx/syntax/routes/api.js",
+    "num_bytes": 307,
+    "match_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.004424095153808594,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.004263877868652344,
+     6.29425048828125e-05,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "parse_times": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     9.5367431640625e-07,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.01884007453918457,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "run_time": 0.028956890106201172
+   }
+  ],
+  "total_bytes": 357,
+  "max_memory_bytes": 306811008
+ },
+ "engine_requested": "OSS",
+ "skipped_rules": [],
+ "profiling_results": []
+}

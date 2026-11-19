@@ -129,10 +129,14 @@ func TestSARIF_JoiningOccurrenceGetsItsOwnIdentity(t *testing.T) {
 			prodFile := "pkg/" + dir + "/db.py"
 			root := repoFiles(t, map[string]string{"pkg/tests/helpers.py": fixtureCredential, prodFile: prodCredential})
 
-			// The two occurrences ARE one Fendix finding (the precondition).
+			// RC-9e (owner ruling OR-85): the test-code occurrence and the production
+			// one have different own evidence, so they are two Fendix findings, one
+			// occurrence each. (This used to be asserted as ONE grouped finding with
+			// two occurrences.) Identity is per occurrence either way, which is what
+			// the rest of this test pins.
 			_, rep := codeScan(t, root, scanOpts{})
-			if pw := passwordFindings(rep); len(pw) != 1 || len(pw[0].Occurrences) != 2 {
-				t.Fatalf("precondition: want one grouped finding with 2 occurrences, got %+v", pw)
+			if pw := passwordFindings(rep); len(pw) != 2 || len(pw[0].Occurrences) != 1 || len(pw[1].Occurrences) != 1 {
+				t.Fatalf("precondition: want two findings with one occurrence each, got %+v", pw)
 			}
 
 			_, got := sarifScan(t, root, scanOpts{})
@@ -165,9 +169,10 @@ func TestSARIF_JoiningOccurrenceGetsItsOwnIdentity(t *testing.T) {
 			if strings.Contains(a.snippet, "Pr0d") || strings.Contains(a.snippet, "svc") {
 				t.Errorf("A's snippet is production's: %q", a.snippet)
 			}
-			// Both name their presentation group, which is presentation only.
-			if a.findingID == "" || a.findingID != b.findingID || a.count != 2 || b.count != 2 {
-				t.Errorf("group reference: A=%+v B=%+v", a, b)
+			// Each is the only occurrence of its own finding, and a finding of one
+			// occurrence carries no group reference: they do not name a shared group.
+			if a.findingID != "" || b.findingID != "" || a.count > 1 || b.count > 1 {
+				t.Errorf("group reference: A=%+v B=%+v; each is its own finding, with no group to name", a, b)
 			}
 		})
 	}

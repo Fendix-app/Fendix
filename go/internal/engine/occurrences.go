@@ -34,11 +34,15 @@ type groupSlot struct {
 // `id:` ignore rule written from a report therefore names the same group it
 // always named, and a finding keeps its ID when a sibling occurrence is
 // suppressed (suppression leaves gaps rather than renumbering).
-func presentationGroupIDs(occurrences []models.Finding) map[string]groupSlot {
-	groups := Deduplicate(append([]models.Finding(nil), occurrences...))
+//
+// extra is the provenance-aware part of the occurrence class (see
+// DeduplicateWith); the same function must be used for every grouping of one
+// scan, or a group's key would not be found again.
+func presentationGroupIDs(occurrences []models.Finding, extra func(models.Finding) string) map[string]groupSlot {
+	groups := DeduplicateWith(append([]models.Finding(nil), occurrences...), extra)
 	keys := make([]string, len(groups))
 	for i := range groups {
-		keys[i] = dedupKey(groups[i])
+		keys[i] = dedupKeyWith(groups[i], extra)
 	}
 	order := make([]int, len(groups))
 	for i := range order {
@@ -75,11 +79,11 @@ func presentationGroupIDs(occurrences []models.Finding) map[string]groupSlot {
 // references and proof, and lists their identities in Occurrences. The
 // finding's Fingerprint is its primary occurrence's own fingerprint, so it
 // always names an occurrence the finding contains.
-func regroupOccurrences(occurrences []models.Finding, ids map[string]groupSlot) []models.Finding {
-	findings := Deduplicate(occurrences)
+func regroupOccurrences(occurrences []models.Finding, ids map[string]groupSlot, extra func(models.Finding) string) []models.Finding {
+	findings := DeduplicateWith(occurrences, extra)
 	slots := make([]groupSlot, len(findings))
 	for i := range findings {
-		slot, ok := ids[dedupKey(findings[i])]
+		slot, ok := ids[dedupKeyWith(findings[i], extra)]
 		if !ok {
 			// Unreachable from the orchestrator (every survivor came from the
 			// set the IDs were assigned over); rank such a group last rather

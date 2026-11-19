@@ -190,3 +190,56 @@ func TestDecideDeescalatesTestFixtureToInfo(t *testing.T) {
 		t.Errorf("corroborated test-fixture finding Status = %q, want BLOCK", got.Status)
 	}
 }
+
+// semgrepTaintEv is a HIGH-severity finding from the semgrep_taint tier: a
+// Semgrep taint rule of a language enabled in semgrep.ReachabilityLanguages.
+func semgrepTaintEv(reachable bool) evidence.Evidence {
+	ev := evidence.Evidence{
+		Title:      "SQL injection: request input reaches db.query()",
+		Category:   "injection",
+		Endpoint:   "app.js:9",
+		Severity:   models.SeverityHigh,
+		Source:     models.SourceWhitebox,
+		SourceTier: models.TierSemgrepTaint,
+		Confidence: models.ConfidenceHigh,
+	}
+	if reachable {
+		ev.Reachable = true
+		ev.TaintChain = []models.TaintLink{
+			{File: "app.js", Line: 7, Expr: "req.query.name"},
+			{File: "app.js", Line: 9, Expr: "db.query(sql)"},
+		}
+	}
+	return ev
+}
+
+// The enforced gate, not Decide: Decide's above-threshold arm blocks
+// unconditionally, so it would pass with or without the gate.
+func TestSemgrepTaintMediumWithReachableBlocks(t *testing.T) {
+	d := DecideWithOptions(semgrepTaintEv(true), "HIGH", Options{EnforceConfidence: true})
+
+	if d.Score.Band != models.ConfidenceMedium {
+		t.Fatalf("Band = %s (%d), want MEDIUM: a semgrep_taint finding must not band HIGH on its own: %v",
+			d.Score.Band, d.Score.Value, d.Score.Reasons)
+	}
+	if d.Status != StatusBlock {
+		t.Errorf("Status = %s (%s), want BLOCK: MEDIUM band with the reachable taint path as independent signal",
+			d.Status, d.Reason)
+	}
+	if !strings.Contains(strings.Join(d.Corroboration.Independent, ","), "reachable taint path") {
+		t.Errorf("independent signals = %v, want the reachable taint path", d.Corroboration.Independent)
+	}
+	if len(d.Corroboration.SelfEvident) != 0 {
+		t.Errorf("self-evident signals = %v, want none (no deterministic detection for a Semgrep tier)",
+			d.Corroboration.SelfEvident)
+	}
+}
+
+func TestSemgrepTaintWithoutReachableWarns(t *testing.T) {
+	d := DecideWithOptions(semgrepTaintEv(false), "HIGH", Options{EnforceConfidence: true})
+
+	if d.Status != StatusWarn {
+		t.Errorf("Status = %s (band %s, score %d, reason %q), want WARN: nothing corroborates it",
+			d.Status, d.Score.Band, d.Score.Value, d.Reason)
+	}
+}

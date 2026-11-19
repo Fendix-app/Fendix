@@ -18,6 +18,18 @@ func AllRules() []Rule {
 	return rules
 }
 
+// callArgs matches the argument text of a call up to the first `)` that is not
+// part of a one-level nested call: any run of non-`)` characters, and `(...)`
+// groups that hold no parenthesis of their own. A lone `(` is an ordinary
+// character, so a string literal such as "... IN (" or "echo (" does not stop
+// the match (a `[^()]` alternative refused it, and lost matches `[^)]*` had),
+// while `r.Context()` and `count(*)` no longer end it early. Every old match is
+// kept and the nested-call ones are added. RE2 matches it in linear time, so a
+// long line of parentheses cannot make a rule backtrack
+// (TestGoRules_NestedPatternStaysLinear). Deeper nesting (`f(g(h(x)))`) stays a
+// documented FN.
+const callArgs = `(?:[^)]|\([^()]*\))*`
+
 // GoRules — Sprint 04 shipped subset (2 of the brief's 5 rules).
 // XXE and INSECURE_RAND need cross-function AST context to avoid
 // stdlib false positives; carried to Sprint 04.5.
@@ -36,9 +48,10 @@ func GoRules() []Rule {
 			// The "query built one line earlier and passed as a bare
 			// identifier" case is the dominant real-world shape but
 			// needs taint analysis — carried to Sprint 04.5.
-			Pattern: regexp.MustCompile(`(?:db|conn|tx)\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\([^)]*(?:\+|%[sv]|fmt\.Sprintf)`),
-			Applies: HasGoExtension,
-			Fix:     "Use parameterised queries: db.Query(\"SELECT … WHERE x = ?\", value). Never concatenate or fmt.Sprintf user-controlled values into SQL.",
+			Pattern:      regexp.MustCompile(`(?:db|conn|tx)\.(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext)\(` + callArgs + `(?:\+|%[sv]|fmt\.Sprintf)`),
+			ConstArgSafe: true,
+			Applies:      HasGoExtension,
+			Fix:          "Use parameterised queries: db.Query(\"SELECT … WHERE x = ?\", value). Never concatenate or fmt.Sprintf user-controlled values into SQL.",
 		},
 		{
 			ID:         "GO_EXEC_COMMAND_INJECTION",
@@ -51,9 +64,10 @@ func GoRules() []Rule {
 			//   1. exec.Command("sh","-c", …) / bash / cmd / powershell — shell semantics.
 			//   2. exec.Command(…) with `+` concat anywhere in the argv list.
 			//   3. exec.Command(…) with fmt.Sprintf building an argv element.
-			Pattern: regexp.MustCompile(`exec\.(?:Command|CommandContext)\([^)]*(?:"(?:sh|bash|cmd|powershell)"\s*,\s*"-c"|\+|fmt\.Sprintf)`),
-			Applies: HasGoExtension,
-			Fix:     "Pass argv as a list rather than going through `sh -c`. If shell semantics are required, sanitise inputs with shellescape or use os/exec with explicit env+argv.",
+			Pattern:      regexp.MustCompile(`exec\.(?:Command|CommandContext)\(` + callArgs + `(?:"(?:sh|bash|cmd|powershell)"\s*,\s*"-c"|\+|fmt\.Sprintf)`),
+			ConstArgSafe: true,
+			Applies:      HasGoExtension,
+			Fix:          "Pass argv as a list rather than going through `sh -c`. If shell semantics are required, sanitise inputs with shellescape or use os/exec with explicit env+argv.",
 		},
 		{
 			ID:         "GO_WEAK_HASH_PASSWORD",
@@ -128,9 +142,21 @@ func JSRules() []Rule {
 			Confidence: models.ConfidenceMedium,
 			Category:   "injection",
 			CWE:        "CWE-78",
-			Pattern:    regexp.MustCompile(`\bchild_process\.exec\s*\(`),
-			Applies:    HasJSExtension,
-			Fix:        "Prefer child_process.execFile or spawn with argv as an array. exec passes its first argument to a shell.",
+			// exec / execSync in any import form: `child_process.exec(`, a
+			// destructured `const { exec } = require("child_process")`, an ES
+			// `import { execSync } from "node:child_process"`, and
+			// `promisify(require("child_process").exec)`. A bare `exec(` is
+			// too common a name to flag alone, so FileGuard limits the rule
+			// to files that import child_process, and NegPattern drops a
+			// `.exec(` method call (RegExp.exec) unless the line spells out
+			// child_process.exec. FN class: `cp.exec(` through an alias of the
+			// module; a shell command run through a differently named wrapper.
+			Pattern:      regexp.MustCompile(`\b(?:child_process\.)?exec(?:Sync)?\s*\(|require\(\s*['"](?:node:)?child_process['"]\s*\)\.exec(?:Sync)?\b`),
+			NegPattern:   regexp.MustCompile(`\.exec\s*\(`),
+			NegException: regexp.MustCompile(`child_process['"]?\)?\.exec`),
+			FileGuard:    regexp.MustCompile(`(?:require\(\s*['"](?:node:)?child_process['"]\s*\)|from\s+['"](?:node:)?child_process['"])`),
+			Applies:      HasJSExtension,
+			Fix:          "Prefer child_process.execFile or spawn with argv as an array. exec passes its first argument to a shell.",
 		},
 		{
 			ID:         "JS_DOCUMENT_WRITE",
@@ -197,11 +223,14 @@ func JavaRules() []Rule {
 			CWE:        "CWE-78",
 			// Runtime.getRuntime().exec(...) or new ProcessBuilder(...) whose
 			// argument is built with `+` concat or String.format. FP class:
-			// concat of two constants. FN class: argv built on a prior line
-			// (needs taint, not line-local regex).
-			Pattern: regexp.MustCompile(`(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\([^)]*(?:\+|String\.format)`),
-			Applies: HasJavaExtension,
-			Fix:     "Pass the command + args as a String[] / List<String> of literals; never build a shell string from user input. If a shell is unavoidable, validate against an allowlist.",
+			// concat of values the file declares as constants is dropped
+			// (ConstArgSafe); a constant defined elsewhere still fires. FN
+			// class: argv built on a prior line (needs taint, not line-local
+			// regex).
+			Pattern:      regexp.MustCompile(`(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\(` + callArgs + `(?:\+|String\.format)`),
+			ConstArgSafe: true,
+			Applies:      HasJavaExtension,
+			Fix:          "Pass the command + args as a String[] / List<String> of literals; never build a shell string from user input. If a shell is unavoidable, validate against an allowlist.",
 		},
 		{
 			ID:         "JAVA_SQL_INJECTION",
@@ -210,18 +239,29 @@ func JavaRules() []Rule {
 			Confidence: models.ConfidenceMedium,
 			Category:   "injection",
 			CWE:        "CWE-89",
-			// executeQuery/executeUpdate/prepareStatement whose SQL string
-			// literal is immediately concatenated. These three are JDBC-specific
-			// names, so an Executor's execute(Runnable) cannot collide; bare
-			// `execute` is deliberately NOT matched (it would fire on a non-SQL
-			// Executor.execute(...) whose argument merely contains a SQL-looking
-			// word). `[^()]*` (not `[^)]*`) so the match cannot cross an inner
-			// call's `(` — e.g. ex.execute(makeTask("update " + x)) stays clean.
-			// FN class: Statement.execute("raw sql" + x) and SQL assembled on a
-			// prior line (needs taint, not line-local regex).
-			Pattern: regexp.MustCompile(`(?:executeQuery|executeUpdate|prepareStatement)\s*\([^()]*"[^"]*(?i:select|insert|update|delete|from|where)[^"]*"\s*\+`),
-			Applies: HasJavaExtension,
-			Fix:     "Use a PreparedStatement with bound `?` parameters: conn.prepareStatement(\"… WHERE x = ?\"). Never concatenate user input into SQL.",
+			// Two alternations on one SQL-literal-then-`+` tail.
+			//   1. executeQuery/executeUpdate/prepareStatement, matched bare.
+			//      These three are JDBC-specific names, so an Executor's
+			//      execute(Runnable) cannot collide; bare `execute`/`update`/
+			//      `query` are deliberately NOT matched here (they would fire on
+			//      a non-SQL Executor.execute(...) whose argument merely
+			//      contains a SQL-looking word).
+			//   2. Spring JdbcTemplate and JPA calls (query*, update, execute,
+			//      batchUpdate, createQuery, createNativeQuery, createSQLQuery),
+			//      which need a RECEIVER named like one: jdbcTemplate,
+			//      namedParameterJdbcTemplate, template, stmt, statement, em,
+			//      entityManager, session. The receiver is what keeps
+			//      executor.execute(makeTask("update " + x)) out.
+			// callArgs crosses one level of inner call, so
+			// `conn.prepareStatement(table("u") + "SELECT ...")` still matches.
+			// ConstArgSafe: a query concatenated only from `static final
+			// String` constants of the file is not injectable.
+			// FN class: execute("raw sql" + x) on a receiver not named above, and
+			// SQL assembled on a prior line (needs taint, not line-local regex).
+			Pattern:      regexp.MustCompile(`(?:(?:executeQuery|executeUpdate|prepareStatement)|\b(?:jdbcTemplate|namedParameterJdbcTemplate|template|stmt|statement|em|entityManager|session)\.(?:query|queryForList|queryForObject|queryForMap|queryForRowSet|update|execute|batchUpdate|createQuery|createNativeQuery|createSQLQuery))\s*\(` + callArgs + `"[^"]*(?i:select|insert|update|delete|from|where)[^"]*"\s*\+`),
+			ConstArgSafe: true,
+			Applies:      HasJavaExtension,
+			Fix:          "Use a PreparedStatement with bound `?` parameters: conn.prepareStatement(\"… WHERE x = ?\"). Never concatenate user input into SQL.",
 		},
 		{
 			ID:         "JAVA_WEAK_CRYPTO",
@@ -236,6 +276,36 @@ func JavaRules() []Rule {
 			Pattern: regexp.MustCompile(`(?:MessageDigest\.getInstance\s*\(\s*"(?i:MD5|SHA-?1)"|Cipher\.getInstance\s*\(\s*"[^"]*(?i:DES|ECB|RC4)[^"]*")`),
 			Applies: HasJavaExtension,
 			Fix:     "Use SHA-256+ for digests and AES-GCM (never ECB/DES/RC4) for encryption. For passwords use bcrypt/scrypt/argon2/PBKDF2.",
+		},
+		{
+			ID:         "JAVA_WEAK_HASH_PASSWORD",
+			Title:      "Weak hash used for password storage",
+			Severity:   models.SeverityHigh,
+			Confidence: models.ConfidenceMedium,
+			Category:   "crypto",
+			CWE:        "CWE-916",
+			// The Java twin of GO_WEAK_HASH_PASSWORD, kept apart from
+			// JAVA_WEAK_CRYPTO: that rule says "an MD5/SHA-1 digest exists"
+			// (Medium, general hygiene: an MD5 ETag is a hit), this one says
+			// "a password is fed to it" (High, CWE-916). A textscan Rule has
+			// one Severity and one Pattern, so they cannot be one rule.
+			//
+			// Fires on the digest()/update() line when the RECEIVER is
+			// MessageDigest-shaped (md, md5, sha1, digest, messageDigest, or a
+			// `MessageDigest.getInstance(...)` chain: update() alone is a
+			// repository/JDBC method name too) and its argument is a
+			// password-named value ending at a word boundary (password,
+			// userPassword, pwd, passphrase, getPassword(); not
+			// passwordForm); FileGuard limits it to a file that asks for MD5
+			// or SHA-1 at all, because the digest line of
+			// `MessageDigest md = ...getInstance("MD5"); md.digest(password...)`
+			// does not name the algorithm. FP class: a file that uses MD5
+			// elsewhere and SHA-256 on the password line. FN class: the
+			// password reaches digest() through a differently named variable.
+			Pattern:   regexp.MustCompile(`(?i:\b(?:md\w*|sha\w*|digest\w*|messageDigest\w*)|MessageDigest\.getInstance\s*\([^)]*\))\.(?:digest|update)\s*\(\s*(?:\w+\.)*(?:\w*[Pp]assword|\w*[Pp]wd|\w*[Pp]assphrase)\b`),
+			FileGuard: regexp.MustCompile(`MessageDigest\.getInstance\s*\(\s*"(?i:MD5|SHA-?1)"`),
+			Applies:   HasJavaExtension,
+			Fix:       "Use bcrypt, scrypt, argon2, or PBKDF2 for password hashing. Raw MD5/SHA-1 is unsuitable: fast hashes with no work factor and no per-record salt.",
 		},
 		{
 			ID:         "JAVA_INSECURE_DESERIALIZATION",
@@ -326,9 +396,9 @@ func JavaRules() []Rule {
 			// An outbound-request sink (new URL / openConnection / HttpClient /
 			// RestTemplate) wrapping a servlet request source ON THE SAME LINE.
 			// The request-source qualifier is required — an unqualified `new URL(`
-			// is far too noisy. `[^()]*` guards inner-call crossing. FN class:
+			// is far too noisy. callArgs crosses one level of inner call. FN class:
 			// the URL built on a prior line (needs the deferred taint engine).
-			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?URL|\.openConnection|HttpRequest\.newBuilder|new\s+(?:[\w.]+\.)?HttpGet|restTemplate\.(?:getForObject|exchange))\s*\([^()]*` + javaReqSource),
+			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?URL|\.openConnection|HttpRequest\.newBuilder|new\s+(?:[\w.]+\.)?HttpGet|restTemplate\.(?:getForObject|exchange))\s*\(` + callArgs + javaReqSource),
 			Applies: HasJavaExtension,
 			Fix:     "Validate the URL against an allowlist of permitted hosts/schemes before the request; never pass a raw request parameter to an HTTP client.",
 		},
@@ -344,11 +414,11 @@ func JavaRules() []Rule {
 			// receiver must contain "resp" (response/resp/httpResponse/
 			// this.response) — without it, any object with a getWriter()
 			// (a log, a report, a Socket) would false-positive (v0.29 review).
-			// The request-source qualifier is also required. `[^()]*` guards
-			// inner-call crossing. FN class: a writer aliased to a non-"resp"
+			// The request-source qualifier is also required. callArgs crosses
+			// one level of inner call. FN class: a writer aliased to a non-"resp"
 			// local (`PrintWriter out = response.getWriter(); out.print(req)`),
 			// or value assembled on a prior line — needs the deferred taint engine.
-			Pattern: regexp.MustCompile(`[\w]*[Rr]esp[\w]*\.(?:getWriter|getOutputStream)\(\)\.(?:print|println|write|append)\s*\([^()]*` + javaReqSource),
+			Pattern: regexp.MustCompile(`[\w]*[Rr]esp[\w]*\.(?:getWriter|getOutputStream)\(\)\.(?:print|println|write|append)\s*\(` + callArgs + javaReqSource),
 			Applies: HasJavaExtension,
 			Fix:     "HTML-encode untrusted output (OWASP Encoder: Encode.forHtml(...)) or use a context-aware templating engine; never write a raw request parameter to the response.",
 		},
@@ -361,9 +431,9 @@ func JavaRules() []Rule {
 			CWE:        "CWE-22",
 			// A file-API sink (new File / Paths.get / FileInputStream / etc.)
 			// taking a request source ON THE SAME LINE. Request-source qualifier
-			// required (a constant path is fine). `[^()]*` guards inner-call
-			// crossing. FN class: path assembled on a prior line.
-			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?File(?:InputStream|Reader|OutputStream|Writer)?|Paths\.get)\s*\([^()]*` + javaReqSource),
+			// required (a constant path is fine). callArgs crosses one level of
+			// inner call. FN class: path assembled on a prior line.
+			Pattern: regexp.MustCompile(`(?:new\s+(?:[\w.]+\.)?File(?:InputStream|Reader|OutputStream|Writer)?|Paths\.get)\s*\(` + callArgs + javaReqSource),
 			Applies: HasJavaExtension,
 			Fix:     "Resolve the path against a fixed base directory and verify it stays within it (canonical path + prefix check), or map the request value to an allowlisted file; never pass it straight to a file API.",
 		},

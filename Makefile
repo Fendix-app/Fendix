@@ -1,4 +1,4 @@
-.PHONY: build test lint clean embed-engine e2e fuzz bench coverage-smoke
+.PHONY: build test lint clean embed-engine e2e fuzz bench coverage-smoke parity parity-venv parity-baseline parity-prereqs
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
 GO_DIR := go
@@ -100,6 +100,92 @@ heavy-eval: build
 heavy-eval-fast: build
 	@echo "→ Running heavy-eval (SAST stages only, ~5 min)..."
 	$(PYTHON) scripts/heavy-eval/run.py --binary $(HEAVY_EVAL_BIN) --python-engine --fast
+
+# Framework parity gate (benchmarks/frameworks/, defined by SPEC.md).
+#
+#   make parity-venv   create $(PARITY_VENV) from python/requirements.lock with
+#                      --require-hashes (needs Python 3.11, the lock's version:
+#                      make parity-venv PARITY_PYTHON=python3.11); run it once
+#   make parity        build bin/fendix-parity from source, scan all 522 cases
+#                      (each in its own tree, ~10 min) and exit 1 when any case
+#                      is worse than benchmarks/frameworks/baseline.json
+#   make parity-baseline
+#                      the same scan, then rewrite baseline.json from it; run it
+#                      in a PR that improves results and commit the new file
+#   make parity PARITY_NO_SEMGREP=1
+#                      the same scan with no `semgrep` on PATH (report-only, no
+#                      gate): the false positives of the native engines alone
+#
+# PARITY_ARGS passes extra flags to run_parity.py, for example
+# `make parity PARITY_ARGS="--frameworks flask,django"` gates a subset (the
+# gate then ignores baseline entries of the frameworks that did not run).
+# Results land in $(PARITY_OUT)/results.json, with the wall time of every scan
+# (scan_seconds per framework, seconds per case, elapsed_seconds in all); the
+# run prints its total and its slowest scan, to watch against the engine's
+# 300 s Semgrep deadline.
+PARITY_VENV ?= .venv-parity
+PARITY_PYTHON ?= python3
+PARITY_ARGS ?=
+# PARITY_NO_SEMGREP=1 runs the harness with a PATH that carries the venv's
+# python3 but no `semgrep`, so only the native engines (textscan, secrets, the
+# Python AST engine) answer: the `--fast` / no-Semgrep path. Results land in
+# $(PARITY_NOSEM_OUT), and the run is report-only: baseline.json was recorded
+# with Semgrep, so gating a no-Semgrep run against it would only list every
+# case Semgrep catches. Use it to read the false positives that the native
+# engines produce on the safe_lookalike cases on their own.
+PARITY_NO_SEMGREP ?=
+PARITY_BIN := $(BIN_DIR)/fendix-parity
+PARITY_OUT := .parity
+PARITY_NOSEM_OUT := .parity-nosemgrep
+PARITY_BASELINE := benchmarks/frameworks/baseline.json
+# --fendix must be absolute: the harness runs the binary from a temp directory.
+ifeq ($(PARITY_NO_SEMGREP),1)
+# A python3 *shim* (not a symlink: a symlink out of the venv loses the venv's
+# site-packages) in a temp dir, then the caller's PATH minus every directory
+# that holds a `semgrep`. The venv's own bin stays off PATH.
+PARITY_RUN = nosem=$$(mktemp -d) && trap 'rm -rf "$$nosem"' EXIT && \
+	printf '\#!/bin/sh\nexec "%s/bin/python3" "$$@"\n' "$(abspath $(PARITY_VENV))" > "$$nosem/python3" && \
+	chmod +x "$$nosem/python3" && \
+	clean=$$(printf '%s\n' "$$PATH" | tr ':' '\n' | while read -r d; do [ -x "$$d/semgrep" ] || printf '%s:' "$$d"; done) && \
+	PATH="$$nosem:$${clean%:}" FENDIX_ENGINE="$(CURDIR)/$(PY_DIR)" \
+	python3 benchmarks/frameworks/run_parity.py --fendix "$(CURDIR)/$(PARITY_BIN)" \
+	--out $(PARITY_NOSEM_OUT) --no-timing --isolate $(PARITY_ARGS)
+else
+# The venv goes first on PATH so the engine finds its python3 and semgrep there.
+PARITY_RUN = PATH="$(abspath $(PARITY_VENV))/bin:$$PATH" FENDIX_ENGINE="$(CURDIR)/$(PY_DIR)" \
+	python3 benchmarks/frameworks/run_parity.py --fendix "$(CURDIR)/$(PARITY_BIN)" \
+	--out $(PARITY_OUT) --no-timing --isolate $(PARITY_ARGS)
+endif
+
+parity-venv:
+	$(PARITY_PYTHON) -m venv $(PARITY_VENV)
+	$(PARITY_VENV)/bin/pip install --require-hashes -r $(PY_DIR)/requirements.lock
+
+parity-prereqs:
+ifeq ($(PARITY_NO_SEMGREP),1)
+	@test -x "$(PARITY_VENV)/bin/python3" || \
+		(echo "parity: no python3 in $(PARITY_VENV); run 'make parity-venv' first" >&2; exit 1)
+else
+	@test -x "$(PARITY_VENV)/bin/semgrep" || \
+		(echo "parity: no semgrep in $(PARITY_VENV); run 'make parity-venv' first" >&2; exit 1)
+endif
+	@echo "→ Building $(PARITY_BIN) from source..."
+	cd $(GO_DIR) && go build -o ../$(PARITY_BIN) ./cmd/fendix
+
+ifeq ($(PARITY_NO_SEMGREP),1)
+parity: parity-prereqs
+	$(PARITY_RUN)
+	@python3 -c 'import json,sys; r=json.load(open("$(PARITY_NOSEM_OUT)/results.json")); fp=sorted(c["id"] for f in r["frameworks"] for c in f["cases"] if c["variant"]=="safe_lookalike" and c["outcome"]=="FP"); print("parity (no Semgrep): %d false positive(s) on safe_lookalike cases" % len(fp)); [print("  "+i) for i in fp]'
+
+parity-baseline:
+	@echo "parity-baseline: baseline.json is recorded with Semgrep; run it without PARITY_NO_SEMGREP" >&2; exit 1
+else
+parity: parity-prereqs
+	$(PARITY_RUN) --gate $(PARITY_BASELINE)
+
+parity-baseline: parity-prereqs
+	$(PARITY_RUN) --write-baseline $(PARITY_BASELINE)
+endif
 
 test-python:
 	@echo "→ Running Python tests..."

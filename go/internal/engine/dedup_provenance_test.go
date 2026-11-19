@@ -54,13 +54,28 @@ func TestDedupPreservesConfirmedEvidenceAgainstUnknownDuplicate(t *testing.T) {
 		{"unknown first", []models.Finding{unknown, confirmed}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// RC-9e (owner ruling OR-85, "cross-file deduplication isolation"):
+			// occurrences with different own evidence no longer share a
+			// finding. This test used to assert ONE merged group; the property
+			// it protects is unchanged and is asserted below, on the finding
+			// that holds the proven occurrence: its proof is never erased.
 			out := Deduplicate(append([]models.Finding(nil), tc.in...))
-			if len(out) != 1 {
-				t.Fatalf("got %d findings, want 1 merged group", len(out))
+			if len(out) != 2 {
+				t.Fatalf("got %d findings, want one per own-evidence class (the proven occurrence and the unproven one)", len(out))
 			}
-			g := out[0]
+			var g, other models.Finding
+			for _, f := range out {
+				if f.Endpoint == "z/views.py:674" {
+					g = f
+				} else {
+					other = f
+				}
+			}
+			if g.Endpoint == "" || other.Endpoint != "a/util.py:10" {
+				t.Fatalf("both occurrences must stay reported, got %v", []string{out[0].Endpoint, out[1].Endpoint})
+			}
 			if !g.Reachable {
-				t.Error("Reachable = false — a proved taint path was erased by an unconfirmed duplicate")
+				t.Error("Reachable = false — a proved taint path was erased")
 			}
 			if !g.ProvenPath {
 				t.Error("ProvenPath = false — proof erased")
@@ -69,14 +84,18 @@ func TestDedupPreservesConfirmedEvidenceAgainstUnknownDuplicate(t *testing.T) {
 				t.Error("RouteConfirmed = false — proof erased")
 			}
 			if len(g.TaintChain) != 2 {
-				t.Errorf("TaintChain has %d links, want 2 — the chain was dropped with the losing member",
+				t.Errorf("TaintChain has %d links, want 2 — the chain was dropped",
 					len(g.TaintChain))
 			}
 			if g.Route == nil {
-				t.Error("Route = nil — the bound route was dropped with the losing member")
+				t.Error("Route = nil — the bound route was dropped")
 			}
 			if g.SourceTier != models.TierTreeSitter {
-				t.Errorf("SourceTier = %q, want the most-trusted tier in the group", g.SourceTier)
+				t.Errorf("SourceTier = %q, want the proven occurrence's tier", g.SourceTier)
+			}
+			// And the isolation: the unproven occurrence does not borrow it.
+			if other.Reachable || other.ProvenPath || other.RouteConfirmed || len(other.TaintChain) > 0 || other.Route != nil {
+				t.Errorf("a/util.py:10 carries a proof it does not have: %+v", other)
 			}
 		})
 	}

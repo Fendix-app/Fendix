@@ -1,0 +1,402 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/reporters"
+)
+
+// End-to-end: what an active scan reports about its probes when the target
+// misbehaves. The page "/" links to /item?id=1 (the probed endpoint); how /item
+// behaves is the scenario. The invariant under test: a target that does not
+// answer is inconclusive, never an evaluation, never a scanner gap by itself,
+// and never leaves the report claiming every probe was evaluated.
+
+func scanScenario(t *testing.T, item func(w http.ResponseWriter, r *http.Request)) (reporters.JSONReport, int) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body><a href="/item?id=1">item</a> <a href="/ok?id=1">ok</a></body></html>`)
+	})
+	// /ok always answers normally: its probes are legitimately evaluated, so the
+	// pass delivers (a pass in which nothing is evaluated is a gap, round 5).
+	mux.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "fine")
+	})
+	var itemHits atomic.Int32
+	mux.HandleFunc("/item", func(w http.ResponseWriter, r *http.Request) {
+		// The crawler's own GET is answered normally so discovery finds the
+		// endpoint; only requests that carry a probe payload misbehave.
+		if itemHits.Add(1) == 1 && r.URL.RawQuery == "id=1" {
+			w.WriteHeader(200)
+			return
+		}
+		item(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	out := filepath.Join(t.TempDir(), "r.json")
+	cfg := &models.ScanConfig{URL: srv.URL, AllowPrivate: true, Workers: 4, Timeout: 4, CrawlDepth: 1, Format: "json", OutputPath: out, EnableActive: true}
+	code := NewOrchestrator(cfg, "dev").Run(context.Background())
+	return readReport(t, out), code
+}
+
+func probesOf(t *testing.T, r reporters.JSONReport) (*models.ActiveProbeCoverage, reporters.ScannerStatus) {
+	t.Helper()
+	if r.Metadata.Coverage == nil || r.Metadata.Coverage.ActiveProbes == nil {
+		t.Fatalf("metadata.coverage.active_probes missing: %+v", r.Metadata.Coverage)
+	}
+	s, ok := statusFor(r, AnalyzerActiveProbes)
+	if !ok {
+		t.Fatal("no active-probes status entry")
+	}
+	return r.Metadata.Coverage.ActiveProbes, s
+}
+
+// itemOnly asserts that every probe that was not evaluated hit /item (the
+// scenario's endpoint) or was a GraphQL origin-sweep probe the page answers 404,
+// and that the account adds up: /ok answers normally, so its probes are
+// legitimately evaluated.
+func itemOnly(t *testing.T, ap *models.ActiveProbeCoverage) {
+	t.Helper()
+	if ap.Attempted == 0 || ap.Evaluated+ap.Inconclusive+ap.UnknownOrigin+ap.ScannerFailed != ap.Attempted {
+		t.Fatalf("the account does not add up: %+v", ap)
+	}
+	for _, e := range ap.NotEvaluatedChecks {
+		// The origin GraphQL sweep probes well-known paths the page never links:
+		// the fixture answers them 404, which is gated (round 5), so they are listed.
+		if e.Check == "graphql" && e.Reason == "gated" && e.Origin == "target" {
+			continue
+		}
+		if !strings.HasPrefix(e.Endpoint, "GET /item") {
+			t.Fatalf("an answered endpoint was reported as not evaluated: %+v", e)
+		}
+	}
+}
+
+func TestProbeCoverage_TargetNeverAnswersIsInconclusiveNotCompleteAndSafe(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) { <-release })
+	ap, st := probesOf(t, rep)
+	itemOnly(t, ap)
+	if ap.Inconclusive == 0 || ap.Reasons["target"]["timeout"] != ap.Inconclusive-ap.Gated.Total || ap.UnknownOrigin+ap.ScannerFailed != 0 {
+		t.Fatalf("a target that never answers: %+v", ap)
+	}
+	// Target-controlled non-answers are not a scanner gap: under A-D5 they make
+	// the entry failed with the target-owned no_endpoints (no refund path)...
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints {
+		t.Fatalf("state = %s/%s %q, want failed/no_endpoints: target non-responses are target-side, and not evaluated", st.State, st.Reason, st.Detail)
+	}
+	// ...but the entry states what was and was not evaluated, first.
+	if !strings.HasPrefix(st.Detail, "probe evaluation: ") || !strings.Contains(st.Detail, "inconclusive probes (target did not answer): timeout") {
+		t.Fatalf("detail = %q", st.Detail)
+	}
+	var itemListed bool
+	for _, e := range ap.NotEvaluatedChecks {
+		if e.Origin == "target" && e.Reason == "timeout" && strings.HasPrefix(e.Endpoint, "GET /item") {
+			itemListed = true
+		}
+	}
+	if !itemListed {
+		t.Fatalf("not_evaluated_checks = %+v", ap.NotEvaluatedChecks)
+	}
+	// Findings are always kept; none were fabricated from non-answers.
+	for _, f := range rep.Findings {
+		if strings.HasPrefix(f.RuleID, "injection/") || strings.HasPrefix(f.RuleID, "xss/") {
+			t.Fatalf("a probe that never got an answer produced a finding: %+v", f)
+		}
+	}
+}
+
+func TestProbeCoverage_ResetConnectionsAreTargetSide(t *testing.T) {
+	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) {
+		c, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		if tc, ok := c.(*net.TCPConn); ok {
+			_ = tc.SetLinger(0)
+		}
+		c.Close()
+	})
+	ap, st := probesOf(t, rep)
+	itemOnly(t, ap)
+	if ap.Inconclusive == 0 || ap.Reasons["target"]["connection_reset"] != ap.Inconclusive-ap.Gated.Total || ap.UnknownOrigin != 0 || ap.ScannerFailed != 0 {
+		t.Fatalf("resets: %+v", ap)
+	}
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints { // A-D5: target-side, not evaluated
+		t.Fatalf("state %s/%s %q", st.State, st.Reason, st.Detail)
+	}
+}
+
+// Round 5 (D5-6, C4B-01 / C4B-06). The round-4b test of this subject pinned
+// "401/403/404/410 are evaluated", which is the defect: a target answering 404
+// to every probe read "All N active probes sent were evaluated" and the
+// entry stayed ok. A gated answer is a final answer, but it evaluates nothing.
+//
+// Here the whole target is gated, so nothing at all was evaluated: the entry is
+// failed (target-owned no_endpoints), the CLI says so, and --require-analyzers
+// active-probes exits 2.
+func TestProbeCoverage_GatedStatusesAreNotEvaluated(t *testing.T) {
+	for _, code := range []int{401, 403, 404, 410} {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/" && r.URL.RawQuery == "" {
+				w.Header().Set("Content-Type", "text/html")
+				fmt.Fprint(w, `<html><body><a href="/item?id=1">item</a></body></html>`)
+				return
+			}
+			w.WriteHeader(code)
+		})
+		srv := httptest.NewServer(mux)
+		out := filepath.Join(t.TempDir(), "r.json")
+		cfg := &models.ScanConfig{URL: srv.URL, AllowPrivate: true, Workers: 4, Timeout: 4, CrawlDepth: 1, Format: "json", OutputPath: out, EnableActive: true,
+			RequiredAnalyzers: []string{AnalyzerActiveProbes}}
+		exit := NewOrchestrator(cfg, "dev").Run(context.Background())
+		srv.Close()
+		rep := readReport(t, out)
+		ap, st := probesOf(t, rep)
+		k := strconv.Itoa(code)
+		if ap.Attempted == 0 || ap.Evaluated != 0 || ap.Gated.Total == 0 || ap.Gated.ByStatus[k] != ap.Gated.Total || len(ap.Gated.ByStatus) != 1 {
+			t.Fatalf("%d: gated probes must not be evaluated: %+v", code, ap)
+		}
+		if ap.Inconclusive != ap.Gated.Total || ap.UnknownOrigin != 0 || ap.ScannerFailed != 0 || ap.Reasons["target"]["gated"] != ap.Gated.Total {
+			t.Fatalf("%d: a gated probe is target-side, never a scanner or unknown-origin gap: %+v", code, ap)
+		}
+		if len(ap.NotEvaluatedChecks) == 0 || ap.NotEvaluatedChecks[0].Reason != "gated" || ap.NotEvaluatedChecks[0].Origin != "target" {
+			t.Fatalf("%d: the gated pairs must be listed: %+v", code, ap.NotEvaluatedChecks)
+		}
+		if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints {
+			t.Fatalf("%d: state %s/%s %q, want failed/no_endpoints (0 evaluated is never complete)", code, st.State, st.Reason, st.Detail)
+		}
+		if rep.Metadata.Coverage.ConfiguredComplete || len(rep.Metadata.Coverage.RequiredGaps) != 1 {
+			t.Fatalf("%d: coverage %+v must be incomplete with the requirement undelivered", code, rep.Metadata.Coverage)
+		}
+		if exit != 2 {
+			t.Fatalf("%d: exit %d, want 2 for --require-analyzers active-probes with 0 probes evaluated", code, exit)
+		}
+	}
+}
+
+// A gated endpoint beside an evaluated one: the entry still delivers, the gated
+// probes are counted and listed apart, and the pair is never proof of anything.
+func TestProbeCoverage_GatedEndpointBesideAnEvaluatedOneIsListed(t *testing.T) {
+	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(403) })
+	ap, st := probesOf(t, rep)
+	if ap.Evaluated == 0 || ap.Gated.Total == 0 || ap.Gated.ByStatus["403"] == 0 {
+		t.Fatalf("the page \"/\" is evaluated and /item is gated: %+v", ap)
+	}
+	// A-D5: the gated probes are required and not evaluated, so the entry is
+	// failed/no_endpoints (target-owned), with the gated segment.
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || !strings.Contains(st.Detail, "gated probes (target answered 401/403/404/410 so not evaluated): ") {
+		t.Fatalf("state %s %q", st.State, st.Detail)
+	}
+	var item bool
+	for _, e := range ap.NotEvaluatedChecks {
+		if e.Reason == "gated" && strings.HasPrefix(e.Endpoint, "GET /item") {
+			item = true
+		}
+	}
+	if !item {
+		t.Fatalf("/item's gated probes must be listed: %+v", ap.NotEvaluatedChecks)
+	}
+}
+
+func TestProbeCoverage_RateLimitAfterRetriesIsInconclusive(t *testing.T) {
+	var hits atomic.Int32
+	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(429)
+	})
+	ap, st := probesOf(t, rep)
+	itemOnly(t, ap)
+	if ap.Inconclusive == 0 || ap.Reasons["target"]["rate_limited"] != ap.Inconclusive-ap.Gated.Total {
+		t.Fatalf("429: %+v", ap)
+	}
+	if hits.Load() <= int32(ap.Inconclusive) {
+		t.Fatalf("hits=%d inconclusive=%d: 429 must have been retried", hits.Load(), ap.Inconclusive)
+	}
+	if st.State != reporters.ScannerFailed || st.Reason != reporters.ReasonNoEndpoints || !strings.Contains(st.Detail, "rate_limited") {
+		t.Fatalf("state %s detail %q", st.State, st.Detail)
+	}
+	// A-D5: an unevaluated required probe makes the scan incomplete.
+	if rep.Metadata.Coverage.ConfiguredComplete {
+		t.Fatalf("target non-answers left the scan complete: %+v", rep.Metadata.Coverage)
+	}
+}
+
+func TestProbeCoverage_PartialResultsKeepEvaluatedAndInconclusiveApart(t *testing.T) {
+	var n atomic.Int32
+	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1)%2 == 0 {
+			w.WriteHeader(503)
+			return
+		}
+		w.WriteHeader(200)
+	})
+	ap, _ := probesOf(t, rep)
+	if ap.Evaluated == 0 || ap.Evaluated+ap.Inconclusive != ap.Attempted {
+		t.Fatalf("partial: %+v", ap)
+	}
+}
+
+// A target that serves discovery and then refuses every connection: the
+// refusals come within the health window of answered requests, so they are the
+// target's behaviour (inconclusive), not an unknown-origin gap.
+func TestProbeCoverage_TargetGoingDarkAfterAnsweringIsInconclusive(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body><a href="/item?id=1">item</a></body></html>`)
+	})
+	srv := httptest.NewServer(mux)
+	out := filepath.Join(t.TempDir(), "r.json")
+	cfg := &models.ScanConfig{URL: srv.URL, AllowPrivate: true, Workers: 1, Timeout: 3, CrawlDepth: 1, Format: "json", OutputPath: out, EnableActive: true}
+	// Stop listening shortly after the crawler is done.
+	time.AfterFunc(600*time.Millisecond, func() { srv.CloseClientConnections(); srv.Listener.Close() })
+	NewOrchestrator(cfg, "dev").Run(context.Background())
+	rep := readReport(t, out)
+	if rep.Metadata.Coverage == nil || rep.Metadata.Coverage.ActiveProbes == nil {
+		t.Skip("no probes were sent before the target went dark")
+	}
+	ap := rep.Metadata.Coverage.ActiveProbes
+	if ap.Attempted == 0 {
+		t.Skip("no probes were sent before the target went dark")
+	}
+	if ap.Reasons["unknown"]["connection_refused"] != 0 {
+		t.Fatalf("refusals within the window of answered requests are target-side, got %+v", ap)
+	}
+}
+
+// The live report's metadata.coverage.active_probes conforms to the published
+// docs/schema.json: required keys, no undeclared keys, the closed reason
+// vocabularies, the origin enum, the list cap. (The repository has no JSON
+// Schema library, so the subset this definition uses is checked here.)
+func TestProbeCoverage_ReportMatchesPublishedSchema(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "../../../docs/schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Definitions map[string]map[string]any `json:"definitions"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	var hits atomic.Int32
+	rep, _ := scanScenario(t, func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1)%3 == 0 {
+			w.WriteHeader(503)
+			return
+		}
+		w.WriteHeader(200)
+	})
+	probesOf(t, rep)
+	data, _ := json.Marshal(rep.Metadata.Coverage.ActiveProbes)
+	var live map[string]any
+	if err := json.Unmarshal(data, &live); err != nil {
+		t.Fatal(err)
+	}
+	var check func(path string, def map[string]any, v any)
+	resolve := func(def map[string]any) map[string]any {
+		if ref, ok := def["$ref"].(string); ok {
+			return schema.Definitions[strings.TrimPrefix(ref, "#/definitions/")]
+		}
+		return def
+	}
+	check = func(path string, def map[string]any, v any) {
+		def = resolve(def)
+		switch def["type"] {
+		case "object":
+			obj, ok := v.(map[string]any)
+			if !ok {
+				t.Fatalf("%s: not an object", path)
+			}
+			props, _ := def["properties"].(map[string]any)
+			if req, ok := def["required"].([]any); ok {
+				for _, k := range req {
+					if _, ok := obj[k.(string)]; !ok {
+						t.Errorf("%s: required key %q missing", path, k)
+					}
+				}
+			}
+			for k, child := range obj {
+				cd, declared := props[k].(map[string]any)
+				if !declared {
+					if def["additionalProperties"] == false {
+						t.Errorf("%s: key %q is not declared in the schema", path, k)
+					}
+					continue
+				}
+				check(path+"."+k, cd, child)
+			}
+		case "array":
+			arr, ok := v.([]any)
+			if !ok {
+				t.Fatalf("%s: not an array", path)
+			}
+			if m, ok := def["maxItems"].(float64); ok && float64(len(arr)) > m {
+				t.Errorf("%s: %d items over maxItems %v", path, len(arr), m)
+			}
+			if items, ok := def["items"].(map[string]any); ok {
+				for i, e := range arr {
+					check(fmt.Sprintf("%s[%d]", path, i), items, e)
+				}
+			}
+		case "integer":
+			f, ok := v.(float64)
+			if !ok || f != float64(int(f)) {
+				t.Errorf("%s: %v is not an integer", path, v)
+			} else if m, ok := def["minimum"].(float64); ok && f < m {
+				t.Errorf("%s: %v under minimum %v", path, f, m)
+			}
+		case "boolean":
+			if _, ok := v.(bool); !ok {
+				t.Errorf("%s: not a boolean", path)
+			}
+		case "string":
+			s, ok := v.(string)
+			if !ok {
+				t.Errorf("%s: not a string", path)
+			}
+			if en, ok := def["enum"].([]any); ok {
+				found := false
+				for _, e := range en {
+					found = found || e == s
+				}
+				if !found {
+					t.Errorf("%s: %q not in enum %v", path, s, en)
+				}
+			}
+		}
+	}
+	check("active_probes", schema.Definitions["ActiveProbeCoverage"], live)
+	// And the Coverage definition declares the property.
+	props := schema.Definitions["Coverage"]["properties"].(map[string]any)
+	if _, ok := props["active_probes"]; !ok {
+		t.Fatal("Coverage does not declare active_probes")
+	}
+}
