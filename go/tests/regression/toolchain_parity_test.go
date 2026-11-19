@@ -21,7 +21,7 @@ import (
 //
 // Required: one exact Go patch across every release.yml setup-go step and
 // the provenance that records it, the same patch in the ci.yml jobs that
-// build and test the shipped code, and that patch on the minor the image
+// build and test the shipped code, and that exact patch in the image
 // builder (Dockerfile and Dockerfile.app) carries.
 func TestReleaseGoMatchesTheImageGo(t *testing.T) {
 	root := harness.RepoRoot(t)
@@ -34,17 +34,17 @@ func TestReleaseGoMatchesTheImageGo(t *testing.T) {
 		return string(data)
 	}
 
-	builder := regexp.MustCompile(`(?m)^FROM golang:(\d+\.\d+)-alpine@sha256:[0-9a-f]{64} AS go-builder$`)
-	imageMinor := ""
+	builder := regexp.MustCompile(`(?m)^FROM golang:(\d+\.\d+\.\d+)-alpine@sha256:[0-9a-f]{64} AS go-builder$`)
+	imageVersion := ""
 	for _, file := range []string{"Dockerfile", "Dockerfile.app"} {
 		m := builder.FindStringSubmatch(read(file))
 		if m == nil {
-			t.Fatalf("%s: no digest-pinned golang:<minor>-alpine go-builder stage", file)
+			t.Fatalf("%s: no digest-pinned golang:<patch>-alpine go-builder stage", file)
 		}
-		if imageMinor != "" && m[1] != imageMinor {
-			t.Fatalf("Dockerfile and Dockerfile.app build with Go %s and %s", imageMinor, m[1])
+		if imageVersion != "" && m[1] != imageVersion {
+			t.Fatalf("Dockerfile and Dockerfile.app build with Go %s and %s", imageVersion, m[1])
 		}
-		imageMinor = m[1]
+		imageVersion = m[1]
 	}
 
 	release := read(".github/workflows/release.yml")
@@ -62,8 +62,8 @@ func TestReleaseGoMatchesTheImageGo(t *testing.T) {
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(pin) {
 		t.Fatalf("release.yml pins Go %q; want an exact patch such as 1.27.1", pin)
 	}
-	if !strings.HasPrefix(pin, imageMinor+".") {
-		t.Errorf("release.yml builds with Go %s but the image builder is Go %s", pin, imageMinor)
+	if pin != imageVersion {
+		t.Errorf("release.yml builds with Go %s but the image builder is Go %s", pin, imageVersion)
 	}
 	provenance := regexp.MustCompile(`"go_version":\s*"([^"]+)"`).FindAllStringSubmatch(release, -1)
 	if len(provenance) == 0 {

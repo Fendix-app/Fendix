@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,6 +115,13 @@ func TestOrigin_RequestBudgetExhaustionIsLabelledAsTheBudget(t *testing.T) {
 	cc, cfg := probeTestEnv(t)
 	scanCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var probes sync.WaitGroup
+	// Join both probes before probeTestEnv restores the globals they read.
+	// Cleanup also joins them if an assertion exits this test early.
+	t.Cleanup(func() {
+		cancel()
+		probes.Wait()
+	})
 	SetScanContext(scanCtx)
 	cc.Audit = currentAuditLog()
 	budget.Reset()
@@ -124,13 +132,19 @@ func TestOrigin_RequestBudgetExhaustionIsLabelledAsTheBudget(t *testing.T) {
 	cc.Client = &http.Client{Transport: budget.WrapTransport(http.DefaultTransport), Timeout: 5 * time.Second}
 
 	inflight := make(chan ProbeRecord, 1)
+	probes.Add(1)
 	go func() {
+		defer probes.Done()
 		rec, _, _ := send(t, scanCtx, cc, cfg, srv.URL) // request 1: written, then the cap cancels it
 		inflight <- rec
 	}()
 	time.Sleep(150 * time.Millisecond)
 	// Request 2 is allowed (and hangs); request 3 is over the cap and fires the cancel.
-	go func() { _, _, _ = send(t, scanCtx, cc, cfg, srv.URL) }()
+	probes.Add(1)
+	go func() {
+		defer probes.Done()
+		_, _, _ = send(t, scanCtx, cc, cfg, srv.URL)
+	}()
 	time.Sleep(100 * time.Millisecond)
 	refused, _, err := send(t, scanCtx, cc, cfg, srv.URL)
 	if err == nil {

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.1] - 2026-11-20
+
+### Security
+
+- Build release binaries and both container images with Go 1.27.4, and ship
+  that toolchain for govulncheck. This fixes CVE-2026-97054 (GO-2026-6859)
+  in the bundled standard library. The builder image is pinned by digest.
+- No scanner source, report schema, finding identity or decision-policy change.
+
 ## [3.8.0] - 2026-11-19
 
 v3.8.0 is the remediation release: a scan says what it did not read, a finding
