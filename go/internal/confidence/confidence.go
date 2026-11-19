@@ -316,7 +316,8 @@ func Score(ev evidence.Evidence) Result {
 //     independent signal — and it must not ALSO band HIGH as a self-evident
 //     match, so a proven Semgrep taint finding stays MEDIUM and blocks on its
 //     reachable path, never on its own say-so.
-//   - not InTest, not Placeholder: 31 of the 35 catalogued instances in
+//   - not documentation (a credential in a README is a sample unless it is
+//     provable offline: documentationSample), and not InTest, not Placeholder: 31 of the 35 catalogued instances in
 //     tasks/FP_CORPUS.md are test fixtures, and a value the placeholder
 //     classifier recognises is deterministic evidence that the match is NOT a
 //     real credential. Both directly negate "deterministic detection of a real
@@ -335,7 +336,31 @@ func HasDeterministicDetection(ev evidence.Evidence) bool {
 		ev.Confidence == models.ConfidenceHigh &&
 		!ev.SourceTier.IsSemgrep() &&
 		!ev.InTest &&
-		!ev.Placeholder
+		!ev.Placeholder &&
+		!documentationSample(ev)
+}
+
+// documentationSample reports whether ev is a credential read out of
+// documentation with nothing that proves it real without the provider (RC-10b).
+//
+// A README, a guide or a changelog shows credentials to be read, and almost all
+// of them are samples: the file's purpose says so, which is evidence about the
+// match that the pattern itself cannot see. So the pattern match alone is not a
+// deterministic detection of a real credential there, and the finding does not
+// earn the +30 that lets it block. It is still reported, with its full evidence
+// (Rule 3), at WARN; and a value that is also demonstrably synthetic goes to
+// INFO (decision.DecideWithOptions).
+//
+// What keeps the weight is a credential that can be shown real offline
+// (evidence.OfflineProvable): a GitHub token whose checksum is valid, a private
+// key whose body parses, an AWS key pair. The path never lowers a value the
+// bytes prove.
+//
+// Documentation is decided by models.IsDocPath, which reads the file and not
+// only the directory: a deployable config under docs/ is not documentation, and
+// keeps its weight.
+func documentationSample(ev evidence.Evidence) bool {
+	return ev.Category == "secrets" && ev.InDoc && !ev.OfflineProvable
 }
 
 // lineageTrace renders ev.Lineage (the BB+WB inputs that merged during

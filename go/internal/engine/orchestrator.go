@@ -993,7 +993,13 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// on Title — so two engines describing one sink in different words never
 	// merged and the user saw the same vulnerability two or three times. Runs
 	// before Deduplicate, while each finding is still one (endpoint, title).
-	findings = CollapseDuplicateLocations(findings)
+	findings = collapseDuplicateLocations(findings, func(rep, member models.Finding) {
+		// Two findings that read a credential: the folded finding is graded on what
+		// they earn together. A Semgrep finding judges nothing about the value.
+		if isNativeSecret(rep) && isNativeSecret(member) {
+			prov.FoldMember(rep, member)
+		}
+	})
 
 	// 5.5. Occurrence identity, BEFORE any grouping.
 	//
@@ -1024,9 +1030,13 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// unsuppressed occurrence set, exactly as they always have, so an `id:`
 	// ignore rule written from a report keeps naming the same group. Each
 	// occurrence carries the ID of the group it would be presented in.
-	groupIDs := presentationGroupIDs(occurrences)
+	//
+	// Occurrences are grouped by their own evidence: the finding's fields and the
+	// flags only the producer knows (prov.OccurrenceClass), so a fixture-shaped
+	// or synthetic occurrence never shares a finding with a stronger one (C1-1).
+	groupIDs := presentationGroupIDs(occurrences, prov.OccurrenceClass)
 	for i := range occurrences {
-		occurrences[i].ID = groupIDs[dedupKey(occurrences[i])].id
+		occurrences[i].ID = groupIDs[dedupKeyWith(occurrences[i], prov.OccurrenceClass)].id
 	}
 
 	// 7. Apply ignore rules from .fendix-ignore, per OCCURRENCE. A path-scoped
@@ -1073,7 +1083,7 @@ func (o *Orchestrator) finalize(evid []evidence.Evidence, meta reporters.ScanMet
 	// survivors are grouped, the primary endpoint, evidence, secret metadata,
 	// affected endpoints, occurrence list and scoring provenance all describe
 	// actionable occurrences; none can point at a suppressed one.
-	findings = regroupOccurrences(occurrences, groupIDs)
+	findings = regroupOccurrences(occurrences, groupIDs, prov.OccurrenceClass)
 
 	// 9.5. Enforce severity↔confidence consistency (TASK-092). LOW confidence
 	// caps severity at MEDIUM; MEDIUM confidence caps at HIGH. Mismatched

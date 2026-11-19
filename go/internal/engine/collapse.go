@@ -2,10 +2,12 @@ package engine
 
 import (
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/Fendix-app/Fendix/go/internal/models"
+	"github.com/Fendix-app/Fendix/go/internal/scanner/secrets"
 )
 
 // CollapseDuplicateLocations merges static findings that describe the SAME
@@ -32,6 +34,11 @@ import (
 // exists to prevent. References are unioned so no CWE mapping is lost.
 //
 // Scope is deliberately narrow:
+//   - only findings that describe the SAME construct fold (constructClasses):
+//     two different constructs on one line, say eval(x) and require(y) in a
+//     minified file, stay two findings, each with its own title, rule,
+//     fingerprint and grade, and neither inherits the other's confidence or
+//     proof (RC-9);
 //   - blackbox findings are untouched (one endpoint legitimately carries many
 //     distinct HTTP observations);
 //   - correlated findings are untouched (they already represent a merge, and
@@ -58,6 +65,17 @@ import (
 // severity, then findingLess), so the result is a pure function of the input
 // SET, not its order (F-L6). Output keeps first-occurrence order.
 func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
+	return collapseDuplicateLocations(findings, nil)
+}
+
+// collapseDuplicateLocations is CollapseDuplicateLocations that also reports
+// each fold: onFold(representative, member) is called once for every member the
+// collapse folds into a representative, in a deterministic order. The
+// orchestrator uses it to carry what only the producer knows about a PROVIDER
+// member onto the representative's provenance (ProvenanceIndex.FoldMember), so
+// that a generic rule's judgement of its own value never lowers a provider
+// token that was read at the same place (CL2-2, R3-SEC-B1).
+func collapseDuplicateLocations(findings []models.Finding, onFold func(rep, member models.Finding)) []models.Finding {
 	if len(findings) <= 1 {
 		return findings
 	}
@@ -101,6 +119,16 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 		}
 	}
 
+	// Within one location, only findings that describe the same construct may
+	// fold. Everything below runs per construct class, so a representative, a
+	// confidence or a proof can only come from a member of the same construct.
+	classes := make([][]int, 0, len(order))
+	for _, k := range order {
+		for _, class := range constructClasses(findings, groups[k]) {
+			classes = append(classes, splitByCredentialTarget(findings, class)...)
+		}
+	}
+
 	// winner[i] is true when finding i survives its group.
 	winner := make([]bool, len(findings))
 	extraRefs := make(map[int][]string)
@@ -112,8 +140,7 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 	for sink, taint := range twinSink {
 		extraRefs[taint] = append(extraRefs[taint], mergedRefs(findings[sink])...)
 	}
-	for _, k := range order {
-		idxs := groups[k]
+	for _, idxs := range classes {
 		// CROSS-TIER ONLY. Two findings from the SAME analyzer at one location
 		// are two different rules that the rule author meant to fire
 		// separately — a Dockerfile legitimately gets both "no USER directive"
@@ -143,12 +170,14 @@ func CollapseDuplicateLocations(findings []models.Finding) []models.Finding {
 			}
 			collapsed++
 			extraRefs[best] = append(extraRefs[best], mergedRefs(findings[i])...)
+			if onFold != nil {
+				onFold(findings[best], findings[i])
+			}
 		}
 	}
 
 	// A group we declined to collapse has no winner; keep every member.
-	for _, k := range order {
-		idxs := groups[k]
+	for _, idxs := range classes {
 		if !hasDistinctTiers(findings, idxs) {
 			for _, i := range idxs {
 				winner[i] = true
@@ -249,6 +278,224 @@ func hasDistinctTiers(findings []models.Finding, idxs []int) bool {
 	return false
 }
 
+// ── Construct identity (RC-9) ───────────────────────────────────────────────
+//
+// Two findings on one source line describe the SAME construct when they are two
+// analyzers' reading of one piece of code: textscan's eval rule and the Python
+// engine's eval heuristic, the native secrets scanner and Semgrep on one
+// password assignment. They describe DIFFERENT constructs when they are two
+// things the line does: `eval(x); require(y)` is an eval and a require.
+//
+// No analyzer exports a column or a span, so the identity is a reviewed one:
+//
+//  1. a rule in constructFamilies belongs to the named family, whatever CWE it
+//     cites. This is where CWE alone is wrong: the native scanner cites CWE-259
+//     for a password where Semgrep cites CWE-798 (one credential), and
+//     textscan's eval and require rules both cite CWE-95 (two constructs);
+//  2. any other rule is identified by the CWE ids it references;
+//  3. a finding is also identified by its exact title: the same words for the
+//     same claim at the same location are one claim;
+//  4. a finding identified by none of these is not identified. It is never
+//     folded into another finding: kept twice is a duplicate, folded wrongly is
+//     a lost finding.
+//
+// Members of one line are in one construct class when their identities share a
+// token, transitively (union-find), so the classes are a function of the member
+// SET and not of its order (F-L6).
+
+// constructFamilies are the reviewed families: rule id, or "prefix*" for a rule
+// id prefix, to the family it belongs to. Keep it to rules where the CWE alone
+// would be wrong.
+var constructFamilies = map[string]string{
+	// eval and exec of a non-literal.
+	"JS_EVAL_LITERAL":       "eval",
+	"SEC-JS_EVAL":           "eval",
+	"python.ast/JS_EVAL":    "eval",
+	"python.ast/PY_EVAL":    "eval",
+	"python-eval-injection": "eval",
+	// A dynamic require is a different construct from eval, although both cite
+	// CWE-95.
+	"JS_REQUIRE_INTERPOLATION": "dynamic-require",
+	// A hardcoded credential, whoever found it and whichever CWE they cite.
+	"secrets/*":                          "hardcoded-credential",
+	"GO_HARDCODED_AWS_KEY":               "hardcoded-credential",
+	"JS_HARDCODED_AWS_KEY":               "hardcoded-credential",
+	"python-hardcoded-secret-assignment": "hardcoded-credential",
+	"python-hardcoded-db-url":            "hardcoded-credential",
+	"python-gcp-service-account-inline":  "hardcoded-credential",
+	"python-aws-access-key-id-literal":   "hardcoded-credential",
+	"python-slack-webhook-url-literal":   "hardcoded-credential",
+	"python-pem-private-key-literal":     "hardcoded-credential",
+	// A fast hash used for a password: CWE-327, -328 or -916 by analyzer.
+	"python.ast/PY_WEAK_CRYPTO_PASSWORD": "weak-password-hash",
+	"python-md5-used-for-password":       "weak-password-hash",
+	"python-sha1-used-for-password":      "weak-password-hash",
+	"GO_WEAK_HASH_PASSWORD":              "weak-password-hash",
+	"JAVA_WEAK_HASH_PASSWORD":            "weak-password-hash",
+	"go-weak-password-hash-*":            "weak-password-hash",
+	"js-weak-password-hash-*":            "weak-password-hash",
+	"java-weak_password_hash-*":          "weak-password-hash",
+	// Server-side template injection: CWE-94 or -1336 by analyzer.
+	"python.ast/PY_SSTI":                     "ssti",
+	"flask-render-template-string-injection": "ssti",
+	"go-ssti-*":                              "ssti",
+	"js-ssti-*":                              "ssti",
+	"java-ssti-*":                            "ssti",
+}
+
+// constructFamily returns the reviewed family of a rule id, or "".
+func constructFamily(ruleID string) string {
+	if ruleID == "" {
+		return ""
+	}
+	if fam, ok := constructFamilies[ruleID]; ok {
+		return fam
+	}
+	for pat, fam := range constructFamilies {
+		if prefix, ok := strings.CutSuffix(pat, "*"); ok && strings.HasPrefix(ruleID, prefix) {
+			return fam
+		}
+	}
+	return ""
+}
+
+var constructCWE = regexp.MustCompile(`^CWE-([0-9]+)\b`)
+
+// constructTokens are the identity tokens of one finding: its reviewed family,
+// else the CWE ids it references; and, for every finding, its exact title. Two
+// findings that word their claim identically at one location are one claim, so a
+// finding with no family and no CWE still folds into the finding that says the
+// same thing, and never into one that says something else.
+func constructTokens(f models.Finding) []string {
+	var out []string
+	if fam := constructFamily(f.RuleID); fam != "" {
+		out = append(out, "family:"+fam)
+	} else {
+		seen := map[string]bool{}
+		for _, r := range f.References {
+			if m := constructCWE.FindStringSubmatch(r); m != nil && !seen[m[1]] {
+				seen[m[1]] = true
+				out = append(out, "cwe:"+m[1])
+			}
+		}
+	}
+	if f.Title != "" {
+		out = append(out, "title:"+f.Title)
+	}
+	return out
+}
+
+// constructClasses partitions the findings idxs (one location) into construct
+// classes: two findings are in one class when they share an identity token,
+// directly or through a third. A finding with no token is a class of its own.
+// idxs is in input order; the classes come back ordered by their first member.
+func constructClasses(findings []models.Finding, idxs []int) [][]int {
+	if len(idxs) < 2 {
+		if len(idxs) == 1 {
+			return [][]int{idxs}
+		}
+		return nil
+	}
+	parent := make([]int, len(idxs))
+	for p := range parent {
+		parent[p] = p
+	}
+	var find func(int) int
+	find = func(p int) int {
+		for parent[p] != p {
+			parent[p] = parent[parent[p]]
+			p = parent[p]
+		}
+		return p
+	}
+	owner := map[string]int{}
+	for p, i := range idxs {
+		for _, tok := range constructTokens(findings[i]) {
+			if q, ok := owner[tok]; ok {
+				if a, b := find(p), find(q); a != b {
+					if a < b {
+						parent[b] = a
+					} else {
+						parent[a] = b
+					}
+				}
+			} else {
+				owner[tok] = p
+			}
+		}
+	}
+	byRoot := map[int][]int{}
+	var roots []int
+	for p, i := range idxs {
+		r := find(p)
+		if _, seen := byRoot[r]; !seen {
+			roots = append(roots, r)
+		}
+		byRoot[r] = append(byRoot[r], i)
+	}
+	out := make([][]int, 0, len(roots))
+	for _, r := range roots {
+		out = append(out, byRoot[r])
+	}
+	return out
+}
+
+// isNativeSecret reports whether a finding is the native secrets scanner's.
+func isNativeSecret(f models.Finding) bool { return strings.HasPrefix(f.RuleID, "secrets/") }
+
+// splitByCredentialTarget splits a construct class of native secrets findings by
+// the name each credential is bound to (CL3, F-B1; RC-9 (1a)).
+//
+// The family says that two secrets rules reading one line read "a hardcoded
+// credential", but a line can hold two credentials: `password = "<real>"; tok =
+// "<sample token>"`, or `{"password": "<real>", "tok": "<sample token>"}`. They are
+// two constructs, and folding them let the sample's status stand for the real
+// value, which then had no finding of its own. The scanner records the name each
+// credential is bound to (SecretRef.Identifier: the assignment to the left of the
+// literal the value sits in), so findings bound to different names are kept apart,
+// each folding only with its own Semgrep twin or same-target findings.
+//
+//   - A class with one target (or none) is returned unchanged: one credential read
+//     by several rules, and its Semgrep twin, is still one construct.
+//   - A class with several targets is split by target, in order of first member.
+//   - A finding that is not the native scanner's (a Semgrep finding names no
+//     target) cannot be placed in any of them, so it is kept as a finding of its
+//     own: kept twice is a duplicate, folded wrongly is a lost finding.
+func splitByCredentialTarget(findings []models.Finding, class []int) [][]int {
+	targets := map[string]int{}
+	var order []string
+	for _, i := range class {
+		if !isNativeSecret(findings[i]) {
+			continue
+		}
+		id := ""
+		if findings[i].Secret != nil {
+			id = findings[i].Secret.Identifier
+		}
+		if _, ok := targets[id]; !ok {
+			targets[id] = len(order)
+			order = append(order, id)
+		}
+	}
+	if len(order) < 2 {
+		return [][]int{class}
+	}
+	parts := make([][]int, len(order))
+	var out [][]int
+	for _, i := range class {
+		if !isNativeSecret(findings[i]) {
+			out = append(out, []int{i})
+			continue
+		}
+		id := ""
+		if findings[i].Secret != nil {
+			id = findings[i].Secret.Identifier
+		}
+		parts[targets[id]] = append(parts[targets[id]], i)
+	}
+	return append(parts, out...)
+}
+
 // duplicateLess reports whether a should represent its location group instead
 // of b. Total order: higher analyzer trust first, then higher severity, then
 // the same deterministic tiebreak dedup uses — so the winner never depends on
@@ -260,7 +507,23 @@ func duplicateLess(a, b models.Finding) bool {
 	if sa, sb := models.SeverityRank(a.Severity), models.SeverityRank(b.Severity); sa != sb {
 		return sa > sb
 	}
-	return findingLess(a, b)
+	if findingLess(a, b) || findingLess(b, a) {
+		return findingLess(a, b)
+	}
+	// Identical in everything findingLess reads: a generic secrets rule and a
+	// provider rule reading one literal produce the same redacted snippet, fix
+	// and line. Without a last tie-break the winner was whichever arrived first,
+	// so the representative (its rule, title, fingerprint and the group it joins)
+	// depended on input order, against F-L6. The scanner's own rule order breaks
+	// the tie, which is the order production always delivered them in, then the
+	// rule id and title for anything else.
+	if oa, ob := secrets.RuleOrder(a.RuleID), secrets.RuleOrder(b.RuleID); oa != ob {
+		return oa < ob
+	}
+	if a.RuleID != b.RuleID {
+		return a.RuleID < b.RuleID
+	}
+	return a.Title < b.Title
 }
 
 // proofDonor picks the group member whose taint proof the representative

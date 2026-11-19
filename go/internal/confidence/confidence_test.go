@@ -383,6 +383,63 @@ func provenanceDriftFixtures() []provenanceFixture {
 			wantValue: base + staticEvidence + deterministicDetn + componentNotImported,
 		},
 		{
+			// RC-10b: a credential read out of documentation (a README) with
+			// nothing offline to prove it. The path is endpoint-derived
+			// (InDoc), so it is covered by the round trip, and the finding
+			// earns no deterministic-detection weight.
+			name: "credential in documentation, not provable offline",
+			ev: evidence.Evidence{
+				Title:      "Stripe live secret key hardcoded",
+				Category:   "secrets",
+				Endpoint:   "docs/guide.md:12",
+				Severity:   models.SeverityCritical,
+				Source:     models.SourceWhitebox,
+				Confidence: models.ConfidenceHigh,
+				InDoc:      true,
+			},
+			// 35 base + 10 static, and NO +30: the file is documentation.
+			wantValue: base + staticEvidence,
+		},
+		{
+			// RC-10b: the same file, but the credential is provable offline (a
+			// checksum-valid GitHub token). OfflineProvable is a producer-set
+			// fact with no endpoint-derived fallback, so it must survive the
+			// projection or the weight a provable credential keeps would be
+			// lost on every real scan.
+			name: "credential in documentation, provable offline",
+			ev: evidence.Evidence{
+				Title:           "GitHub token hardcoded",
+				Category:        "secrets",
+				Endpoint:        "README.md:7",
+				Severity:        models.SeverityCritical,
+				Source:          models.SourceWhitebox,
+				Confidence:      models.ConfidenceHigh,
+				InDoc:           true,
+				OfflineProvable: true,
+			},
+			// 35 base + 10 static + 30 deterministic detection.
+			wantValue: base + staticEvidence + deterministicDetn,
+		},
+		{
+			// RC-10b: a documentation value that is demonstrably synthetic.
+			// SyntheticValue (value evidence only, never the name) is the
+			// second independent signal the decision layer reads.
+			name: "synthetic value in documentation",
+			ev: evidence.Evidence{
+				Title:          "GitHub token hardcoded",
+				Category:       "secrets",
+				Endpoint:       "docs/ref.rst:3",
+				Severity:       models.SeverityCritical,
+				Source:         models.SourceWhitebox,
+				Confidence:     models.ConfidenceHigh,
+				InDoc:          true,
+				Placeholder:    true,
+				SyntheticValue: true,
+			},
+			// 35 base + 10 static - 20 fixture-shaped value.
+			wantValue: base + staticEvidence + placeholderPenalty,
+		},
+		{
 			// A SARIF-imported finding that CorrelateCrossTool strongly
 			// corroborated (an independent tool reported the same normalized
 			// CWE at the same location). CrossToolCorroborated and

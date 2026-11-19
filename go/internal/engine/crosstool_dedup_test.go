@@ -33,7 +33,7 @@ func runFinalizationSlice(evs []evidence.Evidence) []evidence.Evidence {
 	prov := evidence.NewProvenanceIndex(evid)
 	findings := evidence.ToFindings(evid)
 	findings = CollapseDuplicateLocations(findings)
-	findings = Deduplicate(findings)
+	findings = DeduplicateWith(findings, prov.OccurrenceClass)
 	return prov.Restore(evidence.FromFindings(findings))
 }
 
@@ -43,16 +43,35 @@ func runFinalizationSlice(evs []evidence.Evidence) []evidence.Evidence {
 // Severity — a different endpoint) that was, correctly, never stamped. Before
 // the proof-union fold, the group merge computed corroborated AND
 // uncorroborated = false and silently erased the CodeQL confirmation.
+//
+// CL-1 / B-2 (independent verification; the closure's "no raising" invariant for
+// RC-9e): corroboration is evidence about an occurrence, so A' no longer shares a
+// finding with A and cannot inherit it. This test used to assert ONE representative
+// that carried the corroboration for both files. The property it protects, that the
+// valid A↔CodeQL confirmation is never erased by the duplicate, is asserted below
+// on A's own finding; and the duplicate, which the tool never reported, is no longer
+// reported as corroborated (old: len(restored) == 1 and the representative
+// corroborated; new: two findings, only A's corroborated).
 func TestCorroborationSurvivesUncorroboratedDuplicate(t *testing.T) {
 	a := nativeSQLi("app/views.py:100", "100")
-	aPrime := nativeSQLi("app/admin.py:50", "50") // same Title/Category/Severity → same dedup group
+	aPrime := nativeSQLi("app/admin.py:50", "50") // same Title/Category/Severity, another file
 	b := importedSQLi("codeql", "app/views.py:102", "102")
 
 	restored := runFinalizationSlice([]evidence.Evidence{a, aPrime, b})
-	if len(restored) != 1 {
-		t.Fatalf("want one representative finding (B collapsed into A, A' deduped), got %d", len(restored))
+	if len(restored) != 2 {
+		t.Fatalf("want A (with B collapsed into it) and A' as two findings, got %d", len(restored))
 	}
-	rep := restored[0]
+	var rep, dup evidence.Evidence
+	for _, r := range restored {
+		if r.Endpoint == "app/views.py:100" {
+			rep = r
+		} else {
+			dup = r
+		}
+	}
+	if rep.Endpoint == "" || dup.Endpoint != "app/admin.py:50" {
+		t.Fatalf("both occurrences must be reported, got %q and %q", restored[0].Endpoint, restored[1].Endpoint)
+	}
 	if rep.Source != models.SourceWhitebox {
 		t.Fatalf("representative must be native fendix, got %q", rep.Source)
 	}
@@ -62,6 +81,9 @@ func TestCorroborationSurvivesUncorroboratedDuplicate(t *testing.T) {
 	if len(rep.CorroboratingTools) != 1 || rep.CorroboratingTools[0] != "codeql" {
 		t.Fatalf("CorroboratingTools = %v, want [codeql]", rep.CorroboratingTools)
 	}
+	if dup.CrossToolCorroborated || len(dup.CorroboratingTools) != 0 {
+		t.Fatalf("A' is reported as corroborated by %v: the tool never reported it", dup.CorroboratingTools)
+	}
 
 	// And the surviving proof must still feed the corroboration arm.
 	d := decision.DecideWithOptions(rep, "HIGH", decision.Options{EnforceConfidence: true})
@@ -70,6 +92,9 @@ func TestCorroborationSurvivesUncorroboratedDuplicate(t *testing.T) {
 	}
 	if !strings.Contains(d.Reason, "independent cross-tool corroboration") {
 		t.Fatalf("BLOCK must be attributed to the cross-tool signal, got %q", d.Reason)
+	}
+	if dd := decision.DecideWithOptions(dup, "HIGH", decision.Options{EnforceConfidence: true}); dd.Status == decision.StatusBlock {
+		t.Fatalf("A' has no corroboration of its own and must not BLOCK on A's (%s)", dd.Reason)
 	}
 }
 
@@ -165,17 +190,31 @@ func TestPublicCorroborationSurvivesUncorroboratedDuplicate(t *testing.T) {
 	evid, _ := CorrelateCrossTool([]evidence.Evidence{a, aPrime, b})
 	prov := evidence.NewProvenanceIndex(evid)
 	findings := evidence.ToFindings(evid)
-	findings = Deduplicate(findings)
+	findings = DeduplicateWith(findings, prov.OccurrenceClass)
 	stampDecisions(findings, prov, "HIGH", decision.Options{EnforceConfidence: true})
 
-	if len(findings) != 1 {
-		t.Fatalf("want one representative, got %d", len(findings))
+	// CL-1 / B-2: A' is its own finding now (old: want one representative). The
+	// public field must still be A's own, never erased by the duplicate, and A'
+	// must not carry it.
+	if len(findings) != 2 {
+		t.Fatalf("want A and A' as two findings, got %d", len(findings))
 	}
-	if !findings[0].CrossToolCorroborated {
+	var own, dup models.Finding
+	for _, f := range findings {
+		if f.Endpoint == "app/views.py:100" {
+			own = f
+		} else {
+			dup = f
+		}
+	}
+	if !own.CrossToolCorroborated {
 		t.Fatal("the PUBLIC field must survive an uncorroborated dedup duplicate")
 	}
-	if strings.Join(findings[0].CorroboratingTools, ",") != "codeql" {
-		t.Fatalf("public tools = %v, want [codeql]", findings[0].CorroboratingTools)
+	if strings.Join(own.CorroboratingTools, ",") != "codeql" {
+		t.Fatalf("public tools = %v, want [codeql]", own.CorroboratingTools)
+	}
+	if dup.Endpoint != "app/admin.py:50" || dup.CrossToolCorroborated || len(dup.CorroboratingTools) != 0 {
+		t.Fatalf("the uncorroborated duplicate publishes corroboration: %+v", dup.CorroboratingTools)
 	}
 }
 

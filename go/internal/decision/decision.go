@@ -591,6 +591,7 @@ func fixtureCorroborated(ev evidence.Evidence) bool {
 func DecideWithOptions(ev evidence.Evidence, failOn string, opts Options) Decision {
 	d := decide(ev, failOn, opts)
 	applyApplicabilityGate(&d, ev, opts)
+	applyDocumentationSample(&d, ev)
 	if !opts.DeescalateTests || !ev.InTest {
 		return settleOverride(d)
 	}
@@ -657,6 +658,52 @@ func DecideWithOptions(ev evidence.Evidence, failOn string, opts Options) Decisi
 		appendDecisionReason(&d.Score, confidence.CodeDeescalatedTestFixtureCorroborated, testFixtureCorroboratedReason)
 	}
 	return settleOverride(d)
+}
+
+// documentationSyntheticReason is the Reason for the documentation arm. It is a
+// free-text decision reason, not a published breakdown code: a code would be a
+// new value in the public confidence_breakdown vocabulary (see confidence/codes.go).
+const documentationSyntheticReason = "de-escalated to INFO: credential is in documentation AND its value is " +
+	"demonstrably synthetic — two independent signals agree it is a sample " +
+	"(rule: documentation-synthetic; evidence preserved)"
+
+// documentationSynthetic reports whether two INDEPENDENT signals agree that a
+// credential finding in documentation is a sample (RC-10b):
+//
+//   - InDoc — where the value lives, derived from the file path.
+//   - SyntheticValue — what the value looks like, derived from the bytes:
+//     value evidence only, never the variable name.
+//
+// A value that can be shown real offline (OfflineProvable) is never a sample
+// whatever it looks like, and a non-secret category is not what this reads.
+func documentationSynthetic(ev evidence.Evidence) bool {
+	return ev.Category == "secrets" && ev.InDoc && ev.SyntheticValue && !ev.OfflineProvable
+}
+
+// applyDocumentationSample is the documentation arm of the decision. The
+// confidence scorer already withholds the deterministic-detection weight from a
+// credential in documentation that nothing proves real
+// (confidence.HasDeterministicDetection), which leaves it at WARN. This arm takes
+// the further step to INFO when the value is ALSO demonstrably synthetic: the path
+// and the bytes are independent observations, and their agreement is
+// corroboration, applied in the de-escalating direction, the standard the
+// blocking gate applies in the escalating one.
+//
+// Like fixtureCorroborated it steps below the WARN floor on purpose (the floor
+// keeps stacked demotions from burying a threshold-crosser; two independent
+// signals that the string is a sample are not stacked demotions). Independent
+// corroboration vetoes it: if anything beyond the pattern match supports the
+// claim, the sample reading is no longer the whole story. Nothing is suppressed:
+// the finding keeps its id, severity, endpoint and redacted evidence; only
+// Status and Reason move.
+//
+// It does not depend on the test-fixture option: documentation is not test code.
+func applyDocumentationSample(d *Decision, ev evidence.Evidence) {
+	if d.Status != StatusWarn || len(d.Corroboration.Independent) != 0 || !documentationSynthetic(ev) {
+		return
+	}
+	d.Status = StatusInfo
+	d.Reason = documentationSyntheticReason
 }
 
 // settleOverride is the LAST word on PolicyOverride, and it exists because the

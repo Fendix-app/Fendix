@@ -75,6 +75,15 @@ type ScoringProvenance struct {
 	UnconfirmedByLiveScan bool
 	Placeholder           bool
 	ComponentNotImported  bool
+	// InDoc is the RC-10b documentation flag. It merges with "agree or drop",
+	// like InTest: a dedup group is documentation only when EVERY occurrence is.
+	// SyntheticValue does too (a group is synthetic only when every value is),
+	// and OfflineProvable folds by UNION (one provable occurrence withholds the
+	// de-escalation for the group), the way ProviderAnchored does, because it
+	// withholds a de-escalation rather than granting a bonus.
+	InDoc           bool
+	SyntheticValue  bool
+	OfflineProvable bool
 	// ProviderAnchored joins them, with one difference recorded at the merge
 	// site: it folds by UNION, not agree-or-drop, because it withholds a
 	// de-escalation rather than granting a bonus.
@@ -151,6 +160,10 @@ func NewProvenanceIndex(evs []Evidence) ProvenanceIndex {
 			// models.Finding unmarshal — and keeps the rule a pure function of
 			// the endpoint, so it stays reproducible.
 			InTest: e.InTest || models.IsTestPath(e.Endpoint),
+			// InDoc is endpoint-derived for the same reason (RC-10b), with one
+			// veto the endpoint cannot carry: a file whose first line is "#!" is
+			// a script, whatever its name says (CL-1 B-3).
+			InDoc: !e.NotDocumentation && (e.InDoc || models.IsDocPath(e.Endpoint)),
 			// No `|| derive(...)` clause for the four below, on purpose:
 			// nothing on a projected Finding can reconstruct them, so an
 			// invented fallback would be a guess rather than a recovery.
@@ -159,6 +172,8 @@ func NewProvenanceIndex(evs []Evidence) ProvenanceIndex {
 			DirectObservation:     e.DirectObservation,
 			UnconfirmedByLiveScan: e.UnconfirmedByLiveScan,
 			Placeholder:           e.Placeholder,
+			SyntheticValue:        e.SyntheticValue,
+			OfflineProvable:       e.OfflineProvable,
 			ProviderAnchored:      e.ProviderAnchored,
 			ComponentNotImported:  e.ComponentNotImported,
 			CrossToolCorroborated: e.CrossToolCorroborated,
@@ -173,6 +188,47 @@ func NewProvenanceIndex(evs []Evidence) ProvenanceIndex {
 		ix[k] = p
 	}
 	return ix
+}
+
+// FoldMember records, on the provenance of a finding that represents a location,
+// what the producer knew about a finding the collapse folded into it, when both
+// read a credential (CL2-2, R3-SEC-B1; CL3, F-B1). The caller decides which
+// members read one: the native secrets scanner's, never a Semgrep finding, which
+// judges nothing about the value.
+//
+// A folded finding is graded on what its members earn, never below the best of
+// them. Before this, the representative's own judgement stood for all: a generic
+// rule's judgement of its value ("<token>:1234567890": a sequential run) lowered
+// the provider's own real token (R3-SEC-B1), and a published sample provider token
+// that happened to be the representative lowered the real generic value folded
+// into it (F-B1). A member that earns more keeps it:
+//
+//   - Placeholder and SyntheticValue are agree-or-drop: the folded finding is a
+//     sample only when EVERY member is, so a real member keeps it real and two
+//     samples stay samples;
+//   - OfflineProvable and ProviderAnchored are unions, as they are for a group (a
+//     provable occurrence keeps its weight; a provider token is not lowered for the
+//     name of its variable).
+//
+// Nothing is ever added to Placeholder or SyntheticValue, so the fold can only keep
+// or raise the representative's status, never lower it, and it never raises a
+// sample whose members are all samples. A member or representative the index does
+// not know changes nothing.
+func (ix ProvenanceIndex) FoldMember(rep, member models.Finding) {
+	m, ok := ix[identityKey(member.Category, member.Endpoint, member.Title)]
+	if !ok {
+		return
+	}
+	k := identityKey(rep.Category, rep.Endpoint, rep.Title)
+	r, ok := ix[k]
+	if !ok {
+		return
+	}
+	r.Placeholder = r.Placeholder && m.Placeholder
+	r.SyntheticValue = r.SyntheticValue && m.SyntheticValue
+	r.OfflineProvable = r.OfflineProvable || m.OfflineProvable
+	r.ProviderAnchored = r.ProviderAnchored || m.ProviderAnchored
+	ix[k] = r
 }
 
 // Restore returns a copy of evs with each element's scoring provenance
@@ -215,6 +271,15 @@ func (ix ProvenanceIndex) Restore(evs []Evidence) []Evidence {
 		if !out[i].InTest {
 			out[i].InTest = p.InTest
 		}
+		if !out[i].InDoc {
+			out[i].InDoc = p.InDoc
+		}
+		if !out[i].SyntheticValue {
+			out[i].SyntheticValue = p.SyntheticValue
+		}
+		if !out[i].OfflineProvable {
+			out[i].OfflineProvable = p.OfflineProvable
+		}
 		if !out[i].DirectObservation {
 			out[i].DirectObservation = p.DirectObservation
 		}
@@ -247,6 +312,51 @@ func (ix ProvenanceIndex) Restore(evs []Evidence) []Evidence {
 		}
 	}
 	return out
+}
+
+// OccurrenceClass is the part of an occurrence's scoring provenance that decides
+// the status it is reported under and that models.Finding cannot carry: whether
+// its value is fixture-shaped (Placeholder), demonstrably synthetic
+// (SyntheticValue), provable offline (OfflineProvable), provider-signed
+// (ProviderAnchored), whether the file is documentation by the file's own account
+// (InDoc: a script that sits at a documentation path is not), what is known about
+// a dependency's applicability, and which independent tools corroborated THIS
+// occurrence (CrossToolCorroborated and its tool set). It returns "" when none of
+// them is set.
+//
+// Cross-tool corroboration is evidence about an occurrence: an imported result
+// that strongly matches one file's finding says nothing about another file's
+// finding of the same title. The provenance fold unions it across a group, so a
+// group of occurrences that differ in it would report the uncorroborated ones as
+// corroborated (CL-1, B-2).
+//
+// Deduplicate groups occurrences that share a title only when their classes
+// agree (engine.DeduplicateWith). A group's provenance is a fold over its members
+// (agree-or-drop, or union), so a group with members that differ would give each
+// of them the fold: a sample would be reported at a real credential's status, a
+// real credential at a documentation sample's. Keeping them apart makes the
+// status an occurrence is reported under the one its own evidence earns.
+//
+// Only whitebox and imported findings have such a class; a blackbox finding is one
+// observation of one URL. For a group finding the class is that of the fold over
+// its endpoints, which equals the members' class because grouping already
+// required it to agree.
+func (ix ProvenanceIndex) OccurrenceClass(f models.Finding) string {
+	if f.Source != models.SourceWhitebox && f.Source != models.SourceImported {
+		return ""
+	}
+	p := ix.lookup(FromFinding(f))
+	flags := [7]byte{'0', '0', '0', '0', '0', '0', '0'}
+	for i, set := range [7]bool{p.Placeholder, p.SyntheticValue, p.OfflineProvable, p.ProviderAnchored, p.ComponentNotImported, p.InDoc, p.CrossToolCorroborated} {
+		if set {
+			flags[i] = '1'
+		}
+	}
+	tools := strings.Join(p.CorroboratingTools, ",")
+	if string(flags[:]) == "0000000" && p.Applicability == models.ApplicabilityUnknown && tools == "" {
+		return ""
+	}
+	return "|prov:" + string(flags[:]) + "/" + string(p.Applicability) + "/" + tools
 }
 
 // lookup resolves the provenance for one finding-shaped Evidence, merging
@@ -305,6 +415,9 @@ func mergeScoringProvenance(a, b ScoringProvenance) ScoringProvenance {
 		ResponseContext: agreementOr(a.ResponseContext, b.ResponseContext),
 		Lineage:         agreementOrLineage(a.Lineage, b.Lineage),
 		InTest:          agreementOrBool(a.InTest, b.InTest),
+		InDoc:           agreementOrBool(a.InDoc, b.InDoc),
+		SyntheticValue:  agreementOrBool(a.SyntheticValue, b.SyntheticValue),
+		OfflineProvable: a.OfflineProvable || b.OfflineProvable,
 
 		DirectObservation:     agreementOrBool(a.DirectObservation, b.DirectObservation),
 		UnconfirmedByLiveScan: agreementOrBool(a.UnconfirmedByLiveScan, b.UnconfirmedByLiveScan),

@@ -16,11 +16,28 @@ import (
 // corpus the same double-report cascaded into a phantom false positive that
 // held the synthetic F1 at 0.987, under its 0.990 CI floor.
 
+// wbAt builds a whitebox finding. Every finding it builds cites the one CWE of
+// its category, so two of them at one location are two analyzers' reading of
+// ONE construct: since RC-9 the collapse folds only members that describe the
+// same construct, and a fixture that names no identity would not fold.
 func wbAt(cat, endpoint, title string, sev models.Severity, tier models.SourceTier) models.Finding {
 	return models.Finding{
 		Title: title, Category: cat, Endpoint: endpoint, Severity: sev,
 		Source: models.SourceWhitebox, SourceTier: tier,
 		Confidence: models.ConfidenceHigh, Evidence: "e:" + title, Fix: "f:" + title,
+		References: []string{wbCWE(cat)},
+	}
+}
+
+// wbCWE is the single CWE wbAt cites for a category.
+func wbCWE(cat string) string {
+	switch cat {
+	case "injection":
+		return "CWE-74"
+	case "secrets":
+		return "CWE-798"
+	default:
+		return "CWE-1000"
 	}
 }
 
@@ -109,7 +126,7 @@ func TestCollapseUnionsReferences(t *testing.T) {
 	a := wbAt("injection", "a.py:1", "keep", models.SeverityHigh, models.TierTreeSitter)
 	a.References = []string{"CWE-78"}
 	b := wbAt("injection", "a.py:1", "drop", models.SeverityHigh, models.TierSemgrepShim)
-	b.References = []string{"CWE-77", "OWASP-A03"}
+	b.References = []string{"CWE-78", "CWE-77", "OWASP-A03"} // the same construct (CWE-78), with more references
 	got := CollapseDuplicateLocations([]models.Finding{a, b})
 	if len(got) != 1 {
 		t.Fatalf("expected 1, got %d", len(got))

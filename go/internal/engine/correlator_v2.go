@@ -93,6 +93,18 @@ func CorrelateEvidence(evs []evidence.Evidence) []evidence.Evidence {
 			// the import grep; nothing downstream can re-observe it, and the
 			// decision layer now reads it directly.
 			o.Applicability = src.Applicability
+			// Three more (RC-10b, C1-1): SyntheticValue and OfflineProvable are
+			// what the secrets scanner knows about the VALUE, and InDoc is the
+			// file's documentation flag. None can be re-derived downstream
+			// (InDoc is endpoint-derived by the provenance index, the other two
+			// are not), so a hybrid scan would otherwise score documentation
+			// credentials differently from a code-only one.
+			o.SyntheticValue = src.SyntheticValue
+			o.OfflineProvable = src.OfflineProvable
+			o.InDoc = src.InDoc
+			// And the veto on InDoc that only the scanner can know: the file
+			// starts with "#!", so it is a script and not documentation (CL-1 B-3).
+			o.NotDocumentation = src.NotDocumentation
 			// UnconfirmedByLiveScan is OR-ed rather than assigned because THIS
 			// function is also a producer for it — the correlator is what
 			// discovers that a whitebox finding had no live match. A plain

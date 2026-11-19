@@ -35,11 +35,16 @@ import (
 // into one group whose provenance is the agreementOrBool merge — which folds a
 // placeholder and a non-placeholder to false, correctly but uselessly for this
 // test.
+//
+// RC-10b: the "real-shaped" token is a random one. The previous literal
+// (ghp_Zq7Wm3Xk9Rb...) repeats the pattern upper/lower/digit for its whole
+// length, which the extended synthetic classifier (synthetic.go, periodic run)
+// correctly reads as a hand-made sample. A real token is random.
 func secretsEvidenceFor(t *testing.T) (fixture, real evidence.Evidence) {
 	t.Helper()
 	dir := t.TempDir()
 	body := `FAKE_API_KEY = "08bf2e526a1f4c8db3b91e7d0f2a5c6e"` + "\n" +
-		`GITHUB_TOKEN = "ghp_Zq7Wm3Xk9Rb2Nv5Tc8Hd1Jf4Ls6Py0Ag3BnK"` + "\n"
+		`GITHUB_TOKEN = "ghp_` + `StZsxnTSWsbCBpWUed` + `oB6SJ95Ypuie2cPzSf"` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "cfg.py"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
