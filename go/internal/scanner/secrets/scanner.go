@@ -943,7 +943,13 @@ func scanFile(ctx context.Context, root *os.Root, path, rootDir string, d fs.Dir
 		return nil, err
 	}
 	defer f.Close()
-	return scanOpenFile(ctx, f, name, filepath.ToSlash(rel))
+	out, err := scanOpenFile(ctx, f, name, filepath.ToSlash(rel))
+	if len(out) > 0 && models.IsDocPath(filepath.ToSlash(rel)) {
+		// Documentation: decide which of its credentials can be shown real
+		// from the file alone (RC-10b).
+		out = markProvableInDoc(ctx, root, rel, info, name, out)
+	}
+	return out, err
 }
 
 // scanOpenFile streams an open file through the pattern registry. The read is
@@ -983,6 +989,9 @@ type lineScanner struct {
 	// credential still redacts it (carry.go).
 	carry     []carriedSpan
 	carryLine int
+	// docFile is true when the file is documentation (models.IsDocPath): the
+	// only files whose findings are examined for offline provability (RC-10b).
+	docFile bool
 }
 
 // scanReader applies the pattern registry to a stream. rel is the
@@ -1001,13 +1010,20 @@ func scanReader(ctx context.Context, name, rel string, r io.Reader) ([]emitted, 
 	// pattern for the CURRENT line. Reused across lines, and shared by the
 	// redaction pre-pass and the emit loop so each regex runs exactly once
 	// per line rather than once per consumer.
-	ls := &lineScanner{active: active, matches: make([][][]int, len(active)), rel: rel}
+	ls := &lineScanner{active: active, matches: make([][][]int, len(active)), rel: rel, docFile: models.IsDocPath(rel)}
 	n := 0
+	script := false
 	err := streamLines(r, func(seg segment) error {
 		if n++; n&0xff == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+		}
+		// A file whose FIRST line is a "#!" interpreter line is a script, and a
+		// script is never documentation whatever it is called (CL-1 B-3). Only
+		// the first window of line 1 can say so, and a path cannot.
+		if seg.lineno == 1 && seg.first && strings.HasPrefix(strings.TrimPrefix(seg.text, "\ufeff"), "#!") {
+			script = true
 		}
 		ls.scan(seg)
 		if len(ls.out) >= maxFindingsPerFile {
@@ -1015,6 +1031,11 @@ func scanReader(ctx context.Context, name, rel string, r io.Reader) ([]emitted, 
 		}
 		return nil
 	})
+	if script {
+		for i := range ls.out {
+			ls.out[i].ev.NotDocumentation = true
+		}
+	}
 	return ls.out, err
 }
 
@@ -1053,6 +1074,8 @@ func (ls *lineScanner) scan(seg segment) {
 	// INVARIANT from here down: `line` is used ONLY for offsets, pattern
 	// matching and placeholder classification. The only string that may
 	// reach an evidence.Evidence is `redacted`.
+	// One index per window: the per-match lookups below are answered from it.
+	ix := newLineIndex(line)
 	spans := lineSecretSpans(line, active, matches, carriedIn...)
 	redacted, newSpans := redactSpans(line, spans)
 	ls.updateCarry(seg, line, carriedIn, spans, restOfLineEnd(line, active, matches))
@@ -1069,16 +1092,20 @@ func (ls *lineScanner) scan(seg segment) {
 				continue
 			}
 			match := line[sub[0]:sub[1]]
+			vStart, vEnd, hasValue := secretValueSpan(pat, line, sub)
 			// B1/B2: drop matches that are references-not-credentials
 			// (an ARN / Secrets-Manager lookup key) or well-known
 			// placeholders (YOUR_TOKEN_HERE, example keys, changeme…).
 			// These are the two false-positive classes that previously
 			// had to be hand-suppressed per file:line in .fendix-ignore.
-			// Unchanged: it still receives the FULL match.
-			if isReferenceOrPlaceholder(line, match) {
+			//
+			// The reference test reads the credential's own value and
+			// nothing else on the line (NEW-E1): a resource name in a
+			// comment, a URL, a second assignment or a sibling JSON member
+			// says nothing about this credential.
+			if isReferenceOrPlaceholder(referenceCandidate(pat, line, sub), match) {
 				continue
 			}
-			vStart, vEnd, hasValue := secretValueSpan(pat, line, sub)
 			value := ""
 			if hasValue {
 				value = line[vStart:vEnd]
@@ -1091,6 +1118,23 @@ func (ls *lineScanner) scan(seg segment) {
 				if m := mergedMarker(vStart, spans, newSpans, redacted); m != "" && m != markers[0] {
 					markers = append(markers, m)
 				}
+			}
+			// Whether a credential is a sample is a question about its whole literal
+			// value (synthetic.go): a provider token is read inside the string it
+			// sits in, not as the regex's match.
+			litStart, litEnd := -1, -1
+			if hasValue && providerTokenRuleIDs[pat.id] {
+				litStart, litEnd = ix.literalAround(vStart, vEnd)
+			}
+			sig := classifyPlaceholderLit(ix, vStart, value, litStart, litEnd)
+			placeholder, syntheticValue := sig.isPlaceholder(), sig.valueBased()
+			if isProviderAnchored(pat.id) && sig.Extended &&
+				!(sig.NamePrefix || sig.ValueWord || sig.RepeatedChars || sig.LowLength || sig.Common) &&
+				ix.hasNeighbor(neighborStart(sub, vStart, hasValue), neighborEnd(sub, vEnd, hasValue)) {
+				// Judged a sample by the RC-10b signals alone, on a line that
+				// also holds a credential no rule can read: v3.7.0's status
+				// (see neighbor.go).
+				placeholder, syntheticValue = false, false
 			}
 			lineRef := fmt.Sprintf("%s:%d", rel, lineno)
 			lineCopy := lineRef
@@ -1114,7 +1158,7 @@ func (ls *lineScanner) scan(seg segment) {
 				// than re-derived so identity and the placeholder
 				// classifier always agree on what the key is.
 				Secret: &models.SecretRef{
-					Identifier: secretIdentifier(line, vStart, hasValue),
+					Identifier: secretIdentifierIx(ix, vStart, hasValue),
 					File:       rel,
 				},
 				// Deterministic fixture-credential classification. An
@@ -1124,7 +1168,17 @@ func (ls *lineScanner) scan(seg segment) {
 				// scorer turns it into one named negative delta. See
 				// placeholder.go for why this is not folded into
 				// isReferenceOrPlaceholder.
-				Placeholder: classifyPlaceholder(line, vStart, value).isPlaceholder(),
+				Placeholder: placeholder,
+				// The same classification, value evidence only: the name
+				// prefix is excluded. With the file being documentation it is
+				// the second independent signal that the value is a sample
+				// (RC-10b).
+				SyntheticValue: syntheticValue,
+				// A GitHub token whose checksum holds is provable offline; the
+				// private-key and AWS-pair cases need the lines around the
+				// match and are decided after the file is scanned
+				// (markProvableInDoc). Documentation files only.
+				OfflineProvable: ls.docFile && pat.id == "GITHUB_TOKEN" && githubChecksumValid(value),
 				// Whether the match was anchored on the provider's own
 				// token signature rather than on a surrounding assignment.
 				// Bounds how far the fixture classification above is
@@ -1153,24 +1207,93 @@ func boundaryOK(line string, start, end int, leftRE, rightRE *regexp.Regexp) boo
 	return true
 }
 
-// referencePrefixes are case-insensitive substrings whose presence in the
-// matched value means it is a REFERENCE to a secret (a lookup key / ARN /
-// resource id), not the secret value itself. The canonical case is an AWS
+// A credential's value is a REFERENCE to a secret (a lookup key, an ARN, a
+// resource id), not the secret itself, ONLY when the whole value is a
+// well-formed reference, anchored at both ends. The canonical case is an AWS
 // Secrets Manager identifier — e.g.
 //
 //	secret_name = "rds!db-403f5acc-6752-4edd-a4a9-339a8395f134"
-//	secret_arn  = "arn:aws:secretsmanager:eu-central-1:123:secret:prod/db-AbCdEf"
+//	secret_arn  = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:prod/db-AbCdEf"
 //
 // The real credential is fetched at runtime from the secrets manager; the
 // literal in source is the address, not the password. These were previously
 // hand-suppressed per file:line in .fendix-ignore (B1).
-var referencePrefixes = []string{
-	"arn:aws:secretsmanager:",
-	"arn:aws:ssm:",
-	"arn:aws:kms:",
-	"rds!db-",      // RDS-managed master-secret name
-	"rds!cluster-", // Aurora-managed master-secret name
-	"projects/",    // GCP Secret Manager resource name: projects/*/secrets/*
+//
+// Three shapes are references, and each is matched whole:
+//
+//   - an AWS ARN of Secrets Manager, SSM Parameter Store or KMS, with a valid
+//     partition (aws, aws-cn, aws-us-gov), region, 12-digit account and the
+//     service's own resource form. The region, the account and the resource
+//     may be a template slot, an IAM wildcard (*) or, for the account, the
+//     literal "aws", and a Secrets Manager ARN may carry the ECS valueFrom
+//     suffix :json-key:version-stage:version-id (the empty fields kept);
+//   - the RDS-managed secret name, rds!db-<uuid> or rds!cluster-<uuid>;
+//   - a GCP Secret Manager resource name, projects/<id>/secrets/<name>,
+//     optionally with /locations/<loc>, /versions/<n|latest> and an API method
+//     suffix (:access, :addVersion, :destroy, :disable, :enable); the project,
+//     secret, location and version may be template slots.
+//
+// A template slot is how a reference is written before a tool fills it in:
+// ${var} (shell, Terraform, CloudFormation), {{ expr }} (Helm, Jinja), $(var)
+// (make, shell, Azure Pipelines), %s and %(name)s (printf). A slot holds only
+// the characters an identifier or a short expression uses (${...} and $(...):
+// letters, digits, : . _ - and, for $(...), spaces; {{ ... }} also quotes,
+// pipes, parentheses and $), so a '&', '!', '+' or '/' inside one makes the
+// value not a reference. A slot can still hold a plain word, and a word in the
+// region slot of an otherwise perfect ARN is read as a reference: that is the
+// price of reading templates, and the same one ${...} always paid (VERIFY-SEC
+// C-2). A value that is ONLY a slot is not a reference.
+//
+// Not "contains": a value that merely CONTAINS one of these, begins like one and
+// carries other text, or has one glued to its front is a credential
+// (`password = "projects/hunter2hunter2"` is a real password). A reference
+// prefix is not an exemption for the text around it, and a provider-shaped token
+// inside a slot or a resource name is reported by its own rule whatever the
+// generic rules do with the value around it.
+const (
+	// refSlot: one template slot.
+	refSlot = `(?:\$\{[A-Za-z0-9:._-]+\}` +
+		`|\{\{[A-Za-z0-9_$.:()|"'\s-]+\}\}` +
+		`|\$\([A-Za-z0-9:._ -]+\)` +
+		`|%(?:\([A-Za-z_][A-Za-z0-9_]*\))?[sdv])`
+	refPartition = `(?:aws(?:-cn|-us-gov)?|` + refSlot + `)`
+	refRegion    = `(?:[a-z]{2}(?:-[a-z]+)+-[0-9]|[a-z]{2}(?:-[a-z]+)*-?\*|\*|` + refSlot + `)`
+	refAccount   = `(?:[0-9]{12}|aws|\*|` + refSlot + `)`
+	// Resource names: one or more characters of the service's name class, or
+	// slots. '*' is an IAM wildcard; '?' is deliberately not accepted, so a
+	// query-string tail ("?pw=...") never reads as part of a name.
+	refSMName  = `(?:[A-Za-z0-9/_+=.@!*-]|` + refSlot + `)+`
+	refSSMName = `(?:[A-Za-z0-9/_.*-]|` + refSlot + `)+`
+	// refKMSKey: a key id of at least eight characters, or one that carries a
+	// slot or a wildcard (key/*, key/${KeyId}).
+	refKMSKey = `(?:[A-Za-z0-9-]{8,}` +
+		`|(?:[A-Za-z0-9-]|` + refSlot + `|\*)*(?:` + refSlot + `|\*)(?:[A-Za-z0-9-]|` + refSlot + `|\*)*)`
+	refKMSAlias = `(?:[A-Za-z0-9/_*-]|` + refSlot + `)+`
+	// refECSSuffix: :json-key:version-stage:version-id of an ECS valueFrom, all
+	// three colons always present, any field empty. A version id is a UUID, so
+	// a bare word there is not one.
+	refECSSuffix = `:(?:[A-Za-z0-9_.-]|` + refSlot + `)*` +
+		`:(?:[A-Za-z0-9_.-]|` + refSlot + `)*` +
+		`:(?:[A-Za-z0-9]{8}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{12}|` + refSlot + `)?`
+	// GCP names.
+	refGCPProject = `(?:[A-Za-z0-9]|` + refSlot + `)(?:[A-Za-z0-9._:-]|` + refSlot + `)*`
+	refGCPLoc     = `(?:[A-Za-z0-9-]|` + refSlot + `)+`
+	refGCPSecret  = `(?:[A-Za-z0-9_-]|` + refSlot + `)+`
+	refGCPVersion = `(?:[0-9]+|latest|` + refSlot + `)`
+)
+
+var referenceValueREs = []*regexp.Regexp{
+	// AWS ARN.
+	regexp.MustCompile(`(?i)^arn:` + refPartition + `:(?:` +
+		`secretsmanager:` + refRegion + `:` + refAccount + `:secret:` + refSMName + `(?:` + refECSSuffix + `)?` +
+		`|ssm:` + refRegion + `:` + refAccount + `:parameter/` + refSSMName +
+		`|kms:` + refRegion + `:` + refAccount + `:(?:key/` + refKMSKey + `|alias/` + refKMSAlias + `)` +
+		`)$`),
+	// RDS / Aurora managed master-secret name.
+	regexp.MustCompile(`(?i)^rds!(?:db|cluster)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`),
+	// GCP Secret Manager resource name.
+	regexp.MustCompile(`(?i)^projects/` + refGCPProject + `(?:/locations/` + refGCPLoc + `)?/secrets/` + refGCPSecret +
+		`(?:/versions/` + refGCPVersion + `)?(?::(?:access|addversion|destroy|disable|enable))?$`),
 }
 
 // placeholderRE matches a VALUE that is UNAMBIGUOUSLY a templating marker, not
@@ -1199,25 +1322,55 @@ var placeholderRE = regexp.MustCompile(`(?i)^(?:your[_-][a-z0-9_-]*here|<[^>]+>|
 // have to pull it back out of the match.
 var quotedValueRE = regexp.MustCompile(`["']([^"']*)["']`)
 
-// isReferenceOrPlaceholder reports whether a regex-matched secret should NOT be
-// reported because it is a reference-not-credential (an ARN / Secrets-Manager
-// lookup key — referencePrefixes) or an unambiguous placeholder
-// (placeholderRE). `match` is the full regex match (often `KEY = "value"`);
-// the quoted value is extracted for the placeholder test, with a fallback to
-// the whole match when there is no quoted segment.
-func isReferenceOrPlaceholder(line, match string) bool {
-	lowerMatch := strings.ToLower(match)
-	lowerLine := strings.ToLower(line)
-	for _, p := range referencePrefixes {
-		if strings.Contains(lowerMatch, p) || strings.Contains(lowerLine, p) {
+// referenceCandidate returns the text the reference check reads: the credential
+// VALUE of one match, never the line around it.
+//
+// A pattern that captures its credential (a capture group, or valueSpans) is
+// tested on that value; a pattern whose whole match is the credential (a
+// provider token) on the match. A pattern whose credential is a signature or
+// "everything after a header" (valueGroupNone, valueGroupRestOfLine: a PEM
+// armour header, a service-account type marker) has no value that could be a
+// reference, so only its own match is read. Reading the rest of the line there
+// would put a sibling member's resource name back into the decision.
+func referenceCandidate(pat *pattern, line string, sub []int) string {
+	if pat.valueSpans != nil || pat.valueGroup == valueGroupAuto {
+		if s, e, ok := secretValueSpan(pat, line, sub); ok {
+			return line[s:e]
+		}
+	}
+	return line[sub[0]:sub[1]]
+}
+
+// isReferenceValue reports whether value, a credential's own value, is
+// entirely a well-formed reference to a secret (see referenceValueREs). Text
+// around a reference, or a reference prefix on its own, makes it a credential.
+func isReferenceValue(value string) bool {
+	v := strings.TrimSpace(value)
+	for _, re := range referenceValueREs {
+		if re.MatchString(v) {
 			return true
 		}
 	}
-	value := match
-	if m := quotedValueRE.FindStringSubmatch(match); m != nil {
-		value = m[1]
+	return false
+}
+
+// isReferenceOrPlaceholder reports whether a regex-matched secret should NOT be
+// reported because its value is a reference-not-credential (an ARN /
+// Secrets-Manager lookup key — referenceValueREs) or an unambiguous placeholder
+// (placeholderRE). value is the credential value (referenceCandidate): ONLY it
+// is tested for a reference prefix, never the line it sits on. match is the full
+// regex match (often `KEY = "value"`); the quoted value is extracted for the
+// placeholder test, with a fallback to the whole match when there is no quoted
+// segment.
+func isReferenceOrPlaceholder(value, match string) bool {
+	if isReferenceValue(value) {
+		return true
 	}
-	return placeholderRE.MatchString(strings.TrimSpace(value))
+	placeholder := match
+	if m := quotedValueRE.FindStringSubmatch(match); m != nil {
+		placeholder = m[1]
+	}
+	return placeholderRE.MatchString(strings.TrimSpace(placeholder))
 }
 
 // isEnvFile mirrors python _is_env_file: .env exactly, anything
@@ -1244,10 +1397,16 @@ func isEnvFile(name string) bool {
 // identity, or with a digest of the credential, which would persist a
 // credential oracle. See models.SecretRef for the consequence.
 func secretIdentifier(line string, valueStart int, hasValue bool) string {
-	if !hasValue || valueStart <= 0 || valueStart > len(line) {
+	return secretIdentifierIx(newLineIndex(line), valueStart, hasValue)
+}
+
+// secretIdentifierIx is secretIdentifier with the line's index supplied (see
+// lineIndex): the same answers, read from one pass over the window instead of a
+// scan of the prefix per match.
+func secretIdentifierIx(ix *lineIndex, valueStart int, hasValue bool) string {
+	if !hasValue || valueStart <= 0 || valueStart > len(ix.line) {
 		return ""
 	}
-	prefix := line[:valueStart]
 	// The binding is the assignment to the left of the STRING LITERAL the
 	// value sits in — not of the nearest key, and not of the first quote on
 	// the line.
@@ -1271,12 +1430,12 @@ func secretIdentifier(line string, valueStart int, hasValue bool) string {
 	// its left. lastAssignmentKey still runs on that prefix (a nested
 	// `config["stripe_key"] =` gives `stripe_key`, not `config`), never on the
 	// value's text.
-	if open := enclosingQuote(prefix); open >= 0 {
-		if outer := lastAssignmentKey(prefix[:open]); outer != "" {
+	if open := ix.enclosingQuoteBefore(valueStart); open >= 0 {
+		if outer := ix.lastKeyBefore(open); outer != "" {
 			return outer
 		}
 	}
-	return lastAssignmentKey(prefix)
+	return ix.lastKeyBefore(valueStart)
 }
 
 // enclosingQuote returns the index of the quote that opens the string literal
