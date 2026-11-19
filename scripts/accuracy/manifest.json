@@ -46,10 +46,10 @@
         {"line": 10, "case": "case_01_open_request_arg"},
         {"line": 17, "case": "case_02_pathlib_request_arg"},
         {"line": 23, "case": "case_03_send_file_request_arg"},
-        {"line": 28, "case": "case_04_send_from_directory_user_arg"},
         {"line": 33, "case": "case_05_multi_hop"}
       ],
       "tn_lines": [
+        {"line": 28, "case": "case_04_send_from_directory_user_arg"},
         {"line": 40, "case": "case_06_constant_safe"},
         {"line": 45, "case": "case_07_name_from_scope_safe"},
         {"line": 51, "case": "case_08_validated_safe"}
@@ -75,10 +75,10 @@
       "file": "corpus/open_redirect.py",
       "tp_lines": [
         {"line": 6, "case": "case_01_flask_redirect_request_arg"},
-        {"line": 12, "case": "case_02_django_redirect_request_get"},
-        {"line": 18, "case": "case_03_multi_hop"}
+        {"line": 12, "case": "case_02_django_redirect_request_get"}
       ],
       "tn_lines": [
+        {"line": 18, "case": "case_03_multi_hop"},
         {"line": 25, "case": "case_04_constant_safe"},
         {"line": 30, "case": "case_05_name_from_scope_safe"}
       ]

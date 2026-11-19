@@ -36,8 +36,11 @@ jobs:
       # tests/regression (CLI smoke, output-snapshot + perf + benchmark-
       # baseline regression). They build the fendix binary via tests/harness
       # and need no Docker/network, so they run on every push/PR here.
+      # -race multiplies the seeded secrets-scanner tests (about 35 s without it)
+      # past go test's default 10-minute package timeout on a hosted runner, as
+      # the Semgrep-dependent step below already allows for.
       - name: Test
-        run: go test -race -v ./...
+        run: go test -race -v -timeout 30m ./...
 
       - name: Vet
         run: go vet ./...

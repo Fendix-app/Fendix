@@ -42,6 +42,7 @@ from __future__ import annotations
 import base64
 import codecs
 import json
+import re
 import os
 import platform
 import subprocess
@@ -56,6 +57,7 @@ from analyzers.ast_analyzer import AnalysisIncomplete, ASTAnalyzer
 
 TESTDATA = Path(__file__).resolve().parents[2] / "go" / "internal" / "scope" / "testdata"
 GENERATOR = TESTDATA / "gen_pep263_vectors.py"
+_BUILD_STAMP = re.compile(rb'"build": "[^"\n]*"')
 VECTORS_PATH = TESTDATA / "pep263_vectors.json"
 NAMES_PATH = TESTDATA / "pep263_codec_names.json"
 DOC = json.loads(VECTORS_PATH.read_text(encoding="utf-8"))
@@ -134,7 +136,13 @@ def test_generated_files_reproduce_byte_for_byte(tmp_path: Path) -> None:
     r = subprocess.run([sys.executable, "-I", str(GENERATOR), str(tmp_path)], capture_output=True, timeout=900)
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[-2000:]
     for name in ("pep263_vectors.json", "pep263_codec_names.json"):
-        assert (tmp_path / name).read_bytes() == (TESTDATA / name).read_bytes(), f"{name} differs from a fresh generation"
+        # The interpreter's build stamp (`reference_interpreter.build`) names the
+        # platform image the generator ran on: the one pinned multi-arch base digest
+        # resolves to builds of the same CPython made on different days for amd64 and
+        # arm64. It is provenance, not a measurement, so it alone is not compared.
+        fresh, committed = ((tmp_path / name).read_bytes(), (TESTDATA / name).read_bytes())
+        fresh, committed = (_BUILD_STAMP.sub(b'"build": "*"', b) for b in (fresh, committed))
+        assert fresh == committed, f"{name} differs from a fresh generation"
 
 
 # ---------------------------------------------------------------------------

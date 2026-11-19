@@ -26,7 +26,7 @@ def case_03_send_file_request_arg():
 
 
 def case_04_send_from_directory_user_arg():
-    # EXPECT_TP: send_from_directory user-controlled SECOND arg
+    # EXPECT_TN: constant directory, request filename: Werkzeug safe_join contains it
     return send_from_directory(UPLOAD_DIR, request.args["name"])
 
 

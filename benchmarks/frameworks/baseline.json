@@ -106,7 +106,7 @@
       "blocks": true
     },
     "django-path_traversal-safe": {
-      "outcome": "TN",
+      "outcome": "FP",
       "blocks": false
     },
     "django-path_traversal-safe_lookalike": {
@@ -570,7 +570,7 @@
       "blocks": true
     },
     "fastapi-path_traversal-safe": {
-      "outcome": "TN",
+      "outcome": "FP",
       "blocks": false
     },
     "fastapi-path_traversal-safe_lookalike": {
@@ -802,7 +802,7 @@
       "blocks": true
     },
     "flask-path_traversal-safe": {
-      "outcome": "TN",
+      "outcome": "FP",
       "blocks": false
     },
     "flask-path_traversal-safe_lookalike": {

@@ -185,7 +185,12 @@ class TestUnparseableFile:
         findings, raised, _a = _run({"broken.py": "def f(:\n    pass\n", "app.py": SHELL_ROUTE})
         assert raised is not None
         assert [r for r, _ in raised.files] == ["broken.py"]
-        assert "syntax error at line 1" in raised.files[0][1]
+        # An interpreter older than the newest grammar cannot tell a broken file from
+        # newer syntax and says so (CI runs the suite on 3.11; the image is 3.14).
+        if sys.version_info[:2] < interpreter.NEWEST_GRAMMAR:
+            assert "may be too old" in raised.files[0][1] and "line 1" in raised.files[0][1]
+        else:
+            assert "syntax error at line 1" in raised.files[0][1]
         assert SHELL in _ids(findings)
 
     def test_a_null_byte_file_is_lost_evaluation(self) -> None:
@@ -238,10 +243,16 @@ class TestUnparseableFile:
         injection, findings, proc, _s = _engine({"broken.py": "def f(:\n", "app.py": SHELL_ROUTE})
         assert proc.returncode == 0
         assert injection["state"] == "failed" and injection["reason"] == "execution_error"
-        assert injection["detail"] == (
-            "lost evaluation: 1 in-scope file not fully analysed: "
-            "broken.py (parse: syntax error at line 1 (\'(\' was never closed))"
-        ) or injection["detail"].startswith("lost evaluation: 1 in-scope file not fully analysed: broken.py (parse: syntax error at line 1")
+        if sys.version_info[:2] < interpreter.NEWEST_GRAMMAR:
+            # an older interpreter hedges: it cannot rule out newer syntax
+            assert injection["detail"].startswith(
+                "lost evaluation: 1 in-scope file not fully analysed: broken.py (parse: python "
+            ) and "may be too old" in injection["detail"], injection["detail"]
+        else:
+            assert injection["detail"] == (
+                "lost evaluation: 1 in-scope file not fully analysed: "
+                "broken.py (parse: syntax error at line 1 (\'(\' was never closed))"
+            ) or injection["detail"].startswith("lost evaluation: 1 in-scope file not fully analysed: broken.py (parse: syntax error at line 1")
         assert "…" not in injection["detail"]
         assert SHELL in {f["id"] for f in findings}
         assert injection["scope"]["lost"][0][0] == "broken.py"
