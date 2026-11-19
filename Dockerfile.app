@@ -39,7 +39,7 @@ RUN make embed-engine && \
     go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o /fendix-app  ./cmd/fendix-app/
 
 # ---- Stage 2: Runtime image ----
-FROM python:3.14-slim@sha256:7a500125bc50693f2214e842a621440a1b1b9cbb2188f74ab045d29ed2ea5856
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 # git is required for the clone step in the App's pull_request handler.
 # ca-certificates so HTTPS to api.github.com + github.com works.
