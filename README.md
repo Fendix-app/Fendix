@@ -506,7 +506,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix version` | Print version, OS, and architecture information |
 | `fendix managed` | **Preview (ADR-010), new in v3.5.0:** create context and submit evidence under the managed-CI contract |
 
-The published stable release is v3.7.0. `managed` and its two hidden producer
+The published stable release is v3.8.0. `managed` and its two hidden producer
 flags ship in it as a preview under ADR-010: they sit outside the stable
 compatibility contract and are not a product availability claim. No command defines a Cobra alias. Run
 `fendix <command> --help` for the executable flag contract.

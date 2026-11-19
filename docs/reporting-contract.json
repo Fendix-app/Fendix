@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "engine_version": "v3.7.0",
+  "engine_version": "v3.8.0",
   "formats": [
     "json",
     "html",
@@ -1273,7 +1273,7 @@
         "target": "https://staging.example.com",
         "started_at": "2026-10-03T09:00:00Z",
         "duration": "1.2s",
-        "version": "v3.7.0",
+        "version": "v3.8.0",
         "mode": "blackbox",
         "endpoints_scanned": 1,
         "active_probes": false
@@ -1307,7 +1307,7 @@
         "target": "https://staging.example.com",
         "started_at": "2026-10-03T09:00:00Z",
         "duration": "2.4s",
-        "version": "v3.7.0",
+        "version": "v3.8.0",
         "mode": "hybrid",
         "endpoints_scanned": 12,
         "active_probes": false,
@@ -1408,7 +1408,7 @@
           "tool": {
             "driver": {
               "name": "Fendix",
-              "version": "v3.7.0",
+              "version": "v3.8.0",
               "informationUri": "https://github.com/Fendix-app/Fendix",
               "rules": [
                 {

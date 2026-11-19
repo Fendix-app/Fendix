@@ -7,10 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing in this section is released. The published stable release is v3.7.0,
-which is what the hosted backend pins and runs; the remediation described here
-exists only in the working tree and local checkpoint commits, and the release
-stays blocked until it is independently verified.
+## [3.8.0] - 2026-11-19
+
+v3.8.0 is the remediation release: a scan says what it did not read, a finding
+is graded on its own evidence, and no recogniser can turn a real finding into a
+clean scan. It is a minor release under SemVer: the report schema, SARIF
+structure, exit-code meanings and CLI flags are unchanged; what changes is what
+a scan reports.
+
+What a customer will see:
+
+- **More scans read `incomplete`.** A file an analyzer could not read (over a
+  size cap, unreadable, a Python file whose PEP 263 cookie is not a
+  takeover-immune spelling of UTF-8, Latin-1 or ASCII, a JavaScript, TypeScript
+  or Java file whose unicode escapes change what the analyzers see) is recorded
+  as lost evaluation under the existing reasons. The findings of the file are kept.
+- **Findings are graded on their own evidence.** Different constructs on one
+  line stay separate findings; occurrences group only with occurrences of the
+  same evidence, so positional ids (`SEC-nnn`) and finding counts change, and
+  fingerprints of constructs that used to be merged into another appear again.
+  Occurrence fingerprints do not change.
+- **Credentials in test code and documentation warn.** A credential in a test
+  path or a documentation file holds at `WARN` unless it is provable offline (a
+  checksum-valid GitHub token, a parseable private key, an AWS key pair); it is
+  still reported. A value is judged a sample only when the whole value is a
+  sample form, so a real secret written next to a published example keeps
+  v3.7.0's status.
+- **`eval` and path-traversal guards lower, never remove.** `SEC-JS_EVAL`
+  reports every site v3.7.0's line pattern matched; one in a comment, string or
+  regular expression is reported at a grade that warns. A path-traversal sink
+  behind a recognised guard is reported at `WARN`.
+
+Known limitations, accepted for this release (owner rulings OR-85 to OR-90):
+the PEP 263 rule assumes the interpreter's environment is not controlled by the
+scanned repository (script mode with a reachable `sitecustomize` is out of
+scope); password assignments inside JSON members, unquoted `.env`/YAML values
+and similar forms are not read by any release; Semgrep's stage on a single
+line of a megabyte or more can take tens of seconds and records lost
+evaluation when it times out; crafted syntax that makes a complete JavaScript
+reading wrong can lower a v3.7.0 `BLOCK` on `eval` to `WARN`.
+
+The entries below record each change by remediation round.
 
 **Round 5 of the remediation program (2026-11-13) changed what this section
 says in these places; the entries below are updated where they would otherwise
