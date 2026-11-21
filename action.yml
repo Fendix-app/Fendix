@@ -25,21 +25,20 @@
 #
 # Usage: pin the full commit of the validated release, which is immutable, and
 # set `version` to the Fendix release to install. `@v1` follows compatible
-# stable releases of the v1 Action; since 2026-10-27 it resolves to the
-# v3.7.0 release commit below.
+# stable releases of the v1 Action; the validated v3.8.1 pairing uses the release commit below.
 #
 #   - uses: actions/checkout@<full-commit-sha> # v6
 #     with: { fetch-depth: 0 }          # diff mode compares against the base ref
-#   - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
+#   - uses: Fendix-app/Fendix@e3e3eadaaecb8670973f7acbc7b0cc4d3fca34c0 # v3.8.1
 #     with:
-#       version: v3.7.0
+#       version: v3.8.1
 #       code: .
 #
 # Usage (full: add a DAST target and fail the build on HIGH):
 #
-#   - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
+#   - uses: Fendix-app/Fendix@e3e3eadaaecb8670973f7acbc7b0cc4d3fca34c0 # v3.8.1
 #     with:
-#       version: v3.7.0
+#       version: v3.8.1
 #       url: ${{ secrets.STAGING_API_URL }}
 #       code: .
 #       spec: openapi.yaml
@@ -87,7 +86,7 @@ inputs:
     required: false
     default: "true"
   version:
-    description: "Fendix release to install: an exact tag such as v3.6.2, or 'latest', resolved once to an exact tag. The binary must verify against its release's cosign signature, so only signed releases install; automatic Python preparation (engine_path empty) needs a signed build record, published from v3.5.0."
+    description: "Fendix release to install: an exact tag such as v3.8.1, or 'latest', resolved once to an exact tag. The binary must verify against its release's cosign signature, so only signed releases install; automatic Python preparation (engine_path empty) needs a signed build record, published from v3.5.0."
     required: false
     default: "latest"
   extra-args:

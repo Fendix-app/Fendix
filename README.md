@@ -676,7 +676,7 @@ verbatim in `result.properties.evidence`.
 
 ## CI/CD Integration
 
-The recommended composite Action and reference-workflow examples below retain their tested v3.7.0 pairing. The current standalone CLI and container release is v3.8.1; updating those install pins does not certify a new Action pairing or move `@v1`.
+The composite Action, standalone CLI and digest-pinned reference workflow below all use the current v3.8.1 release.
 
 Fendix's `init` command generates starter files for three CI systems:
 
@@ -711,7 +711,7 @@ also accepts an optional `FENDIX_SHA256` pin.
 ### GitHub Actions
 
 **Recommended: the Fendix Action.** It is listed on GitHub Marketplace as
-[Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan). Pin it to the full commit of the v3.7.0
+[Fendix Security Scan](https://github.com/marketplace/actions/fendix-security-scan). Pin it to the full commit of the v3.8.1
 release, with an explicit `version`:
 
 ```yaml
@@ -731,38 +731,31 @@ jobs:
         with:
           fetch-depth: 0      # diff mode compares against the PR base ref
 
-      - uses: Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0
+      - uses: Fendix-app/Fendix@e3e3eadaaecb8670973f7acbc7b0cc4d3fca34c0 # v3.8.1
         with:
-          version: v3.7.0
+          version: v3.8.1
           code: .
           url: ${{ secrets.STAGING_API_URL }}   # optional, adds DAST
           spec: openapi.yaml                     # optional
           fail-on: HIGH
 ```
 
-The commit pins the Action's own code and cannot change; `version` pins the
-Fendix release it installs. `@v1` follows compatible stable releases of the v1
-Action. Since 2026-10-27 it resolves to the v3.7.0 release commit `90adf6a`,
-so it has v3.7.0's fail-closed required analyzers, but it moves when a later
-compatible release is published; pin the commit for a reference that cannot
-change. With `@v1`, set `version: v3.7.0`. A workflow that set
-`version: v3.6.5` while `@v1` was the v3.6.2 Action now runs the v3.7.0
-Action with that release, a pairing that has not been tested end to end;
-move it to `version: v3.7.0`.
+The commit pins the Action's code; `version` pins the engine it installs.
+Since 2026-11-21, `@v1` resolves to the v3.8.1 release commit
+`e3e3eadaaecb8670973f7acbc7b0cc4d3fca34c0`. With `@v1`, set
+`version: v3.8.1`. The major tag follows compatible Action releases;
+pin the full commit when the reference must never change.
 
-Never reference `@main`; it changes without review. The permissions above are
-all the Action needs; it uses the job token only for the SARIF upload. The
-v3.7.0 release commit with `version: v3.7.0` was tested end to end in a public
-repository on 2026-10-25 (`Fendix-app/fendix-action-e2e-public`, runs
-40225358870 to 40225440001). After the move, literal `@v1` with
-`version: v3.7.0` repeated four of those scenarios on 2026-10-27 with the same
-outcome and exit code: no findings (0), a `BLOCK` finding (1), a scan error
-(2), and a required Semgrep with no wheel for glibc 2.31, which fails setup
-with exit 2 before any scan (runs 40568280529 to 40568281493). Before the
-move, the v3.6.2 Action, by its release commit and as literal `@v1`, passed
-the external-user end-to-end matrix in public and private repositories, and
-literal `@v1` with `version: v3.6.5` passed the v3.6.5 release's end-to-end
-run.
+Never reference `@main`. The permissions above are all the Action needs;
+it uses the job token only for SARIF upload. The pinned v3.8.1 pairing passed
+an end-to-end matrix in `Fendix-app/fendix-action-e2e-public` on 2026-11-21
+([run 44893196135](https://github.com/Fendix-app/fendix-action-e2e-public/actions/runs/44893196135)):
+no findings (0), a `BLOCK` finding (1), a scan error (2), and required Semgrep
+on glibc 2.31 failing setup before any scan. The matrix checks binary version,
+SARIF and actual outcomes, including the old-glibc logs. The integration guide
+records the successful literal `@v1` repeat
+([run 44893341576](https://github.com/Fendix-app/fendix-action-e2e-public/actions/runs/44893341576))
+and reference-workflow verification.
 
 #### What the Action does
 
@@ -848,7 +841,7 @@ run.
           cosign-release: "v2.4.1"
       - name: Install Fendix (signature required)
         env:
-          FENDIX_VERSION: v3.7.0
+          FENDIX_VERSION: v3.8.1
           FENDIX_REQUIRE_SIGNATURE: "1"
         run: curl -fsSL https://get.fendix.dev/install.sh | sh
       - name: Run scan
@@ -874,7 +867,7 @@ run.
 #### Alternative: the digest-pinned reference workflow
 
 For teams that want the container-based path and to own the workflow file
-directly, the reference workflow runs the official v3.7.0 container by digest
+directly, the reference workflow runs the official v3.8.1 container by digest
 and pins every third-party Action to a full commit SHA. Its content was tested
 end to end; the integration guide has the record. Install it from that commit,
 not from `main`:
@@ -882,7 +875,7 @@ not from `main`:
 ```bash
 mkdir -p .github/workflows
 curl -fsSL -o .github/workflows/fendix-scan.yml \
-  https://raw.githubusercontent.com/Fendix-app/Fendix/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml
+  https://raw.githubusercontent.com/Fendix-app/Fendix/8b0212eda6371269f7b1bffde9cf2768b539c038/examples/github-actions/fendix-scan.yml
 ```
 
 The [integration guide](docs/INTEGRATION_GUIDE.md#32-alternative--the-digest-pinned-reference-workflow)

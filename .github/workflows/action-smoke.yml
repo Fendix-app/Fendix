@@ -21,7 +21,7 @@ jobs:
           go-version: "1.27.4"
       - uses: ./
         with:
-          version: v3.6.0
+          version: v3.8.1
           code: tests/fixtures/coverage-smoke
           diff: 'false'
           format: json
@@ -39,7 +39,7 @@ jobs:
           for name in ['python-engine', 'python-engine/injection', 'semgrep', 'secrets', 'textscan']:
               assert states.get(name) == 'ok', (name, states)
           PY
-      # The Action installed exactly v3.6.0, signature-verified, into its own
+      # The Action installed exactly v3.8.1, signature-verified, into its own
       # private directory under RUNNER_TEMP: that is the fendix on PATH, and
       # nothing was written to /usr/local/bin.
       - name: Assert the verified binary runs from the Action's private directory
@@ -51,9 +51,9 @@ jobs:
             *) echo "::error::fendix resolves to $path, not the Action's private directory"; exit 1 ;;
           esac
           out=$(fendix version)
-          [ "${out%%$'\n'*}" = "fendix version v3.6.0 (linux/amd64)" ] || { echo "::error::unexpected version: $out"; exit 1; }
+          [ "${out%%$'\n'*}" = "fendix version v3.8.1 (linux/amd64)" ] || { echo "::error::unexpected version: $out"; exit 1; }
           [ ! -e /usr/local/bin/fendix ] || { echo "::error::a fendix binary was written to /usr/local/bin"; exit 1; }
-          echo "fendix v3.6.0 runs from $path"
+          echo "fendix v3.8.1 runs from $path"
       # setup-python runs with update-environment: false, so the caller's job
       # keeps its own environment: no pythonLocation or *_ROOT_DIR, and the
       # tool-cache interpreter is not on PATH. (The Action's venv and
@@ -72,10 +72,8 @@ jobs:
           esac
           echo "no setup-python environment in this job; python3 is $(command -v python3)"
 
-  # The lock path a release tree takes. No published release ships
-  # python/requirements.lock before v3.6.1, so the Action's automatic path
-  # cannot reach it yet; this job runs the same preparation code on this
-  # commit's python/ tree as a release tree. The venv must hold exactly the
+  # Test this commit's hash lock directly as well as the published release
+  # preparation above. Releases before v3.6.1 use the legacy requirements path. The venv must hold exactly the
   # locked versions, and every required analyzer must reach ok with it.
   release-lock:
     name: Release tree lock install
@@ -90,10 +88,10 @@ jobs:
         with:
           python-version: "3.11"
           update-environment: false
-      - name: Install Fendix v3.6.0
+      - name: Install Fendix v3.8.1
         run: |
           set -euo pipefail
-          curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.6.0 sh
+          curl -fsSL https://get.fendix.dev/install.sh | FENDIX_VERSION=v3.8.1 sh
           fendix version
       - name: Prepare this commit's python/ tree as a release tree
         env:
@@ -107,11 +105,11 @@ jobs:
           prepare = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(prepare)
           work = Path(tempfile.mkdtemp(prefix="fendix-lock-", dir=os.environ["RUNNER_TEMP"]))
-          # "v3.7.0" is the release this tree becomes; it only names the log line.
+          # The version argument labels this current release-tree preparation.
           # Semgrep is required, as the Action's default makes it for a code scan.
-          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.7.0", work, required=["semgrep"])
+          prepare.prepare(shutil.which("fendix"), Path("python").resolve(), "v3.8.1", work, required=["semgrep"])
           PY
-          grep -qF "Installing the locked dependencies of Fendix v3.7.0 (requirements.lock, --require-hashes)" prepare.log
+          grep -qF "Installing the locked dependencies of Fendix v3.8.1 (requirements.lock, --require-hashes)" prepare.log
           grep -qF "Wheels only (--only-binary=:all:): no dependency is built from source" prepare.log
           if grep -qF "Building wheel for" prepare.log; then echo "::error::a dependency was built from source"; exit 1; fi
       - name: Preflight the locked venv's Semgrep
@@ -252,12 +250,12 @@ jobs:
             expected-exit: ''
           # The engine rejects --fail-on INFO before scanning: exit 2, no report.
           - case: scan-error
-            version: v3.6.0
+            version: v3.8.1
             fail-on: INFO
             upload-sarif: 'true'
             expected-exit: '2'
           - case: block
-            version: v3.6.0
+            version: v3.8.1
             fail-on: HIGH
             upload-sarif: 'false'
             expected-exit: '1'
@@ -265,7 +263,7 @@ jobs:
           # semgrep, which require-analyzers: auto requires for a code scan,
           # so the engine exits 2 and its partial report is not uploaded.
           - case: required-disabled
-            version: v3.6.5
+            version: v3.8.1
             fail-on: HIGH
             upload-sarif: 'true'
             extra-args: --fast
@@ -273,19 +271,23 @@ jobs:
           # The opt-out on a BLOCK: the gate fails on the finding and still
           # says that required-analyzer enforcement was off.
           - case: opt-out-block
-            version: v3.7.0
+            version: v3.8.1
             fail-on: HIGH
             upload-sarif: 'false'
             require-analyzers: none
             expected-exit: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Stage the gate fixture outside test-path grading
+        run: |
+          mkdir -p action-target
+          cp tests/fixtures/action-gate/server.py action-target/server.py
       - id: fendix
         uses: ./
         continue-on-error: true
         with:
           version: ${{ matrix.version }}
-          code: tests/fixtures/action-block
+          code: action-target
           diff: 'false'
           fail-on: ${{ matrix.fail-on }}
           format: sarif
@@ -354,8 +356,8 @@ jobs:
         uses: ./
         continue-on-error: true
         with:
-          version: v3.6.5
-          code: .
+          version: v3.8.1
+          code: tests/fixtures/action-gate
           diff: 'false'
           fail-on: ''
           format: json
@@ -405,8 +407,8 @@ jobs:
       - id: fendix
         uses: ./
         with:
-          version: v3.6.5
-          code: .
+          version: v3.8.1
+          code: tests/fixtures/action-gate
           diff: 'false'
           fail-on: ''
           format: json
@@ -450,8 +452,8 @@ jobs:
           rules_for() {
             case "$1" in
               "Action Python setup (automatic)") printf '%s\n' \
-                "present|Fendix v3.6.0 ships no requirements.lock: installing requirements.txt with the pydantic<2.14 compatibility bound" \
-                "absent|Installing the locked dependencies" ;;
+                "present|Installing the locked dependencies of Fendix v3.8.1 (requirements.lock, --require-hashes)" \
+                "present|Wheels only (--only-binary=:all:)" ;;
               "Action Python setup (explicit)") printf '%s\n' \
                 "present|Custom engine_path: installing its requirements.txt with the pydantic<2.14 compatibility bound" \
                 "absent|Installing the locked dependencies" ;;
