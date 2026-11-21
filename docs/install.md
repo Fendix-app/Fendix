@@ -12,6 +12,8 @@ choose between them or want signature-verification details.
 
 ---
 
+Current stable release: **[v3.8.1](https://github.com/Fendix-app/Fendix/releases/tag/v3.8.1)**. The official binary and container toolchain use Go 1.27.4.
+
 ## Choose a path
 
 | You want… | Use |
@@ -33,7 +35,7 @@ choose between them or want signature-verification details.
 | Source checkout | Available from the checkout's `./python` directory. |
 
 `--code` auto-enables the Python phase unless `--python-engine=false` is
-explicit. On a standalone v3.7.0 install with no version-matched tree supplied
+explicit. On a standalone v3.8.1 install with no version-matched tree supplied
 through `FENDIX_ENGINE` or an engine pin, that phase is recorded
 `skipped/dependency_missing`; native secrets, textscan, Semgrep orchestration,
 and native dependency analyzers continue. Use the official container or a
@@ -70,7 +72,7 @@ Downloads the latest release binary, verifies its sha256 checksum, and
 installs to `/usr/local/bin/fendix`. Override:
 
 - `FENDIX_DIR=$HOME/.local/bin` — install to a user-writable directory.
-- `FENDIX_VERSION=v3.7.0` — pin a specific version.
+- `FENDIX_VERSION=v3.8.1` — pin a specific version.
 - `FENDIX_REPO=...` — pull from a fork or private mirror.
 - `FENDIX_SHA256=<hex>` — refuse any binary whose SHA-256 differs (a pin
   that holds even if the release is later replaced). From v3.5.1.
@@ -102,7 +104,7 @@ curl -fsSL https://get.fendix.dev/install.sh | less
 ```bash
 # Pick the right architecture for your host
 ARCH=$(dpkg --print-architecture)         # amd64 or arm64
-VERSION=v3.7.0                            # current release at time of writing
+VERSION=v3.8.1                            # current release at time of writing
 FILE="fendix-${VERSION}-linux-${ARCH}.deb"
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/${FILE}"
 
@@ -129,7 +131,7 @@ case "$ARCH" in
   x86_64)  PKG_ARCH=amd64 ;;
   aarch64) PKG_ARCH=arm64 ;;
 esac
-VERSION=v3.7.0
+VERSION=v3.8.1
 FILE="fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/${FILE}"
 
@@ -149,8 +151,8 @@ Uninstall with `sudo dnf remove fendix`.
 ## Docker
 
 ```bash
-docker pull fendixapp/fendix:3.7.0
-docker run --rm fendixapp/fendix:3.7.0 scan --url https://api.example.com
+docker pull fendixapp/fendix:3.8.1
+docker run --rm fendixapp/fendix:3.8.1 scan --url https://api.example.com
 ```
 
 The image is multi-arch (linux/amd64 + linux/arm64); `docker pull` picks
@@ -162,7 +164,7 @@ mode works out of the box.
 > produced by one of those cannot say which engine version wrote it — including
 > SARIF `driver.version`. From v2.0.1 the build takes the git tag, matching how
 > the platform binaries have always been stamped. Pin a tag
-> (`fendixapp/fendix:3.7.0`) or a digest rather than `:latest`
+> (`fendixapp/fendix:3.8.1`) or a digest rather than `:latest`
 > if you need that to be reproducible. A locally built image still reports
 > `docker`, deliberately: a plain `docker build .` has no tag to claim.
 
@@ -174,7 +176,7 @@ Pick a binary for your platform from the
 matching `.sha256` file, and place it on your PATH:
 
 ```bash
-VERSION=v3.7.0
+VERSION=v3.8.1
 FILE="fendix-${VERSION}-darwin-arm64"
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/${FILE}"
 
@@ -190,7 +192,7 @@ fendix version
 
 ## Build from source
 
-Requires Go 1.21+ and Python 3.9+.
+Requires Go 1.25+ and Python 3.9+. Official v3.8.1 release builds use Go 1.27.4.
 
 ```bash
 git clone https://github.com/Fendix-app/Fendix.git
@@ -209,9 +211,9 @@ pip install -r python/requirements.txt
 
 ## Verifying release artifacts (cosign)
 
-When `COSIGN_ENABLED=true` is set on the engine repo, every release
-ships `.sig` + `.crt` sidecar files alongside each binary, `.deb`, `.rpm`,
-and Docker image. Verification is keyless via Sigstore Fulcio — no static
+When `COSIGN_ENABLED=true` is set on the engine repo, release binaries and `.deb` / `.rpm` packages
+ship `.sig` + `.crt` sidecars. Container signatures and attestations are stored
+in the registry. Verification is keyless via Sigstore Fulcio — no static
 public key to distribute.
 
 Verify a binary:
@@ -222,29 +224,35 @@ Certificates through v3.4.1 keep their pre-transfer identity; see
 
 ```bash
 cosign verify-blob \
-  --certificate fendix-v3.7.0-linux-amd64.crt \
-  --signature   fendix-v3.7.0-linux-amd64.sig \
-  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0" \
+  --certificate fendix-v3.8.1-linux-amd64.crt \
+  --signature   fendix-v3.8.1-linux-amd64.sig \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  fendix-v3.7.0-linux-amd64
+  fendix-v3.8.1-linux-amd64
 ```
+
+For a signed binding between the binary digest and its source commit, follow
+[the build-record verification](../SECURITY.md#verifying-binary-release-binding).
+The published per-binary `.intoto.jsonl` is plain metadata; the independently
+verifiable container SLSA attestation is documented in
+[SECURITY.md](../SECURITY.md#verifying-container-slsa-build-provenance).
 
 Verify a `.deb` or `.rpm` package (same pattern, swap the asset name):
 
 ```bash
 cosign verify-blob \
-  --certificate fendix-v3.7.0-linux-amd64.deb.crt \
-  --signature   fendix-v3.7.0-linux-amd64.deb.sig \
-  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0" \
+  --certificate fendix-v3.8.1-linux-amd64.deb.crt \
+  --signature   fendix-v3.8.1-linux-amd64.deb.sig \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  fendix-v3.7.0-linux-amd64.deb
+  fendix-v3.8.1-linux-amd64.deb
 ```
 
 Verify the Docker image (signs the multi-arch manifest digest):
 
 ```bash
-cosign verify fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015 \
-  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
+cosign verify fendixapp/fendix@sha256:2752d6114b209b2c3b986b49950c0238b7e72d98c988eb9c5ee623fcd7c9ff1a \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 ```
 
