@@ -373,27 +373,13 @@ jobs:
       # ID), what the inputs were (commit SHA, ref, repo), and what
       # the output was (binary sha256).
       #
-      # We construct the predicate inline rather than calling
-      # `slsa-framework/slsa-github-generator` because (a) the
-      # reusable workflow expands the trust boundary by another
-      # third-party repo we'd have to pin and audit, and (b) the
-      # in-toto + cosign path achieves the same verifiability via
-      # Rekor. A consumer verifies with:
-      #
-      #   cosign verify-blob-attestation \
-      #     --signature   fendix-vX.Y.Z-OS-ARCH.intoto.jsonl \
-      #     --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
-      #     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-      #     --type slsaprovenance1 \
-      #     fendix-vX.Y.Z-OS-ARCH
-      #
-      # By default this signs at SLSA L2 (hosted-runner, non-forgeable
-      # OIDC, automated build, source-versioned). L3 ("isolated,
-      # parameterless, hermetic build") is achievable on this
-      # workflow because the runner is ephemeral and the build script
-      # is pinned by commit SHA via the workflow file — but a formal
-      # L3 claim requires a third-party attestor; we claim L2 and let
-      # users self-verify the L3 properties.
+      # The per-binary .intoto.jsonl produced by --output-attestation is
+      # plain statement metadata; it is not a certificate-bearing bundle.
+      # v3.8.1 did not publish a standalone verification bundle for it.
+      # Binary release binding is verified through the binary signature and
+      # signed build record (SECURITY.md). Container SLSA is verified through
+      # its registry attestation. A future release can publish a binary
+      # bundle explicitly; do not describe this file as independently signed.
       - name: Generate SLSA provenance
         if: vars.COSIGN_ENABLED == 'true'
         env:
@@ -445,9 +431,9 @@ jobs:
           }
           EOF
 
-          # Sign the predicate as an in-toto attestation that
-          # references the binary's sha256. The output is JSONL with
-          # the cosign signature embedded.
+          # Attest the predicate, recording the statement beside the binary.
+          # --output-attestation does not save a certificate-bearing bundle;
+          # this published metadata is not a standalone signature proof.
           cosign attest-blob --yes \
             --predicate "${BINARY}.predicate.json" \
             --type slsaprovenance1 \

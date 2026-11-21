@@ -14,22 +14,22 @@ This document covers two things:
 
 ## Supported versions
 
-Current stable release: **v3.8.0** (2026-11-19 — see
+Current stable release: **v3.8.1** (2026-11-20 — see
 [`CHANGELOG.md`](CHANGELOG.md)).
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 3.6.x   | ✅ active           |
-| 3.5.x   | ✅ critical only    |
-| < 3.5   | ❌ end of life      |
+| 3.8.x   | ✅ active           |
+| 3.7.x   | ✅ critical only    |
+| < 3.7   | ❌ end of life      |
 
 The post-1.0 policy announced pre-1.0 is now in force: **the latest two minor
 versions are supported — full security fixes on the current minor, critical
-fixes only on the previous one.** Everything below `3.5.0` is end of life and
-will not receive backports; upgrade to `3.6.x`.
+fixes only on the previous one.** Everything below `3.7.0` is end of life and
+will not receive backports; upgrade to `3.8.x`.
 
 A patch release on the supported branch is the delivery vehicle for a fix
-(e.g. `3.6.1` for a `3.6.x` issue).
+(e.g. `3.8.1` for a `3.8.x` issue).
 
 ## Reporting a vulnerability
 
@@ -110,14 +110,16 @@ identity that produced them.
 ### Verifying current binaries
 
 ```sh
-# After downloading both fendix-vX.Y.Z-linux-amd64 and the .sig + .crt
-# sidecars from the GitHub release page:
+# Download the binary and its .sig + .crt sidecars from this release:
+VERSION=v3.8.1
+ASSET="fendix-${VERSION}-linux-amd64"
+IDENTITY="https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}"
 cosign verify-blob \
-  --certificate fendix-vX.Y.Z-linux-amd64.crt \
-  --signature   fendix-vX.Y.Z-linux-amd64.sig \
-  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$" \
+  --certificate "${ASSET}.crt" \
+  --signature "${ASSET}.sig" \
+  --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  fendix-vX.Y.Z-linux-amd64
+  "$ASSET"
 ```
 
 A successful verification prints `Verified OK`. Any mismatch — wrong
@@ -125,51 +127,93 @@ identity, wrong signing time, tampered binary — exits non-zero.
 
 ### Verifying the Docker image
 
+The v3.8.1 multi-architecture manifest is pinned below. Its signature, CycloneDX SBOM and SLSA provenance use the same exact release workflow identity. Binaries and the image toolchain use Go 1.27.4; this fixes CVE-2026-97054 (GO-2026-6859). The remaining image advisories require their own reachability review; a valid signature is not a vulnerability-free claim.
+
 ```sh
-REF='docker.io/fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0$'
+REF='docker.io/fendixapp/fendix@sha256:2752d6114b209b2c3b986b49950c0238b7e72d98c988eb9c5ee623fcd7c9ff1a'
+IDENTITY='https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify \
-  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer "$ISSUER" \
   "$REF"
 ```
 
-### Verifying SLSA build provenance
+### Verifying binary release binding
 
-Each release binary and the Docker image carry a SLSA v1.0 build
-provenance attestation signed via cosign keyless (Sigstore Fulcio +
-GitHub Actions OIDC). The predicate records the workflow file path,
-the source commit SHA, the runner identity, and the build inputs.
+The v3.8.1 release publishes a signed `build-record.json` that binds each
+executable digest to its release tag, source commit and workflow. Verify the
+record's signature, then compare the downloaded binary with its entry:
 
 ```sh
-# Per-binary SLSA provenance (the .intoto.jsonl sidecar):
-cosign verify-blob-attestation \
-  --signature fendix-vX.Y.Z-linux-amd64.intoto.jsonl \
-  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$" \
-  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  --type slsaprovenance1 \
-  fendix-vX.Y.Z-linux-amd64
+VERSION=v3.8.1
+ASSET="fendix-${VERSION}-linux-amd64"
+BASE="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}"
+for FILE in build-record.json build-record.json.crt build-record.json.sig; do
+  curl -fsSL -o "$FILE" "$BASE/$FILE"
+done
 
-# Docker image SLSA provenance for the immutable v3.7.0 digest (via Rekor):
-REF='docker.io/fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0$'
+cosign verify-blob \
+  --certificate build-record.json.crt \
+  --signature build-record.json.sig \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  build-record.json && python3 - "$ASSET" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path("build-record.json").read_text())
+asset = Path(sys.argv[1])
+expected_source = {
+    "repository": "Fendix-app/Fendix",
+    "tag": "v3.8.1",
+    "commit": "e3e3eadaaecb8670973f7acbc7b0cc4d3fca34c0",
+}
+if record["engine_version"] != "v3.8.1" or record["source"] != expected_source:
+    raise SystemExit("unexpected release or source in build record")
+entries = [a for a in record["artifacts"] if a["download_name"] == asset.name]
+digest = "sha256:" + hashlib.sha256(asset.read_bytes()).hexdigest()
+if len(entries) != 1 or entries[0]["executable_sha256"] != digest:
+    raise SystemExit("binary does not match the signed build record")
+print("Binary matches the signed v3.8.1 release record")
+PY
+```
+
+The published per-binary `.predicate.json` and `.intoto.jsonl` files are plain
+provenance metadata. In v3.8.1, `.intoto.jsonl` contains an in-toto statement,
+not a certificate-bearing verification bundle. The release does not publish
+the bundle needed by a standalone `cosign verify-blob-attestation` command.
+Treat those downloaded files as unsigned metadata; the binary signature and
+the signed build record above are the independently verifiable release bindings.
+See [the build-record contract](docs/managed-ci/signed-build-record.md).
+
+<a name="verifying-slsa-build-provenance"></a>
+
+### Verifying container SLSA build provenance
+
+The Docker image carries a verifiable SLSA v1.0 provenance attestation signed
+via cosign keyless (Sigstore Fulcio + GitHub Actions OIDC). It records the
+workflow, source commit, runner and build inputs:
+
+```sh
+REF='docker.io/fendixapp/fendix@sha256:2752d6114b209b2c3b986b49950c0238b7e72d98c988eb9c5ee623fcd7c9ff1a'
+IDENTITY='https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify-attestation \
   --type slsaprovenance1 \
-  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer "$ISSUER" \
   "$REF"
 ```
 
-SLSA level claim: **L2** (hosted, non-forgeable OIDC, automated,
-source-versioned). The build also happens to satisfy L3 properties
-(ephemeral runner, parameterless, the build script is pinned by the
-commit SHA the attestation records), but L3 requires a third-party
-attestor that we don't currently use. Operators with strict SLSA
-gates can self-verify the L3 properties from the predicate JSON.
+The project's SLSA **L2** claim applies to this container provenance: hosted
+builds, workflow-bound OIDC identity, automation and versioned sources. No
+independent L3 certification is claimed. The binary build record above is a
+release binding, not a standalone SLSA-level claim.
 
 ### Verifying the SBOM
 
@@ -180,20 +224,20 @@ carries an in-toto attestation uploaded to Rekor.
 ```sh
 # Per-binary SBOM signature (same flow as the binary itself):
 cosign verify-blob \
-  --certificate fendix-vX.Y.Z-linux-amd64.cdx.json.crt \
-  --signature   fendix-vX.Y.Z-linux-amd64.cdx.json.sig \
-  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$" \
+  --certificate fendix-v3.8.1-linux-amd64.cdx.json.crt \
+  --signature   fendix-v3.8.1-linux-amd64.cdx.json.sig \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  fendix-vX.Y.Z-linux-amd64.cdx.json
+  fendix-v3.8.1-linux-amd64.cdx.json
 
 # Docker image SBOM attestation (verifies against the Rekor log):
-REF='docker.io/fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015'
-IDENTITY='^https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.7.0$'
+REF='docker.io/fendixapp/fendix@sha256:2752d6114b209b2c3b986b49950c0238b7e72d98c988eb9c5ee623fcd7c9ff1a'
+IDENTITY='https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1'
 ISSUER='https://token.actions.githubusercontent.com'
 
 cosign verify-attestation \
   --type cyclonedx \
-  --certificate-identity-regexp "$IDENTITY" \
+  --certificate-identity "$IDENTITY" \
   --certificate-oidc-issuer "$ISSUER" \
   "$REF"
 ```

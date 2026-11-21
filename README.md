@@ -11,11 +11,13 @@ Fendix can combine runtime probes and static analyzers in one scan. When both en
 
 ---
 
+Current stable release: **[v3.8.1](https://github.com/Fendix-app/Fendix/releases/tag/v3.8.1)**. This is the Go 1.27.4 security rebuild of v3.8.0; scanner behaviour, report schema and finding identity are unchanged. See [the changelog](CHANGELOG.md#381---2026-11-20).
+
 ## Accuracy
 
 Reproducible numbers from the last published capture (`v2.0.1`, 2026-08-24).
 They remain historical measurement evidence and are not relabeled as a
-v3.7.0 run:
+current-release run:
 
 | Track | P / R / F1 | Reproduce |
 |---|---|---|
@@ -73,7 +75,7 @@ Recall by language, on the development corpus and on the blind holdout (a held-o
 
 Where each column was measured: the dev columns are recomputed from `benchmarks/frameworks/baseline.json`, which `make parity` reproduced at commit `8b78364` on Semgrep 1.182.1; the blind-holdout column was measured at commit `e03655a` on Semgrep 1.141.0 (the version that commit pins); the real-world precision column was measured at commit `6901cf7` on Semgrep 1.141.0.
 
-**Pending re-measurement.** The blind-holdout and real-world columns predate this release's detection changes (including the security fixes in `CHANGELOG.md`, `[Unreleased]`, Security) and its Semgrep 1.182.1. They are kept as measured at the commits named above and are pending re-measurement at the release commit; until then they describe those commits, not this release.
+**Pending re-measurement.** The blind-holdout and real-world columns predate this release's detection changes (including the security fixes in `CHANGELOG.md`, `[3.8.0]`, Security) and its Semgrep 1.182.1. They are kept as measured at the commits named above and are pending re-measurement at the release commit; until then they describe those commits, not this release.
 
 Holdout recall is lower than dev recall for every language, and the drop exceeds the 0.10 limit in all four, so the development corpus overstates recall on code the rules have not seen. Quote the holdout column once it is re-measured for the release; the dev columns are scoped to the development corpus and are not a claim about arbitrary code. See [docs/accuracy.md](docs/accuracy.md) and [BENCHMARKS.md](BENCHMARKS.md).
 
@@ -179,7 +181,7 @@ before you install it again.
 curl -fsSL https://get.fendix.dev/install.sh | sh
 ```
 
-Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.7.0`.
+Downloads the latest release binary, verifies its SHA-256 checksum, and installs to `/usr/local/bin/fendix`. Override the install directory with `FENDIX_DIR=$HOME/.local/bin` and the version with `FENDIX_VERSION=v3.8.1`.
 
 `get.fendix.dev` is served from the official [`homebrew-fendix`](https://github.com/Fendix-app/homebrew-fendix) repository through GitHub Pages. To inspect the script before piping to a shell:
 
@@ -193,7 +195,7 @@ If `get.fendix.dev` is ever unreachable, the `raw.githubusercontent.com` URL is 
 
 ```bash
 ARCH=$(dpkg --print-architecture)   # amd64 or arm64
-VERSION=v3.7.0
+VERSION=v3.8.1
 URL="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${ARCH}.deb"
 curl -fsSL -o fendix.deb "${URL}"
 sudo dpkg -i fendix.deb && sudo apt-get install -f
@@ -209,7 +211,7 @@ case "$(uname -m)" in
   x86_64)  PKG_ARCH=amd64 ;;
   aarch64) PKG_ARCH=arm64 ;;
 esac
-VERSION=v3.7.0
+VERSION=v3.8.1
 sudo dnf install \
   "https://github.com/Fendix-app/Fendix/releases/download/${VERSION}/fendix-${VERSION}-linux-${PKG_ARCH}.rpm"
 ```
@@ -217,8 +219,8 @@ sudo dnf install \
 ### Docker
 
 ```bash
-docker pull fendixapp/fendix:3.7.0
-docker run --rm fendixapp/fendix:3.7.0 scan --url https://api.example.com
+docker pull fendixapp/fendix:3.8.1
+docker run --rm fendixapp/fendix:3.8.1 scan --url https://api.example.com
 ```
 
 The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and includes Python and the static-analysis dependencies, so hybrid mode works out of the box. Pin a version or digest for reproducible use.
@@ -228,14 +230,14 @@ The Docker image is multi-architecture (`linux/amd64` and `linux/arm64`) and inc
 Pick a binary for your platform from the [latest official engine release](https://github.com/Fendix-app/Fendix/releases/latest) (`linux/amd64`, `linux/arm64`, `darwin/amd64`, or `darwin/arm64`), verify the matching `.sha256` file, and place it on your PATH:
 
 ```bash
-curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.7.0/fendix-v3.7.0-darwin-arm64
+curl -fsSL -o fendix https://github.com/Fendix-app/Fendix/releases/download/v3.8.1/fendix-v3.8.1-darwin-arm64
 shasum -a 256 fendix  # compare against the .sha256 alongside the binary
 chmod +x fendix && sudo mv fendix /usr/local/bin/fendix
 ```
 
 ### Build from Source
 
-Requires Go 1.21+ and Python 3.9+. The Python engine parses the scanned code with the interpreter it runs on: below 3.9 it reports every check failed and exits 2, and an interpreter older than 3.14 reports a file in newer syntax as lost evaluation rather than as clean.
+Requires Go 1.25+ and Python 3.9+. The Python engine parses the scanned code with the interpreter it runs on: below 3.9 it reports every check failed and exits 2, and an interpreter older than 3.14 reports a file in newer syntax as lost evaluation rather than as clean.
 
 ```bash
 git clone https://github.com/Fendix-app/Fendix.git
@@ -254,12 +256,12 @@ pip install -r python/requirements.txt
 
 ## Verifying signed releases
 
-Every release artifact (binary, `.deb`, `.rpm`, multi-arch Docker manifest) ships with a `.crt` + `.sig` sidecar produced by [cosign](https://docs.sigstore.dev/cosign/overview/) keyless signing — Sigstore Fulcio anchors the signature to the GitHub Actions OIDC identity that built the release. No static public key, no rotation surface, no key-loss recovery story to maintain.
+Release binaries and `.deb` / `.rpm` packages ship with `.crt` + `.sig` sidecars produced by [cosign](https://docs.sigstore.dev/cosign/overview/) keyless signing — Sigstore Fulcio anchors the signature to the GitHub Actions OIDC identity that built the release. Container manifest signatures and attestations are stored in the registry. No static public key is distributed.
 
 Verify a binary:
 
 ```bash
-VERSION=v3.7.0
+VERSION=v3.8.1
 ASSET=fendix-${VERSION}-linux-amd64
 BASE="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}"
 
@@ -278,11 +280,11 @@ cosign verify-blob \
 
 Releases after v3.4.1 use `Fendix-app/Fendix` in the certificate identity. Binary certificates through v3.4.1 keep the immutable pre-transfer workflow identity they were issued with; [`SECURITY.md`](SECURITY.md) shows how to verify them.
 
-For the current Docker image, use `cosign verify` against the immutable digest and the official workflow identity:
+For the current v3.8.1 Docker image, use `cosign verify` against the immutable digest and the official workflow identity:
 
 ```bash
-cosign verify fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015 \
-  --certificate-identity-regexp "^https://github.com/Fendix-app/Fendix/" \
+cosign verify fendixapp/fendix@sha256:2752d6114b209b2c3b986b49950c0238b7e72d98c988eb9c5ee623fcd7c9ff1a \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/v3.8.1" \
   --certificate-oidc-issuer     "https://token.actions.githubusercontent.com"
 ```
 
@@ -506,7 +508,7 @@ fendix report --input findings.json --format html --output report.html
 | `fendix version` | Print version, OS, and architecture information |
 | `fendix managed` | **Preview (ADR-010), new in v3.5.0:** create context and submit evidence under the managed-CI contract |
 
-The published stable release is v3.8.0. `managed` and its two hidden producer
+The published stable release is v3.8.1. `managed` and its two hidden producer
 flags ship in it as a preview under ADR-010: they sit outside the stable
 compatibility contract and are not a product availability claim. No command defines a Cobra alias. Run
 `fendix <command> --help` for the executable flag contract.
@@ -673,6 +675,8 @@ verbatim in `result.properties.evidence`.
 ---
 
 ## CI/CD Integration
+
+The recommended composite Action and reference-workflow examples below retain their tested v3.7.0 pairing. The current standalone CLI and container release is v3.8.1; updating those install pins does not certify a new Action pairing or move `@v1`.
 
 Fendix's `init` command generates starter files for three CI systems:
 
@@ -1307,7 +1311,7 @@ fendix/
 
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.25+ (official v3.8.1 releases are built with Go 1.27.4)
 - Python 3.9+
 - Make
 
