@@ -6,18 +6,18 @@ Fendix produces SARIF 2.1.0 output for GitHub code scanning: PR annotations and 
 
 The recommended GitHub integration is the Fendix Action
 ([Fendix Security Scan on GitHub Marketplace](https://github.com/marketplace/actions/fendix-security-scan)),
-pinned to the full commit of the v3.7.0 release,
-`Fendix-app/Fendix@90adf6a5082be0661b4156566a3a99609ed4792d # v3.7.0`, with
-`version: v3.7.0`. `@v1` resolves to that commit since 2026-10-27 and moves
-with later compatible releases; with it, set `version: v3.7.0` as well. See
+pinned to the full commit of the v3.8.1 release,
+`Fendix-app/Fendix@e3e3eadaaecb8670973f7acbc7b0cc4d3fca34c0 # v3.8.1`, with
+`version: v3.8.1`. `@v1` resolves to that commit since 2026-11-21 and moves
+with later compatible releases; with it, set `version: v3.8.1` as well. See
 [INTEGRATION_GUIDE §3.1](INTEGRATION_GUIDE.md#31-recommended--the-composite-github-action).
 Never reference `@main`.
 
 ### Alternative — copy the reference workflow
 
-For the container-based path, a complete, digest-pinned v3.7.0 container
+For the container-based path, a complete, digest-pinned v3.8.1 container
 workflow lives at
-[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/5ddfd88bde0e24d67d23be7f0d0302cfb29789f5/examples/github-actions/fendix-scan.yml).
+[`examples/github-actions/fendix-scan.yml`](https://github.com/Fendix-app/Fendix/blob/8b0212eda6371269f7b1bffde9cf2768b539c038/examples/github-actions/fendix-scan.yml).
 Install it from that tested commit, not from `main`, as shown in
 [INTEGRATION_GUIDE §3.2](INTEGRATION_GUIDE.md#32-alternative--the-digest-pinned-reference-workflow).
 Dropped into `.github/workflows/fendix-scan.yml` of your project, it will:
@@ -39,7 +39,7 @@ The sections below show the individual building blocks if you'd rather
 assemble your own workflow.
 
 Commands shown with a bare `fendix` binary assume a version-matched Python
-engine tree is configured when `--code` coverage is expected. Official v3.7.0
+engine tree is configured when `--code` coverage is expected. Official v3.8.1
 standalone binaries do not include that tree; without it, the native analyzers
 continue and `python-engine` is recorded `skipped/dependency_missing`. The
 reference workflow avoids that degradation by using the official container.
@@ -61,7 +61,7 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
     env:
-      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:0f0a04e520cbb7eda9dd0850f1807e09c3952111bb79bb72f57c3955eb622015
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:2752d6114b209b2c3b986b49950c0238b7e72d98c988eb9c5ee623fcd7c9ff1a
     permissions:
       actions: read           # Required for SARIF upload on a private repository
       security-events: write  # Required for SARIF upload
