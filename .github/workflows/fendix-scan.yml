@@ -1,0 +1,235 @@
+# Fendix — reference GitHub Actions workflow.
+#
+# Drop this into `.github/workflows/fendix-scan.yml` of your project. It
+# scans your repo (and optional OpenAPI spec) on every PR and on push to
+# main, uploads SARIF to the GitHub Security tab (public repositories; see
+# the Code Security note below for private ones), posts a summary comment
+# on the PR, and gates the merge on findings at or above HIGH severity.
+#
+# What it does on each event:
+#
+#   - pull_request: scans against the newest baseline visible in the event's
+#     Actions cache scope, posts a PR comment summarising findings (top 5 + counts),
+#     uploads SARIF for inline annotations (see the Code Security note
+#     below), and fails the build when --fail-on triggers.
+#
+#   - push to main: scans, saves a baseline cache entry, and uploads SARIF
+#     (see the Code Security note below).
+#     A later PR can restore that main entry when it is the newest entry
+#     visible in the PR's cache scope.
+#
+# Baseline storage: actions/cache (first-party). The cache is keyed by
+# run_id with a fallback restore-key. actions/cache saves automatically after
+# every successful job, including eligible PR jobs; cache scope controls which
+# entries a later run can restore. This key does not prove main-only provenance.
+#
+# Required permissions:
+#   actions:         read     — SARIF upload on private repositories
+#                               (upload-sarif reads the workflow run)
+#   contents:        read     — checkout
+#   security-events: write    — SARIF upload via github/codeql-action
+#   pull-requests:   write    — PR comment via actions/github-script
+#
+# SARIF upload and GitHub Code Security: the Fendix gate does not depend on
+# it. Public repositories upload SARIF to the Security tab. A private
+# repository needs GitHub Code Security for code scanning, so the upload is
+# skipped there with a notice; the scan, the PR comment and the gate still
+# run. If your private repository has Code Security, set the repository
+# variable FENDIX_UPLOAD_SARIF to `true` to upload.
+#
+# Required repository secrets: none for the public container path.
+# If your project's spec or staging URL needs auth, plumb a secret
+# through the `--auth` flag (see the Live API Scan section in
+# docs/ci-cd-integration.md).
+#
+# Supply-chain hardening:
+#   - Every third-party Action is pinned to a full commit SHA (not a
+#     floating tag like @v4): a tag can be force-moved by the action
+#     owner to point at new code, a SHA cannot. The trailing comment
+#     records the human-readable version each SHA corresponded to.
+#   - Fendix itself runs from the immutable v3.8.1 Docker Hub digest,
+#     which includes the version-matched Python engine and Go toolchain.
+#     Review and replace the digest deliberately when upgrading.
+#   - Repo-local plugins (.fendix/plugins/ committed to the repo under
+#     scan) are NOT enabled here. On a pull_request the checked-out tree
+#     is attacker-controlled, so auto-running repo-committed plugins
+#     would be remote code execution in CI. Fendix's default already
+#     skips them; we deliberately do NOT pass --allow-repo-local-plugins.
+#     User-global ~/.fendix/plugins/ is not populated on the runner, so
+#     no plugins run at all unless you add a trusted install step.
+
+name: Fendix Security Scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  fendix:
+    runs-on: ubuntu-latest
+    env:
+      FENDIX_IMAGE: docker.io/fendixapp/fendix@sha256:2752d6114b209b2c3b986b49950c0238b7e72d98c988eb9c5ee623fcd7c9ff1a
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Pull pinned Fendix image
+        run: |
+          docker pull "$FENDIX_IMAGE"
+          docker run --rm "$FENDIX_IMAGE" version
+
+      # Restore the newest baseline visible in this event's cache scope. That
+      # can be a main entry or a prior entry for the same PR scope. On the
+      # first run (no cache yet), every finding is "new".
+      - name: Restore Fendix baseline
+        id: baseline
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .fendix/baseline.json
+          key: fendix-baseline-${{ github.run_id }}
+          restore-keys: |
+            fendix-baseline-
+
+      - name: Run Fendix scan
+        id: scan
+        run: |
+          mkdir -p .fendix
+          baseline_flag=""
+          if [ -f .fendix/baseline.json ]; then
+            echo "Using baseline from previous run."
+            baseline_flag="--baseline .fendix/baseline.json"
+          fi
+          # `set +e` so we capture the exit code without aborting the
+          # job — we still want to upload SARIF + post the PR comment
+          # even when --fail-on triggers.
+          set +e
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --volume "$PWD:/work" \
+            --workdir /work \
+            "$FENDIX_IMAGE" scan \
+            --code ./ \
+            --format json \
+            --output findings.json \
+            --save-baseline .fendix/baseline.json \
+            $baseline_flag \
+            --fail-on HIGH
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+
+      # Re-render the JSON report into SARIF for GitHub Code Scanning.
+      # Re-rendering (rather than running fendix twice) guarantees the
+      # SARIF and PR comment describe the exact same findings.
+      - name: Convert findings to SARIF
+        if: always() && hashFiles('findings.json') != ''
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --volume "$PWD:/work" \
+            --workdir /work \
+            "$FENDIX_IMAGE" report \
+            --input findings.json \
+            --format sarif \
+            --output results.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always() && hashFiles('results.sarif') != '' && (!github.event.repository.private || vars.FENDIX_UPLOAD_SARIF == 'true')
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: results.sarif
+          category: fendix
+
+      - name: Explain skipped SARIF upload
+        if: always() && hashFiles('results.sarif') != '' && github.event.repository.private && vars.FENDIX_UPLOAD_SARIF != 'true'
+        run: |
+          echo "::notice title=SARIF upload skipped::GitHub Security-tab upload for a private repository requires GitHub Code Security. If this repository has it, set the repository variable FENDIX_UPLOAD_SARIF=true. The Fendix gate still decides this check."
+
+      # PR summary comment. Posts at most one new comment per push to
+      # the PR — the GitHub UI threads them by timestamp. If you'd
+      # rather edit a single sticky comment, see the "Sticky comment"
+      # snippet in docs/ci-cd-integration.md.
+      - name: Post PR summary comment
+        if: github.event_name == 'pull_request' && always() && hashFiles('findings.json') != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          # Same condition as the upload step, so the comment never points at
+          # a Security tab this run did not upload to.
+          FENDIX_SARIF_UPLOAD: ${{ !github.event.repository.private || vars.FENDIX_UPLOAD_SARIF == 'true' }}
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('findings.json', 'utf8'));
+            const summary = report.summary || {};
+            const sources = report.sources || {};
+            const total = report.total ?? (report.findings || []).length;
+            const sarifUploaded = process.env.FENDIX_SARIF_UPLOAD === 'true';
+
+            const lines = [
+              `## Fendix scan: ${total} finding${total === 1 ? '' : 's'}`,
+              '',
+              `Mode: \`${(report.metadata || {}).mode || 'unknown'}\` · ` +
+                `Endpoints scanned: ${(report.metadata || {}).endpoints_scanned ?? 0} · ` +
+                `Duration: ${(report.metadata || {}).duration || 'n/a'}`,
+              '',
+              '| Severity | Count | Source | Count |',
+              '|---|---|---|---|',
+              `| Critical | ${summary.critical || 0} | Blackbox | ${sources.blackbox || 0} |`,
+              `| High | ${summary.high || 0} | Whitebox | ${sources.whitebox || 0} |`,
+              `| Medium | ${summary.medium || 0} | Correlated | ${sources.correlated || 0} |`,
+              `| Low | ${summary.low || 0} | _Total_ | **${total}** |`,
+              `| Info | ${summary.info || 0} | | |`,
+              '',
+            ];
+
+            if (total === 0) {
+              lines.push('_No new findings vs. baseline. ✅_');
+            } else {
+              const top = (report.findings || []).slice(0, 5).map(f => {
+                const where = f.endpoint || f.line || '';
+                return `- **[${f.severity}]** ${f.title} — \`${where}\``;
+              });
+              lines.push('### Top findings', ...top);
+              if (total > 5) lines.push('', `_…and ${total - 5} more${sarifUploaded ? ' in the SARIF report' : ''}._`);
+            }
+
+            lines.push(
+              '',
+              sarifUploaded
+                ? '<sub>Open the **Security** tab for inline annotations. ' +
+                    'Re-run this workflow to refresh.</sub>'
+                : '<sub>SARIF was not uploaded: Security-tab upload for a private ' +
+                    'repository needs GitHub Code Security and the repository ' +
+                    'variable FENDIX_UPLOAD_SARIF=true. Re-run this workflow to refresh.</sub>'
+            );
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: lines.join('\n'),
+            });
+
+      # The scan result decides the job, whatever happened to the reporting
+      # steps above (SARIF, upload, comment). Failure was deferred until here
+      # so the PR author sees the full output. A missing or unknown result
+      # fails closed: it must never pass by accident.
+      - name: Enforce --fail-on gate
+        if: always()
+        env:
+          SCAN_EXIT: ${{ steps.scan.outputs.exit_code }}
+        run: |
+          case "$SCAN_EXIT" in
+            0) echo "Fendix gate passed: no finding blocks at the --fail-on threshold." ;;
+            1) echo "::error title=Fendix gate::A finding blocks at the --fail-on threshold (fendix scan exited 1)."; exit 1 ;;
+            2) echo "::error title=Fendix gate::The scan did not complete (fendix scan exited 2)."; exit 2 ;;
+            *) echo "::error title=Fendix gate::No usable scan result (exit code '$SCAN_EXIT'); failing closed."; exit 2 ;;
+          esac
