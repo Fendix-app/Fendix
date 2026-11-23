@@ -182,13 +182,42 @@ print("Binary matches the signed v3.8.1 release record")
 PY
 ```
 
-The published per-binary `.predicate.json` and `.intoto.jsonl` files are plain
-provenance metadata. In v3.8.1, `.intoto.jsonl` contains an in-toto statement,
-not a certificate-bearing verification bundle. The release does not publish
-the bundle needed by a standalone `cosign verify-blob-attestation` command.
-Treat those downloaded files as unsigned metadata; the binary signature and
-the signed build record above are the independently verifiable release bindings.
-See [the build-record contract](docs/managed-ci/signed-build-record.md).
+### Verifying per-binary SLSA provenance
+
+From the first release after v3.8.1, each binary ships a Sigstore bundle,
+`fendix-vX.Y.Z-<os>-<arch>.sigstore.json`. The bundle holds the DSSE-signed
+SLSA v1.0 provenance, the Fulcio certificate and the Rekor inclusion proof, so
+it verifies on its own:
+
+```sh
+VERSION=vX.Y.Z   # a release after v3.8.1
+ASSET="fendix-${VERSION}-linux-amd64"
+BASE="https://github.com/Fendix-app/Fendix/releases/download/${VERSION}"
+for FILE in "$ASSET" "$ASSET.sigstore.json"; do
+  curl -fsSL -o "$FILE" "$BASE/$FILE"
+done
+
+cosign verify-blob-attestation \
+  --bundle "${ASSET}.sigstore.json" \
+  --new-bundle-format \
+  --type slsaprovenance1 \
+  --certificate-identity "https://github.com/Fendix-app/Fendix/.github/workflows/release.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "${ASSET}"
+```
+
+The release workflow runs this same command on every binary before it
+publishes, so a release whose recipe would fail is never published.
+
+The `.predicate.json` and `.intoto.jsonl` files beside each binary are the
+plain predicate and in-toto statement. They carry no signature; do not pass
+them to cosign as a signature.
+
+**Releases up to and including v3.8.1 have no per-binary bundle.** Their
+`.intoto.jsonl` is an unsigned statement and cannot be verified on its own
+(issue #90); they will not be re-signed. For those releases, the binary
+signature and the signed build record above are the verifiable release
+bindings. See [the build-record contract](docs/managed-ci/signed-build-record.md).
 
 <a name="verifying-slsa-build-provenance"></a>
 

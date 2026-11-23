@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Per-binary SLSA provenance can now be verified on its own (#90).** Up to
+  v3.8.1 each binary's `.intoto.jsonl` was a bare in-toto statement with no
+  signature, so no cosign command could verify it. Each binary now ships
+  `fendix-vX.Y.Z-<os>-<arch>.sigstore.json`, a Sigstore bundle holding the
+  signed provenance, its certificate and the Rekor proof, verified with
+  `cosign verify-blob-attestation --bundle` as shown in `SECURITY.md`. The
+  release workflow runs that recipe on every binary before publishing, and a
+  regression test keeps the recipe and the workflow in step. The
+  `.intoto.jsonl` statement is still published. Releases up to v3.8.1 are not
+  re-signed and have no bundle.
+
 ## [3.8.1] - 2026-11-20
 
 ### Security

@@ -373,13 +373,15 @@ jobs:
       # ID), what the inputs were (commit SHA, ref, repo), and what
       # the output was (binary sha256).
       #
-      # The per-binary .intoto.jsonl produced by --output-attestation is
-      # plain statement metadata; it is not a certificate-bearing bundle.
-      # v3.8.1 did not publish a standalone verification bundle for it.
-      # Binary release binding is verified through the binary signature and
-      # signed build record (SECURITY.md). Container SLSA is verified through
-      # its registry attestation. A future release can publish a binary
-      # bundle explicitly; do not describe this file as independently signed.
+      # Two files come out of attest-blob:
+      # - .intoto.jsonl (--output-attestation) is the bare in-toto statement,
+      #   kept for anyone reading the predicate. It carries no signature.
+      # - .sigstore.json (--bundle --new-bundle-format) is the
+      #   certificate-bearing Sigstore bundle: DSSE envelope, Fulcio
+      #   certificate and Rekor inclusion proof. This is what
+      #   `cosign verify-blob-attestation --bundle` verifies (SECURITY.md).
+      # Releases up to and including v3.8.1 published only the statement
+      # (issue #90), so they have no per-binary bundle.
       - name: Generate SLSA provenance
         if: vars.COSIGN_ENABLED == 'true'
         env:
@@ -431,18 +433,38 @@ jobs:
           }
           EOF
 
-          # Attest the predicate, recording the statement beside the binary.
-          # --output-attestation does not save a certificate-bearing bundle;
-          # this published metadata is not a standalone signature proof.
+          # Attest the predicate. The bundle is the verifiable artifact; the
+          # bare statement is kept beside it for readers of the predicate.
           cosign attest-blob --yes \
             --predicate "${BINARY}.predicate.json" \
             --type slsaprovenance1 \
+            --new-bundle-format \
+            --bundle "${BINARY}.sigstore.json" \
             --output-attestation "${BINARY}.intoto.jsonl" \
             "${BINARY}"
 
           # Record the SHA we attested over (lets a verifier sanity-
           # check the bound subject without parsing the JSONL).
           echo "${BINARY_SHA256}  ${BINARY}" > "${BINARY}.intoto.jsonl.subject"
+
+      # Run the SECURITY.md recipe against the files this job produced, so the
+      # published recipe cannot drift from what the release ships (issue #90).
+      # A failure here stops the release before anything is published.
+      - name: Verify SLSA provenance with the documented recipe
+        if: vars.COSIGN_ENABLED == 'true'
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME}"
+          ASSET="fendix-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          cd dist
+          # fendix-recipe: slsa-binary-bundle
+          cosign verify-blob-attestation \
+            --bundle "${ASSET}.sigstore.json" \
+            --new-bundle-format \
+            --type slsaprovenance1 \
+            --certificate-identity "https://github.com/${GITHUB_WORKFLOW_REF}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${ASSET}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
