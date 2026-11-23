@@ -118,7 +118,7 @@ jobs:
           persist-credentials: false
 
       # Same toolchain as the framework-parity job in ci.yml and `release`.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: steps.holdout.outputs.configured == 'true'
         with:
           go-version: "1.27.4"
@@ -180,7 +180,7 @@ jobs:
       # toolchain cannot type-check that toolchain's standard library or a
       # module declaring it, and govulncheck fails on every real Go module.
       # ci.yml's go and e2e jobs test with the same patch.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4"
 
@@ -933,7 +933,7 @@ jobs:
       # with `cosign verify-attestation --type cyclonedx ...`.
       - name: Set up Go (for syft)
         if: vars.COSIGN_ENABLED == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: "1.27.4"
 
